@@ -15,6 +15,9 @@ _Avoid_: franchise, universe
 **Series Relationship**:
 A typed connection between Series in a Series Family, such as sequel, spinoff, or reboot.
 
+**Source Status**:
+The completion state of a Series' source work: Ongoing, Completed, Hiatus, or Cancelled. It describes the original publication, not the English edition's progress, and is imported like any other fact.
+
 **Volume**:
 A stable collected-content unit within a Series, normally defined by the work's source publication and independent of later packaging. A separately identifiable published extra may be an unnumbered Volume; incidental bonus material is not a Volume.
 _Avoid_: book, tankobon
@@ -25,12 +28,22 @@ The stable ordinal placement of a Volume within its Series' single canonical rea
 **Volume Label**:
 The publisher-facing designation shown for a Volume, such as "7.5," "Side Story," or "Spring Log." It is not the Volume's identity or sort order.
 
+**Volume Synopsis**:
+An optional edition-independent summary of a Volume's content, curated by Editors. When absent, displays borrow the Release Description of a representative Release.
+
 **Release**:
-A specific purchasable publication — one language, publisher, Format, Binding where applicable, optional Edition Line, content mapping, and optional ISBN-10 and ISBN-13 identifiers. An unchanged reprint or the same digital publication sold by another retailer retains its Release identity; a change to those publication characteristics creates another Release.
+A specific purchasable publication of an Edition — one Format, Binding where applicable, one language, and optional ISBN-10 and ISBN-13 identifiers. An unchanged reprint or the same digital publication sold by another retailer retains its Release identity; a change to those characteristics creates another Release.
 _Avoid_: edition, printing
+
+**Release Description**:
+The publisher-provided descriptive text for a specific Release, such as a back-cover blurb. It describes that edition of the content and may differ between Releases covering the same Volume.
 
 **Release Variant**:
 A visually distinct form of a Release, such as an alternate or box-set-exclusive cover, whose publication characteristics and content are otherwise unchanged. A user may identify the Release Variant they own without giving it a separate Release identity.
+
+**Edition**:
+A publisher's packaging of specific content — one Publisher, one Volume Coverage, and one Edition Line membership or none — realized by one or more Releases that differ only in Format and Binding. "Berserk Deluxe Edition Vol 4" is one Edition; its hardcover and digital Releases belong to it, while a 3-in-1 omnibus of the same chapters is a different Edition.
+_Avoid_: version, printing
 
 **Format**:
 How a Release is published — physical or digital in v1.
@@ -42,10 +55,10 @@ The physical construction of a Release, such as paperback or hardcover. Binding 
 A publisher-named family of Releases, such as "Deluxe Edition" or "3-in-1," with consistent branding, content mapping, and numbering. An Edition Line may span physical and digital Formats; format alone does not define a different line, and ordinary Releases need not belong to any line.
 
 **Edition Line Position**:
-A Release's sequence label within its Edition Line, independent of the identities and numbers of the Volumes it covers.
+An Edition's sequence label within its Edition Line, independent of the identities and numbers of the Volumes it covers.
 
 **Volume Coverage**:
-The ordered mapping from a Release to the Volumes whose content it contains, including whether each Volume is covered completely or partially. This lets split and omnibus Releases retain the identity of their source Volumes.
+The ordered mapping from an Edition to the Volumes whose content it contains, including whether each Volume is covered completely or partially. A Release inherits the coverage of its Edition; this lets split and omnibus Editions retain the identity of their source Volumes.
 
 **Release Bundle**:
 A purchasable, non-nestable package, such as a box set, containing multiple Releases. It has its own publication facts, while its member books retain their individual Release identities; the bundle may identify a particular Release Variant for a member.
@@ -82,6 +95,12 @@ A user's private-by-default sharing policy for Ownership and Reading, with separ
 
 **Publisher**:
 The company issuing a Release (e.g. VIZ Media, Seven Seas).
+
+**Bootstrap Mode**:
+A pre-launch import state in which Approved Sources may create Canonical Records directly, including new Series, without queued review; quality is checked by sampling instead. It is switched off permanently before public launch, after which steady-state review rules apply.
+
+**Bootstrap-Unreviewed**:
+A marker on a Canonical Record created during Bootstrap Mode that steady-state rules would have queued for review. It identifies the post-launch review backlog and does not affect the record's public display.
 
 **Source Observation**:
 A fact reported by an external data source about a Series, Volume, or Release. Source Observations inform MangaDB's data but do not override an approved human decision.
