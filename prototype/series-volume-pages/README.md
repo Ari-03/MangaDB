@@ -26,3 +26,13 @@ Pick the hierarchy that makes these statements easiest to understand together:
 2. “Monster Edition 1 is a publisher package covering canonical Volumes 1–3.”
 
 Then note which terminology, cover treatment, and cross-links should survive from the other variants.
+
+## Decision — August 17, 2026
+
+- **Selected hierarchy:** Variant A, Reading Path.
+- **Runner-up:** Variant B, Edition Shelves.
+- **Page direction:** Make the Series and its canonical Volume sequence primary. Inspect Releases, Edition Lines, Volume Coverage, cover Release Variants, and Release Bundle membership beneath the selected Volume.
+- **Numbering:** Keep canonical Volume Position and Volume Label visually separate from publisher Edition Line Position.
+- **Covers and bundles:** Browse cover variants within their Release, identify an exclusive variant from its Release Bundle, and cross-link between the bundle and its member Releases.
+
+Variant B remains useful reference material for its compact coverage chips and publisher-package grouping, but it is not the primary page hierarchy.
