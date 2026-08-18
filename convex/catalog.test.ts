@@ -82,6 +82,90 @@ describe("catalog.listSeries", () => {
   });
 });
 
+describe("catalog.search", () => {
+  const seed = async (t: ReturnType<typeof convexTest>) => {
+    await t.run(async (ctx) => {
+      await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "Tokyo Ghoul",
+        altTitles: ["Toukyou Kushu"],
+        searchText: "Tokyo Ghoul Toukyou Kushu",
+      });
+      await ctx.db.insert("series", {
+        status: "active",
+        publicId: 2,
+        title: "Witch Hat Atelier",
+        altTitles: [],
+        searchText: "Witch Hat Atelier",
+      });
+      await ctx.db.insert("series", {
+        status: "hidden",
+        publicId: 3,
+        title: "Tokyo Hidden",
+        altTitles: [],
+        searchText: "Tokyo Hidden",
+      });
+      await ctx.db.insert("series", {
+        status: "merged",
+        publicId: 4,
+        title: "Tokyo Duplicate",
+        altTitles: [],
+        searchText: "Tokyo Duplicate",
+      });
+      await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+      });
+      await ctx.db.insert("publishers", {
+        status: "active",
+        name: "VIZ Media",
+        slug: "viz-media",
+      });
+      await ctx.db.insert("publishers", {
+        status: "hidden",
+        name: "Seven Hidden Press",
+        slug: "seven-hidden",
+      });
+    });
+  };
+
+  it("matches Series by title, skipping hidden and merged records", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const results = await t.query(api.catalog.search, { query: "Tokyo" });
+    expect(results.series).toEqual([
+      { publicId: 1, title: "Tokyo Ghoul", altTitles: ["Toukyou Kushu"] },
+    ]);
+  });
+
+  it("matches Series by alt title through the searchText index", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const results = await t.query(api.catalog.search, { query: "Kushu" });
+    expect(results.series.map((s) => s.publicId)).toEqual([1]);
+  });
+
+  it("resolves Publisher names case-insensitively, active only", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const results = await t.query(api.catalog.search, { query: "seven" });
+    expect(results.publishers).toEqual([
+      { name: "Seven Seas Entertainment", slug: "seven-seas" },
+    ]);
+  });
+
+  it("returns nothing for an empty or whitespace query", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    expect(await t.query(api.catalog.search, { query: "   " })).toEqual({
+      series: [],
+      publishers: [],
+    });
+  });
+});
+
 describe("catalog.seriesPage", () => {
   it("orders volumes by hidden Position, never by the display Label", async () => {
     const t = convexTest(schema);

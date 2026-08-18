@@ -49,6 +49,63 @@ export const listSeries = query({
   },
 });
 
+// ---------- Search (ticket #38) ----------
+
+export const SEARCH_LIMIT = 20;
+// The publisher list is deliberately small (spec §8: "publishers via the
+// small list" — a few dozen English-market publishers), so a capped scan
+// replaces any index; the cap only guards against pathology.
+export const PUBLISHER_SCAN_CAP = 500;
+
+/**
+ * v1 search (spec §8): Series only, matched through the title + alt-titles
+ * search index (`searchText` is both concatenated on write); Publishers
+ * resolved by case-insensitive name match over the small publisher list. No
+ * Volume or Bundle search in v1. ISBN inputs never reach this query — the
+ * /search route recognizes them first and redirects through `/isbn/{isbn}`.
+ *
+ * Results carry only active records: hidden records are invisible, and a
+ * merged Series is findable through its survivor (merges fold alt titles
+ * into the surviving record), so search always links canonical pages.
+ */
+export const search = query({
+  args: { query: v.string() },
+  handler: async (ctx, { query: rawQuery }) => {
+    const trimmed = rawQuery.trim();
+    if (trimmed === "") {
+      return { series: [], publishers: [] };
+    }
+
+    const seriesDocs = await ctx.db
+      .query("series")
+      .withSearchIndex("search_title", (q) => q.search("searchText", trimmed))
+      // Overfetch so post-filtering hidden/merged docs can't starve the page.
+      .take(SEARCH_LIMIT * 2);
+    const series = seriesDocs
+      .filter((doc) => doc.status === "active")
+      .slice(0, SEARCH_LIMIT)
+      .map((doc) => ({
+        publicId: doc.publicId,
+        title: doc.title,
+        altTitles: doc.altTitles,
+      }));
+
+    const needle = trimmed.toLowerCase();
+    const publisherDocs = await ctx.db
+      .query("publishers")
+      .take(PUBLISHER_SCAN_CAP);
+    const publishers = publisherDocs
+      .filter(
+        (doc) =>
+          doc.status === "active" && doc.name.toLowerCase().includes(needle),
+      )
+      .slice(0, SEARCH_LIMIT)
+      .map((doc) => ({ name: doc.name, slug: doc.slug }));
+
+    return { series, publishers };
+  },
+});
+
 // ---------- Series page (ticket #22) ----------
 
 /**

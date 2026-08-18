@@ -30,6 +30,17 @@ const on = (year: number, month: number, day: number) => ({
 
 const usd = (amountCents: number) => ({ amountCents, currency: "USD" });
 
+// Seed ISBNs are fake (a private 978-1-99900 block) but checksum-valid, so
+// pasting one into /search exercises the real ISBN-recognition redirect (#38).
+const tgStandardIsbns = [
+  "9781999000103",
+  "9781999000110",
+  "9781999000127",
+  "9781999000134",
+] as const;
+const tgReIsbns = ["9781999000219", "9781999000226"] as const;
+const quietIsbns = ["9781999000318", "9781999000325", "9781999000332"] as const;
+
 async function addSeries(
   ctx: MutationCtx,
   args: {
@@ -258,7 +269,7 @@ export const run = internalMutation({
         editionId: edition.id,
         format: "physical",
         binding: "paperback",
-        isbn13: `978199900001${i}`,
+        isbn13: tgStandardIsbns[i],
         pubDate: on(2015, 6 + i, 16),
         price: usd(1299),
         description:
@@ -293,7 +304,7 @@ export const run = internalMutation({
       editionId: monster1.id,
       format: "physical",
       binding: "hardcover",
-      isbn13: "9781999000107",
+      isbn13: "9781999000608",
       pubDate: on(2022, 10, 25),
       price: usd(4999),
       description: "Oversized omnibus hardcover collecting the opening arc.",
@@ -338,7 +349,7 @@ export const run = internalMutation({
       name: "Tokyo Ghoul Complete Box Set",
       publisherId: viz,
       format: "physical",
-      isbn13: "9781999000404",
+      isbn13: "9781999000400",
       pubDate: on(2023, 9, 19),
       price: usd(5999),
       description: "All four standard paperbacks with an exclusive cover.",
@@ -367,7 +378,7 @@ export const run = internalMutation({
         editionId: edition.id,
         format: "physical",
         binding: "paperback",
-        isbn13: `978199900020${position}`,
+        isbn13: tgReIsbns[position - 1],
         pubDate: on(2017, 9 + position, 17),
         price: usd(1299),
         publisherId: viz,
@@ -394,7 +405,7 @@ export const run = internalMutation({
         editionId: edition.id,
         format: "physical",
         binding: "paperback",
-        isbn13: `978199900030${position}`,
+        isbn13: quietIsbns[position - 1],
         pubDate: on(2026, 2 + position, 10),
         price: usd(1499),
         publisherId: sevenSeas,
@@ -419,7 +430,7 @@ export const run = internalMutation({
       editionId: oneshotEdition.id,
       format: "physical",
       binding: "paperback",
-      isbn13: "9781999000503",
+      isbn13: "9781999000509",
       pubDate: on(2025, 11, 4),
       price: usd(1599),
       publisherId: sevenSeas,

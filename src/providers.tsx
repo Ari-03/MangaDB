@@ -1,5 +1,5 @@
 import { ClerkProvider, UserButton, useAuth } from "@clerk/tanstack-react-start";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import type { ReactNode } from "react";
@@ -48,8 +48,38 @@ export function SiteHeader() {
       <Link to="/" className="site-name">
         MangaDB
       </Link>
+      <HeaderSearch />
       {clerkEnabled ? <AuthNav /> : null}
     </header>
+  );
+}
+
+// Site-wide entry into /search (ticket #38). A real GET form so it works
+// before hydration; with JS the submit becomes a client-side navigation.
+function HeaderSearch() {
+  const navigate = useNavigate();
+  return (
+    <form
+      className="header-search"
+      role="search"
+      action="/search"
+      method="get"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const value = new FormData(event.currentTarget).get("q");
+        void navigate({
+          to: "/search",
+          search: { q: typeof value === "string" ? value : "" },
+        });
+      }}
+    >
+      <input
+        type="search"
+        name="q"
+        placeholder="Search…"
+        aria-label="Search series, publishers, or an ISBN"
+      />
+    </form>
   );
 }
 

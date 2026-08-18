@@ -315,6 +315,68 @@ footer {
   color: var(--accent);
 }
 
+/* ---- search (ticket #38) ---- */
+
+.header-search {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.header-search input {
+  font: inherit;
+  font-size: 0.9rem;
+  width: 100%;
+  max-width: 14rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--card);
+  color: var(--fg);
+}
+
+.search-form {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0 0.5rem;
+}
+
+.search-form input {
+  font: inherit;
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--card);
+  color: var(--fg);
+}
+
+.search-results {
+  margin: 0 0 1.5rem;
+}
+
+.search-results h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.5rem;
+}
+
+.result-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.result-list a {
+  color: var(--accent);
+}
+
+.result-alt {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 /* ---- auth & account (ticket #26) ---- */
 
 .site-header {

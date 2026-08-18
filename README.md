@@ -14,9 +14,9 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 
 | Path | What |
 |---|---|
-| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `series.$publicId.$slug.tsx` is the public Series page; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
+| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `series.$publicId.$slug.tsx` is the public Series page; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
 | `src/router.tsx` | Router factory (`getRouter`) |
-| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs) |
+| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
 | `src/server.ts` | Custom Workers entry: canonical-host redirect, then the Start handler |
@@ -79,6 +79,29 @@ computed from the current title at request time, never stored
 a merged Series (merged docs keep their public ID and point at the survivor)
 all 301 to the canonical URL.
 
+## Search
+
+`/search?q=…` (spec §8/§11, ticket #38) is v1 search, reachable from the box
+in the site header. It is deliberately narrow:
+
+- **Series** are matched through the `search_title` search index on
+  `searchText` — the title and every alternate title concatenated on write —
+  so "Toukyou Kushu" finds Tokyo Ghoul. Results link the canonical
+  `/series/{id}/{slug}` pages; hidden and merged records never appear (a
+  merged Series is findable through its survivor).
+- **Publishers** resolve by case-insensitive name match over the small
+  publisher list, linking their `/publisher/{slug}` pages (Publisher
+  Spotlight pages are ticket #25).
+- **ISBNs**: a query recognized as a valid ISBN-10/13 (`src/lib/isbn.ts` —
+  checksum-verified, separators ignored) never runs a text search; the loader
+  302s through `/isbn/{isbn}`, the route that owns resolution to the owning
+  Edition page anchored at the Release (or the Bundle page) with a 301
+  (ticket #23). The dev seed's fake ISBNs are checksum-valid so this is
+  demoable locally — try `978-1-9990001-0-3`.
+
+No Volume or Bundle text search in v1, and search pages are noindex — they
+are not in the spec's indexable set.
+
 ## Auth (Clerk) — how it works
 
 Spec §9. Clerk owns credentials and sessions (Google OAuth + verified
@@ -137,7 +160,7 @@ Other commands:
 
 ```sh
 npm run typecheck   # tsc --noEmit
-npm test            # vitest (canonical-host + slug policy; seed, series page, accounts via convex-test)
+npm test            # vitest (canonical-host + slug + ISBN policy; seed, series page, search, accounts via convex-test)
 npm run build       # production client + Worker bundles into dist/
 npm run preview     # serve the production build locally in workerd
 ```
