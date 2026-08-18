@@ -48,6 +48,10 @@ export function SiteHeader() {
       <Link to="/" className="site-name">
         MangaDB
       </Link>
+      {/* The Releases browser (#24) is the main public browse surface. */}
+      <Link to="/releases" className="site-nav-link">
+        Releases
+      </Link>
       <HeaderSearch />
       {clerkEnabled ? <AuthNav /> : null}
     </header>

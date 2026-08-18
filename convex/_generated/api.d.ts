@@ -12,6 +12,7 @@ import type * as catalog from "../catalog.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_publicIds from "../lib/publicIds.js";
 import type * as lib_usernames from "../lib/usernames.js";
+import type * as releases from "../releases.js";
 import type * as seed from "../seed.js";
 import type * as users from "../users.js";
 
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
   "lib/publicIds": typeof lib_publicIds;
   "lib/usernames": typeof lib_usernames;
+  releases: typeof releases;
   seed: typeof seed;
   users: typeof users;
 }>;

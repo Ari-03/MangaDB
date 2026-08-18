@@ -14,6 +14,8 @@ import { Route as ClaimUsernameRouteImport } from './routes/claim-username'
 import { Route as MeRouteImport } from './routes/me'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as MeIndexRouteImport } from './routes/me.index'
+import { Route as ReleasesIndexRouteImport } from './routes/releases.index'
+import { Route as ReleasesMonthRouteImport } from './routes/releases.$month'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SeriesPublicIdIndexRouteImport } from './routes/series.$publicId.index'
@@ -44,6 +46,16 @@ const MeIndexRoute = MeIndexRouteImport.update({
   path: '/',
   getParentRoute: () => MeRoute,
 } as any)
+const ReleasesIndexRoute = ReleasesIndexRouteImport.update({
+  id: '/releases/',
+  path: '/releases/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReleasesMonthRoute = ReleasesMonthRouteImport.update({
+  id: '/releases/$month',
+  path: '/releases/$month',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignInSplatRoute = SignInSplatRouteImport.update({
   id: '/sign-in/$',
   path: '/sign-in/$',
@@ -70,9 +82,11 @@ export interface FileRoutesByFullPath {
   '/claim-username': typeof ClaimUsernameRoute
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
+  '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me/': typeof MeIndexRoute
+  '/releases/': typeof ReleasesIndexRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
 }
@@ -80,9 +94,11 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/search': typeof SearchRoute
+  '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me': typeof MeIndexRoute
+  '/releases': typeof ReleasesIndexRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/series/$publicId': typeof SeriesPublicIdIndexRoute
 }
@@ -92,9 +108,11 @@ export interface FileRoutesById {
   '/claim-username': typeof ClaimUsernameRoute
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
+  '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me/': typeof MeIndexRoute
+  '/releases/': typeof ReleasesIndexRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
 }
@@ -105,9 +123,11 @@ export interface FileRouteTypes {
     | '/claim-username'
     | '/me'
     | '/search'
+    | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/me/'
+    | '/releases/'
     | '/series/$publicId/$slug'
     | '/series/$publicId/'
   fileRoutesByTo: FileRoutesByTo
@@ -115,9 +135,11 @@ export interface FileRouteTypes {
     | '/'
     | '/claim-username'
     | '/search'
+    | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/me'
+    | '/releases'
     | '/series/$publicId/$slug'
     | '/series/$publicId'
   id:
@@ -126,9 +148,11 @@ export interface FileRouteTypes {
     | '/claim-username'
     | '/me'
     | '/search'
+    | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/me/'
+    | '/releases/'
     | '/series/$publicId/$slug'
     | '/series/$publicId/'
   fileRoutesById: FileRoutesById
@@ -138,8 +162,10 @@ export interface RootRouteChildren {
   ClaimUsernameRoute: typeof ClaimUsernameRoute
   MeRoute: typeof MeRouteWithChildren
   SearchRoute: typeof SearchRoute
+  ReleasesMonthRoute: typeof ReleasesMonthRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
+  ReleasesIndexRoute: typeof ReleasesIndexRoute
   SeriesPublicIdSlugRoute: typeof SeriesPublicIdSlugRoute
   SeriesPublicIdIndexRoute: typeof SeriesPublicIdIndexRoute
 }
@@ -180,6 +206,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/me/'
       preLoaderRoute: typeof MeIndexRouteImport
       parentRoute: typeof MeRoute
+    }
+    '/releases/': {
+      id: '/releases/'
+      path: '/releases'
+      fullPath: '/releases/'
+      preLoaderRoute: typeof ReleasesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/releases/$month': {
+      id: '/releases/$month'
+      path: '/releases/$month'
+      fullPath: '/releases/$month'
+      preLoaderRoute: typeof ReleasesMonthRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/sign-in/$': {
       id: '/sign-in/$'
@@ -227,8 +267,10 @@ const rootRouteChildren: RootRouteChildren = {
   ClaimUsernameRoute: ClaimUsernameRoute,
   MeRoute: MeRouteWithChildren,
   SearchRoute: SearchRoute,
+  ReleasesMonthRoute: ReleasesMonthRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
+  ReleasesIndexRoute: ReleasesIndexRoute,
   SeriesPublicIdSlugRoute: SeriesPublicIdSlugRoute,
   SeriesPublicIdIndexRoute: SeriesPublicIdIndexRoute,
 }

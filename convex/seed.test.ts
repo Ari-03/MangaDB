@@ -85,6 +85,41 @@ describe("seed.run", () => {
   });
 });
 
+describe("releases.monthBrowse over the seed", () => {
+  it("populates the current month's browser window, day-TBA included", async () => {
+    const { t } = await seeded();
+    const now = new Date();
+    const result = await t.query(api.releases.monthBrowse, {
+      year: now.getUTCFullYear(),
+      month: now.getUTCMonth() + 1,
+    });
+    // Quiet Cartographer Vol 4 (physical + digital), Tokyo Ghoul:re Vol 3
+    // (physical + a month-precision digital date).
+    expect(result.releases).toHaveLength(4);
+    expect(result.releases.filter((r) => r.day === null)).toHaveLength(1);
+    expect(
+      result.releases.map((r) => [r.series[0]?.title, r.volumeLabel, r.format]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["The Quiet Cartographer", "Vol. 4", "physical"],
+        ["The Quiet Cartographer", "Vol. 4", "digital"],
+        ["Tokyo Ghoul:re", "Vol. 3", "physical"],
+        ["Tokyo Ghoul:re", "Vol. 3", "digital"],
+      ]),
+    );
+    // Both filters over the same window (spec §10: shared in both views).
+    const filtered = await t.query(api.releases.monthBrowse, {
+      year: now.getUTCFullYear(),
+      month: now.getUTCMonth() + 1,
+      format: "physical",
+      publisher: "seven-seas",
+    });
+    expect(
+      filtered.releases.map((r) => [r.volumeLabel, r.publisher?.slug]),
+    ).toEqual([["Vol. 4", "seven-seas"]]);
+  });
+});
+
 describe("catalog.seriesPage over the seed", () => {
   it("renders Tokyo Ghoul as the Reading Path: canonical order, distinct label, family", async () => {
     const { t, ids } = await seeded();

@@ -14,14 +14,14 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 
 | Path | What |
 |---|---|
-| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `series.$publicId.$slug.tsx` is the public Series page; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
+| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx` is the public Series page; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
 | `src/router.tsx` | Router factory (`getRouter`) |
-| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search) |
+| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
 | `src/server.ts` | Custom Workers entry: canonical-host redirect, then the Start handler |
 | `src/server/` | Server-only code (canonical-host policy, SSR Convex client, SSR Clerk auth/token) |
-| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26) |
+| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26) |
 | `wrangler.jsonc` | Workers config (`nodejs_compat`, custom entry, vars) |
 | `vite.config.ts` | Start + Cloudflare + React plugins |
 
@@ -62,6 +62,40 @@ Releases, a box-set-exclusive Release Variant, a Release Bundle that pins that
 Variant — plus a deliberately simple Series and a oneshot that use none of
 those concepts. All publication facts are fake. Public IDs come from the
 `counters` table exactly like production writes (`convex/lib/publicIds.ts`).
+
+The seed also dates a handful of Releases relative to the clock at seed time —
+this month, last month, next month, plus one month-precision "day TBA" date —
+so the Releases browser always has a populated current window to demo.
+
+## Releases browser
+
+The main public browse surface (ticket #24, spec §10, prototype #8): two
+sibling views over the same month window of Canonical Releases.
+
+- **`/releases` — Release Agenda**, the first-visit default: a cover-led
+  chronological list of the current month, grouped and anchored by publication
+  date; each row shows cover, Series link, Volume label (composed from the
+  Edition's Coverage — "Vol. 1–3" for an omnibus, "(partial)" when partial),
+  Format + Binding, and Publisher.
+- **`/releases/{yyyy-mm}` — Month Grid**: the same data month-at-a-glance,
+  each Release on its date; `?view=agenda` renders the Agenda for that month
+  instead, so any month is browsable in either view. Month URLs are also the
+  browser's pagination (spec §11 — never `?page=N`).
+- **Shared filters, all state in the URL:** `?format=physical|digital` and
+  `?publisher={slug}` work identically in both views (a renamed publisher's
+  old slug still resolves via `publisherSlugRedirects`), so every view +
+  filter combination is a shareable link. Unfiltered `/releases` and month
+  pages are indexable; any query param makes the page `noindex, follow` with
+  a canonical to the unfiltered URL (spec §11).
+- **Query shape** (`convex/releases.ts`, the recorded spec §8 trade-off): one
+  date-window index scan per page — `by_publisher_date` when the Publisher
+  filter is set, else `by_date` — with status and Format refined in memory
+  afterwards, because Convex can't index array containment and a month window
+  holds hundreds of rows. A month-precision date (`sort` = `yyyymm00`) lands
+  in its month's window and renders as "day to be announced".
+
+Releases only — Release Bundles stay off the browser (spec §10), and the
+followed-Series filter arrives with Series Follows (ticket #29).
 
 ## Series pages
 

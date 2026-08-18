@@ -28,6 +28,13 @@ const on = (year: number, month: number, day: number) => ({
   sort: year * 10000 + month * 100 + day,
 });
 
+/** Month-precision partial date (day TBA): sort key yyyymm00 (spec §8). */
+const inMonth = (year: number, month: number) => ({
+  year,
+  month,
+  sort: year * 10000 + month * 100,
+});
+
 const usd = (amountCents: number) => ({ amountCents, currency: "USD" });
 
 // Seed ISBNs are fake (a private 978-1-99900 block) but checksum-valid, so
@@ -40,6 +47,11 @@ const tgStandardIsbns = [
 ] as const;
 const tgReIsbns = ["9781999000219", "9781999000226"] as const;
 const quietIsbns = ["9781999000318", "9781999000325", "9781999000332"] as const;
+const upcomingIsbns = [
+  "9781999000707",
+  "9781999000714",
+  "9781999000721",
+] as const;
 
 async function addSeries(
   ctx: MutationCtx,
@@ -391,6 +403,7 @@ export const run = internalMutation({
       title: "The Quiet Cartographer",
       sourceStatus: "ongoing",
     });
+    const quietEditions = [];
     for (const position of [1, 2, 3]) {
       const vol = await addVolume(ctx, {
         seriesId: quiet.id,
@@ -401,6 +414,7 @@ export const run = internalMutation({
         publisherId: sevenSeas,
         coverage: [{ volumeId: vol.id, extent: "complete" }],
       });
+      quietEditions.push(edition);
       await addRelease(ctx, {
         editionId: edition.id,
         format: "physical",
@@ -435,6 +449,112 @@ export const run = internalMutation({
       price: usd(1599),
       publisherId: sevenSeas,
       seriesIds: [oneshot.id],
+    });
+
+    // -- A live month window for the Releases browser (#24): the catalog is
+    //    fixed, but these releases date themselves from the clock at seed
+    //    time, so `/releases` always shows a populated current month, with
+    //    neighbors for prev/next navigation and one month-precision date for
+    //    the "day to be announced" grouping. --
+    const now = new Date();
+    const anchor = { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+    const shifted = (delta: number) => {
+      const zeroBased = anchor.year * 12 + (anchor.month - 1) + delta;
+      return {
+        year: Math.floor(zeroBased / 12),
+        month: ((zeroBased % 12) + 12) % 12 + 1,
+      };
+    };
+    const prevMonth = shifted(-1);
+    const nextMonth = shifted(1);
+
+    // The Quiet Cartographer Vol 4 publishes this month in both formats.
+    const quietVol4 = await addVolume(ctx, {
+      seriesId: quiet.id,
+      position: 4,
+      label: "4",
+    });
+    const quietVol4Edition = await addEdition(ctx, {
+      publisherId: sevenSeas,
+      coverage: [{ volumeId: quietVol4.id, extent: "complete" }],
+    });
+    await addRelease(ctx, {
+      editionId: quietVol4Edition.id,
+      format: "physical",
+      binding: "paperback",
+      isbn13: upcomingIsbns[0],
+      pubDate: on(anchor.year, anchor.month, 9),
+      price: usd(1499),
+      publisherId: sevenSeas,
+      seriesIds: [quiet.id],
+    });
+    await addRelease(ctx, {
+      editionId: quietVol4Edition.id,
+      format: "digital",
+      pubDate: on(anchor.year, anchor.month, 9),
+      price: usd(999),
+      publisherId: sevenSeas,
+      seriesIds: [quiet.id],
+    });
+
+    // Vol 5 lands next month; Vol 3's digital release arrived last month.
+    const quietVol5 = await addVolume(ctx, {
+      seriesId: quiet.id,
+      position: 5,
+      label: "5",
+    });
+    const quietVol5Edition = await addEdition(ctx, {
+      publisherId: sevenSeas,
+      coverage: [{ volumeId: quietVol5.id, extent: "complete" }],
+    });
+    await addRelease(ctx, {
+      editionId: quietVol5Edition.id,
+      format: "physical",
+      binding: "paperback",
+      isbn13: upcomingIsbns[1],
+      pubDate: on(nextMonth.year, nextMonth.month, 12),
+      price: usd(1499),
+      publisherId: sevenSeas,
+      seriesIds: [quiet.id],
+    });
+    const quietVol3Edition = quietEditions[2];
+    if (!quietVol3Edition) throw new Error("seed bug: missing quiet edition");
+    await addRelease(ctx, {
+      editionId: quietVol3Edition.id,
+      format: "digital",
+      pubDate: on(prevMonth.year, prevMonth.month, 18),
+      price: usd(999),
+      publisherId: sevenSeas,
+      seriesIds: [quiet.id],
+    });
+
+    // Tokyo Ghoul:re Vol 3: physical this month, digital day still TBA.
+    const reVol3 = await addVolume(ctx, {
+      seriesId: tokyoGhoulRe.id,
+      position: 3,
+      label: "3",
+    });
+    const reVol3Edition = await addEdition(ctx, {
+      publisherId: viz,
+      coverage: [{ volumeId: reVol3.id, extent: "complete" }],
+    });
+    await addRelease(ctx, {
+      editionId: reVol3Edition.id,
+      format: "physical",
+      binding: "paperback",
+      isbn13: upcomingIsbns[2],
+      pubDate: on(anchor.year, anchor.month, 23),
+      price: usd(1299),
+      publisherId: viz,
+      seriesIds: [tokyoGhoulRe.id],
+    });
+    await addRelease(ctx, {
+      editionId: reVol3Edition.id,
+      format: "digital",
+      pubDate: inMonth(anchor.year, anchor.month),
+      price: usd(899),
+      publisherId: viz,
+      seriesIds: [tokyoGhoulRe.id],
     });
 
     // Handy for tests and for the CLI output when run against a dev deployment.

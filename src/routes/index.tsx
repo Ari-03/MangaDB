@@ -63,6 +63,10 @@ function Home() {
         </p>
       )}
 
+      <p className="home-browse">
+        <Link to="/releases">Browse the release calendar →</Link>
+      </p>
+
       {data && data.series.length > 0 ? (
         <section className="series-index">
           <h2>Series</h2>
