@@ -139,7 +139,7 @@ const evidence = v.union(
 // a redirects table. Hidden and merged records are locked against ordinary
 // edits in code (#14). `overriddenFields` is the sticky Human Override set
 // (#13); its audit trail lives in Revisions.
-const canonical = (table: string) => ({
+const canonical = <Table extends string>(table: Table) => ({
   status: v.union(v.literal("active"), v.literal("hidden"), v.literal("merged")),
   mergedIntoId: v.optional(v.id(table)),
   locked: v.optional(v.boolean()),

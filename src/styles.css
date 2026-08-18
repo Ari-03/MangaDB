@@ -99,6 +99,222 @@ footer {
   padding-top: 1rem;
 }
 
+/* ---- series page (ticket #22) ---- */
+
+.breadcrumbs {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.breadcrumbs a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.series-facts {
+  color: var(--muted);
+  margin: 0 0 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+}
+
+.series-family,
+.reading-path {
+  margin: 0 0 2rem;
+}
+
+.series-family {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+}
+
+.series-family h2,
+.reading-path h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.5rem;
+}
+
+.family-members {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0;
+  margin: 0 0 0.5rem;
+}
+
+.family-members li[aria-current="page"] {
+  font-weight: 700;
+}
+
+.family-relationships {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.section-hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 1rem;
+}
+
+.volume-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.volume {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.9rem 1.1rem;
+}
+
+.volume-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.vol-position {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  padding: 0 0.35rem;
+}
+
+.vol-label {
+  font-weight: 700;
+}
+
+.vol-synopsis {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.35rem 0 0;
+}
+
+.volume-editions {
+  margin-top: 0.5rem;
+}
+
+.volume-editions summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.edition-card {
+  border-top: 1px solid var(--border);
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+
+.edition-header {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+.edition-name {
+  font-weight: 600;
+}
+
+.line-position {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.edition-publisher {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.coverage {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+}
+
+.coverage-chip {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  padding: 0 0.35rem;
+  margin-right: 0.25rem;
+}
+
+.coverage-note {
+  color: var(--muted);
+}
+
+.release-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.release {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75rem;
+}
+
+.release-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.9rem;
+}
+
+.release-form {
+  font-weight: 600;
+}
+
+.release-date,
+.release-isbn,
+.release-price {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.release-description,
+.release-variants,
+.release-bundles {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.15rem 0 0;
+}
+
+.series-index h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.5rem;
+}
+
+.series-links {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 2rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.series-links a {
+  color: var(--accent);
+}
+
 /* ---- auth & account (ticket #26) ---- */
 
 .site-header {

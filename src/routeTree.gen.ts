@@ -15,6 +15,8 @@ import { Route as MeRouteImport } from './routes/me'
 import { Route as MeIndexRouteImport } from './routes/me.index'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
+import { Route as SeriesPublicIdIndexRouteImport } from './routes/series.$publicId.index'
+import { Route as SeriesPublicIdSlugRouteImport } from './routes/series.$publicId.$slug'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -46,6 +48,16 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
   path: '/sign-up/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SeriesPublicIdIndexRoute = SeriesPublicIdIndexRouteImport.update({
+  id: '/series/$publicId/',
+  path: '/series/$publicId/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SeriesPublicIdSlugRoute = SeriesPublicIdSlugRouteImport.update({
+  id: '/series/$publicId/$slug',
+  path: '/series/$publicId/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -54,6 +66,8 @@ export interface FileRoutesByFullPath {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me/': typeof MeIndexRoute
+  '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/series/$publicId/': typeof SeriesPublicIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -61,6 +75,8 @@ export interface FileRoutesByTo {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me': typeof MeIndexRoute
+  '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/series/$publicId': typeof SeriesPublicIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -70,13 +86,29 @@ export interface FileRoutesById {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me/': typeof MeIndexRoute
+  '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/series/$publicId/': typeof SeriesPublicIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/claim-username' | '/me' | '/sign-in/$' | '/sign-up/$' | '/me/'
+    | '/'
+    | '/claim-username'
+    | '/me'
+    | '/sign-in/$'
+    | '/sign-up/$'
+    | '/me/'
+    | '/series/$publicId/$slug'
+    | '/series/$publicId/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/claim-username' | '/sign-in/$' | '/sign-up/$' | '/me'
+  to:
+    | '/'
+    | '/claim-username'
+    | '/sign-in/$'
+    | '/sign-up/$'
+    | '/me'
+    | '/series/$publicId/$slug'
+    | '/series/$publicId'
   id:
     | '__root__'
     | '/'
@@ -85,6 +117,8 @@ export interface FileRouteTypes {
     | '/sign-in/$'
     | '/sign-up/$'
     | '/me/'
+    | '/series/$publicId/$slug'
+    | '/series/$publicId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -93,6 +127,8 @@ export interface RootRouteChildren {
   MeRoute: typeof MeRouteWithChildren
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
+  SeriesPublicIdSlugRoute: typeof SeriesPublicIdSlugRoute
+  SeriesPublicIdIndexRoute: typeof SeriesPublicIdIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -139,6 +175,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignUpSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/series/$publicId/': {
+      id: '/series/$publicId/'
+      path: '/series/$publicId'
+      fullPath: '/series/$publicId/'
+      preLoaderRoute: typeof SeriesPublicIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/series/$publicId/$slug': {
+      id: '/series/$publicId/$slug'
+      path: '/series/$publicId/$slug'
+      fullPath: '/series/$publicId/$slug'
+      preLoaderRoute: typeof SeriesPublicIdSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -158,6 +208,8 @@ const rootRouteChildren: RootRouteChildren = {
   MeRoute: MeRouteWithChildren,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
+  SeriesPublicIdSlugRoute: SeriesPublicIdSlugRoute,
+  SeriesPublicIdIndexRoute: SeriesPublicIdIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -14,13 +14,14 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 
 | Path | What |
 |---|---|
-| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
+| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `series.$publicId.$slug.tsx` is the public Series page; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
 | `src/router.tsx` | Router factory (`getRouter`) |
+| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
 | `src/server.ts` | Custom Workers entry: canonical-host redirect, then the Start handler |
 | `src/server/` | Server-only code (canonical-host policy, SSR Convex client, SSR Clerk auth/token) |
-| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `users.ts` + `lib/` are accounts from #26) |
+| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26) |
 | `wrangler.jsonc` | Workers config (`nodejs_compat`, custom entry, vars) |
 | `vite.config.ts` | Start + Cloudflare + React plugins |
 
@@ -42,6 +43,41 @@ npm run dev
 Everything auth-related is optional locally: without Clerk credentials the app
 runs signed-out-only and the public catalog works end to end. The auth pages
 render a setup notice instead of crashing.
+
+### Dev seed
+
+With `npx convex dev` running, populate a small hand-authored catalog that
+exercises the domain model's corners (ticket #22):
+
+```sh
+npx convex run seed:run '{}'            # only when the catalog is empty
+npx convex run seed:run '{"wipe":true}' # wipe catalog tables and reseed
+```
+
+It creates a Series Family (Tokyo Ghoul → Tokyo Ghoul:re, typed sequel edge),
+Volumes whose hidden Position and public Label diverge (position 4 is labeled
+"3.5"), the "Monster Edition" Edition Line with an omnibus Edition covering
+Volumes 1–3, a split digital Edition with partial Coverage, physical + digital
+Releases, a box-set-exclusive Release Variant, a Release Bundle that pins that
+Variant — plus a deliberately simple Series and a oneshot that use none of
+those concepts. All publication facts are fake. Public IDs come from the
+`counters` table exactly like production writes (`convex/lib/publicIds.ts`).
+
+## Series pages
+
+`/series/{id}/{slug}` (spec §11) server-renders the **Reading Path** hierarchy
+validated by prototype #16: the canonical Volume sequence leads (ordered by
+hidden Volume Position — the publisher-facing Label is display-only, never the
+sort key), and each Volume reveals every covering Edition with its Edition
+Line membership, ordered Volume Coverage (complete/partial), Releases,
+Variants, and Bundle cross-links. Simple Series show none of the empty
+concepts.
+
+The `{id}` is the per-entity sequential public ID; the slug is cosmetic and
+computed from the current title at request time, never stored
+(`src/lib/slug.ts`). A wrong or stale slug, a slugless URL, and the old ID of
+a merged Series (merged docs keep their public ID and point at the survivor)
+all 301 to the canonical URL.
 
 ## Auth (Clerk) — how it works
 
@@ -101,7 +137,7 @@ Other commands:
 
 ```sh
 npm run typecheck   # tsc --noEmit
-npm test            # vitest (canonical-host policy, accounts/username policy via convex-test)
+npm test            # vitest (canonical-host + slug policy; seed, series page, accounts via convex-test)
 npm run build       # production client + Worker bundles into dist/
 npm run preview     # serve the production build locally in workerd
 ```
