@@ -5,11 +5,23 @@ import {
   Outlet,
   Scripts,
 } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import type { ReactNode } from "react";
 
+import { AppProviders, SiteHeader } from "~/providers";
+import { ssrAuth } from "~/server/auth";
 import stylesUrl from "../styles.css?url";
 
+// Runs on the server for SSR and on every client navigation (server-fn RPC),
+// so gated routes see fresh auth state both ways (spec §9).
+const fetchSsrAuth = createServerFn({ method: "GET" }).handler(async () => {
+  return await ssrAuth();
+});
+
 export const Route = createRootRoute({
+  // Merged into router context: `userId` (Clerk subject, null signed out) and
+  // `convexToken` for authed SSR reads via convexServerClient(token).
+  beforeLoad: async () => await fetchSsrAuth(),
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -24,7 +36,17 @@ export const Route = createRootRoute({
     links: [{ rel: "stylesheet", href: stylesUrl }],
   }),
   shellComponent: RootDocument,
+  component: RootComponent,
 });
+
+function RootComponent() {
+  return (
+    <AppProviders>
+      <SiteHeader />
+      <Outlet />
+    </AppProviders>
+  );
+}
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (

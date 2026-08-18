@@ -4,5 +4,7 @@ dist/
 .env
 .env.local
 .env.*.local
+.dev.vars
+.dev.vars.*
 worker-configuration.d.ts
 .tanstack/
