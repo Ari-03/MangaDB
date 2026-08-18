@@ -1,0 +1,43 @@
+{
+  "name": "mangadb",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "codegen": "convex codegen",
+    "cf-typegen": "wrangler types",
+    "convex:dev": "convex dev",
+    "deploy": "convex deploy --cmd-url-env-var-name VITE_CONVEX_URL --cmd \"npm run build\" && wrangler deploy"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.170.29",
+    "@tanstack/react-start": "^1.168.46",
+    "convex": "^1.44.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.52.1",
+    "@edge-runtime/vm": "^5.0.0",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "convex-test": "^0.0.55",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.123.0"
+  },
+  "allowScripts": {
+    "esbuild@0.27.0": true,
+    "esbuild@0.28.1": true,
+    "workerd@1.20260811.1": true,
+    "sharp@0.35.2": true
+  }
+}

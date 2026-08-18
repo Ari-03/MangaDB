@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mangadb",
+  // Custom entry wrapping the Start handler with the canonical-host redirect
+  // (apex canonical, www 301, HTTPS-only — spec §11).
+  "main": "src/server.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    // The canonical public host (spec §12). Requests for www.<host> 301 to the
+    // apex; hosts that don't match (workers.dev previews, localhost) are
+    // served as-is. Set to "" to disable redirects entirely.
+    "CANONICAL_HOST": "mangadb.org"
+    // VITE_CONVEX_URL is intentionally not set here: set it per environment
+    //   wrangler deploy --var VITE_CONVEX_URL:https://<deployment>.convex.cloud
+    // or add it under `vars` once the Convex deployment exists (see README).
+  }
+  // When mangadb.org is attached to the Worker, add:
+  // "routes": [
+  //   { "pattern": "mangadb.org", "custom_domain": true },
+  //   { "pattern": "www.mangadb.org", "custom_domain": true }
+  // ]
+}
