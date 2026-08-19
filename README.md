@@ -462,19 +462,17 @@ signal), fetches the book page for new/changed records only (the
 ISBN, cover), skips non-manga records (light novels, audiobooks),
 normalizes, and reconciles each snapshot atomically:
 
-- **Matching ladder**: ① the stored observation link (a rename becomes a
-  field conflict, never a failed match) → ② ISBN-13 exact with a
-  title-similarity sanity check (a failed check flags for review — the
-  importer never merges) → ⑤ the creation path. Rungs ③/④ become meaningful
-  with the second source.
+- **Matching ladder**: the full five rungs, shared with every future
+  adapter — see "Import reconciliation (ticket #35)" below.
 - **Creation** goes through the same Proposal machinery as humans (spec §5):
   a system-authored, immediately approved Proposal creates
   Series → Volume → Edition (+ coverage) → Release, with one public
   importer-authored **Revision per record citing the source name + record
   URL**. Marketing descriptions are never imported (spec §6).
 - **Steady state** auto-creates a single-volume Release under an
-  already-linked Series; a brand-new Series or multi-volume coverage queues
-  an In-Review Proposal pre-filled with the parsed guess instead.
+  already-linked Series; a brand-new Series, multi-volume coverage, or an
+  Edition-Line-shaped release (deluxe/omnibus/box-set packaging) queues an
+  In-Review Proposal pre-filled with the parsed guess instead.
 - **Bootstrap Mode** (spec §7) lifts both gates: those records are created
   directly and tagged `bootstrapUnreviewed` — exactly what steady state
   would have queued — queryable as the post-launch backlog via
@@ -486,10 +484,9 @@ normalizes, and reconciles each snapshot atomically:
   npx convex run importSources:setBootstrapModeInternal '{"on":true}'
   ```
 
-- **Updates** to a linked Release auto-apply only the fields Seven Seas is
-  authoritative for on its own catalog (date, ISBN, price); fields under a
-  sticky Human Override are never touched — the conflicting value stays
-  recorded on the observation.
+- **Updates** to a linked Release reconcile field-by-field under the
+  authority conflict rules (next section); a Series rename at the source is
+  a field conflict on the linked Series, never a failed match.
 - **Covers** land in Convex file storage as
   `{storageId, sourceUrl, attribution}`, with the attribution string from
   the registry row.
@@ -508,6 +505,75 @@ Bootstrap seeding order for this source: `seedRegistry` → turn Bootstrap
 Mode on → repeat `sevenSeas:sync` until `recordsChanged` settles at 0. The
 `imports.recentRuns` query (Moderator+) shows run history; Bootstrap Mode is
 switched off permanently before launch (spec §7).
+
+## Import reconciliation: matching ladder + authority rules (ticket #35)
+
+Spec §6, source-agnostic: every adapter funnels through the same three
+modules, so Kodansha/PRH/ANN/OpenLibrary inherit the whole rulebook.
+
+**The five-rung matching ladder** (`convex/lib/matching.ts`), strongest
+first, resolved top-down:
+
+1. **Stored source-id link** — the observation's `recordRef` (the adapter's
+   fast path). A rename at the source is then a field conflict on the
+   linked record, never a failed match.
+2. **ISBN-13 exact** with a title-similarity sanity check; a hit with a
+   dissimilar title flags for review.
+3. **Publisher + normalized series title + volume label + format**, against
+   editions covering exactly that one volume — auto ONLY with exactly one
+   candidate carrying no Human Override and no lock.
+4. **Title-only** plausible candidates: always review.
+5. **No match**: the creation path.
+
+Two plausible candidates anywhere queue a flagged In-Review Proposal
+(pre-filled with the creation guess and the ambiguity in its change
+comment); the importer never initiates a merge. Multi-volume facts (omnibus
+ranges) skip rungs ③/④ — ISBN or the creation path.
+
+**Authority conflict rules** (`convex/lib/authority.ts` pure decisions,
+`convex/lib/reconcile.ts` applies them). For each offered field, the
+incumbent is whoever authored the latest Revision touching it; both sides'
+ranks come from the **live** registry, so a registry edit ("rules change")
+re-routes the next run with no code change:
+
+- **Strictly higher authority** auto-updates (approved system Proposal +
+  public importer-authored Revision citing the source).
+- **Equal authority** queues an In-Review conflict Proposal — one open
+  conflict per observation; a stale or outdated open conflict is withdrawn
+  and replaced by the importer itself.
+- **Lower authority** is recorded on the observation only
+  (`sourceObservations.conflicts`).
+- **Dates**: a consistent more-precise date auto-refines at equal-or-higher
+  authority; less precise never replaces more precise (not even a conflict).
+- **Human Overrides stay sticky**: a conflicting import queues at ANY
+  authority and never overwrites; human-authored values without an override
+  mark queue too. A source updating its own previously imported fact
+  auto-updates (not a cross-source disagreement).
+- The `price` authority column extends the spec table as plain registry
+  data (own-catalog sources + PRH authoritative).
+
+**Suppression** (spec §6): rejecting a source-authored conflict Proposal
+(`proposals.rejectProposal`) writes a `conflictSuppressions` row per
+rejected field, keyed exactly on (record, field, source, offered value) —
+the identical conflict never re-queues. It lifts when the source offers a
+different value (different hash), the observation is withdrawn (the sweep
+deletes that record's suppressions from that source), or registry rules
+re-route the field away from the queue.
+
+**Steady-state creation boundaries**: a single-Volume Release under an
+already-linked Series auto-creates; a brand-new Series, multi-Volume
+Coverage, or an Edition-Line-shaped release
+(omnibus/deluxe/box-set/collector's packaging) queues pre-filled so a
+correct guess is one click. Bootstrap Mode lifts the creation gates —
+matching ambiguity still reviews even in Bootstrap Mode. Queue dedup rides
+`sourceObservations.queuedProposalId`: one open queue item per observation,
+and a rejected one never re-queues until the snapshot changes.
+
+Tests: `convex/lib/authority.test.ts` (the decision table),
+`convex/lib/matching.test.ts` (the ladder against a hand-built catalog),
+`convex/reconcile.test.ts` (end to end through the Seven Seas pipeline on a
+stubbed site: overrides, suppression, source-vs-source conflicts, precision
+refinement, rungs ③/④, the Edition-Line gate, withdrawal).
 
 ## SEO: metadata, JSON-LD, Open Graph, sitemaps (ticket #39)
 

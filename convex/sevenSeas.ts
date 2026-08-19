@@ -5,18 +5,22 @@
 // (lib/sevenSeas.ts), and hands each snapshot to `applyBook`:
 //
 //   observation upsert (latest snapshot + append-only history)
-//     → matching ladder (① stored link · ② ISBN-13 + title sanity · ⑤ create)
-//     → system-authored, immediately approved Proposal that creates
-//       Series/Volume/Edition/Release, with public importer-authored
-//       Revisions citing the source name + record URL
-//     → in steady state, a brand-new Series or multi-Volume Coverage queues
-//       an In-Review Proposal instead; in Bootstrap Mode those records are
-//       created directly and tagged bootstrap-unreviewed (spec §7).
+//     → the full matching ladder (lib/matching.ts): ① stored link ·
+//       ② ISBN-13 + title sanity · ③ publisher+title+label+format with
+//       exactly one candidate · ④ title-only always reviews · ⑤ create.
+//       Ambiguity always queues flagged; the importer never merges.
+//     → linked records reconcile field-by-field under the authority rules
+//       (lib/reconcile.ts): auto-update, queue a conflict Proposal, or
+//       record on the observation only. Human Overrides stay sticky.
+//     → the creation path emits a system-authored, immediately approved
+//       Proposal creating Series/Volume/Edition/Release with public
+//       importer-authored Revisions citing the source name + record URL.
+//     → in steady state, a brand-new Series, multi-Volume Coverage, or an
+//       Edition-Line-shaped release queues an In-Review Proposal instead;
+//       in Bootstrap Mode those records are created directly and tagged
+//       bootstrap-unreviewed (spec §7).
 //
 // Covers land in Convex file storage as {storageId, sourceUrl, attribution}.
-// Rungs ③/④ of the matching ladder (publisher+title+label, title-only)
-// become meaningful once a second source can observe records this source
-// created; they arrive with the Kodansha adapter.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -24,8 +28,10 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
+import { matchRelease, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import { allocatePublicId } from "./lib/publicIds";
+import { reconcileFields } from "./lib/reconcile";
 import {
   bookSnapshotValidator,
   isMangaBook,
@@ -34,7 +40,6 @@ import {
   parseBookPage,
   type BookSnapshot,
 } from "./lib/sevenSeas";
-import { sameValue } from "./lib/values";
 
 export const SOURCE_KEY = "sevenseas";
 const BASE_URL = "https://sevenseasentertainment.com";
@@ -307,60 +312,101 @@ function coveredLabels(label: string | undefined): string[] {
   return [label];
 }
 
-/** Loose title-similarity sanity check for the ISBN rung (spec §6). */
-export function titlesSimilar(a: string, b: string): boolean {
-  const tokens = (s: string) =>
-    new Set(
-      s
-        .toLowerCase()
-        .replace(/\(.*?\)/g, " ")
-        .replace(/[^a-z0-9 ]/g, " ")
-        .split(/\s+/)
-        .filter((w) => w.length > 1),
-    );
-  const ta = tokens(a);
-  const tb = tokens(b);
-  if (ta.size === 0 || tb.size === 0) return true;
-  let shared = 0;
-  for (const w of ta) if (tb.has(w)) shared++;
-  return shared / Math.min(ta.size, tb.size) >= 0.5;
+/** The fields this source offers on a linked Release, in canonical form. */
+function offeredReleaseFields(snapshot: BookSnapshot): Record<string, unknown> {
+  const offered: Record<string, unknown> = {};
+  if (snapshot.isbn13 !== undefined) offered.isbn13 = snapshot.isbn13;
+  if (snapshot.releaseDate) offered.pubDate = toPartialDate(snapshot.releaseDate);
+  if (snapshot.priceCents !== undefined) {
+    offered.price = {
+      amountCents: snapshot.priceCents,
+      currency: snapshot.currency ?? "USD",
+    };
+  }
+  return offered;
 }
 
-async function latestRevisionId(
+// A single-Volume release that still implies an Edition Line — deluxe,
+// omnibus, box-set packaging — always reviews in steady state (spec §6
+// creation boundaries); multi-volume ranges are caught by the coverage gate.
+const EDITION_LINE_HINT = /\b(omnibus|box(?:ed)? set|deluxe|collector'?s)\b/i;
+
+function needsEditionLine(snapshot: BookSnapshot): boolean {
+  return (
+    EDITION_LINE_HINT.test(snapshot.seriesTitle) ||
+    EDITION_LINE_HINT.test(snapshot.title)
+  );
+}
+
+/** When the observation's CURRENT snapshot was stored (history is append-only). */
+async function snapshotStoredAt(
   ctx: MutationCtx,
-  type: "release",
-  id: Id<"releases">,
-): Promise<{ id: Id<"revisions"> | null; seq: number }> {
-  const latest = await ctx.db
-    .query("revisions")
-    .withIndex("by_record", (q) => q.eq("ref.type", type).eq("ref.id", id as never))
+  observation: Doc<"sourceObservations">,
+): Promise<number> {
+  const lastSuperseded = await ctx.db
+    .query("observationSnapshots")
+    .withIndex("by_observation", (q) => q.eq("observationId", observation._id))
     .order("desc")
     .first();
-  return { id: latest?._id ?? null, seq: latest?.seq ?? 0 };
+  return lastSuperseded?.supersededAt ?? observation._creationTime;
 }
 
-/** Is this observation already waiting in the review queue? */
-async function hasQueuedProposal(
+/**
+ * Queue dedup (spec §6): one open queue item per observation, and a
+ * rejected one never re-queues until the snapshot changes. Approved or
+ * withdrawn queue items never block.
+ */
+async function alreadyHandled(
   ctx: MutationCtx,
-  observationId: Id<"sourceObservations">,
+  observation: Doc<"sourceObservations">,
 ): Promise<boolean> {
-  const pending = await ctx.db
-    .query("proposals")
-    .withIndex("by_state", (q) => q.eq("state", "inReview"))
-    .collect();
-  for (const proposal of pending) {
-    const version = await ctx.db
-      .query("proposalVersions")
-      .withIndex("by_proposal", (q) =>
-        q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
-      )
-      .unique();
-    const cited = version?.evidence.some(
-      (e) => e.kind === "observation" && e.observationId === observationId,
+  if (!observation.queuedProposalId) return false;
+  const proposal = await ctx.db.get(observation.queuedProposalId);
+  if (!proposal) return false;
+  if (proposal.state === "inReview") return true;
+  if (proposal.state === "rejected") {
+    return (
+      (await snapshotStoredAt(ctx, observation)) <= (proposal.decidedAt ?? 0)
     );
-    if (cited) return true;
   }
   return false;
+}
+
+/**
+ * Reconcile the linked Series' title with the source's current one — a
+ * series rename at the source is a field conflict routed through the same
+ * authority rules as any other field (spec §6 rung ①, never a failed
+ * match). Returns the linked series, if any, for the creation boundaries.
+ */
+async function reconcileLinkedSeries(
+  ctx: MutationCtx,
+  snapshot: BookSnapshot,
+  citation: { sourceName: string; url: string },
+  now: number,
+): Promise<{ seriesId: Id<"series"> | null; changed: boolean }> {
+  const seriesObs = await getObservation(
+    ctx,
+    SOURCE_KEY,
+    `series:${snapshot.seriesSlug}`,
+  );
+  if (seriesObs?.recordRef?.type !== "series") {
+    return { seriesId: null, changed: false };
+  }
+  const series = await ctx.db.get(seriesObs.recordRef.id);
+  if (!series || series.status !== "active") {
+    return { seriesId: null, changed: false };
+  }
+  if (series.locked) return { seriesId: series._id, changed: false };
+  const result = await reconcileFields(ctx, {
+    sourceKey: SOURCE_KEY,
+    ref: { type: "series", id: series._id },
+    doc: series,
+    offered: { title: snapshot.seriesTitle },
+    observation: seriesObs,
+    citation,
+    now,
+  });
+  return { seriesId: series._id, changed: result.changed };
 }
 
 /**
@@ -384,7 +430,8 @@ export const applyBook = internalMutation({
     });
 
     // Rung ①: stored source-id link. A rename at the source is then a field
-    // conflict on the linked record, never a failed match.
+    // conflict on the linked record — reconciled under the authority rules —
+    // never a failed match.
     if (observation.recordRef?.type === "release") {
       const release = await ctx.db.get(observation.recordRef.id);
       if (!release || release.status !== "active" || release.locked) {
@@ -393,72 +440,119 @@ export const applyBook = internalMutation({
       if (!changed && release.coverImage) {
         return { status: "unchanged", changed: false };
       }
-      return await applyLinkedUpdate(ctx, { release, snapshot, citation });
+      const seriesResult = await reconcileLinkedSeries(ctx, snapshot, citation, now);
+      const result = await reconcileFields(ctx, {
+        sourceKey: SOURCE_KEY,
+        ref: { type: "release", id: release._id },
+        doc: release,
+        offered: offeredReleaseFields(snapshot),
+        observation,
+        citation,
+        now,
+      });
+      return {
+        status:
+          result.applied.length > 0
+            ? "updated"
+            : result.queued.length > 0
+              ? "queued"
+              : "recordOnly",
+        changed: result.changed || seriesResult.changed,
+        releaseId: release._id,
+        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+      };
     }
 
-    // Rung ②: ISBN-13 exact with a title-similarity sanity check. Ambiguity
-    // or a failed check queues for humans — the importer never merges.
-    if (snapshot.isbn13 !== undefined) {
-      const byIsbn = await ctx.db
-        .query("releases")
-        .withIndex("by_isbn13", (q) => q.eq("isbn13", snapshot.isbn13))
-        .first();
-      if (byIsbn && byIsbn.status === "active") {
-        const seriesTitles: string[] = [];
-        for (const seriesId of byIsbn.seriesIds) {
-          const series = await ctx.db.get(seriesId);
-          if (series) seriesTitles.push(series.title);
-        }
-        if (seriesTitles.some((t) => titlesSimilar(t, snapshot.seriesTitle))) {
-          await ctx.db.patch(observation._id, {
-            recordRef: { type: "release", id: byIsbn._id },
-          });
-          const firstSeriesId = byIsbn.seriesIds[0];
-          if (firstSeriesId !== undefined) {
-            await linkSeriesObservation(ctx, snapshot, firstSeriesId, now);
-          }
-          return { status: "linked", changed: true, releaseId: byIsbn._id };
-        }
-        return {
-          status: "needsReview",
-          changed: false,
-          reason: `ISBN ${snapshot.isbn13} matches an existing release with a dissimilar title`,
-        };
-      }
-    }
+    // The series half of rung ① (keyed on the source's own series slug),
+    // including a rename check; then rungs ②–⑤ via the shared ladder.
+    const { seriesId } = await reconcileLinkedSeries(ctx, snapshot, citation, now);
 
-    // Series link (rung ① for the series concept, keyed on the source's own
-    // series slug); then the creation path (rung ⑤).
-    const seriesObs = await getObservation(
-      ctx,
-      SOURCE_KEY,
-      `series:${snapshot.seriesSlug}`,
-    );
-    let seriesId: Id<"series"> | null = null;
-    if (seriesObs?.recordRef?.type === "series") {
-      const series = await ctx.db.get(seriesObs.recordRef.id);
-      if (series && series.status === "active") seriesId = series._id;
-    }
-
+    const publisher = await ctx.db
+      .query("publishers")
+      .withIndex("by_slug", (q) => q.eq("slug", PUBLISHER.slug))
+      .unique();
     const labels = coveredLabels(snapshot.volumeLabel);
-    const multiVolume = labels.length > 1;
-    const bootstrap = await getBootstrapMode(ctx);
+    const fact: ReleaseFact = {
+      seriesTitle: snapshot.seriesTitle,
+      volumeLabel: labels.length === 1 ? labels[0]! : null,
+      multiVolume: labels.length > 1,
+      format: "physical",
+      isbn13: snapshot.isbn13,
+      publisherId:
+        publisher && publisher.status === "active" ? publisher._id : null,
+    };
+    const match = await matchRelease(ctx, fact);
 
-    // Steady-state creation boundaries (spec §6): a single-Volume Release
-    // under an already-linked Series auto-creates; a brand-new Series or
-    // multi-Volume Coverage always queues, pre-filled so a correct guess is
-    // one click. Bootstrap Mode lifts both gates (spec §7).
-    const wouldQueue = seriesId === null || multiVolume;
-    if (wouldQueue && !bootstrap) {
-      if (await hasQueuedProposal(ctx, observation._id)) {
-        return { status: "alreadyQueued", changed: false };
+    if (match.kind === "match") {
+      // Rung ② or ③ found the one canonical Release this book is: link the
+      // observation, then reconcile the offered fields into it.
+      const release = match.release;
+      await ctx.db.patch(observation._id, {
+        recordRef: { type: "release", id: release._id },
+      });
+      const firstSeriesId = release.seriesIds[0];
+      if (firstSeriesId !== undefined) {
+        await linkSeriesObservation(ctx, snapshot, firstSeriesId, now);
+      }
+      await reconcileFields(ctx, {
+        sourceKey: SOURCE_KEY,
+        ref: { type: "release", id: release._id },
+        doc: release,
+        offered: offeredReleaseFields(snapshot),
+        observation,
+        citation,
+        now,
+      });
+      return {
+        status: "linked",
+        changed: true,
+        releaseId: release._id,
+        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+      };
+    }
+
+    if (match.kind === "review") {
+      // Ambiguity always queues flagged (spec §6) — the importer never
+      // merges, in Bootstrap Mode or out of it. The queue item is the
+      // pre-filled creation guess with the flag in its change comment.
+      if (await alreadyHandled(ctx, observation)) {
+        return { status: "alreadyQueued", changed: false, reason: match.reason };
       }
       await queueCreationProposal(ctx, {
-        observationId: observation._id,
+        observation,
         snapshot,
         seriesId,
         labels,
         now,
+        comment: `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`,
+      });
+      return { status: "needsReview", changed: true, reason: match.reason };
+    }
+
+    // Rung ⑤ — creation, behind the steady-state boundaries (spec §6): a
+    // single-Volume Release under an already-linked Series auto-creates; a
+    // brand-new Series, multi-Volume Coverage, or an Edition-Line-shaped
+    // release always queues, pre-filled so a correct guess is one click.
+    // Bootstrap Mode lifts the gates (spec §7).
+    const bootstrap = await getBootstrapMode(ctx);
+    const gates = [
+      ...(seriesId === null ? ["a brand-new Series"] : []),
+      ...(fact.multiVolume ? ["multi-Volume Coverage"] : []),
+      ...(needsEditionLine(snapshot)
+        ? ["an Edition Line (deluxe/omnibus/box-set packaging)"]
+        : []),
+    ];
+    if (gates.length > 0 && !bootstrap) {
+      if (await alreadyHandled(ctx, observation)) {
+        return { status: "alreadyQueued", changed: false };
+      }
+      await queueCreationProposal(ctx, {
+        observation,
+        snapshot,
+        seriesId,
+        labels,
+        now,
+        comment: `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.`,
       });
       return { status: "queued", changed: true };
     }
@@ -470,7 +564,7 @@ export const applyBook = internalMutation({
       labels,
       citation,
       // Tag exactly what steady state would have queued (spec §7).
-      tagBootstrapUnreviewed: bootstrap && wouldQueue,
+      tagBootstrapUnreviewed: bootstrap && gates.length > 0,
       now,
     });
   },
@@ -716,17 +810,21 @@ async function createCanonicalRecords(
 /**
  * Queue an In-Review Proposal pre-filled with the parsed guess (spec §5/§6):
  * temp-ID create ops for whatever does not exist yet, evidence citing the
- * observation. These land in the shared review queue (proposals.ts, #32);
- * a Moderator's approval applies the ops via the creation registry.
+ * observation, the gate or matching-ladder flag in the change comment.
+ * These land in the shared review queue (proposals.ts, #32); a Moderator's
+ * approval applies the ops via the creation registry. The observation
+ * remembers the proposal (queuedProposalId) so an unchanged snapshot never
+ * re-queues — not while one is open, and not after a rejection.
  */
 async function queueCreationProposal(
   ctx: MutationCtx,
   args: {
-    observationId: Id<"sourceObservations">;
+    observation: Doc<"sourceObservations">;
     snapshot: BookSnapshot;
     seriesId: Id<"series"> | null;
     labels: string[];
     now: number;
+    comment: string;
   },
 ): Promise<void> {
   const { snapshot, labels } = args;
@@ -797,105 +895,10 @@ async function queueCreationProposal(
     proposalId,
     versionNo: 1,
     ops,
-    evidence: [{ kind: "observation", observationId: args.observationId }],
-    changeComment:
-      args.seriesId === null
-        ? `New series "${snapshot.seriesTitle}" observed at Seven Seas — steady-state creation gate.`
-        : `Multi-volume coverage "${snapshot.title}" observed at Seven Seas — steady-state creation gate.`,
+    evidence: [{ kind: "observation", observationId: args.observation._id }],
+    changeComment: args.comment,
   });
-}
-
-// ---------- the linked-update path ----------
-
-/**
- * Auto-update the fields this source is authoritative for on its own
- * catalog (spec §6 authority table): date, ISBN, price. Human Overrides are
- * sticky — overridden fields are skipped; the observation itself already
- * records the conflicting value. Less precise data never replaces more
- * precise; this source only ever offers full-precision dates.
- */
-async function applyLinkedUpdate(
-  ctx: MutationCtx,
-  args: {
-    release: Doc<"releases">;
-    snapshot: BookSnapshot;
-    citation: { sourceName: string; url: string };
-  },
-): Promise<ApplyResult> {
-  const { release, snapshot } = args;
-  const coverNeeded = !release.coverImage && snapshot.coverUrl !== undefined;
-
-  const offered: Record<string, unknown> = {};
-  if (snapshot.isbn13 !== undefined) offered.isbn13 = snapshot.isbn13;
-  if (snapshot.releaseDate) offered.pubDate = toPartialDate(snapshot.releaseDate);
-  if (snapshot.priceCents !== undefined) {
-    offered.price = {
-      amountCents: snapshot.priceCents,
-      currency: snapshot.currency ?? "USD",
-    };
-  }
-
-  const overridden = new Set(release.overriddenFields ?? []);
-  const changes = Object.entries(offered)
-    .filter(([field]) => !overridden.has(field))
-    .filter(
-      ([field, after]) =>
-        !sameValue((release as unknown as Record<string, unknown>)[field], after),
-    )
-    .map(([field, after]) => ({
-      field,
-      before: (release as unknown as Record<string, unknown>)[field],
-      after,
-    }));
-
-  if (changes.length === 0) {
-    return {
-      status: "recordOnly",
-      changed: false,
-      releaseId: release._id,
-      coverNeeded,
-    };
-  }
-
-  const latest = await latestRevisionId(ctx, "release", release._id);
-  const now = Date.now();
-  const proposalId = await ctx.db.insert("proposals", {
-    author: SOURCE_AUTHOR,
-    state: "approved",
-    currentVersionNo: 1,
-    submittedAt: now,
-    decidedAt: now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
-    ops: [
-      {
-        kind: "update" as const,
-        ref: { type: "release" as const, id: release._id },
-        baseRevisionId: latest.id ?? undefined,
-        changes,
-      },
-    ],
-    evidence: [],
-    changeComment: IMPORT_COMMENT,
-  });
-
-  const patch: Record<string, unknown> = {};
-  for (const change of changes) patch[change.field] = change.after;
-  await ctx.db.patch(release._id, patch as never);
-
-  await ctx.db.insert("revisions", {
-    ref: { type: "release", id: release._id } as never,
-    seq: latest.seq + 1,
-    proposalId,
-    author: SOURCE_AUTHOR,
-    changes,
-    comment: IMPORT_COMMENT,
-    citation: args.citation,
-  });
-
-  return { status: "updated", changed: true, releaseId: release._id, coverNeeded };
+  await ctx.db.patch(args.observation._id, { queuedProposalId: proposalId });
 }
 
 // ---------- covers ----------

@@ -356,6 +356,23 @@ export default defineSchema({
     snapshot: v.any(),
     lastSeenAt: v.number(),
     withdrawn: v.boolean(),
+    // Lower-authority disagreements live here, on the observation only
+    // (spec §6 conflict rules) — one entry per field, latest offer wins.
+    conflicts: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          offered: v.any(),
+          at: v.number(),
+          reason: v.string(),
+        }),
+      ),
+    ),
+    // The Proposal this observation most recently queued (a flagged match
+    // review, a steady-state creation gate, or an authority conflict) —
+    // reconciliation's dedup anchor: one open queue item per observation,
+    // and a rejected one never re-queues until the snapshot changes.
+    queuedProposalId: v.optional(v.id("proposals")),
   })
     .index("by_source_record", ["sourceKey", "sourceRecordId"])
     .index("by_record", ["recordRef.type", "recordRef.id"])

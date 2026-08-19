@@ -29,7 +29,10 @@ const fieldAuthority = v.record(v.string(), authorityLevel);
 // The v1 authority table from spec §6, as seed data. `seedRegistry` only
 // inserts missing keys — it never overwrites a row an Administrator edited.
 // Only Seven Seas starts enabled; the other adapters land in later tickets
-// and their rows are flipped on as data when they do.
+// and their rows are flipped on as data when they do. The `price` column
+// extends the spec table as plain registry data (that's the point of the
+// registry): own-catalog publishers and the distributor API are
+// authoritative for their own list prices; ANN/OpenLibrary have none.
 export const V1_SOURCE_DEFAULTS = [
   {
     key: "sevenseas",
@@ -42,6 +45,7 @@ export const V1_SOURCE_DEFAULTS = [
       titles: "authoritative",
       creators: "authoritative",
       format: "authoritative",
+      price: "authoritative",
     },
     cadence: "daily",
     attribution: "Cover and publication data courtesy of Seven Seas Entertainment (sevenseasentertainment.com).",
@@ -57,6 +61,7 @@ export const V1_SOURCE_DEFAULTS = [
       titles: "authoritative",
       creators: "authoritative",
       format: "authoritative",
+      price: "authoritative",
     },
     cadence: "daily",
     attribution: "Cover and publication data courtesy of Kodansha (kodansha.us).",
@@ -72,6 +77,7 @@ export const V1_SOURCE_DEFAULTS = [
       titles: "standard",
       creators: "standard",
       format: "standard",
+      price: "authoritative",
     },
     cadence: "daily",
     attribution: "Publication data via the Penguin Random House API.",

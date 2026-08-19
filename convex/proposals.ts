@@ -39,7 +39,7 @@ import {
 } from "./lib/proposalCreates";
 import { fieldDescriptor } from "./lib/moderationFields";
 import { requireDataTeam, requireModerator } from "./lib/roles";
-import { sameValue } from "./lib/values";
+import { sameValue, valueHash } from "./lib/values";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
 
@@ -614,7 +614,13 @@ export const requestChanges = mutation({
   },
 });
 
-/** Reject with a required reason — terminal; Data-Team-only forever. */
+/**
+ * Reject with a required reason — terminal; Data-Team-only forever.
+ * Rejecting an import-authored conflict additionally suppresses each
+ * rejected offer on (record, field, source, offered value) — spec §6: the
+ * identical conflict never re-queues until the source offers a different
+ * value, the observation is withdrawn, or the registry rules change.
+ */
 export const rejectProposal = mutation({
   args: { proposalId: v.id("proposals"), note: v.string() },
   handler: async (ctx, args) => {
@@ -629,6 +635,35 @@ export const rejectProposal = mutation({
       kind: "reject",
       text: note,
     });
+    if (proposal.author.kind === "source") {
+      const sourceKey = proposal.author.sourceKey;
+      const version = await currentVersionOf(ctx, proposal);
+      for (const op of version?.ops ?? []) {
+        if (op.kind !== "update") continue;
+        for (const change of op.changes) {
+          const hash = valueHash(change.after);
+          const existing = await ctx.db
+            .query("conflictSuppressions")
+            .withIndex("by_key", (q) =>
+              q
+                .eq("ref.type", (op.ref as RecordRef).type)
+                .eq("ref.id", (op.ref as RecordRef).id as never)
+                .eq("field", change.field)
+                .eq("sourceKey", sourceKey)
+                .eq("valueHash", hash),
+            )
+            .first();
+          if (!existing) {
+            await ctx.db.insert("conflictSuppressions", {
+              ref: op.ref,
+              field: change.field,
+              sourceKey,
+              valueHash: hash,
+            });
+          }
+        }
+      }
+    }
     await ctx.db.patch(args.proposalId, {
       state: "rejected",
       decidedBy: user._id,

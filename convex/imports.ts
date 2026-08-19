@@ -169,6 +169,10 @@ export const runScheduled = internalAction({
  * absence is never evidence and downtime never expires data (which is why
  * only a complete sweep may call this). Synthetic link observations (the
  * `series:` rung-① links) are skipped: only books appear in the listing.
+ *
+ * Withdrawal also lifts the record's conflict suppressions from this source
+ * (spec §6: suppression holds until the value, observation, or rules
+ * change) — if the record ever reappears, its conflicts get a fresh look.
  */
 export const markWithdrawn = internalMutation({
   args: { sourceKey: v.string(), notSeenSince: v.number() },
@@ -184,6 +188,19 @@ export const markWithdrawn = internalMutation({
       if (obs.withdrawn) continue;
       if (obs.sourceRecordId.startsWith("series:")) continue;
       await ctx.db.patch(obs._id, { withdrawn: true });
+      if (obs.recordRef) {
+        const suppressions = await ctx.db
+          .query("conflictSuppressions")
+          .withIndex("by_key", (q) =>
+            q
+              .eq("ref.type", obs.recordRef!.type)
+              .eq("ref.id", obs.recordRef!.id as never),
+          )
+          .collect();
+        for (const row of suppressions) {
+          if (row.sourceKey === sourceKey) await ctx.db.delete(row._id);
+        }
+      }
       marked++;
     }
     return { marked };
