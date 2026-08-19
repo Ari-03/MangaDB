@@ -22,6 +22,30 @@ export function seriesPath(publicId: number, title: string): string {
   return `/series/${publicId}/${slugify(title)}`;
 }
 
+// Volume, Edition, and Bundle titles are composed, not stored (spec §8):
+// Volumes/Editions from series + label/line (convex/lib/titles.ts), Bundles
+// from their stored name. The slug is computed from that composed title.
+
+/** Canonical Volume URL path, from the composed Volume title. */
+export function volumePath(publicId: number, title: string): string {
+  return `/volume/${publicId}/${slugify(title)}`;
+}
+
+/** Canonical Edition URL path, from the composed Edition title. */
+export function editionPath(publicId: number, title: string): string {
+  return `/edition/${publicId}/${slugify(title)}`;
+}
+
+/** Canonical Bundle URL path, from the Bundle's name. */
+export function bundlePath(publicId: number, title: string): string {
+  return `/bundle/${publicId}/${slugify(title)}`;
+}
+
+/** Route `params` for a `/{entity}/$publicId/$slug` Link. */
+export function slugParams(publicId: number, title: string) {
+  return { publicId: String(publicId), slug: slugify(title) };
+}
+
 /**
  * Parse the `{id}` URL segment. Digits only; forms that don't round-trip
  * ("007") parse fine and the canonical-URL comparison 301s them.

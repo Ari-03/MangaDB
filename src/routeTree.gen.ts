@@ -13,13 +13,20 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClaimUsernameRouteImport } from './routes/claim-username'
 import { Route as MeRouteImport } from './routes/me'
 import { Route as SearchRouteImport } from './routes/search'
+import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
 import { Route as ReleasesIndexRouteImport } from './routes/releases.index'
 import { Route as ReleasesMonthRouteImport } from './routes/releases.$month'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
+import { Route as BundlePublicIdIndexRouteImport } from './routes/bundle.$publicId.index'
+import { Route as BundlePublicIdSlugRouteImport } from './routes/bundle.$publicId.$slug'
+import { Route as EditionPublicIdIndexRouteImport } from './routes/edition.$publicId.index'
+import { Route as EditionPublicIdSlugRouteImport } from './routes/edition.$publicId.$slug'
 import { Route as SeriesPublicIdIndexRouteImport } from './routes/series.$publicId.index'
 import { Route as SeriesPublicIdSlugRouteImport } from './routes/series.$publicId.$slug'
+import { Route as VolumePublicIdIndexRouteImport } from './routes/volume.$publicId.index'
+import { Route as VolumePublicIdSlugRouteImport } from './routes/volume.$publicId.$slug'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -39,6 +46,11 @@ const MeRoute = MeRouteImport.update({
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IsbnIsbnRoute = IsbnIsbnRouteImport.update({
+  id: '/isbn/$isbn',
+  path: '/isbn/$isbn',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MeIndexRoute = MeIndexRouteImport.update({
@@ -66,6 +78,26 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
   path: '/sign-up/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BundlePublicIdIndexRoute = BundlePublicIdIndexRouteImport.update({
+  id: '/bundle/$publicId/',
+  path: '/bundle/$publicId/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BundlePublicIdSlugRoute = BundlePublicIdSlugRouteImport.update({
+  id: '/bundle/$publicId/$slug',
+  path: '/bundle/$publicId/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EditionPublicIdIndexRoute = EditionPublicIdIndexRouteImport.update({
+  id: '/edition/$publicId/',
+  path: '/edition/$publicId/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EditionPublicIdSlugRoute = EditionPublicIdSlugRouteImport.update({
+  id: '/edition/$publicId/$slug',
+  path: '/edition/$publicId/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SeriesPublicIdIndexRoute = SeriesPublicIdIndexRouteImport.update({
   id: '/series/$publicId/',
   path: '/series/$publicId/',
@@ -76,31 +108,55 @@ const SeriesPublicIdSlugRoute = SeriesPublicIdSlugRouteImport.update({
   path: '/series/$publicId/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const VolumePublicIdIndexRoute = VolumePublicIdIndexRouteImport.update({
+  id: '/volume/$publicId/',
+  path: '/volume/$publicId/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VolumePublicIdSlugRoute = VolumePublicIdSlugRouteImport.update({
+  id: '/volume/$publicId/$slug',
+  path: '/volume/$publicId/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
+  '/isbn/$isbn': typeof IsbnIsbnRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me/': typeof MeIndexRoute
   '/releases/': typeof ReleasesIndexRoute
+  '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
+  '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
+  '/bundle/$publicId/': typeof BundlePublicIdIndexRoute
+  '/edition/$publicId/': typeof EditionPublicIdIndexRoute
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
+  '/volume/$publicId/': typeof VolumePublicIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/search': typeof SearchRoute
+  '/isbn/$isbn': typeof IsbnIsbnRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me': typeof MeIndexRoute
   '/releases': typeof ReleasesIndexRoute
+  '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
+  '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
+  '/bundle/$publicId': typeof BundlePublicIdIndexRoute
+  '/edition/$publicId': typeof EditionPublicIdIndexRoute
   '/series/$publicId': typeof SeriesPublicIdIndexRoute
+  '/volume/$publicId': typeof VolumePublicIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -108,13 +164,20 @@ export interface FileRoutesById {
   '/claim-username': typeof ClaimUsernameRoute
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
+  '/isbn/$isbn': typeof IsbnIsbnRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/me/': typeof MeIndexRoute
   '/releases/': typeof ReleasesIndexRoute
+  '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
+  '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
+  '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
+  '/bundle/$publicId/': typeof BundlePublicIdIndexRoute
+  '/edition/$publicId/': typeof EditionPublicIdIndexRoute
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
+  '/volume/$publicId/': typeof VolumePublicIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -123,38 +186,59 @@ export interface FileRouteTypes {
     | '/claim-username'
     | '/me'
     | '/search'
+    | '/isbn/$isbn'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/me/'
     | '/releases/'
+    | '/bundle/$publicId/$slug'
+    | '/edition/$publicId/$slug'
     | '/series/$publicId/$slug'
+    | '/volume/$publicId/$slug'
+    | '/bundle/$publicId/'
+    | '/edition/$publicId/'
     | '/series/$publicId/'
+    | '/volume/$publicId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/claim-username'
     | '/search'
+    | '/isbn/$isbn'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/me'
     | '/releases'
+    | '/bundle/$publicId/$slug'
+    | '/edition/$publicId/$slug'
     | '/series/$publicId/$slug'
+    | '/volume/$publicId/$slug'
+    | '/bundle/$publicId'
+    | '/edition/$publicId'
     | '/series/$publicId'
+    | '/volume/$publicId'
   id:
     | '__root__'
     | '/'
     | '/claim-username'
     | '/me'
     | '/search'
+    | '/isbn/$isbn'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/me/'
     | '/releases/'
+    | '/bundle/$publicId/$slug'
+    | '/edition/$publicId/$slug'
     | '/series/$publicId/$slug'
+    | '/volume/$publicId/$slug'
+    | '/bundle/$publicId/'
+    | '/edition/$publicId/'
     | '/series/$publicId/'
+    | '/volume/$publicId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -162,12 +246,19 @@ export interface RootRouteChildren {
   ClaimUsernameRoute: typeof ClaimUsernameRoute
   MeRoute: typeof MeRouteWithChildren
   SearchRoute: typeof SearchRoute
+  IsbnIsbnRoute: typeof IsbnIsbnRoute
   ReleasesMonthRoute: typeof ReleasesMonthRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   ReleasesIndexRoute: typeof ReleasesIndexRoute
+  BundlePublicIdSlugRoute: typeof BundlePublicIdSlugRoute
+  EditionPublicIdSlugRoute: typeof EditionPublicIdSlugRoute
   SeriesPublicIdSlugRoute: typeof SeriesPublicIdSlugRoute
+  VolumePublicIdSlugRoute: typeof VolumePublicIdSlugRoute
+  BundlePublicIdIndexRoute: typeof BundlePublicIdIndexRoute
+  EditionPublicIdIndexRoute: typeof EditionPublicIdIndexRoute
   SeriesPublicIdIndexRoute: typeof SeriesPublicIdIndexRoute
+  VolumePublicIdIndexRoute: typeof VolumePublicIdIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -198,6 +289,13 @@ declare module '@tanstack/react-router' {
       path: '/search'
       fullPath: '/search'
       preLoaderRoute: typeof SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/isbn/$isbn': {
+      id: '/isbn/$isbn'
+      path: '/isbn/$isbn'
+      fullPath: '/isbn/$isbn'
+      preLoaderRoute: typeof IsbnIsbnRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/me/': {
@@ -235,6 +333,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignUpSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bundle/$publicId/': {
+      id: '/bundle/$publicId/'
+      path: '/bundle/$publicId'
+      fullPath: '/bundle/$publicId/'
+      preLoaderRoute: typeof BundlePublicIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/bundle/$publicId/$slug': {
+      id: '/bundle/$publicId/$slug'
+      path: '/bundle/$publicId/$slug'
+      fullPath: '/bundle/$publicId/$slug'
+      preLoaderRoute: typeof BundlePublicIdSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/edition/$publicId/': {
+      id: '/edition/$publicId/'
+      path: '/edition/$publicId'
+      fullPath: '/edition/$publicId/'
+      preLoaderRoute: typeof EditionPublicIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/edition/$publicId/$slug': {
+      id: '/edition/$publicId/$slug'
+      path: '/edition/$publicId/$slug'
+      fullPath: '/edition/$publicId/$slug'
+      preLoaderRoute: typeof EditionPublicIdSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/series/$publicId/': {
       id: '/series/$publicId/'
       path: '/series/$publicId'
@@ -247,6 +373,20 @@ declare module '@tanstack/react-router' {
       path: '/series/$publicId/$slug'
       fullPath: '/series/$publicId/$slug'
       preLoaderRoute: typeof SeriesPublicIdSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/volume/$publicId/': {
+      id: '/volume/$publicId/'
+      path: '/volume/$publicId'
+      fullPath: '/volume/$publicId/'
+      preLoaderRoute: typeof VolumePublicIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/volume/$publicId/$slug': {
+      id: '/volume/$publicId/$slug'
+      path: '/volume/$publicId/$slug'
+      fullPath: '/volume/$publicId/$slug'
+      preLoaderRoute: typeof VolumePublicIdSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -267,12 +407,19 @@ const rootRouteChildren: RootRouteChildren = {
   ClaimUsernameRoute: ClaimUsernameRoute,
   MeRoute: MeRouteWithChildren,
   SearchRoute: SearchRoute,
+  IsbnIsbnRoute: IsbnIsbnRoute,
   ReleasesMonthRoute: ReleasesMonthRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   ReleasesIndexRoute: ReleasesIndexRoute,
+  BundlePublicIdSlugRoute: BundlePublicIdSlugRoute,
+  EditionPublicIdSlugRoute: EditionPublicIdSlugRoute,
   SeriesPublicIdSlugRoute: SeriesPublicIdSlugRoute,
+  VolumePublicIdSlugRoute: VolumePublicIdSlugRoute,
+  BundlePublicIdIndexRoute: BundlePublicIdIndexRoute,
+  EditionPublicIdIndexRoute: EditionPublicIdIndexRoute,
   SeriesPublicIdIndexRoute: SeriesPublicIdIndexRoute,
+  VolumePublicIdIndexRoute: VolumePublicIdIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

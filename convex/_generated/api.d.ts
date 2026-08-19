@@ -9,8 +9,10 @@
  */
 
 import type * as catalog from "../catalog.js";
+import type * as catalogPages from "../catalogPages.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_publicIds from "../lib/publicIds.js";
+import type * as lib_titles from "../lib/titles.js";
 import type * as lib_usernames from "../lib/usernames.js";
 import type * as releases from "../releases.js";
 import type * as seed from "../seed.js";
@@ -24,8 +26,10 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   catalog: typeof catalog;
+  catalogPages: typeof catalogPages;
   "lib/auth": typeof lib_auth;
   "lib/publicIds": typeof lib_publicIds;
+  "lib/titles": typeof lib_titles;
   "lib/usernames": typeof lib_usernames;
   releases: typeof releases;
   seed: typeof seed;

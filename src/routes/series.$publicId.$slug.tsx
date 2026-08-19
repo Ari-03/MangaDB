@@ -1,6 +1,8 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
-import { parsePublicId, seriesPath } from "~/lib/slug";
+import { editionTitle, volumeTitle } from "../../convex/lib/titles";
+import { formatPartialDate, formatPrice } from "~/lib/format";
+import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
 /**
@@ -68,29 +70,6 @@ const RELATIONSHIP_LABELS = {
   other: "related to",
 } as const;
 
-const MONTHS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-function formatPartialDate(
-  date: { year: number; month?: number; day?: number } | null,
-): string | null {
-  if (!date) return null;
-  const month = date.month ? MONTHS[date.month - 1] : undefined;
-  if (month && date.day) return `${month} ${date.day}, ${date.year}`;
-  if (month) return `${month} ${date.year}`;
-  return String(date.year);
-}
-
-function formatPrice(
-  price: { amountCents: number; currency: string } | null,
-): string | null {
-  if (!price) return null;
-  const amount = (price.amountCents / 100).toFixed(2);
-  return price.currency === "USD" ? `$${amount}` : `${amount} ${price.currency}`;
-}
-
 function SeriesPage() {
   const page = Route.useLoaderData();
   const { series, family, volumes } = page;
@@ -124,7 +103,11 @@ function SeriesPage() {
         </p>
         <ol className="volume-list">
           {volumes.map((volume) => (
-            <VolumeItem key={volume.publicId} volume={volume} />
+            <VolumeItem
+              key={volume.publicId}
+              volume={volume}
+              seriesTitle={series.title}
+            />
           ))}
         </ol>
       </section>
@@ -180,7 +163,13 @@ function seriesLinkParams(publicId: number, title: string) {
   return { publicId: String(publicId), slug };
 }
 
-function VolumeItem({ volume }: { volume: SeriesPageData["volumes"][number] }) {
+function VolumeItem({
+  volume,
+  seriesTitle,
+}: {
+  volume: SeriesPageData["volumes"][number];
+  seriesTitle: string;
+}) {
   const releaseCount = volume.editions.reduce(
     (n, edition) => n + edition.releases.length,
     0,
@@ -194,7 +183,17 @@ function VolumeItem({ volume }: { volume: SeriesPageData["volumes"][number] }) {
           #{volume.position}
         </span>
         <span className="vol-label">
-          {volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume"}
+          {/* Links the Volume page (ticket #23): every covering Release with
+              complete/partial coverage listed distinctly. */}
+          <Link
+            to="/volume/$publicId/$slug"
+            params={slugParams(
+              volume.publicId,
+              volumeTitle(seriesTitle, volume.label),
+            )}
+          >
+            {volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume"}
+          </Link>
         </span>
       </div>
       {volume.synopsis ? <p className="vol-synopsis">{volume.synopsis}</p> : null}
@@ -205,7 +204,11 @@ function VolumeItem({ volume }: { volume: SeriesPageData["volumes"][number] }) {
           {releaseCount === 1 ? "release" : "releases"}
         </summary>
         {volume.editions.map((edition) => (
-          <EditionCard key={edition.publicId} edition={edition} />
+          <EditionCard
+            key={edition.publicId}
+            edition={edition}
+            seriesTitle={seriesTitle}
+          />
         ))}
       </details>
     </li>
@@ -214,12 +217,36 @@ function VolumeItem({ volume }: { volume: SeriesPageData["volumes"][number] }) {
 
 type Edition = SeriesPageData["volumes"][number]["editions"][number];
 
-function EditionCard({ edition }: { edition: Edition }) {
+function EditionCard({
+  edition,
+  seriesTitle,
+}: {
+  edition: Edition;
+  seriesTitle: string;
+}) {
   return (
     <article className="edition-card">
       <header className="edition-header">
         <span className="edition-name">
-          {edition.lineName ?? "Standard edition"}
+          {/* Links the Edition page — the book detail page (ticket #23). The
+              Edition's title is composed, never stored (spec §8). */}
+          <Link
+            to="/edition/$publicId/$slug"
+            params={slugParams(
+              edition.publicId,
+              editionTitle({
+                seriesTitle,
+                lineName: edition.lineName,
+                linePosition: edition.linePosition,
+                covered: edition.coverage.map((c) => ({
+                  label: c.label,
+                  position: c.position,
+                })),
+              }),
+            )}
+          >
+            {edition.lineName ?? "Standard edition"}
+          </Link>
           {/* Edition Line Position is publisher package numbering — never the
               canonical volume number (spec §2). */}
           {edition.lineName && edition.linePosition ? (
@@ -285,7 +312,18 @@ function ReleaseRow({ release }: { release: Edition["releases"][number] }) {
       ) : null}
       {release.bundles.length > 0 ? (
         <p className="release-bundles">
-          Also in {release.bundles.map((bundle) => bundle.name).join(", ")}
+          Also in{" "}
+          {release.bundles.map((bundle, i) => (
+            <span key={bundle.publicId}>
+              {i > 0 ? ", " : ""}
+              <Link
+                to="/bundle/$publicId/$slug"
+                params={slugParams(bundle.publicId, bundle.name)}
+              >
+                {bundle.name}
+              </Link>
+            </span>
+          ))}
         </p>
       ) : null}
     </li>

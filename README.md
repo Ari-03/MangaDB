@@ -14,7 +14,7 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 
 | Path | What |
 |---|---|
-| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx` is the public Series page; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
+| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
 | `src/router.tsx` | Router factory (`getRouter`) |
 | `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
@@ -111,7 +111,37 @@ The `{id}` is the per-entity sequential public ID; the slug is cosmetic and
 computed from the current title at request time, never stored
 (`src/lib/slug.ts`). A wrong or stale slug, a slugless URL, and the old ID of
 a merged Series (merged docs keep their public ID and point at the survivor)
-all 301 to the canonical URL.
+all 301 to the canonical URL. The same ID+slug policy applies to every
+catalog page below.
+
+## Volume, Edition, and Bundle pages + `/isbn` (ticket #23)
+
+The rest of the public catalog surface (spec §2, §10, §11), served by the
+queries in `convex/catalogPages.ts` through `src/server/catalogPages.ts`:
+
+- **`/volume/{id}/{slug}`** reveals every Release covering that Volume,
+  grouped under its Edition and split into **Complete releases** vs
+  **Partial coverage** by the Edition's extent for *this* Volume. The
+  omnibus case shows the Edition's full ordered Coverage (chips linking each
+  covered Volume), and canonical Volume numbering (hidden Position + public
+  Label) stays visibly separate from Edition Line numbering throughout.
+- **`/edition/{id}/{slug}`** is the book detail page: Release rows differing
+  only in Format/Binding, each with ISBN-13/10, date, price, Release
+  Description, its Release Variants beneath, and links to containing
+  Bundles. Editions have no stored name — the page title is composed from
+  series + Edition Line + position or covered Volumes (`convex/lib/titles.ts`),
+  and the slug is computed from that composed title. Releases have no page
+  of their own (spec §11): each row anchors by ISBN when present, else
+  document ID.
+- **`/bundle/{id}/{slug}`** lists a Release Bundle's own publication facts
+  (box-set ISBN, date, price) and its member Releases in order, each
+  linking back to its Edition page anchored at the Release row and naming
+  the pinned Release Variant when the box set specifies one. Release rows
+  on Volume/Edition/Series pages link back to their containing Bundles.
+- **`/isbn/{isbn}`** 301s a valid ISBN-10/13 (separators tolerated) to the
+  owning Edition page anchored at the matching Release row; a box-set ISBN
+  301s to its Bundle page, and a Release match wins any conflict. Unknown
+  or checksum-invalid ISBNs 404.
 
 ## Search
 
@@ -194,7 +224,7 @@ Other commands:
 
 ```sh
 npm run typecheck   # tsc --noEmit
-npm test            # vitest (canonical-host + slug + ISBN policy; seed, series page, search, accounts via convex-test)
+npm test            # vitest (canonical-host + slug + ISBN + title policy; seed, series/volume/edition/bundle pages, isbn lookup, search, accounts via convex-test)
 npm run build       # production client + Worker bundles into dist/
 npm run preview     # serve the production build locally in workerd
 ```

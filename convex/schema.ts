@@ -306,6 +306,7 @@ export default defineSchema({
   })
     .index("by_publicId", ["publicId"])
     .index("by_isbn13", ["isbn13"])
+    .index("by_isbn10", ["isbn10"])
     .index("by_date", ["pubDate.sort"])
     .index("by_bootstrap", ["bootstrapUnreviewed"]),
 
