@@ -356,7 +356,11 @@ export default defineSchema({
     withdrawn: v.boolean(),
   })
     .index("by_source_record", ["sourceKey", "sourceRecordId"])
-    .index("by_record", ["recordRef.type", "recordRef.id"]),
+    .index("by_record", ["recordRef.type", "recordRef.id"])
+    // For the post-sweep withdrawal pass: records a completed full listing
+    // sweep did not touch have disappeared at the source (#13 — retained,
+    // never deleted; absence is never evidence).
+    .index("by_source_seen", ["sourceKey", "lastSeenAt"]),
 
   observationSnapshots: defineTable({
     observationId: v.id("sourceObservations"),

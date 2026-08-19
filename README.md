@@ -21,7 +21,7 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
 | `src/server.ts` | Custom Workers entry: canonical-host redirect, then the Start handler |
 | `src/server/` | Server-only code (canonical-host policy, SSR Convex client, SSR Clerk auth/token) |
-| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26; `moderation.ts` + `roles.ts` are the moderation core from #31; `collection.ts` is the personal collection from #27; `reading.ts` is reading tracking from #28) |
+| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26; `moderation.ts` + `roles.ts` are the moderation core from #31; `collection.ts` is the personal collection from #27; `reading.ts` is reading tracking from #28; `importSources.ts` + `imports.ts` + `sevenSeas.ts` + `crons.ts` are the import foundation from #34) |
 | `wrangler.jsonc` | Workers config (`nodejs_compat`, custom entry, vars) |
 | `vite.config.ts` | Start + Cloudflare + React plugins |
 
@@ -290,6 +290,104 @@ never overwrite it; only an explicit Moderator `clearOverride` (a later
 slice) removes an entry. The overridden fields are listed on the edit form
 and in the public history section.
 
+## Import foundation (ticket #34)
+
+Spec §6/§7: the hybrid data strategy's automated half, proven end to end on
+one source — Seven Seas Entertainment, the lowest-friction publisher source
+(first-party WP REST JSON API, open robots.txt, no scraping-hostile ToS).
+
+**Approved Source registry — data, not code** (`convex/importSources.ts`).
+Each `approvedSources` row carries scope, the per-field authority map
+(authoritative / standard / weak), cadence, enablement, and the attribution
+string used on imported covers. Adding or editing a source's scope,
+authority, or cadence is a plain data write — the Administrator-gated
+`importSources.upsert` mutation or the Convex dashboard — with no schema or
+code change. Only the adapter (fetch + parse) is code; a registry row
+without an adapter is inert until one ships. Seed the five v1 sources from
+the spec's authority table (inserts missing keys only, never overwrites
+edits):
+
+```sh
+npx convex run importSources:seedRegistry '{}'
+```
+
+Only `sevenseas` starts enabled; Kodansha, PRH, ANN, and OpenLibrary rows
+are flipped on as their adapters land in later tickets.
+
+**Source Observations** (`convex/lib/observations.ts`). External facts are
+observations, never direct writes: identity is (source, source-record-id),
+`snapshot` holds the latest normalized form read by reconciliation, and
+every superseded snapshot is retained append-only in `observationSnapshots`.
+An unchanged fetch bumps `lastSeenAt` only. A record that disappears from a
+**complete** listing sweep is marked withdrawn — retained, never deleted;
+absence is never evidence, and a partial sweep never withdraws anything.
+
+**Import Runs & health** (`convex/imports.ts`). Every run logs source,
+timing, counts, and errors in `importRuns`. Fetches back off exponentially
+within a run; three consecutive failed runs flip the source unhealthy in
+the registry (first success flips it back). The Admin email on transition
+awaits an email provider.
+
+**Cadence** (`convex/crons.ts`). One hourly cron tick reads the registry
+and starts every enabled source that is due per its cadence string
+(`daily` / `weekly` / `monthly`), so cadence edits take effect without a
+deploy. A still-running run defers its source.
+
+**The Seven Seas adapter** (`convex/sevenSeas.ts`, parsers in
+`convex/lib/sevenSeas.ts`). `sevenSeas:sync` pages through
+`wp-json/wp/v2/books` (identity + title + `modified_gmt` as the change
+signal), fetches the book page for new/changed records only (the
+`#volume-meta` block carries series, creators, release date, price, format,
+ISBN, cover), skips non-manga records (light novels, audiobooks),
+normalizes, and reconciles each snapshot atomically:
+
+- **Matching ladder**: ① the stored observation link (a rename becomes a
+  field conflict, never a failed match) → ② ISBN-13 exact with a
+  title-similarity sanity check (a failed check flags for review — the
+  importer never merges) → ⑤ the creation path. Rungs ③/④ become meaningful
+  with the second source.
+- **Creation** goes through the same Proposal machinery as humans (spec §5):
+  a system-authored, immediately approved Proposal creates
+  Series → Volume → Edition (+ coverage) → Release, with one public
+  importer-authored **Revision per record citing the source name + record
+  URL**. Marketing descriptions are never imported (spec §6).
+- **Steady state** auto-creates a single-volume Release under an
+  already-linked Series; a brand-new Series or multi-volume coverage queues
+  an In-Review Proposal pre-filled with the parsed guess instead.
+- **Bootstrap Mode** (spec §7) lifts both gates: those records are created
+  directly and tagged `bootstrapUnreviewed` — exactly what steady state
+  would have queued — queryable as the post-launch backlog via
+  `imports.bootstrapBacklog`. Toggle (Administrator mutation
+  `importSources.setBootstrapMode`, or the operator escape hatch before an
+  Administrator exists):
+
+  ```sh
+  npx convex run importSources:setBootstrapModeInternal '{"on":true}'
+  ```
+
+- **Updates** to a linked Release auto-apply only the fields Seven Seas is
+  authoritative for on its own catalog (date, ISBN, price); fields under a
+  sticky Human Override are never touched — the conflicting value stays
+  recorded on the observation.
+- **Covers** land in Convex file storage as
+  `{storageId, sourceUrl, attribution}`, with the attribution string from
+  the registry row.
+
+Run it manually against a dev deployment (the polite defaults pause between
+requests and cap book-page fetches per run, so the initial backfill
+converges over repeated runs — newest-modified first):
+
+```sh
+npx convex run sevenSeas:sync '{}'                        # full sweep, ≤200 detail fetches
+npx convex run sevenSeas:sync '{"maxDetailFetches":1000}' # bigger backfill bite
+npx convex run sevenSeas:sync '{"maxListingPages":1}'     # quick smoke (no withdrawal pass)
+```
+
+Bootstrap seeding order for this source: `seedRegistry` → turn Bootstrap
+Mode on → repeat `sevenSeas:sync` until `recordsChanged` settles at 0. The
+`imports.recentRuns` query (Moderator+) shows run history; Bootstrap Mode is
+switched off permanently before launch (spec §7).
+
 ## SEO: metadata, JSON-LD, Open Graph, sitemaps (ticket #39)
 
 Spec §11. All metadata is formula-generated — no hand-written metadata in v1.
@@ -394,7 +492,7 @@ Other commands:
 
 ```sh
 npm run typecheck   # tsc --noEmit
-npm test            # vitest (canonical-host + slug + ISBN + title + SEO metadata/JSON-LD/sitemap policy; seed, series/volume/edition/bundle pages, isbn lookup, search, accounts, reading tracking, sitemap queries via convex-test)
+npm test            # vitest (canonical-host + slug + ISBN + title + SEO metadata/JSON-LD/sitemap policy; seed, series/volume/edition/bundle pages, isbn lookup, search, accounts, reading tracking, sitemap queries, source registry + Seven Seas import pipeline via convex-test with fixture responses)
 npm run build       # production client + Worker bundles into dist/
 npm run preview     # serve the production build locally in workerd
 ```
