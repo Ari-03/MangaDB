@@ -23,6 +23,7 @@ import { Route as ReleasesIndexRouteImport } from './routes/releases.index'
 import { Route as ReleasesMonthRouteImport } from './routes/releases.$month'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
+import { Route as UUsernameRouteImport } from './routes/u.$username'
 import { Route as BundlePublicIdIndexRouteImport } from './routes/bundle.$publicId.index'
 import { Route as BundlePublicIdSlugRouteImport } from './routes/bundle.$publicId.$slug'
 import { Route as EditionPublicIdIndexRouteImport } from './routes/edition.$publicId.index'
@@ -106,6 +107,11 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
   path: '/sign-up/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UUsernameRoute = UUsernameRouteImport.update({
+  id: '/u/$username',
+  path: '/u/$username',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BundlePublicIdIndexRoute = BundlePublicIdIndexRouteImport.update({
   id: '/bundle/$publicId/',
   path: '/bundle/$publicId/',
@@ -181,6 +187,7 @@ export interface FileRoutesByFullPath {
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
+  '/u/$username': typeof UUsernameRoute
   '/me/': typeof MeIndexRoute
   '/releases/': typeof ReleasesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
@@ -208,6 +215,7 @@ export interface FileRoutesByTo {
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
+  '/u/$username': typeof UUsernameRoute
   '/me': typeof MeIndexRoute
   '/releases': typeof ReleasesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
@@ -237,6 +245,7 @@ export interface FileRoutesById {
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
+  '/u/$username': typeof UUsernameRoute
   '/me/': typeof MeIndexRoute
   '/releases/': typeof ReleasesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
@@ -267,6 +276,7 @@ export interface FileRouteTypes {
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
+    | '/u/$username'
     | '/me/'
     | '/releases/'
     | '/bundle/$publicId/$slug'
@@ -294,6 +304,7 @@ export interface FileRouteTypes {
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
+    | '/u/$username'
     | '/me'
     | '/releases'
     | '/bundle/$publicId/$slug'
@@ -322,6 +333,7 @@ export interface FileRouteTypes {
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
+    | '/u/$username'
     | '/me/'
     | '/releases/'
     | '/bundle/$publicId/$slug'
@@ -351,6 +363,7 @@ export interface RootRouteChildren {
   ReleasesMonthRoute: typeof ReleasesMonthRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
+  UUsernameRoute: typeof UUsernameRoute
   ReleasesIndexRoute: typeof ReleasesIndexRoute
   BundlePublicIdSlugRoute: typeof BundlePublicIdSlugRoute
   EditionPublicIdSlugRoute: typeof EditionPublicIdSlugRoute
@@ -466,6 +479,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignUpSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/u/$username': {
+      id: '/u/$username'
+      path: '/u/$username'
+      fullPath: '/u/$username'
+      preLoaderRoute: typeof UUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/bundle/$publicId/': {
       id: '/bundle/$publicId/'
       path: '/bundle/$publicId'
@@ -576,6 +596,7 @@ const rootRouteChildren: RootRouteChildren = {
   ReleasesMonthRoute: ReleasesMonthRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
+  UUsernameRoute: UUsernameRoute,
   ReleasesIndexRoute: ReleasesIndexRoute,
   BundlePublicIdSlugRoute: BundlePublicIdSlugRoute,
   EditionPublicIdSlugRoute: EditionPublicIdSlugRoute,

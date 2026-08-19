@@ -77,7 +77,7 @@ async function bundleEntryRow(
 }
 
 /** A Variant's display name, or null when it is hidden or gone. */
-async function variantName(
+export async function variantName(
   ctx: QueryCtx,
   variantId: Id<"releaseVariants"> | undefined,
 ): Promise<string | null> {
@@ -123,7 +123,7 @@ async function derivedOwnership(
 }
 
 /** Enough joined Edition context to link a Release from personal views. */
-async function releaseLink(ctx: QueryCtx, release: Doc<"releases">) {
+export async function releaseLink(ctx: QueryCtx, release: Doc<"releases">) {
   const edition = await followMerges(
     ctx,
     "editions",

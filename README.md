@@ -242,6 +242,37 @@ public catalog pages and disappear entirely signed out.
 `/me` → Reading lists the chosen statuses (with volumes-read progress per
 Series) and every active pass, linking back to the Edition row.
 
+## Tracking visibility + public profiles (ticket #30)
+
+Spec §3: personal tracking is **private by default**, with separate
+visibility defaults for Ownership and Reading plus per-Series overrides
+(`convex/sharing.ts`; UI in `src/lib/sharing.tsx`; profile page at
+`src/routes/u.$username.tsx` reading through `src/server/profile.ts`).
+
+- **Defaults** live on the User (`ownershipVisibility` /
+  `readingVisibility`, both `private` at account creation). `/me` → Sharing
+  holds the two selects; `sharing.setDefaultVisibility` is the write path.
+- **Per-Series overrides** live on the per-user-per-series state row
+  (`userSeriesStates`). The Series page shows a "Sharing for this series"
+  panel (signed-in only) whose selects call `sharing.setSeriesVisibility`;
+  picking "Default" clears the override back to the account default.
+- **`/u/{username}`** is a current-state public profile — a public Convex
+  read (`sharing.publicProfile`, no auth) that enforces visibility
+  server-side and renders the same to everyone, owner included:
+  - Public **Ownership** shows Owned Releases (with the selected Variant),
+    Owned Bundles, and their derived member ownership. **Wanted/Ordered
+    entries are never exposed** at any visibility.
+  - Public **Reading** shows Series Reading Status, active Release
+    percentage, and Volume read counts.
+  - **Series Follows always stay private in v1** — the query never reads
+    the follow fields into the result.
+  - An entry covering several Series shows only when *every* covered Series
+    is effectively public: one private override hides the whole entry (and
+    a box set containing it), because showing it would reveal that Series.
+- **Public but noindex** (spec §11): the page carries `robots: noindex`,
+  profiles are excluded from every sitemap, and there is no activity feed —
+  the profile is a snapshot of current state, never a history.
+
 ## Moderation core (ticket #31)
 
 Spec §4/§5: immutable, versioned **Proposals** are the single write path for

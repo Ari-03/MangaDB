@@ -49,7 +49,7 @@ export async function requireActiveRelease(
 }
 
 /** The Series resolved through merges; throws when unknown or hidden. */
-async function requireActiveSeries(
+export async function requireActiveSeries(
   ctx: QueryCtx,
   seriesId: Id<"series">,
 ): Promise<Doc<"series">> {

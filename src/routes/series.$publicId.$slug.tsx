@@ -20,6 +20,7 @@ import {
   pageHead,
   seriesTitleTag,
 } from "~/lib/seo";
+import { SeriesVisibilityControls } from "~/lib/sharing";
 import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
@@ -136,6 +137,10 @@ function SeriesPage() {
           the tracking prompts never change it without confirmation. Renders
           nothing signed out. */}
       <SeriesReadingControls seriesPublicId={series.publicId} />
+
+      {/* Per-Series visibility overrides for the public profile (#30);
+          renders nothing signed out. */}
+      <SeriesVisibilityControls seriesPublicId={series.publicId} />
 
       {family ? <FamilySection family={family} self={series} /> : null}
 

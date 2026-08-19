@@ -6,6 +6,7 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { MyCollection } from "~/lib/collection";
 import { MyReading } from "~/lib/reading";
+import { SharingSettings } from "~/lib/sharing";
 import { convexClient } from "~/providers";
 
 export const Route = createFileRoute("/me/")({
@@ -49,6 +50,13 @@ function MePage() {
         <p className="placeholder">
           Release dates for series you follow will appear here.
         </p>
+      </section>
+
+      <section className="me-section">
+        <h2>Sharing</h2>
+        {/* Tracking visibility (#30): separate Ownership/Reading defaults,
+            private until explicitly opened, plus the public-profile link. */}
+        <SharingSettings />
       </section>
 
       <section className="me-section">
