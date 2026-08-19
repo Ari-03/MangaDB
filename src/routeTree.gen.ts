@@ -15,6 +15,7 @@ import { Route as MeRouteImport } from './routes/me'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
+import { Route as ModRolesRouteImport } from './routes/mod.roles'
 import { Route as ReleasesIndexRouteImport } from './routes/releases.index'
 import { Route as ReleasesMonthRouteImport } from './routes/releases.$month'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
@@ -27,6 +28,7 @@ import { Route as SeriesPublicIdIndexRouteImport } from './routes/series.$public
 import { Route as SeriesPublicIdSlugRouteImport } from './routes/series.$publicId.$slug'
 import { Route as VolumePublicIdIndexRouteImport } from './routes/volume.$publicId.index'
 import { Route as VolumePublicIdSlugRouteImport } from './routes/volume.$publicId.$slug'
+import { Route as ModEditTypeKeyRouteImport } from './routes/mod.edit.$type.$key'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -57,6 +59,11 @@ const MeIndexRoute = MeIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => MeRoute,
+} as any)
+const ModRolesRoute = ModRolesRouteImport.update({
+  id: '/mod/roles',
+  path: '/mod/roles',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ReleasesIndexRoute = ReleasesIndexRouteImport.update({
   id: '/releases/',
@@ -118,6 +125,11 @@ const VolumePublicIdSlugRoute = VolumePublicIdSlugRouteImport.update({
   path: '/volume/$publicId/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModEditTypeKeyRoute = ModEditTypeKeyRouteImport.update({
+  id: '/mod/edit/$type/$key',
+  path: '/mod/edit/$type/$key',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -125,6 +137,7 @@ export interface FileRoutesByFullPath {
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/roles': typeof ModRolesRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -138,12 +151,14 @@ export interface FileRoutesByFullPath {
   '/edition/$publicId/': typeof EditionPublicIdIndexRoute
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId/': typeof VolumePublicIdIndexRoute
+  '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/roles': typeof ModRolesRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -157,6 +172,7 @@ export interface FileRoutesByTo {
   '/edition/$publicId': typeof EditionPublicIdIndexRoute
   '/series/$publicId': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId': typeof VolumePublicIdIndexRoute
+  '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -165,6 +181,7 @@ export interface FileRoutesById {
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/roles': typeof ModRolesRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -178,6 +195,7 @@ export interface FileRoutesById {
   '/edition/$publicId/': typeof EditionPublicIdIndexRoute
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId/': typeof VolumePublicIdIndexRoute
+  '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -187,6 +205,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/roles'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -200,12 +219,14 @@ export interface FileRouteTypes {
     | '/edition/$publicId/'
     | '/series/$publicId/'
     | '/volume/$publicId/'
+    | '/mod/edit/$type/$key'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/claim-username'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/roles'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -219,6 +240,7 @@ export interface FileRouteTypes {
     | '/edition/$publicId'
     | '/series/$publicId'
     | '/volume/$publicId'
+    | '/mod/edit/$type/$key'
   id:
     | '__root__'
     | '/'
@@ -226,6 +248,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/roles'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -239,6 +262,7 @@ export interface FileRouteTypes {
     | '/edition/$publicId/'
     | '/series/$publicId/'
     | '/volume/$publicId/'
+    | '/mod/edit/$type/$key'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -247,6 +271,7 @@ export interface RootRouteChildren {
   MeRoute: typeof MeRouteWithChildren
   SearchRoute: typeof SearchRoute
   IsbnIsbnRoute: typeof IsbnIsbnRoute
+  ModRolesRoute: typeof ModRolesRoute
   ReleasesMonthRoute: typeof ReleasesMonthRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
@@ -259,6 +284,7 @@ export interface RootRouteChildren {
   EditionPublicIdIndexRoute: typeof EditionPublicIdIndexRoute
   SeriesPublicIdIndexRoute: typeof SeriesPublicIdIndexRoute
   VolumePublicIdIndexRoute: typeof VolumePublicIdIndexRoute
+  ModEditTypeKeyRoute: typeof ModEditTypeKeyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -304,6 +330,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/me/'
       preLoaderRoute: typeof MeIndexRouteImport
       parentRoute: typeof MeRoute
+    }
+    '/mod/roles': {
+      id: '/mod/roles'
+      path: '/mod/roles'
+      fullPath: '/mod/roles'
+      preLoaderRoute: typeof ModRolesRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/releases/': {
       id: '/releases/'
@@ -389,6 +422,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VolumePublicIdSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mod/edit/$type/$key': {
+      id: '/mod/edit/$type/$key'
+      path: '/mod/edit/$type/$key'
+      fullPath: '/mod/edit/$type/$key'
+      preLoaderRoute: typeof ModEditTypeKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -408,6 +448,7 @@ const rootRouteChildren: RootRouteChildren = {
   MeRoute: MeRouteWithChildren,
   SearchRoute: SearchRoute,
   IsbnIsbnRoute: IsbnIsbnRoute,
+  ModRolesRoute: ModRolesRoute,
   ReleasesMonthRoute: ReleasesMonthRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
@@ -420,6 +461,7 @@ const rootRouteChildren: RootRouteChildren = {
   EditionPublicIdIndexRoute: EditionPublicIdIndexRoute,
   SeriesPublicIdIndexRoute: SeriesPublicIdIndexRoute,
   VolumePublicIdIndexRoute: VolumePublicIdIndexRoute,
+  ModEditTypeKeyRoute: ModEditTypeKeyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

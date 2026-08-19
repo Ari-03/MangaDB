@@ -47,7 +47,9 @@ const dataRole = v.union(
 // revisions, and suppressions all target one of these. Volume-coverage rows
 // are deliberately absent: coverage is edited as the pseudo-field
 // "volumeCoverage" of its Edition, so revision history lands on the Edition.
-const recordRef = v.union(
+// Exported for the moderation write path (moderation.ts), which takes and
+// stores these refs.
+export const recordRef = v.union(
   v.object({ type: v.literal("publisher"), id: v.id("publishers") }),
   v.object({ type: v.literal("seriesFamily"), id: v.id("seriesFamilies") }),
   v.object({ type: v.literal("series"), id: v.id("series") }),
@@ -69,10 +71,12 @@ const authorRef = v.union(
   v.object({ kind: v.literal("source"), sourceKey: v.string() }),
 );
 
+// `before`/`after` are optional because "absent" is a real value: setting a
+// previously empty field has no `before`, clearing one has no `after`.
 const fieldChange = v.object({
   field: v.string(),
-  before: v.any(),
-  after: v.any(),
+  before: v.optional(v.any()),
+  after: v.optional(v.any()),
 });
 
 // One coherent atomic intent (#14): approval applies every op in a single
@@ -424,6 +428,10 @@ export default defineSchema({
     errors: v.array(v.string()),
   }).index("by_source", ["sourceKey"]),
 
+  // Append-only forever (#14): every appointment, revocation, suspension, and
+  // reinstatement lands here and is never edited or deleted. The initial
+  // Administrator is appointed by the operator (roles.bootstrapAdministrator),
+  // recorded with the system actor.
   roleAudit: defineTable({
     userId: v.id("users"),
     action: v.union(
@@ -433,7 +441,10 @@ export default defineSchema({
       v.literal("reinstated"),
     ),
     role: dataRole,
-    actorId: v.id("users"),
+    actor: v.union(
+      v.object({ kind: v.literal("user"), userId: v.id("users") }),
+      v.object({ kind: v.literal("system") }),
+    ),
     reason: v.optional(v.string()),
   }).index("by_user", ["userId"]),
 

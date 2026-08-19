@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { formatPartialDate, formatPrice } from "~/lib/format";
+import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
 import { fetchBundlePage, type BundlePageData } from "~/server/catalogPages";
 
@@ -111,6 +112,10 @@ function BundlePage() {
           </ol>
         )}
       </section>
+
+      {/* Public revision history + the moderator edit entry point (#31). */}
+      <RecordHistory type="releaseBundle" publicId={bundle.publicId} />
+      <ModEditLink type="releaseBundle" editKey={String(bundle.publicId)} />
     </main>
   );
 }

@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { ModEditLink, ModReleaseEditLinks, RecordHistory } from "~/lib/moderation";
 import { editionPath, parsePublicId, slugParams } from "~/lib/slug";
 import { fetchEditionPage } from "~/server/catalogPages";
 
@@ -119,6 +120,13 @@ function EditionPage() {
           </ul>
         )}
       </section>
+
+      {/* Public revision history + the moderator edit entry point (#31). */}
+      <RecordHistory type="edition" publicId={edition.publicId} />
+      <ModEditLink type="edition" editKey={String(edition.publicId)} />
+      <ModReleaseEditLinks
+        releases={releases.map((r) => ({ id: r.id, anchor: r.anchor }))}
+      />
     </main>
   );
 }

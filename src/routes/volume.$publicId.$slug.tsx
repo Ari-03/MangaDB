@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { parsePublicId, slugParams, volumePath } from "~/lib/slug";
 import { fetchVolumePage, type VolumePageData } from "~/server/catalogPages";
 
@@ -115,6 +116,10 @@ function VolumePage() {
           ))}
         </section>
       ) : null}
+
+      {/* Public revision history + the moderator edit entry point (#31). */}
+      <RecordHistory type="volume" publicId={volume.publicId} />
+      <ModEditLink type="volume" editKey={String(volume.publicId)} />
     </main>
   );
 }

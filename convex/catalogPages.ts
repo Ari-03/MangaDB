@@ -19,8 +19,9 @@ type MergeableTable = "volumes" | "editions" | "releases" | "releaseBundles";
 /**
  * Follow a merged record to its surviving record (spec §4/§8), cycle-guarded;
  * hidden records read as absent. Mirrors catalog.ts's resolveActiveSeries.
+ * Exported for moderation.ts (revision history resolves the same way).
  */
-async function followMerges<T extends MergeableTable>(
+export async function followMerges<T extends MergeableTable>(
   ctx: QueryCtx,
   // The table name anchors T's inference — `Doc<T>` alone is an indexed
   // access type TypeScript cannot infer backward from.
@@ -40,9 +41,10 @@ async function followMerges<T extends MergeableTable>(
 /**
  * An Edition's ordered Volume Coverage joined with each covered Volume and
  * its Series, plus the composed Edition title (lib/titles.ts). Hidden
- * Volumes/Series drop out of the coverage listing.
+ * Volumes/Series drop out of the coverage listing. Exported for
+ * moderation.ts (edit-form display titles).
  */
-async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
+export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   const line = edition.editionLineId
     ? await ctx.db.get(edition.editionLineId)
     : null;

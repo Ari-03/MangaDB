@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
 import { formatPartialDate, formatPrice } from "~/lib/format";
+import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
@@ -111,6 +112,10 @@ function SeriesPage() {
           ))}
         </ol>
       </section>
+
+      {/* Public revision history + the moderator edit entry point (#31). */}
+      <RecordHistory type="series" publicId={series.publicId} />
+      <ModEditLink type="series" editKey={String(series.publicId)} />
     </main>
   );
 }

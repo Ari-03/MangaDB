@@ -29,6 +29,9 @@ export const viewer = query({
     return {
       needsUsername: false as const,
       username: user.username,
+      // Data-team role (ticket #31); gates the edit affordances client-side.
+      // Authorization is always re-checked in the moderation functions.
+      role: user.role ?? null,
       formatPreference: user.formatPreference,
       ownershipVisibility: user.ownershipVisibility,
       readingVisibility: user.readingVisibility,

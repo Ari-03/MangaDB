@@ -14,14 +14,14 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 
 | Path | What |
 |---|---|
-| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step) |
+| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step; `mod.edit.…` + `mod.roles.tsx` are the moderation surfaces from #31) |
 | `src/router.tsx` | Router factory (`getRouter`) |
 | `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
 | `src/server.ts` | Custom Workers entry: canonical-host redirect, then the Start handler |
 | `src/server/` | Server-only code (canonical-host policy, SSR Convex client, SSR Clerk auth/token) |
-| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26) |
+| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26; `moderation.ts` + `roles.ts` are the moderation core from #31) |
 | `wrangler.jsonc` | Workers config (`nodejs_compat`, custom entry, vars) |
 | `vite.config.ts` | Start + Cloudflare + React plugins |
 
@@ -165,6 +165,54 @@ in the site header. It is deliberately narrow:
 
 No Volume or Bundle text search in v1, and search pages are noindex — they
 are not in the spec's indexable set.
+
+## Moderation core (ticket #31)
+
+Spec §4/§5: immutable, versioned **Proposals** are the single write path for
+catalog changes. This slice covers roles, direct edits, public revision
+history, and implicit Human Overrides; Editor submission and the review queue
+are the next slice.
+
+**Roles.** `convex/roles.ts` + `convex/lib/roles.ts`. Administrators appoint
+Moderators (and anything else); Moderators appoint Editors; Editors propose
+(next slice). Every appointment, revocation, suspension, and reinstatement
+writes a permanent row to `roleAudit` — append-only, surviving even account
+deletion. Revocation/suspension removes privileges only: Revisions and
+Proposals record the author's role at authorship and are never rewritten.
+The initial Administrator is appointed by the operator, once, after that
+person has signed in and claimed a username:
+
+```sh
+npx convex run roles:bootstrapAdministrator '{"username":"yourname"}'
+```
+
+The `/mod/roles` page (Moderator+) shows the roster, the
+appoint/revoke/suspend/reinstate actions, and the audit trail.
+
+**Direct edits.** A Moderator or Administrator edits a record through
+`/mod/edit/{type}/{key}` — linked from the Series, Volume, Edition (including
+per-Release links), and Bundle pages when the viewer holds the role. The
+form renders from the field registry in `convex/lib/moderationFields.ts`,
+requires a change comment, and its save
+(`convex/moderation.ts#submitDirectEdit`) is an immediately approved Proposal
+Version: a `proposals` row (state `approved`, self-approved), an immutable
+`proposalVersions` row with the update op, and one immutable public
+`revisions` row per affected record. The op carries the record's base
+Revision; if the record changed since the form loaded, the save is refused as
+stale — reload and re-edit, never a silent rebase. Hidden, merged, and locked
+records refuse direct edits.
+
+**Public history.** Each Series/Volume/Edition/Bundle page shows the
+record's history (`moderation.recordHistory`, public): final diff, author
+(with role at authorship, or the import source), approver, timestamp, change
+comment, and source citation. Pending/rejected proposals stay private.
+
+**Human Overrides.** Any approved human change to an import-authored field —
+one whose latest Revision was source-authored — implicitly joins the record's
+sticky `overriddenFields` list (spec §4): imports may report conflicts but
+never overwrite it; only an explicit Moderator `clearOverride` (a later
+slice) removes an entry. The overridden fields are listed on the edit form
+and in the public history section.
 
 ## Auth (Clerk) — how it works
 
