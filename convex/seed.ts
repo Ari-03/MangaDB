@@ -202,11 +202,21 @@ export const run = internalMutation({
       ...active,
       name: "VIZ Media",
       slug: "viz-media",
+      description:
+        "San Francisco publisher of English-language manga, home of the Shonen Jump and Shojo Beat lines.",
     });
     const sevenSeas = await ctx.db.insert("publishers", {
       ...active,
       name: "Seven Seas Entertainment",
       slug: "seven-seas",
+      description:
+        "Independent publisher of manga and light novels in English, known for its omnibus and danmei lines.",
+    });
+    // A past rename: the old slug 301s to /publisher/seven-seas (spec §11,
+    // ticket #25) — exercises the redirect path in dev.
+    await ctx.db.insert("publisherSlugRedirects", {
+      fromSlug: "seven-seas-entertainment",
+      publisherId: sevenSeas,
     });
 
     // -- Series Family: Tokyo Ghoul + Tokyo Ghoul:re, typed sequel edge --

@@ -43,6 +43,23 @@ export function currentMonth(now: Date = new Date()): YearMonth {
   return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
 }
 
+/**
+ * yyyymmdd sort key for `now` (UTC) — the same shape as pubDate.sort (spec
+ * §8), lower-bounding the Publisher Spotlight's upcoming lane (ticket #25).
+ */
+export function todaySortKey(now: Date = new Date()): number {
+  return (
+    now.getUTCFullYear() * 10000 +
+    (now.getUTCMonth() + 1) * 100 +
+    now.getUTCDate()
+  );
+}
+
+/** yyyymm99 sort key covering every day of a month — an upper window bound. */
+export function monthEndSortKey({ year, month }: YearMonth): number {
+  return year * 10000 + month * 100 + 99;
+}
+
 export function daysInMonth({ year, month }: YearMonth): number {
   // Day 0 of the next month is this month's last day.
   return new Date(Date.UTC(year, month, 0)).getUTCDate();

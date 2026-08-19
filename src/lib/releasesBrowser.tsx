@@ -298,7 +298,12 @@ function groupByDay(releases: Array<BrowseRelease>) {
 
 // ---------- Agenda (spec §10: cover-led chronological default) ----------
 
-function AgendaView({
+/**
+ * The cover-led day-grouped release list. Exported for the Publisher
+ * Spotlight's upcoming lane (ticket #25), which renders the same rows
+ * month by month.
+ */
+export function AgendaView({
   anchor,
   releases,
 }: {
@@ -366,11 +371,14 @@ function ReleaseCard({ release }: { release: BrowseRelease }) {
           {release.binding ? ` · ${release.binding}` : ""}
         </span>
         {release.publisher ? (
-          // Publisher Spotlight pages are ticket #25; /publisher/{slug} is
-          // their canonical URL (spec §11), so a plain anchor here.
-          <a className="release-card-publisher" href={`/publisher/${release.publisher.slug}`}>
+          // The Publisher Spotlight page (ticket #25, spec §11).
+          <Link
+            className="release-card-publisher"
+            to="/publisher/$slug"
+            params={{ slug: release.publisher.slug }}
+          >
             {release.publisher.name}
-          </a>
+          </Link>
         ) : null}
       </div>
     </li>

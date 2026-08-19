@@ -77,12 +77,101 @@ function composeVolumeLabel(
 }
 
 /**
+ * Join active Release docs into the row shape every release lane renders:
+ * cover, Series link(s), Volume label, Format, and Publisher per row (spec
+ * §10). A month-precision date (day unknown, sort yyyymm00) keeps `day: null`
+ * so views can group it as "date to be announced"; rows whose Edition or
+ * every Series is hidden drop out. Rows return date-sorted, then stable by
+ * title and volume. Shared by the browser's month window (monthBrowse) and
+ * the Publisher Spotlight's upcoming lane (publisher.ts, ticket #25).
+ */
+export async function joinBrowseRows(
+  ctx: QueryCtx,
+  docs: Array<Doc<"releases">>,
+) {
+  const getPublisher = cachedGet<"publishers">(ctx);
+  const getSeries = cachedGet<"series">(ctx);
+  const getVolume = cachedGet<"volumes">(ctx);
+  const getEdition = cachedGet<"editions">(ctx);
+  const getLine = cachedGet<"editionLines">(ctx);
+  const coverageByEdition = new Map<string, Array<Doc<"volumeCoverages">>>();
+
+  const releases = [];
+  for (const release of docs) {
+    const pubDate = release.pubDate;
+    if (!pubDate) continue; // unreachable inside an index range; type guard
+
+    const edition = await getEdition(release.editionId);
+    if (!edition || edition.status !== "active") continue;
+
+    // Series links come from the denormalized seriesIds (spec §8); a hidden
+    // Series hides its releases from the public browser.
+    const series = [];
+    for (const seriesId of release.seriesIds) {
+      const doc = await getSeries(seriesId);
+      if (doc && doc.status === "active") {
+        series.push({ publicId: doc.publicId, title: doc.title });
+      }
+    }
+    if (series.length === 0) continue;
+
+    let coverage = coverageByEdition.get(edition._id);
+    if (!coverage) {
+      coverage = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+        .collect();
+      coverageByEdition.set(edition._id, coverage);
+    }
+    const covered = [];
+    let anyPartial = false;
+    for (const row of coverage) {
+      const volume = await getVolume(row.volumeId);
+      if (!volume || volume.status !== "active") continue;
+      covered.push({ label: volume.label ?? null, position: volume.position });
+      if (row.extent === "partial") anyPartial = true;
+    }
+
+    const publisherDoc = await getPublisher(release.publisherId);
+    const line = edition.editionLineId
+      ? await getLine(edition.editionLineId)
+      : null;
+
+    releases.push({
+      id: release._id,
+      day: pubDate.day ?? null,
+      sort: pubDate.sort,
+      format: release.format,
+      binding: release.binding ?? null,
+      isbn13: release.isbn13 ?? null,
+      series,
+      volumeLabel: composeVolumeLabel(covered, anyPartial),
+      lineName: line && line.status === "active" ? line.name : null,
+      linePosition: edition.linePosition ?? null,
+      publisher:
+        publisherDoc && publisherDoc.status === "active"
+          ? { name: publisherDoc.name, slug: publisherDoc.slug }
+          : null,
+      coverUrl: release.coverImage
+        ? await ctx.storage.getUrl(release.coverImage.storageId)
+        : null,
+    });
+  }
+
+  // Chronological, then stable within a day by title and volume.
+  releases.sort(
+    (a, b) =>
+      a.sort - b.sort ||
+      (a.series[0]?.title ?? "").localeCompare(b.series[0]?.title ?? "") ||
+      a.volumeLabel.localeCompare(b.volumeLabel),
+  );
+  return releases;
+}
+
+/**
  * Every Canonical Release publishing in one month, joined into the shape both
- * browser views render: cover, Series link(s), Volume label, Format, and
- * Publisher per row (spec §10). Rows arrive date-sorted; a month-precision
- * date (day unknown, sort yyyymm00) lands in the same window with `day: null`
- * so the views can group it as "date to be announced". Hidden/merged records
- * never surface. Releases only — Bundles stay off the browser (spec §10).
+ * browser views render (joinBrowseRows). Hidden/merged records never surface.
+ * Releases only — Bundles stay off the browser (spec §10).
  *
  * Also returns the active Publisher list (small, spec §8) so the filter
  * dropdown renders from the same round trip.
@@ -145,83 +234,6 @@ export const monthBrowse = query({
         doc.status === "active" && (format === undefined || doc.format === format),
     );
 
-    const getPublisher = cachedGet<"publishers">(ctx);
-    const getSeries = cachedGet<"series">(ctx);
-    const getVolume = cachedGet<"volumes">(ctx);
-    const getEdition = cachedGet<"editions">(ctx);
-    const getLine = cachedGet<"editionLines">(ctx);
-    const coverageByEdition = new Map<string, Array<Doc<"volumeCoverages">>>();
-
-    const releases = [];
-    for (const release of refined) {
-      const pubDate = release.pubDate;
-      if (!pubDate) continue; // unreachable inside the index range; type guard
-
-      const edition = await getEdition(release.editionId);
-      if (!edition || edition.status !== "active") continue;
-
-      // Series links come from the denormalized seriesIds (spec §8); a hidden
-      // Series hides its releases from the public browser.
-      const series = [];
-      for (const seriesId of release.seriesIds) {
-        const doc = await getSeries(seriesId);
-        if (doc && doc.status === "active") {
-          series.push({ publicId: doc.publicId, title: doc.title });
-        }
-      }
-      if (series.length === 0) continue;
-
-      let coverage = coverageByEdition.get(edition._id);
-      if (!coverage) {
-        coverage = await ctx.db
-          .query("volumeCoverages")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect();
-        coverageByEdition.set(edition._id, coverage);
-      }
-      const covered = [];
-      let anyPartial = false;
-      for (const row of coverage) {
-        const volume = await getVolume(row.volumeId);
-        if (!volume || volume.status !== "active") continue;
-        covered.push({ label: volume.label ?? null, position: volume.position });
-        if (row.extent === "partial") anyPartial = true;
-      }
-
-      const publisherDoc = await getPublisher(release.publisherId);
-      const line = edition.editionLineId
-        ? await getLine(edition.editionLineId)
-        : null;
-
-      releases.push({
-        id: release._id,
-        day: pubDate.day ?? null,
-        sort: pubDate.sort,
-        format: release.format,
-        binding: release.binding ?? null,
-        isbn13: release.isbn13 ?? null,
-        series,
-        volumeLabel: composeVolumeLabel(covered, anyPartial),
-        lineName: line && line.status === "active" ? line.name : null,
-        linePosition: edition.linePosition ?? null,
-        publisher:
-          publisherDoc && publisherDoc.status === "active"
-            ? { name: publisherDoc.name, slug: publisherDoc.slug }
-            : null,
-        coverUrl: release.coverImage
-          ? await ctx.storage.getUrl(release.coverImage.storageId)
-          : null,
-      });
-    }
-
-    // Chronological, then stable within a day by title and volume.
-    releases.sort(
-      (a, b) =>
-        a.sort - b.sort ||
-        (a.series[0]?.title ?? "").localeCompare(b.series[0]?.title ?? "") ||
-        a.volumeLabel.localeCompare(b.volumeLabel),
-    );
-
-    return { releases, publishers };
+    return { releases: await joinBrowseRows(ctx, refined), publishers };
   },
 });

@@ -720,6 +720,42 @@ main.releases-page {
   }
 }
 
+/* ---- Publisher Spotlight (ticket #25) ---- */
+
+.publisher-page header p {
+  max-width: 46rem;
+}
+
+.publisher-upcoming {
+  margin-top: 2rem;
+}
+
+.publisher-upcoming h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.5rem;
+}
+
+.publisher-lane-month {
+  margin: 0 0 1.5rem;
+}
+
+.publisher-lane-month h3 {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 0.6rem;
+}
+
+.publisher-lane-month h3 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.publisher-lane-month h3 a:hover {
+  color: var(--accent);
+}
+
 /* ---- auth & account (ticket #26) ---- */
 
 .site-header {

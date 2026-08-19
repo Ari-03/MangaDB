@@ -4,9 +4,11 @@ import {
   addMonths,
   daysInMonth,
   firstWeekday,
+  monthEndSortKey,
   monthParam,
   monthTitle,
   parseMonthParam,
+  todaySortKey,
 } from "./month";
 
 describe("parseMonthParam", () => {
@@ -62,5 +64,18 @@ describe("calendar shape", () => {
 
   it("titles months for the heading", () => {
     expect(monthTitle({ year: 2026, month: 8 })).toBe("August 2026");
+  });
+});
+
+describe("sort keys (spec §8 partial-date yyyymmdd)", () => {
+  it("keys today in UTC for the Spotlight lane's lower bound", () => {
+    expect(todaySortKey(new Date(Date.UTC(2026, 7, 19)))).toBe(20260819);
+    // Just before midnight UTC stays on the same UTC day.
+    expect(todaySortKey(new Date(Date.UTC(2026, 0, 1, 23, 59)))).toBe(20260101);
+  });
+
+  it("keys a month's end as yyyymm99, covering day-TBA and every day", () => {
+    expect(monthEndSortKey({ year: 2026, month: 11 })).toBe(20261199);
+    expect(monthEndSortKey({ year: 2027, month: 1 })).toBe(20270199);
   });
 });

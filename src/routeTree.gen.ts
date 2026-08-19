@@ -16,6 +16,7 @@ import { Route as SearchRouteImport } from './routes/search'
 import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
 import { Route as ModRolesRouteImport } from './routes/mod.roles'
+import { Route as PublisherSlugRouteImport } from './routes/publisher.$slug'
 import { Route as ReleasesIndexRouteImport } from './routes/releases.index'
 import { Route as ReleasesMonthRouteImport } from './routes/releases.$month'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
@@ -63,6 +64,11 @@ const MeIndexRoute = MeIndexRouteImport.update({
 const ModRolesRoute = ModRolesRouteImport.update({
   id: '/mod/roles',
   path: '/mod/roles',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PublisherSlugRoute = PublisherSlugRouteImport.update({
+  id: '/publisher/$slug',
+  path: '/publisher/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ReleasesIndexRoute = ReleasesIndexRouteImport.update({
@@ -138,6 +144,7 @@ export interface FileRoutesByFullPath {
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/roles': typeof ModRolesRoute
+  '/publisher/$slug': typeof PublisherSlugRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -159,6 +166,7 @@ export interface FileRoutesByTo {
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/roles': typeof ModRolesRoute
+  '/publisher/$slug': typeof PublisherSlugRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -182,6 +190,7 @@ export interface FileRoutesById {
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/roles': typeof ModRolesRoute
+  '/publisher/$slug': typeof PublisherSlugRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -206,6 +215,7 @@ export interface FileRouteTypes {
     | '/search'
     | '/isbn/$isbn'
     | '/mod/roles'
+    | '/publisher/$slug'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -227,6 +237,7 @@ export interface FileRouteTypes {
     | '/search'
     | '/isbn/$isbn'
     | '/mod/roles'
+    | '/publisher/$slug'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -249,6 +260,7 @@ export interface FileRouteTypes {
     | '/search'
     | '/isbn/$isbn'
     | '/mod/roles'
+    | '/publisher/$slug'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -272,6 +284,7 @@ export interface RootRouteChildren {
   SearchRoute: typeof SearchRoute
   IsbnIsbnRoute: typeof IsbnIsbnRoute
   ModRolesRoute: typeof ModRolesRoute
+  PublisherSlugRoute: typeof PublisherSlugRoute
   ReleasesMonthRoute: typeof ReleasesMonthRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
@@ -336,6 +349,13 @@ declare module '@tanstack/react-router' {
       path: '/mod/roles'
       fullPath: '/mod/roles'
       preLoaderRoute: typeof ModRolesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/publisher/$slug': {
+      id: '/publisher/$slug'
+      path: '/publisher/$slug'
+      fullPath: '/publisher/$slug'
+      preLoaderRoute: typeof PublisherSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/releases/': {
@@ -449,6 +469,7 @@ const rootRouteChildren: RootRouteChildren = {
   SearchRoute: SearchRoute,
   IsbnIsbnRoute: IsbnIsbnRoute,
   ModRolesRoute: ModRolesRoute,
+  PublisherSlugRoute: PublisherSlugRoute,
   ReleasesMonthRoute: ReleasesMonthRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,

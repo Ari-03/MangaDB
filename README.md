@@ -14,7 +14,7 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 
 | Path | What |
 |---|---|
-| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step; `mod.edit.…` + `mod.roles.tsx` are the moderation surfaces from #31) |
+| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `publisher.$slug.tsx` is the Publisher Spotlight; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step; `mod.edit.…` + `mod.roles.tsx` are the moderation surfaces from #31) |
 | `src/router.tsx` | Router factory (`getRouter`) |
 | `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI; `collection.tsx` is the signed-in collection overlay from #27; `reading.tsx` is the signed-in reading-tracking overlay from #28) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
@@ -143,6 +143,23 @@ queries in `convex/catalogPages.ts` through `src/server/catalogPages.ts`:
   301s to its Bundle page, and a Release match wins any conflict. Unknown
   or checksum-invalid ISBNs 404.
 
+## Publisher Spotlight pages (ticket #25)
+
+`/publisher/{slug}` (spec §10/§11, prototype #17) is the **Publisher
+Spotlight**: a publisher-led profile — name, description, catalog facts —
+followed by a **bounded upcoming-Releases lane** (the next ~3 months, capped
+at 12 rows, grouped by month with the browser's Agenda treatment) and a clear
+route into the main Releases browser pre-filtered to that Publisher
+(`/releases?publisher={slug}`). There is deliberately no cross-publisher
+overview page; that comparison lives in the browser.
+
+Publishers are the slug-only URL exception (spec §8): the slug is the
+identity, so a **renamed Publisher's old slug 301s** to the new one via the
+`publisherSlugRedirects` table, and a merged Publisher's slug 301s to its
+survivor's (`convex/publisher.ts` resolves both; the route issues the
+redirect). The dev seed includes one redirect —
+`/publisher/seven-seas-entertainment` 301s to `/publisher/seven-seas`.
+
 ## Search
 
 `/search?q=…` (spec §8/§11, ticket #38) is v1 search, reachable from the box
@@ -154,8 +171,7 @@ in the site header. It is deliberately narrow:
   `/series/{id}/{slug}` pages; hidden and merged records never appear (a
   merged Series is findable through its survivor).
 - **Publishers** resolve by case-insensitive name match over the small
-  publisher list, linking their `/publisher/{slug}` pages (Publisher
-  Spotlight pages are ticket #25).
+  publisher list, linking their `/publisher/{slug}` Spotlight pages.
 - **ISBNs**: a query recognized as a valid ISBN-10/13 (`src/lib/isbn.ts` —
   checksum-verified, separators ignored) never runs a text search; the loader
   302s through `/isbn/{isbn}`, the route that owns resolution to the owning

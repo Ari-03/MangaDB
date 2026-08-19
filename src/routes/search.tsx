@@ -141,10 +141,11 @@ function SearchResultsView({
           <h2>Publishers</h2>
           <ul className="result-list">
             {results.publishers.map((p) => (
-              // Publisher Spotlight pages are ticket #25; /publisher/{slug}
-              // is their canonical URL (spec §11), so a plain anchor here.
+              // The Publisher Spotlight page (ticket #25, spec §11).
               <li key={p.slug}>
-                <a href={`/publisher/${p.slug}`}>{p.name}</a>
+                <Link to="/publisher/$slug" params={{ slug: p.slug }}>
+                  {p.name}
+                </Link>
               </li>
             ))}
           </ul>

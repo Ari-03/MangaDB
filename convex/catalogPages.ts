@@ -15,6 +15,7 @@ import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
 // ---------- shared resolution & joins ----------
 
 type MergeableTable =
+  | "publishers"
   | "series"
   | "volumes"
   | "editions"
