@@ -49,6 +49,13 @@ export async function requireModerator(
   return await requireRole(ctx, ["moderator", "administrator"]);
 }
 
+/** Any data-team role — the propose/queue-visibility privilege (spec §5). */
+export async function requireDataTeam(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"users">> {
+  return await requireRole(ctx, DATA_ROLES);
+}
+
 /**
  * Count of active (non-suspended) Administrators. Guards the lockout case:
  * the last Administrator can never be revoked or suspended.

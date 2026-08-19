@@ -3,7 +3,11 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
 import { ReleaseCollectionControls } from "~/lib/collection";
 import { formatPartialDate, formatPrice } from "~/lib/format";
-import { ModEditLink, RecordHistory } from "~/lib/moderation";
+import {
+  ModEditLink,
+  ProposeNewRecordsLink,
+  RecordHistory,
+} from "~/lib/moderation";
 import {
   ReleasePassControls,
   SeriesReadingControls,
@@ -153,9 +157,10 @@ function SeriesPage() {
         </ol>
       </section>
 
-      {/* Public revision history + the moderator edit entry point (#31). */}
+      {/* Public revision history + the data-team entry points (#31/#32). */}
       <RecordHistory type="series" publicId={series.publicId} />
       <ModEditLink type="series" editKey={String(series.publicId)} />
+      <ProposeNewRecordsLink seriesPublicId={series.publicId} />
     </main>
   );
 }

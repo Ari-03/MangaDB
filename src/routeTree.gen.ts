@@ -15,6 +15,8 @@ import { Route as MeRouteImport } from './routes/me'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
+import { Route as ModProposalsRouteImport } from './routes/mod.proposals'
+import { Route as ModQueueRouteImport } from './routes/mod.queue'
 import { Route as ModRolesRouteImport } from './routes/mod.roles'
 import { Route as PublisherSlugRouteImport } from './routes/publisher.$slug'
 import { Route as ReleasesIndexRouteImport } from './routes/releases.index'
@@ -25,11 +27,14 @@ import { Route as BundlePublicIdIndexRouteImport } from './routes/bundle.$public
 import { Route as BundlePublicIdSlugRouteImport } from './routes/bundle.$publicId.$slug'
 import { Route as EditionPublicIdIndexRouteImport } from './routes/edition.$publicId.index'
 import { Route as EditionPublicIdSlugRouteImport } from './routes/edition.$publicId.$slug'
+import { Route as ModProposalIdRouteImport } from './routes/mod.proposal.$id'
+import { Route as ModProposeNewSeriesPublicIdRouteImport } from './routes/mod.propose-new.$seriesPublicId'
 import { Route as SeriesPublicIdIndexRouteImport } from './routes/series.$publicId.index'
 import { Route as SeriesPublicIdSlugRouteImport } from './routes/series.$publicId.$slug'
 import { Route as VolumePublicIdIndexRouteImport } from './routes/volume.$publicId.index'
 import { Route as VolumePublicIdSlugRouteImport } from './routes/volume.$publicId.$slug'
 import { Route as ModEditTypeKeyRouteImport } from './routes/mod.edit.$type.$key'
+import { Route as ModProposeTypeKeyRouteImport } from './routes/mod.propose.$type.$key'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -60,6 +65,16 @@ const MeIndexRoute = MeIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => MeRoute,
+} as any)
+const ModProposalsRoute = ModProposalsRouteImport.update({
+  id: '/mod/proposals',
+  path: '/mod/proposals',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ModQueueRoute = ModQueueRouteImport.update({
+  id: '/mod/queue',
+  path: '/mod/queue',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ModRolesRoute = ModRolesRouteImport.update({
   id: '/mod/roles',
@@ -111,6 +126,17 @@ const EditionPublicIdSlugRoute = EditionPublicIdSlugRouteImport.update({
   path: '/edition/$publicId/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModProposalIdRoute = ModProposalIdRouteImport.update({
+  id: '/mod/proposal/$id',
+  path: '/mod/proposal/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ModProposeNewSeriesPublicIdRoute =
+  ModProposeNewSeriesPublicIdRouteImport.update({
+    id: '/mod/propose-new/$seriesPublicId',
+    path: '/mod/propose-new/$seriesPublicId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const SeriesPublicIdIndexRoute = SeriesPublicIdIndexRouteImport.update({
   id: '/series/$publicId/',
   path: '/series/$publicId/',
@@ -136,6 +162,11 @@ const ModEditTypeKeyRoute = ModEditTypeKeyRouteImport.update({
   path: '/mod/edit/$type/$key',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModProposeTypeKeyRoute = ModProposeTypeKeyRouteImport.update({
+  id: '/mod/propose/$type/$key',
+  path: '/mod/propose/$type/$key',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -143,6 +174,8 @@ export interface FileRoutesByFullPath {
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/proposals': typeof ModProposalsRoute
+  '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
   '/publisher/$slug': typeof PublisherSlugRoute
   '/releases/$month': typeof ReleasesMonthRoute
@@ -152,6 +185,8 @@ export interface FileRoutesByFullPath {
   '/releases/': typeof ReleasesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
+  '/mod/proposal/$id': typeof ModProposalIdRoute
+  '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
   '/bundle/$publicId/': typeof BundlePublicIdIndexRoute
@@ -159,12 +194,15 @@ export interface FileRoutesByFullPath {
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId/': typeof VolumePublicIdIndexRoute
   '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
+  '/mod/propose/$type/$key': typeof ModProposeTypeKeyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/proposals': typeof ModProposalsRoute
+  '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
   '/publisher/$slug': typeof PublisherSlugRoute
   '/releases/$month': typeof ReleasesMonthRoute
@@ -174,6 +212,8 @@ export interface FileRoutesByTo {
   '/releases': typeof ReleasesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
+  '/mod/proposal/$id': typeof ModProposalIdRoute
+  '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
   '/bundle/$publicId': typeof BundlePublicIdIndexRoute
@@ -181,6 +221,7 @@ export interface FileRoutesByTo {
   '/series/$publicId': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId': typeof VolumePublicIdIndexRoute
   '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
+  '/mod/propose/$type/$key': typeof ModProposeTypeKeyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -189,6 +230,8 @@ export interface FileRoutesById {
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/proposals': typeof ModProposalsRoute
+  '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
   '/publisher/$slug': typeof PublisherSlugRoute
   '/releases/$month': typeof ReleasesMonthRoute
@@ -198,6 +241,8 @@ export interface FileRoutesById {
   '/releases/': typeof ReleasesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
+  '/mod/proposal/$id': typeof ModProposalIdRoute
+  '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
   '/bundle/$publicId/': typeof BundlePublicIdIndexRoute
@@ -205,6 +250,7 @@ export interface FileRoutesById {
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId/': typeof VolumePublicIdIndexRoute
   '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
+  '/mod/propose/$type/$key': typeof ModProposeTypeKeyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -214,6 +260,8 @@ export interface FileRouteTypes {
     | '/me'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/proposals'
+    | '/mod/queue'
     | '/mod/roles'
     | '/publisher/$slug'
     | '/releases/$month'
@@ -223,6 +271,8 @@ export interface FileRouteTypes {
     | '/releases/'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
+    | '/mod/proposal/$id'
+    | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
     | '/volume/$publicId/$slug'
     | '/bundle/$publicId/'
@@ -230,12 +280,15 @@ export interface FileRouteTypes {
     | '/series/$publicId/'
     | '/volume/$publicId/'
     | '/mod/edit/$type/$key'
+    | '/mod/propose/$type/$key'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/claim-username'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/proposals'
+    | '/mod/queue'
     | '/mod/roles'
     | '/publisher/$slug'
     | '/releases/$month'
@@ -245,6 +298,8 @@ export interface FileRouteTypes {
     | '/releases'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
+    | '/mod/proposal/$id'
+    | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
     | '/volume/$publicId/$slug'
     | '/bundle/$publicId'
@@ -252,6 +307,7 @@ export interface FileRouteTypes {
     | '/series/$publicId'
     | '/volume/$publicId'
     | '/mod/edit/$type/$key'
+    | '/mod/propose/$type/$key'
   id:
     | '__root__'
     | '/'
@@ -259,6 +315,8 @@ export interface FileRouteTypes {
     | '/me'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/proposals'
+    | '/mod/queue'
     | '/mod/roles'
     | '/publisher/$slug'
     | '/releases/$month'
@@ -268,6 +326,8 @@ export interface FileRouteTypes {
     | '/releases/'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
+    | '/mod/proposal/$id'
+    | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
     | '/volume/$publicId/$slug'
     | '/bundle/$publicId/'
@@ -275,6 +335,7 @@ export interface FileRouteTypes {
     | '/series/$publicId/'
     | '/volume/$publicId/'
     | '/mod/edit/$type/$key'
+    | '/mod/propose/$type/$key'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -283,6 +344,8 @@ export interface RootRouteChildren {
   MeRoute: typeof MeRouteWithChildren
   SearchRoute: typeof SearchRoute
   IsbnIsbnRoute: typeof IsbnIsbnRoute
+  ModProposalsRoute: typeof ModProposalsRoute
+  ModQueueRoute: typeof ModQueueRoute
   ModRolesRoute: typeof ModRolesRoute
   PublisherSlugRoute: typeof PublisherSlugRoute
   ReleasesMonthRoute: typeof ReleasesMonthRoute
@@ -291,6 +354,8 @@ export interface RootRouteChildren {
   ReleasesIndexRoute: typeof ReleasesIndexRoute
   BundlePublicIdSlugRoute: typeof BundlePublicIdSlugRoute
   EditionPublicIdSlugRoute: typeof EditionPublicIdSlugRoute
+  ModProposalIdRoute: typeof ModProposalIdRoute
+  ModProposeNewSeriesPublicIdRoute: typeof ModProposeNewSeriesPublicIdRoute
   SeriesPublicIdSlugRoute: typeof SeriesPublicIdSlugRoute
   VolumePublicIdSlugRoute: typeof VolumePublicIdSlugRoute
   BundlePublicIdIndexRoute: typeof BundlePublicIdIndexRoute
@@ -298,6 +363,7 @@ export interface RootRouteChildren {
   SeriesPublicIdIndexRoute: typeof SeriesPublicIdIndexRoute
   VolumePublicIdIndexRoute: typeof VolumePublicIdIndexRoute
   ModEditTypeKeyRoute: typeof ModEditTypeKeyRoute
+  ModProposeTypeKeyRoute: typeof ModProposeTypeKeyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -343,6 +409,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/me/'
       preLoaderRoute: typeof MeIndexRouteImport
       parentRoute: typeof MeRoute
+    }
+    '/mod/proposals': {
+      id: '/mod/proposals'
+      path: '/mod/proposals'
+      fullPath: '/mod/proposals'
+      preLoaderRoute: typeof ModProposalsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mod/queue': {
+      id: '/mod/queue'
+      path: '/mod/queue'
+      fullPath: '/mod/queue'
+      preLoaderRoute: typeof ModQueueRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/mod/roles': {
       id: '/mod/roles'
@@ -414,6 +494,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EditionPublicIdSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mod/proposal/$id': {
+      id: '/mod/proposal/$id'
+      path: '/mod/proposal/$id'
+      fullPath: '/mod/proposal/$id'
+      preLoaderRoute: typeof ModProposalIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mod/propose-new/$seriesPublicId': {
+      id: '/mod/propose-new/$seriesPublicId'
+      path: '/mod/propose-new/$seriesPublicId'
+      fullPath: '/mod/propose-new/$seriesPublicId'
+      preLoaderRoute: typeof ModProposeNewSeriesPublicIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/series/$publicId/': {
       id: '/series/$publicId/'
       path: '/series/$publicId'
@@ -449,6 +543,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ModEditTypeKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mod/propose/$type/$key': {
+      id: '/mod/propose/$type/$key'
+      path: '/mod/propose/$type/$key'
+      fullPath: '/mod/propose/$type/$key'
+      preLoaderRoute: typeof ModProposeTypeKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -468,6 +569,8 @@ const rootRouteChildren: RootRouteChildren = {
   MeRoute: MeRouteWithChildren,
   SearchRoute: SearchRoute,
   IsbnIsbnRoute: IsbnIsbnRoute,
+  ModProposalsRoute: ModProposalsRoute,
+  ModQueueRoute: ModQueueRoute,
   ModRolesRoute: ModRolesRoute,
   PublisherSlugRoute: PublisherSlugRoute,
   ReleasesMonthRoute: ReleasesMonthRoute,
@@ -476,6 +579,8 @@ const rootRouteChildren: RootRouteChildren = {
   ReleasesIndexRoute: ReleasesIndexRoute,
   BundlePublicIdSlugRoute: BundlePublicIdSlugRoute,
   EditionPublicIdSlugRoute: EditionPublicIdSlugRoute,
+  ModProposalIdRoute: ModProposalIdRoute,
+  ModProposeNewSeriesPublicIdRoute: ModProposeNewSeriesPublicIdRoute,
   SeriesPublicIdSlugRoute: SeriesPublicIdSlugRoute,
   VolumePublicIdSlugRoute: VolumePublicIdSlugRoute,
   BundlePublicIdIndexRoute: BundlePublicIdIndexRoute,
@@ -483,6 +588,7 @@ const rootRouteChildren: RootRouteChildren = {
   SeriesPublicIdIndexRoute: SeriesPublicIdIndexRoute,
   VolumePublicIdIndexRoute: VolumePublicIdIndexRoute,
   ModEditTypeKeyRoute: ModEditTypeKeyRoute,
+  ModProposeTypeKeyRoute: ModProposeTypeKeyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

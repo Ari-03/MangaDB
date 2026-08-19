@@ -17,6 +17,7 @@ import type * as imports from "../imports.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_moderationFields from "../lib/moderationFields.js";
 import type * as lib_observations from "../lib/observations.js";
+import type * as lib_proposalCreates from "../lib/proposalCreates.js";
 import type * as lib_publicIds from "../lib/publicIds.js";
 import type * as lib_roles from "../lib/roles.js";
 import type * as lib_sevenSeas from "../lib/sevenSeas.js";
@@ -24,6 +25,7 @@ import type * as lib_titles from "../lib/titles.js";
 import type * as lib_usernames from "../lib/usernames.js";
 import type * as lib_values from "../lib/values.js";
 import type * as moderation from "../moderation.js";
+import type * as proposals from "../proposals.js";
 import type * as publisher from "../publisher.js";
 import type * as reading from "../reading.js";
 import type * as releases from "../releases.js";
@@ -49,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
   "lib/moderationFields": typeof lib_moderationFields;
   "lib/observations": typeof lib_observations;
+  "lib/proposalCreates": typeof lib_proposalCreates;
   "lib/publicIds": typeof lib_publicIds;
   "lib/roles": typeof lib_roles;
   "lib/sevenSeas": typeof lib_sevenSeas;
@@ -56,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   "lib/usernames": typeof lib_usernames;
   "lib/values": typeof lib_values;
   moderation: typeof moderation;
+  proposals: typeof proposals;
   publisher: typeof publisher;
   reading: typeof reading;
   releases: typeof releases;
@@ -92,4 +96,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+};

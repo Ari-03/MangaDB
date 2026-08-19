@@ -247,11 +247,11 @@ Series) and every active pass, linking back to the Edition row.
 Spec §4/§5: immutable, versioned **Proposals** are the single write path for
 catalog changes. This slice covers roles, direct edits, public revision
 history, and implicit Human Overrides; Editor submission and the review queue
-are the next slice.
+are ticket #32 below.
 
 **Roles.** `convex/roles.ts` + `convex/lib/roles.ts`. Administrators appoint
 Moderators (and anything else); Moderators appoint Editors; Editors propose
-(next slice). Every appointment, revocation, suspension, and reinstatement
+(ticket #32). Every appointment, revocation, suspension, and reinstatement
 writes a permanent row to `roleAudit` — append-only, surviving even account
 deletion. Revocation/suspension removes privileges only: Revisions and
 Proposals record the author's role at authorship and are never rewritten.
@@ -289,6 +289,64 @@ sticky `overriddenFields` list (spec §4): imports may report conflicts but
 never overwrite it; only an explicit Moderator `clearOverride` (a later
 slice) removes an entry. The overridden fields are listed on the edit form
 and in the public history section.
+
+## Editor Proposals and the review queue (ticket #32)
+
+Spec §5, built on the #31 core: `convex/proposals.ts` + the creation
+registry `convex/lib/proposalCreates.ts`.
+
+**Lifecycle.** Any data-team member drafts a Proposal (`saveDraft` — a
+mutable working copy on the `proposals` row) and submits it
+(`submitProposal`): validation runs, a change comment is required, factual
+changes (anything but editorial prose like descriptions/synopses) require
+source evidence (a URL or a Source Observation), and computed warnings
+(new Series, bulk >10 ops, partial coverage) must be explicitly
+acknowledged. Submission freezes the draft into an immutable
+`proposalVersions` row — `Draft → In Review`. A Moderator then approves
+(`approveProposal` — applies every op in one mutation through the same
+`applyUpdate` path as direct edits, one public Revision per affected
+record), rejects (`rejectProposal`, reason required), or requests changes
+(`requestChanges`, reason required — back to Draft, seeded with the
+reviewed version; resubmission mints the next immutable version). Authors
+can `withdrawProposal` from Draft or In Review. Reviewers never edit a
+version.
+
+**Stale-base detection.** Every update op records its record's base
+Revision. If any base moves before approval (someone else's change landed
+first), approval is blocked: `approveProposal` flags the proposal stale and
+reports which records moved instead of applying anything. The author must
+explicitly `rebaseProposal` — back to Draft re-anchored on today's bases,
+with already-made changes dropped as no-ops — review, and resubmit. There
+is no silent rebase.
+
+**Temp-IDs.** One Proposal can atomically create several records: create
+ops for `series`/`volumes`/`editions`/`releases` may reference the temp-ID
+of an earlier create op (a volume's `seriesId`, an edition's coverage rows,
+a release's `editionId`). Approval applies them in order, allocating public
+IDs, computing Volume Position, inserting `volumeCoverages`, and deriving
+Release denorms. The same machinery approves the In-Review creation
+proposals the Seven Seas importer queues in steady state. The
+`/mod/propose-new/{seriesPublicId}` wizard (linked from Series pages for
+the data team) drafts a volume + edition + coverage + release in one
+proposal.
+
+**The queue.** `/mod/queue` (Data-Team-visible only) lists In-Review
+proposals oldest first, filterable by operation, record type, author
+(imports vs humans, or one name), warnings, staleness, and age. Claiming
+(`claimProposal`) signals who is looking but never locks — any Moderator
+can still decide. `/mod/proposal/{id}` is the review page: every immutable
+version with grouped before/after per record, base Revisions and per-record
+staleness, evidence beside the changes, structural summaries of creates,
+the Draft working copy, and the internal (never public) discussion notes.
+`/mod/proposals` lists the viewer's own proposals; Editors reach the update
+form at `/mod/propose/{type}/{key}` via the "Propose a change" links on
+record pages.
+
+**Rate limits and bulk caps.** The official Convex rate-limiter component
+(`@convex-dev/rate-limiter`, registered in `convex/convex.config.ts` — no
+extra setup beyond `npx convex dev` pushing it) enforces per-user token
+buckets: 30 submissions/hour (burst 5) and 120 draft saves/hour (burst 20).
+A single proposal carries at most 25 operations (`bulkCap`).
 
 ## Import foundation (ticket #34)
 

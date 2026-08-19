@@ -4,7 +4,8 @@
 // immediately approved Proposal Version — producing one immutable public
 // Revision per affected record, plus the public per-record history and the
 // implicit Human Override marking. Editor submission and the review queue
-// are the next slice; they reuse `applyUpdate` and grow the op set.
+// (ticket #32) live in proposals.ts and reuse `applyUpdate`,
+// `validateChanges`, and the record plumbing exported here.
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -16,7 +17,7 @@ import {
 } from "./_generated/server";
 import { editionCoverage, followMerges } from "./catalogPages";
 import { recordRef } from "./schema";
-import { requireModerator } from "./lib/roles";
+import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   EDITABLE_FIELDS,
   fieldDescriptor,
@@ -28,7 +29,7 @@ import { sameValue } from "./lib/values";
 
 // ---------- record refs & lookup ----------
 
-const TABLE_FOR_TYPE = {
+export const TABLE_FOR_TYPE = {
   publisher: "publishers",
   seriesFamily: "seriesFamilies",
   series: "series",
@@ -40,11 +41,11 @@ const TABLE_FOR_TYPE = {
   releaseBundle: "releaseBundles",
 } as const;
 
-type CatalogTable = (typeof TABLE_FOR_TYPE)[RecordType];
-type CatalogDoc = Doc<CatalogTable>;
-type RecordRef = { type: RecordType; id: Id<CatalogTable> };
+export type CatalogTable = (typeof TABLE_FOR_TYPE)[RecordType];
+export type CatalogDoc = Doc<CatalogTable>;
+export type RecordRef = { type: RecordType; id: Id<CatalogTable> };
 
-async function getCanonical(
+export async function getCanonical(
   ctx: QueryCtx | MutationCtx,
   ref: RecordRef,
 ): Promise<CatalogDoc | null> {
@@ -52,7 +53,7 @@ async function getCanonical(
 }
 
 /** Revisions of one record, newest first (the by_record index ends on seq). */
-async function revisionsOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
+export async function revisionsOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
   return await ctx.db
     .query("revisions")
     .withIndex("by_record", (q) =>
@@ -87,7 +88,7 @@ function importAuthoredFields(
 
 // ---------- value plumbing ----------
 
-type FieldChange = { field: string; before: unknown; after: unknown };
+export type FieldChange = { field: string; before: unknown; after: unknown };
 
 /**
  * Validate a submitted change set against the field registry and the current
@@ -95,7 +96,7 @@ type FieldChange = { field: string; before: unknown; after: unknown };
  * submission and approval run this validation (spec §5); hard invariants are
  * never overridable.
  */
-function validateChanges(
+export function validateChanges(
   type: RecordType,
   doc: CatalogDoc,
   submitted: Array<{ field: string; value: unknown }>,
@@ -157,7 +158,7 @@ function validateChanges(
  * Override marking, and the new immutable Revision. Shared by direct edits
  * today and the review-queue approval in the next slice.
  */
-async function applyUpdate(
+export async function applyUpdate(
   ctx: MutationCtx,
   args: {
     ref: RecordRef;
@@ -318,7 +319,7 @@ export const submitDirectEdit = mutation({
 
 // ---------- the edit form (moderator/administrator) ----------
 
-const recordTypeArg = v.union(
+export const recordTypeArg = v.union(
   v.literal("publisher"),
   v.literal("seriesFamily"),
   v.literal("series"),
@@ -335,7 +336,7 @@ const recordTypeArg = v.union(
  * one, the slug for publishers, the document ID otherwise. No merge
  * following — editing a merged loser is refused, not silently redirected.
  */
-async function resolveEditTarget(
+export async function resolveEditTarget(
   ctx: QueryCtx,
   type: RecordType,
   key: string,
@@ -386,13 +387,13 @@ async function resolveEditTarget(
 }
 
 /** Where the edit form links back to, as `/{entity}/{publicId}/{slug}` input. */
-type BackLink = {
+export type BackLink = {
   entity: "series" | "volume" | "edition" | "bundle";
   publicId: number;
   title: string;
 } | null;
 
-async function displayInfo(
+export async function displayInfo(
   ctx: QueryCtx,
   type: RecordType,
   doc: CatalogDoc,
@@ -459,15 +460,17 @@ async function displayInfo(
 }
 
 /**
- * Everything the direct-edit form needs (moderator/administrator only): the
- * record's editable fields with current values (straight from the registry
- * the mutation validates against), the base Revision for the staleness
- * check, and the record's overridden-fields list.
+ * Everything the edit and propose forms need (Data Team only): the record's
+ * editable fields with current values (straight from the registry the
+ * mutations validate against), the base Revision for the staleness check,
+ * and the record's overridden-fields list. Editors use it to draft update
+ * Proposals (#32); Moderators for direct edits — the mutations re-check the
+ * stronger role.
  */
 export const editForm = query({
   args: { type: recordTypeArg, key: v.string() },
   handler: async (ctx, { type, key }) => {
-    await requireModerator(ctx);
+    await requireDataTeam(ctx);
     const doc = await resolveEditTarget(ctx, type, key);
     if (!doc) return null;
     const ref = { type, id: doc._id } as RecordRef;

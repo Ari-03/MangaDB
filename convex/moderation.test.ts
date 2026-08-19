@@ -475,12 +475,14 @@ describe("moderation.editForm", () => {
     expect(after?.baseRevisionId).toBe(edit.revisionId);
   });
 
-  it("is moderator-only and resolves releases by document ID", async () => {
+  it("is data-team-only and resolves releases by document ID", async () => {
     const t = convexTest(schema);
     await setup(t);
+    // Editors read the form too since #32 (they draft update proposals from
+    // it); anyone without a data-team role is refused.
     await expect(
       t
-        .withIdentity({ subject: EDITOR })
+        .withIdentity({ subject: PLAIN })
         .query(api.moderation.editForm, { type: "series", key: "1" }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
 

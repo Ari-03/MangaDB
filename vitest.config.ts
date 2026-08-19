@@ -12,7 +12,9 @@ export default defineConfig({
   },
   test: {
     environment: "edge-runtime",
-    server: { deps: { inline: ["convex-test"] } },
+    // The rate-limiter package is inlined so its component test helper's
+    // import.meta.glob (of the component's TS sources) gets transformed.
+    server: { deps: { inline: ["convex-test", "@convex-dev/rate-limiter"] } },
     include: ["src/**/*.test.ts", "convex/**/*.test.ts"],
   },
 });

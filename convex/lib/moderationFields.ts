@@ -43,6 +43,12 @@ export type FieldDescriptor = {
   /** For kind "select": the allowed values ("" clears when not required). */
   options?: readonly string[];
   help?: string;
+  /**
+   * Editorial prose (descriptions, synopses) rather than a checkable fact.
+   * Factual changes need source evidence at proposal submission (spec §5);
+   * editorial fields do not.
+   */
+  editorial?: boolean;
 };
 
 const text = (
@@ -67,7 +73,7 @@ export const SOURCE_STATUS_OPTIONS = [
 export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
   publisher: [
     text("name", "Name", { required: true }),
-    textarea("description", "Description"),
+    textarea("description", "Description", { editorial: true }),
   ],
   seriesFamily: [text("name", "Name", { required: true })],
   series: [
@@ -90,7 +96,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
     text("label", "Volume label", {
       help: "Publisher-facing designation (\"7.5\", \"Side Story\"). Clear for an unnumbered volume. Never the sort order.",
     }),
-    textarea("synopsis", "Volume synopsis"),
+    textarea("synopsis", "Volume synopsis", { editorial: true }),
   ],
   editionLine: [text("name", "Line name", { required: true })],
   edition: [
@@ -110,7 +116,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
     { name: "isbn10", label: "ISBN-10", kind: "isbn10" },
     { name: "pubDate", label: "Publication date", kind: "partialDate" },
     { name: "price", label: "Price", kind: "price" },
-    textarea("description", "Release description"),
+    textarea("description", "Release description", { editorial: true }),
   ],
   releaseVariant: [text("name", "Variant name", { required: true })],
   releaseBundle: [
@@ -119,7 +125,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
     { name: "isbn10", label: "ISBN-10", kind: "isbn10" },
     { name: "pubDate", label: "Publication date", kind: "partialDate" },
     { name: "price", label: "Price", kind: "price" },
-    textarea("description", "Description"),
+    textarea("description", "Description", { editorial: true }),
   ],
 };
 

@@ -129,7 +129,9 @@ const proposalOp = v.union(
   v.object({ kind: v.literal("unlock"), ref: recordRef }),
 );
 
-const evidence = v.union(
+// Exported for the proposal write path (proposals.ts), which accepts and
+// stores evidence rows.
+export const evidence = v.union(
   v.object({
     kind: v.literal("observation"),
     observationId: v.id("sourceObservations"),
@@ -377,6 +379,8 @@ export default defineSchema({
       v.literal("rejected"),
       v.literal("withdrawn"),
     ),
+    // Number of immutable versions submitted so far; 0 for a never-submitted
+    // Draft. `currentVersionNo` names the version under review once submitted.
     currentVersionNo: v.number(),
     // Set when any affected record's base Revision changes before approval;
     // a stale proposal must return to Draft and be rebased (#14).
@@ -387,7 +391,19 @@ export default defineSchema({
     decidedAt: v.optional(v.number()),
     // Lineage link when resubmitting rejected work as a new Proposal.
     resubmittedFromId: v.optional(v.id("proposals")),
-  }).index("by_state", ["state", "submittedAt"]),
+    // The mutable working copy while in Draft (#32). Submission freezes it
+    // into an immutable proposalVersions row and clears it; Request Changes
+    // and rebase seed it back from the last submitted version.
+    draft: v.optional(
+      v.object({
+        ops: v.array(proposalOp),
+        evidence: v.array(evidence),
+        comment: v.string(),
+      }),
+    ),
+  })
+    .index("by_state", ["state", "submittedAt"])
+    .index("by_author", ["author.userId", "state"]),
 
   // Immutable once submitted; Request Changes yields a new version (#14).
   proposalVersions: defineTable({
@@ -398,6 +414,21 @@ export default defineSchema({
     changeComment: v.string(),
     warningsAcknowledged: v.optional(v.array(v.string())),
   }).index("by_proposal", ["proposalId", "versionNo"]),
+
+  // Internal review discussion (#14: private in v1 — Data-Team-only, never
+  // public). Decision notes (request-changes reasons, rejections) land here
+  // beside free-form comments; the note keeps the version it was made on.
+  proposalNotes: defineTable({
+    proposalId: v.id("proposals"),
+    versionNo: v.number(),
+    authorId: v.id("users"),
+    kind: v.union(
+      v.literal("comment"),
+      v.literal("requestChanges"),
+      v.literal("reject"),
+    ),
+    text: v.string(),
+  }).index("by_proposal", ["proposalId"]),
 
   // One immutable public Revision per affected record per approval.
   revisions: defineTable({

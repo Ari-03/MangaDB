@@ -146,9 +146,22 @@ export function useIsModerator(): boolean {
   );
 }
 
+/** True when the viewer holds any data-team role (Editor and up). */
+export function useIsDataTeam(): boolean {
+  const viewer = useQuery(api.users.viewer, {});
+  return Boolean(
+    viewer &&
+      !viewer.needsUsername &&
+      (viewer.role === "editor" ||
+        viewer.role === "moderator" ||
+        viewer.role === "administrator"),
+  );
+}
+
 /**
- * The direct-edit entry point on a record page: shown only to Moderators and
- * Administrators, linking `/mod/edit/{type}/{key}`.
+ * The maintenance entry point on a record page: Moderators and
+ * Administrators get the direct edit (`/mod/edit`); Editors get the update
+ * proposal (`/mod/propose`, ticket #32) whose submission lands In Review.
  */
 export function ModEditLink(props: { type: string; editKey: string }) {
   if (!convexClient) return null;
@@ -157,11 +170,52 @@ export function ModEditLink(props: { type: string; editKey: string }) {
 
 function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) {
   const isModerator = useIsModerator();
-  if (!isModerator) return null;
+  const isDataTeam = useIsDataTeam();
+  if (isModerator) {
+    return (
+      <p className="mod-edit-link">
+        <Link to="/mod/edit/$type/$key" params={{ type, key: editKey }}>
+          Edit this record
+        </Link>
+      </p>
+    );
+  }
+  if (isDataTeam) {
+    return (
+      <p className="mod-edit-link">
+        <Link to="/mod/propose/$type/$key" params={{ type, key: editKey }}>
+          Propose a change
+        </Link>
+      </p>
+    );
+  }
+  return null;
+}
+
+/**
+ * The atomic multi-record proposal entry point on a Series page (ticket
+ * #32): any data-team member can propose a new Volume + Edition + Release
+ * in one temp-ID Proposal.
+ */
+export function ProposeNewRecordsLink(props: { seriesPublicId: number }) {
+  if (!convexClient) return null;
+  return <ProposeNewRecordsLinkInner {...props} />;
+}
+
+function ProposeNewRecordsLinkInner({
+  seriesPublicId,
+}: {
+  seriesPublicId: number;
+}) {
+  const isDataTeam = useIsDataTeam();
+  if (!isDataTeam) return null;
   return (
     <p className="mod-edit-link">
-      <Link to="/mod/edit/$type/$key" params={{ type, key: editKey }}>
-        Edit this record
+      <Link
+        to="/mod/propose-new/$seriesPublicId"
+        params={{ seriesPublicId: String(seriesPublicId) }}
+      >
+        Propose a new volume + edition + release
       </Link>
     </p>
   );
@@ -185,15 +239,16 @@ function ModReleaseEditLinksInner({
   releases: Array<{ id: string; anchor: string }>;
 }) {
   const isModerator = useIsModerator();
-  if (!isModerator || releases.length === 0) return null;
+  const isDataTeam = useIsDataTeam();
+  if (!isDataTeam || releases.length === 0) return null;
   return (
     <p className="mod-edit-link">
-      Edit a release:{" "}
+      {isModerator ? "Edit a release:" : "Propose a change to a release:"}{" "}
       {releases.map((release, i) => (
         <span key={release.id}>
           {i > 0 ? " · " : ""}
           <Link
-            to="/mod/edit/$type/$key"
+            to={isModerator ? "/mod/edit/$type/$key" : "/mod/propose/$type/$key"}
             params={{ type: "release", key: release.id }}
           >
             {release.anchor}

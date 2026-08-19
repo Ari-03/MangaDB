@@ -1,8 +1,10 @@
 import { ClerkProvider, UserButton, useAuth } from "@clerk/tanstack-react-start";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProvider, ConvexReactClient, useQuery } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import type { ReactNode } from "react";
+
+import { api } from "../convex/_generated/api";
 
 // Client-side wiring (spec §9): <ClerkProvider> owns the session,
 // ConvexProviderWithClerk feeds its "convex"-template JWT to the reactive
@@ -96,6 +98,7 @@ function AuthNav() {
     <nav>
       {isSignedIn ? (
         <>
+          {convexClient ? <DataTeamNav /> : null}
           <Link to="/me">My library</Link>
           <UserButton />
         </>
@@ -104,4 +107,19 @@ function AuthNav() {
       )}
     </nav>
   );
+}
+
+// The review-queue entry point (#32) — rendered only for data-team members.
+// Kept in its own component so the role query runs only when signed in.
+function DataTeamNav() {
+  const viewer = useQuery(api.users.viewer, {});
+  const isDataTeam = Boolean(
+    viewer &&
+      !viewer.needsUsername &&
+      (viewer.role === "editor" ||
+        viewer.role === "moderator" ||
+        viewer.role === "administrator"),
+  );
+  if (!isDataTeam) return null;
+  return <Link to="/mod/queue">Queue</Link>;
 }

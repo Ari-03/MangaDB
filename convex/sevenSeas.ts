@@ -716,8 +716,8 @@ async function createCanonicalRecords(
 /**
  * Queue an In-Review Proposal pre-filled with the parsed guess (spec §5/§6):
  * temp-ID create ops for whatever does not exist yet, evidence citing the
- * observation. The review-queue approval machinery that applies these ops
- * is the next moderation slice; until then the queue is the record.
+ * observation. These land in the shared review queue (proposals.ts, #32);
+ * a Moderator's approval applies the ops via the creation registry.
  */
 async function queueCreationProposal(
   ctx: MutationCtx,

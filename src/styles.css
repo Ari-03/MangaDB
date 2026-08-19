@@ -1207,3 +1207,148 @@ button:disabled {
   gap: 0.2rem;
   font-size: 0.85rem;
 }
+
+/* ---------- proposals & the review queue (#32) ---------- */
+
+.queue-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: end;
+  margin: 1rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  font-size: 0.9rem;
+}
+
+.queue-filters label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.queue-filters input,
+.queue-filters select {
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: inherit;
+  color: inherit;
+}
+
+.queue-list {
+  list-style: none;
+  margin: 1rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.queue-row {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.queue-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.queue-stale {
+  color: #b3261e;
+}
+
+.queue-warnings {
+  color: #8a6d00;
+}
+
+.proposal-actions {
+  margin: 1rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.proposal-actions label {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.75rem 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.proposal-actions textarea {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+}
+
+.proposal-version {
+  margin: 1.25rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.proposal-ops {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.proposal-op {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75rem;
+}
+
+.proposal-base {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.temp-id {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.proposal-evidence {
+  margin: 0.35rem 0;
+  padding-left: 1.25rem;
+  font-size: 0.9rem;
+}
+
+.proposal-notes {
+  margin: 1.5rem 0;
+}
+
+.proposal-notes ol {
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.proposal-notes label {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.75rem 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.proposal-notes textarea {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+}
