@@ -12,6 +12,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { PUBLISHER_SCAN_CAP } from "./catalog";
+import { editionTitle, releaseAnchor } from "./lib/titles";
 
 // A month window holds hundreds of releases across all publishers (spec §8);
 // the cap only guards against pathology, mirroring COUNT_CAP elsewhere.
@@ -139,6 +140,20 @@ export async function joinBrowseRows(
 
     releases.push({
       id: release._id,
+      // The row's canonical target (spec §11: a Release is a row on its
+      // Edition page): Edition public ID + composed title for the link, the
+      // Release's anchor within it. Month pages build their ItemList JSON-LD
+      // from these (ticket #39).
+      edition: {
+        publicId: edition.publicId,
+        title: editionTitle({
+          seriesTitle: series[0]?.title ?? null,
+          lineName: line && line.status === "active" ? line.name : null,
+          linePosition: edition.linePosition ?? null,
+          covered,
+        }),
+      },
+      anchor: releaseAnchor(release),
       day: pubDate.day ?? null,
       sort: pubDate.sort,
       format: release.format,

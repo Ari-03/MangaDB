@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 
 import { api } from "../../convex/_generated/api";
+import { pageHead, SITE_NAME } from "~/lib/seo";
 import { slugify } from "~/lib/slug";
 import { convexServerClient } from "~/server/convex";
 
@@ -21,6 +22,15 @@ const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
 
 export const Route = createFileRoute("/")({
   loader: () => fetchHomeData(),
+  // Canonical + social card for the home page (ticket #39); the title and
+  // description templates live in the root route's defaults.
+  head: () =>
+    pageHead({
+      title: `${SITE_NAME} – English Manga Volumes & Release Dates`,
+      description:
+        "Track English manga volume releases: what volumes exist, when each edition comes out, and which ones you own, want, or have read.",
+      path: "/",
+    }),
   component: Home,
 });
 

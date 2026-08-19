@@ -3,6 +3,14 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 import { BundleCollectionControls } from "~/lib/collection";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
+import {
+  breadcrumbListJsonLd,
+  bundleTitleTag,
+  isoPartialDate,
+  jsonLdScript,
+  pageHead,
+  truncateDescription,
+} from "~/lib/seo";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
 import { fetchBundlePage, type BundlePageData } from "~/server/catalogPages";
 
@@ -30,21 +38,39 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
     }
     return page;
   },
-  head: ({ loaderData }) => ({
-    meta: loaderData
-      ? [
-          { title: `${loaderData.bundle.name} (Manga box set) — MangaDB` },
-          {
-            name: "description",
-            content: `${loaderData.bundle.name}${
-              loaderData.bundle.publisher
-                ? ` from ${loaderData.bundle.publisher.name}`
-                : ""
-            }: the ${loaderData.members.length} books inside, with ISBNs and release dates.`,
-          },
-        ]
-      : [],
-  }),
+  // Title/description formulas, cover-led social card, canonical link, and
+  // BreadcrumbList JSON-LD (spec §11, ticket #39). Facts lead; the Bundle's
+  // publisher blurb is the fallback.
+  head: ({ loaderData }) => {
+    if (!loaderData) return {};
+    const { bundle, members } = loaderData;
+    const path = bundlePath(bundle.publicId, bundle.name);
+    const facts = [
+      bundle.publisher ? `from ${bundle.publisher.name}` : null,
+      `the ${members.length} books inside`,
+      bundle.pubDate ? `released ${isoPartialDate(bundle.pubDate)}` : null,
+      bundle.isbn13 ? `box set ISBN ${bundle.isbn13}` : null,
+    ].filter((fact) => fact !== null);
+    return {
+      ...pageHead({
+        title: bundleTitleTag(bundle.name, bundle.publisher?.name ?? null),
+        description: `${bundle.name} ${facts.join(", ")}.${
+          bundle.description ? ` ${truncateDescription(bundle.description, 80)}` : ""
+        }`,
+        path,
+        image: bundle.coverUrl,
+        ogType: "book",
+      }),
+      scripts: [
+        jsonLdScript(
+          breadcrumbListJsonLd([
+            { name: "MangaDB", path: "/" },
+            { name: bundle.name },
+          ]),
+        ),
+      ],
+    };
+  },
   component: BundlePage,
   notFoundComponent: BundleNotFound,
 });

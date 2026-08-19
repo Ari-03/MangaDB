@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 
 // Cap per-table counting so the scaffold query stays cheap even once imports
@@ -216,6 +216,10 @@ export const seriesPage = query({
     ).filter((doc) => doc.status === "active");
 
     const volumes = [];
+    // Series pages pick a representative release cover at query time (spec
+    // §8): the first covering Release with a cover, in reading order. It
+    // fronts the cover-led OG/Twitter card (spec §11, ticket #39).
+    let representativeCover: Id<"_storage"> | null = null;
     for (const volume of volumeDocs) {
       const coveringRows = await ctx.db
         .query("volumeCoverages")
@@ -278,6 +282,10 @@ export const seriesPage = query({
             bundles.push({ publicId: bundle.publicId, name: bundle.name });
           }
 
+          if (representativeCover === null && release.coverImage) {
+            representativeCover = release.coverImage.storageId;
+          }
+
           releases.push({
             id: release._id,
             format: release.format,
@@ -327,6 +335,9 @@ export const seriesPage = query({
       },
       family,
       volumes,
+      coverUrl: representativeCover
+        ? await ctx.storage.getUrl(representativeCover)
+        : null,
     };
   },
 });

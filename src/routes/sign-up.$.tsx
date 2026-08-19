@@ -6,7 +6,13 @@ import { clerkEnabled } from "~/providers";
 // See sign-in.$.tsx; email addresses are verified by Clerk before the session
 // exists (spec §9: verified email/password). /me then forces the username claim.
 export const Route = createFileRoute("/sign-up/$")({
-  head: () => ({ meta: [{ title: "Sign up — MangaDB" }] }),
+  head: () => ({
+    meta: [
+      { title: "Sign up — MangaDB" },
+      // Auth pages are never indexed (spec §11).
+      { name: "robots", content: "noindex" },
+    ],
+  }),
   component: SignUpPage,
 });
 

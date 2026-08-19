@@ -2,6 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { currentMonth } from "~/lib/month";
 import {
+  breadcrumbListJsonLd,
+  browserTitleTag,
+  jsonLdScript,
+  pageHead,
+} from "~/lib/seo";
+import {
   ReleasesBrowser,
   validateBrowseFilters,
   type BrowseFilters,
@@ -37,21 +43,26 @@ export const Route = createFileRoute("/releases/")({
       filtered: Boolean(deps.format || deps.publisher),
     };
   },
+  // Indexing policy (spec §11): the unfiltered browser is indexable; any
+  // filtered combination is noindex/follow. The canonical always points at
+  // the bare `/releases`, so no query-string variant — including a stray
+  // `?page=N` — is ever the indexed URL.
   head: ({ loaderData }) => ({
-    meta: [
-      { title: "Manga release calendar — MangaDB" },
-      {
-        name: "description",
-        content:
-          "English manga releases day by day: every volume publishing this month, with format, publisher, and edition details.",
-      },
-      ...(loaderData?.filtered
-        ? [{ name: "robots", content: "noindex, follow" }]
-        : []),
+    ...pageHead({
+      title: browserTitleTag(),
+      description:
+        "English manga releases day by day: every volume publishing this month, with format, publisher, and edition details.",
+      path: "/releases",
+      robots: loaderData?.filtered ? "noindex, follow" : undefined,
+    }),
+    scripts: [
+      jsonLdScript(
+        breadcrumbListJsonLd([
+          { name: "MangaDB", path: "/" },
+          { name: "Releases" },
+        ]),
+      ),
     ],
-    links: loaderData?.filtered
-      ? [{ rel: "canonical", href: "/releases" }]
-      : [],
   }),
   component: ReleasesAgendaPage,
 });

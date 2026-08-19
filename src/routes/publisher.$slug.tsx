@@ -11,6 +11,13 @@ import {
 } from "~/lib/month";
 import { ModEditLink } from "~/lib/moderation";
 import { AgendaView } from "~/lib/releasesBrowser";
+import {
+  breadcrumbListJsonLd,
+  jsonLdScript,
+  organizationJsonLd,
+  pageHead,
+  publisherTitleTag,
+} from "~/lib/seo";
 import { fetchPublisherPage, type PublisherPageData } from "~/server/publisher";
 
 // The bounded lane's horizon: today through the end of the month three months
@@ -52,17 +59,35 @@ export const Route = createFileRoute("/publisher/$slug")({
     }
     return page;
   },
-  head: ({ loaderData }) => ({
-    meta: loaderData
-      ? [
-          { title: `${loaderData.publisher.name} — Manga releases — MangaDB` },
-          {
-            name: "description",
-            content: `${loaderData.publisher.name} on MangaDB: publisher profile, upcoming English manga releases, and the full release calendar.`,
-          },
-        ]
-      : [],
-  }),
+  // Title/description formulas, canonical link, and BreadcrumbList +
+  // Organization JSON-LD (spec §11, ticket #39).
+  head: ({ loaderData }) => {
+    if (!loaderData) return {};
+    const { publisher } = loaderData;
+    const path = `/publisher/${publisher.slug}`;
+    return {
+      ...pageHead({
+        title: publisherTitleTag(publisher.name),
+        description: `${publisher.name} on MangaDB: publisher profile, upcoming English manga releases, and the full release calendar.`,
+        path,
+      }),
+      scripts: [
+        jsonLdScript(
+          breadcrumbListJsonLd([
+            { name: "MangaDB", path: "/" },
+            { name: publisher.name },
+          ]),
+        ),
+        jsonLdScript(
+          organizationJsonLd({
+            name: publisher.name,
+            path,
+            description: publisher.description,
+          }),
+        ),
+      ],
+    };
+  },
   component: PublisherPage,
   notFoundComponent: PublisherNotFound,
 });

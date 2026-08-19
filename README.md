@@ -290,6 +290,49 @@ never overwrite it; only an explicit Moderator `clearOverride` (a later
 slice) removes an entry. The overridden fields are listed on the edit form
 and in the public history section.
 
+## SEO: metadata, JSON-LD, Open Graph, sitemaps (ticket #39)
+
+Spec §11. All metadata is formula-generated — no hand-written metadata in v1.
+
+**Titles & descriptions.** `src/lib/seo.ts` holds the per-page-type templates
+(Series "{Title} – English Manga Volumes & Release Dates | MangaDB", Volume
+"{Series} Vol. {Label} – …", Edition "{Composed title} ({Publisher}) – ISBN &
+Release Date | MangaDB", Publisher, Month, browser, Bundle). Descriptions are
+assembled from facts, falling back to a truncated Volume Synopsis / Release
+Description. Every page's `head()` goes through `pageHead()`, which also
+emits the canonical link and the **cover-led OG/Twitter card** — the
+representative release cover picked at query time (spec §8) upgrades the
+card to `summary_large_image`.
+
+**JSON-LD.** BreadcrumbList on every catalog page; BookSeries on Series;
+one Book per Release row on Edition pages (URL = the Edition page anchored
+at the row — Releases have no page of their own); Organization on Publisher;
+ItemList on unfiltered month pages. No ratings markup. Builders live in
+`src/lib/seo.ts`, unit-tested in `src/lib/seo.test.ts`.
+
+**Indexing policy.** Catalog pages, `/releases`, and month views are
+indexable and always carry an absolute canonical. Filtered browser views
+(format/publisher/view params) are `noindex, follow` with the canonical
+pointing at the unfiltered URL. `/search`, `/me/…`, `/mod/…`, auth pages,
+and `/claim-username` are never indexed (meta robots; `/u/{username}` gets
+the same treatment when profiles land). No `?page=N` is ever indexed: entity
+pages don't paginate, the browser paginates by month URL, and the
+always-present canonical strips any stray query string.
+
+**Sitemaps & robots.** The custom Worker entry (`src/server.ts` →
+`src/server/seoRoutes.ts`) serves `/sitemap.xml` — an index of per-entity
+children (`/sitemaps/{series,volumes,editions,publishers,bundles,months}.xml`)
+containing exactly the indexable canonical URLs — plus `/robots.txt`.
+`lastmod` comes from each record's latest Revision (`convex/seo.ts`,
+paginated), falling back to creation time; everything is generated on demand
+with `Cache-Control` headers — no cron. `robots.txt` disallows only the
+pure-app surfaces (`/me`, `/mod`, `/claim-username`) so noindex-carrying
+pages stay fetchable, and links the sitemap index.
+
+**Canonical origin.** Absolute URLs (canonical links, OG URLs, sitemap locs)
+use `VITE_SITE_URL` when set, defaulting to `https://mangadb.org`; the
+runtime `CANONICAL_HOST` var continues to drive the www/HTTPS 301s.
+
 ## Auth (Clerk) — how it works
 
 Spec §9. Clerk owns credentials and sessions (Google OAuth + verified
@@ -333,6 +376,9 @@ App:
   `clerkMiddleware()` and SSR auth. Unset → app treats everyone as signed out.
   Dev: `.dev.vars` (workerd reads Worker secrets from there, not `.env.local`).
   Deploy: `npx wrangler secret put CLERK_SECRET_KEY`.
+- `VITE_SITE_URL` — canonical public origin for SEO URLs (canonical links,
+  OG URLs, sitemap locs). Unset → `https://mangadb.org` (spec §11's apex).
+  Set it only for preview environments that should self-reference.
 
 Convex deployment (Convex dashboard → Settings → Environment Variables, or
 `npx convex env set`):
@@ -348,7 +394,7 @@ Other commands:
 
 ```sh
 npm run typecheck   # tsc --noEmit
-npm test            # vitest (canonical-host + slug + ISBN + title policy; seed, series/volume/edition/bundle pages, isbn lookup, search, accounts, reading tracking via convex-test)
+npm test            # vitest (canonical-host + slug + ISBN + title + SEO metadata/JSON-LD/sitemap policy; seed, series/volume/edition/bundle pages, isbn lookup, search, accounts, reading tracking, sitemap queries via convex-test)
 npm run build       # production client + Worker bundles into dist/
 npm run preview     # serve the production build locally in workerd
 ```

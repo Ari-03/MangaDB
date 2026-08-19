@@ -4,7 +4,14 @@ import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { VolumeReadCount } from "~/lib/reading";
-import { parsePublicId, slugParams, volumePath } from "~/lib/slug";
+import {
+  breadcrumbListJsonLd,
+  jsonLdScript,
+  pageHead,
+  truncateDescription,
+  volumeTitleTag,
+} from "~/lib/seo";
+import { parsePublicId, seriesPath, slugParams, volumePath } from "~/lib/slug";
 import { fetchVolumePage, type VolumePageData } from "~/server/catalogPages";
 
 /**
@@ -33,17 +40,39 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
     }
     return page;
   },
-  head: ({ loaderData }) => ({
-    meta: loaderData
-      ? [
-          { title: `${loaderData.volume.title} (Manga) — MangaDB` },
-          {
-            name: "description",
-            content: `Every English release covering ${loaderData.volume.title}: editions, formats, ISBNs, and release dates.`,
-          },
-        ]
-      : [],
-  }),
+  // Title/description formulas, cover-led social card, canonical link, and
+  // BreadcrumbList JSON-LD (spec §11, ticket #39). The description falls
+  // back to fact assembly when no Volume Synopsis exists.
+  head: ({ loaderData }) => {
+    if (!loaderData) return {};
+    const { volume, series, editions, coverUrl } = loaderData;
+    const path = volumePath(volume.publicId, volume.title);
+    const editionCount =
+      editions.length === 1 ? "1 English edition" : `${editions.length} English editions`;
+    return {
+      ...pageHead({
+        title: volumeTitleTag(series.title, volume.label),
+        description: volume.synopsis
+          ? truncateDescription(volume.synopsis)
+          : `${volume.title} in English: ${editionCount} with every release date, format, and ISBN.`,
+        path,
+        image: coverUrl,
+        ogType: "book",
+      }),
+      scripts: [
+        jsonLdScript(
+          breadcrumbListJsonLd([
+            { name: "MangaDB", path: "/" },
+            {
+              name: series.title,
+              path: seriesPath(series.publicId, series.title),
+            },
+            { name: volume.title },
+          ]),
+        ),
+      ],
+    };
+  },
   component: VolumePage,
   notFoundComponent: VolumeNotFound,
 });

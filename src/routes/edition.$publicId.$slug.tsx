@@ -2,7 +2,16 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { ModEditLink, ModReleaseEditLinks, RecordHistory } from "~/lib/moderation";
-import { editionPath, parsePublicId, slugParams } from "~/lib/slug";
+import {
+  bookJsonLd,
+  breadcrumbListJsonLd,
+  editionTitleTag,
+  isoPartialDate,
+  jsonLdScript,
+  pageHead,
+  truncateDescription,
+} from "~/lib/seo";
+import { editionPath, parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 import { fetchEditionPage } from "~/server/catalogPages";
 
 /**
@@ -30,21 +39,71 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
     }
     return page;
   },
-  head: ({ loaderData }) => ({
-    meta: loaderData
-      ? [
-          { title: `${loaderData.edition.title} (Manga) — MangaDB` },
-          {
-            name: "description",
-            content: `${loaderData.edition.title}${
-              loaderData.edition.publisher
-                ? ` from ${loaderData.edition.publisher.name}`
-                : ""
-            }: every release with format, binding, ISBNs, and release dates.`,
-          },
-        ]
-      : [],
-  }),
+  // Title/description formulas, cover-led social card, canonical link, and
+  // JSON-LD (spec §11, ticket #39): BreadcrumbList plus one Book per Release
+  // row — Releases have no page of their own, so each Book's URL is this
+  // Edition page anchored at its row. The description leads with facts
+  // (publisher, date, ISBN), falling back to the Release Description blurb.
+  head: ({ loaderData }) => {
+    if (!loaderData) return {};
+    const { edition, series, releases, coverUrl } = loaderData;
+    const path = editionPath(edition.publicId, edition.title);
+    const primarySeries = series[0];
+    const first = releases[0];
+    const facts = [
+      edition.publisher ? `from ${edition.publisher.name}` : null,
+      first?.pubDate ? `released ${isoPartialDate(first.pubDate)}` : null,
+      first?.isbn13 ? `ISBN ${first.isbn13}` : null,
+    ].filter((fact) => fact !== null);
+    const blurb = releases.find((r) => r.description)?.description;
+    return {
+      ...pageHead({
+        title: editionTitleTag(edition.title, edition.publisher?.name ?? null),
+        description:
+          facts.length > 0
+            ? `${edition.title} ${facts.join(", ")} — every release with format, binding, ISBN, and release date.`
+            : blurb
+              ? truncateDescription(blurb)
+              : `${edition.title}: every release with format, binding, ISBN, and release date.`,
+        path,
+        image: coverUrl,
+        ogType: "book",
+      }),
+      scripts: [
+        jsonLdScript(
+          breadcrumbListJsonLd([
+            { name: "MangaDB", path: "/" },
+            ...(primarySeries
+              ? [
+                  {
+                    name: primarySeries.title,
+                    path: seriesPath(primarySeries.publicId, primarySeries.title),
+                  },
+                ]
+              : []),
+            { name: edition.title },
+          ]),
+        ),
+        ...releases.map((release) =>
+          jsonLdScript(
+            bookJsonLd({
+              name: edition.title,
+              editionPath: path,
+              anchor: release.anchor,
+              format: release.format,
+              binding: release.binding,
+              isbn13: release.isbn13,
+              isbn10: release.isbn10,
+              pubDate: release.pubDate,
+              language: release.language,
+              publisherName: edition.publisher?.name ?? null,
+              coverUrl: release.coverUrl,
+            }),
+          ),
+        ),
+      ],
+    };
+  },
   component: EditionPage,
   notFoundComponent: EditionNotFound,
 });

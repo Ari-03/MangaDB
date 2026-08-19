@@ -5,6 +5,11 @@ import { defineConfig } from "vitest/config";
 // the Convex runtime for convex-test and provides Request/Response for the
 // canonical-host tests.
 export default defineConfig({
+  resolve: {
+    // "~/*" → "src/*" from tsconfig.json, for tests of modules that import
+    // app code by alias (e.g. src/server/seoRoutes.ts).
+    alias: { "~": new URL("./src", import.meta.url).pathname },
+  },
   test: {
     environment: "edge-runtime",
     server: { deps: { inline: ["convex-test"] } },

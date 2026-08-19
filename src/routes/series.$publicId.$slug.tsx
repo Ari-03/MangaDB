@@ -9,6 +9,13 @@ import {
   SeriesReadingControls,
   VolumeReadCount,
 } from "~/lib/reading";
+import {
+  bookSeriesJsonLd,
+  breadcrumbListJsonLd,
+  jsonLdScript,
+  pageHead,
+  seriesTitleTag,
+} from "~/lib/seo";
 import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
@@ -35,17 +42,38 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
     }
     return page;
   },
-  head: ({ loaderData }) => ({
-    meta: loaderData
-      ? [
-          { title: `${loaderData.series.title} (Manga) — MangaDB` },
-          {
-            name: "description",
-            content: `English releases of ${loaderData.series.title}: the canonical volume sequence with every edition and release date.`,
-          },
-        ]
-      : [],
-  }),
+  // Title/description formulas, cover-led social card, canonical link, and
+  // BreadcrumbList + BookSeries JSON-LD (spec §11, ticket #39).
+  head: ({ loaderData }) => {
+    if (!loaderData) return {};
+    const { series, volumes, coverUrl } = loaderData;
+    const path = seriesPath(series.publicId, series.title);
+    const volumeCount =
+      volumes.length === 1 ? "1 volume" : `${volumes.length} volumes`;
+    return {
+      ...pageHead({
+        title: seriesTitleTag(series.title),
+        description: `English releases of ${series.title}: ${volumeCount} in the canonical reading order, with every edition, format, and release date.`,
+        path,
+        image: coverUrl,
+      }),
+      scripts: [
+        jsonLdScript(
+          breadcrumbListJsonLd([
+            { name: "MangaDB", path: "/" },
+            { name: series.title },
+          ]),
+        ),
+        jsonLdScript(
+          bookSeriesJsonLd({
+            title: series.title,
+            altTitles: series.altTitles,
+            path,
+          }),
+        ),
+      ],
+    };
+  },
   component: SeriesPage,
   notFoundComponent: SeriesNotFound,
 });

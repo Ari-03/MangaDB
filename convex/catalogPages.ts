@@ -126,9 +126,21 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     pubDate: release.pubDate ?? null,
     price: release.price ?? null,
     description: release.description ?? null,
+    coverUrl: release.coverImage
+      ? await ctx.storage.getUrl(release.coverImage.storageId)
+      : null,
     variants,
     bundles,
   };
+}
+
+/**
+ * The page's representative cover (spec §8: picked at query time), fronting
+ * the cover-led OG/Twitter card (spec §11): the first date-sorted Release
+ * row carrying one.
+ */
+function representativeCover(rows: Array<{ coverUrl: string | null }>) {
+  return rows.find((row) => row.coverUrl !== null)?.coverUrl ?? null;
 }
 
 type ReleaseRow = Awaited<ReturnType<typeof releaseRow>>;
@@ -212,6 +224,7 @@ export const volumePage = query({
       },
       series: { publicId: series.publicId, title: series.title },
       editions,
+      coverUrl: representativeCover(editions.flatMap((e) => e.releases)),
     };
   },
 });
@@ -237,6 +250,7 @@ export const editionPage = query({
 
     const publisher = await ctx.db.get(edition.publisherId);
     const { title, lineName, coverage } = await editionCoverage(ctx, edition);
+    const releases = await editionReleases(ctx, edition._id);
 
     // Distinct Series of the covered Volumes, for breadcrumbs/backlinks.
     const series = [];
@@ -260,7 +274,8 @@ export const editionPage = query({
       },
       series,
       coverage,
-      releases: await editionReleases(ctx, edition._id),
+      releases,
+      coverUrl: representativeCover(releases),
     };
   },
 });
@@ -344,6 +359,9 @@ export const bundlePage = query({
           publisher && publisher.status === "active"
             ? { name: publisher.name, slug: publisher.slug }
             : null,
+        coverUrl: bundle.coverImage
+          ? await ctx.storage.getUrl(bundle.coverImage.storageId)
+          : null,
       },
       members,
     };

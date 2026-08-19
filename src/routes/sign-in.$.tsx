@@ -8,7 +8,13 @@ import { clerkEnabled } from "~/providers";
 // dashboard (spec §9). New accounts land on /me, which forces the username
 // claim before anything personal renders.
 export const Route = createFileRoute("/sign-in/$")({
-  head: () => ({ meta: [{ title: "Sign in — MangaDB" }] }),
+  head: () => ({
+    meta: [
+      { title: "Sign in — MangaDB" },
+      // Auth pages are never indexed (spec §11).
+      { name: "robots", content: "noindex" },
+    ],
+  }),
   component: SignInPage,
 });
 
