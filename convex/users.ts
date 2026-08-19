@@ -12,7 +12,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
-import { getUserBySubject, requireIdentity } from "./lib/auth";
+import { getUserBySubject, requireIdentity, requireUser } from "./lib/auth";
 import { validateUsername } from "./lib/usernames";
 
 /**
@@ -86,6 +86,27 @@ export const claimUsername = mutation({
       });
     }
     return { username: trimmed };
+  },
+});
+
+/**
+ * Set the viewer's Physical/Digital/Both format preference (spec §3). It
+ * scopes exactly one thing: which announced Releases from followed Series
+ * appear in My Upcoming Releases (follows.myUpcoming, ticket #29). Wanted
+ * and Ordered entries always appear regardless.
+ */
+export const setFormatPreference = mutation({
+  args: {
+    preference: v.union(
+      v.literal("physical"),
+      v.literal("digital"),
+      v.literal("both"),
+    ),
+  },
+  handler: async (ctx, { preference }) => {
+    const user = await requireUser(ctx);
+    await ctx.db.patch(user._id, { formatPreference: preference });
+    return { preference };
   },
 });
 

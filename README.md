@@ -242,6 +242,38 @@ public catalog pages and disappear entirely signed out.
 `/me` → Reading lists the chosen statuses (with volumes-read progress per
 Series) and every active pass, linking back to the Edition row.
 
+## Series Follows + My Upcoming Releases (ticket #29)
+
+Spec §3: future-release interest is a **Series Follow**, separate from
+owning and reading (`convex/follows.ts`; UI in `src/lib/follows.tsx`).
+Follows are always private in v1 — the profile never shows them.
+
+- **Explicit follow toggle** on the Series page. `setSeriesFollow` is the
+  single write path; nothing follows a Series as a side effect of anything.
+- **One post-first-entry prompt per Series**: inserting a user's first
+  Collection Entry in a Series returns a `suggestFollow` from the collection
+  mutations, rendered as a non-blocking inline prompt. Only its Follow
+  button creates the follow; "Don't ask again" dismisses permanently
+  (`dismissFollowPrompt` — later entries in that Series never prompt again);
+  ignoring it changes nothing.
+- **My Upcoming Releases** (`/me` → Upcoming) implements the spec formula,
+  computed live on every read and never stored: announced future Canonical
+  Releases from followed Series matching the viewer's Physical/Digital/Both
+  preference (settable right in the section via `users.setFormatPreference`),
+  plus every future Wanted/Ordered Release **and Bundle** regardless of
+  preference — deduplicated (one row per Release however many clauses match)
+  and with anything Owned excluded, whether owned directly or derived
+  through an Owned Bundle. "Future" follows the publisher-lane convention:
+  dated today-or-later, plus day-TBA releases of the current month onward;
+  an undated Bundle is not announced and never appears.
+- **Releases browser overlay**: followed Series get a subtle ★ marker and a
+  "Followed series" filter in both the Agenda and the Month Grid — never a
+  separate section. The month window stays a public SSR query; the marker
+  and the `?followed=true` filter are a signed-in client-side overlay
+  (`follows.followedSeries`), applied in memory per the recorded spec §8
+  trade-off. Followed-filtered views are noindex with a canonical pointing
+  at the unfiltered browser, so they are never indexed (spec §11).
+
 ## Tracking visibility + public profiles (ticket #30)
 
 Spec §3: personal tracking is **private by default**, with separate

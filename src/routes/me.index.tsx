@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { MyCollection } from "~/lib/collection";
+import { MyUpcoming } from "~/lib/follows";
 import { MyReading } from "~/lib/reading";
 import { SharingSettings } from "~/lib/sharing";
 import { convexClient } from "~/providers";
@@ -47,9 +48,10 @@ function MePage() {
       </section>
       <section className="me-section">
         <h2>Upcoming</h2>
-        <p className="placeholder">
-          Release dates for series you follow will appear here.
-        </p>
+        {/* My Upcoming Releases (#29): followed Series matching the format
+            preference + every future Wanted/Ordered Release and Bundle,
+            deduplicated, Owned excluded, computed live. */}
+        <MyUpcoming />
       </section>
 
       <section className="me-section">

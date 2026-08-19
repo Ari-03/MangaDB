@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
 import { ReleaseCollectionControls } from "~/lib/collection";
+import { SeriesFollowControls } from "~/lib/follows";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import {
   ModEditLink,
@@ -132,6 +133,10 @@ function SeriesPage() {
           <span className="fact">Also known as {series.altTitles.join(", ")}</span>
         ) : null}
       </p>
+
+      {/* Series Follow is the explicit toggle for future-release interest
+          (#29); always private in v1. Renders nothing signed out. */}
+      <SeriesFollowControls seriesPublicId={series.publicId} />
 
       {/* Series Reading Status is set only here, by explicit choice (#28);
           the tracking prompts never change it without confirmation. Renders

@@ -76,6 +76,85 @@ async function bundleEntryRow(
     .unique();
 }
 
+/** Active, merge-resolved Series covered by one Collection Entry's target. */
+async function entrySeries(
+  ctx: QueryCtx,
+  entry: Doc<"collectionEntries">,
+): Promise<Map<Id<"series">, Doc<"series">>> {
+  const covered = new Map<Id<"series">, Doc<"series">>();
+  const addRelease = async (releaseId: Id<"releases">) => {
+    const release = await followMerges(ctx, "releases", await ctx.db.get(releaseId));
+    if (!release) return;
+    for (const seriesId of release.seriesIds) {
+      const series = await followMerges(ctx, "series", await ctx.db.get(seriesId));
+      if (series) covered.set(series._id, series);
+    }
+  };
+  if (entry.releaseId) {
+    await addRelease(entry.releaseId);
+  } else if (entry.bundleId) {
+    const bundle = await followMerges(
+      ctx,
+      "releaseBundles",
+      await ctx.db.get(entry.bundleId),
+    );
+    if (!bundle) return covered;
+    const memberships = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+      .collect();
+    for (const membership of memberships) {
+      await addRelease(membership.releaseId);
+    }
+  }
+  return covered;
+}
+
+/**
+ * The one non-blocking follow prompt per Series (ticket #29, spec §3),
+ * computed after a *new* entry was inserted: for each Series the new entry's
+ * target covers, suggest a Series Follow exactly when this is the user's
+ * first Collection Entry in that Series (no other entry covers it), they are
+ * not already following it, and the prompt was never dismissed for it. The
+ * client renders the suggestion; only follows.setSeriesFollow ever creates
+ * the follow, and follows.dismissFollowPrompt suppresses it permanently.
+ */
+async function followSuggestions(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  newEntry: Doc<"collectionEntries">,
+) {
+  const target = await entrySeries(ctx, newEntry);
+  if (target.size === 0) return [];
+
+  const others = (
+    await ctx.db
+      .query("collectionEntries")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect()
+  ).filter((entry) => entry._id !== newEntry._id);
+  const alreadyCovered = new Set<Id<"series">>();
+  for (const other of others) {
+    for (const seriesId of (await entrySeries(ctx, other)).keys()) {
+      alreadyCovered.add(seriesId);
+    }
+  }
+
+  const suggestions = [];
+  for (const [seriesId, series] of target) {
+    if (alreadyCovered.has(seriesId)) continue;
+    const state = await ctx.db
+      .query("userSeriesStates")
+      .withIndex("by_user_series", (q) =>
+        q.eq("userId", userId).eq("seriesId", seriesId),
+      )
+      .unique();
+    if (state?.following || state?.followPromptDismissed) continue;
+    suggestions.push({ seriesId, title: series.title });
+  }
+  return suggestions;
+}
+
 /** A Variant's display name, or null when it is hidden or gone. */
 export async function variantName(
   ctx: QueryCtx,
@@ -352,6 +431,9 @@ export const myCollection = query({
  * ever holds) with an optional pinned Variant, or omit `state` to remove the
  * entry. Removal deletes only the direct entry; Derived Ownership is
  * computed, so it is untouchable from here.
+ *
+ * Inserting a first Collection Entry in a Series returns `suggestFollow`
+ * (ticket #29) — a suggestion only; nothing here writes the follow.
  */
 export const setReleaseEntry = mutation({
   args: {
@@ -366,7 +448,7 @@ export const setReleaseEntry = mutation({
     const existing = await releaseEntryRow(ctx, user._id, release._id);
     if (!state) {
       if (existing) await ctx.db.delete(existing._id);
-      return { entry: null };
+      return { entry: null, suggestFollow: [] };
     }
 
     if (variantId) {
@@ -379,18 +461,25 @@ export const setReleaseEntry = mutation({
       }
     }
 
+    let suggestFollow: Awaited<ReturnType<typeof followSuggestions>> = [];
     if (existing) {
       // Patching variantId with undefined clears a previously pinned Variant.
+      // A state change on an existing entry is never a first entry — no prompt.
       await ctx.db.patch(existing._id, { state, variantId });
     } else {
-      await ctx.db.insert("collectionEntries", {
+      const entryId = await ctx.db.insert("collectionEntries", {
         userId: user._id,
         releaseId: release._id,
         state,
         variantId,
       });
+      suggestFollow = await followSuggestions(
+        ctx,
+        user._id,
+        (await ctx.db.get(entryId))!,
+      );
     }
-    return { entry: { state, variantId: variantId ?? null } };
+    return { entry: { state, variantId: variantId ?? null }, suggestFollow };
   },
 });
 
@@ -399,6 +488,9 @@ export const setReleaseEntry = mutation({
  * omit `state` to remove the entry. Removing an Owned Bundle entry ends its
  * Derived Ownership (it was never stored) and never erases any direct
  * Release entry.
+ *
+ * Inserting a first Collection Entry in a Series (through the Bundle's
+ * member Releases) returns `suggestFollow` (ticket #29) — a suggestion only.
  */
 export const setBundleEntry = mutation({
   args: {
@@ -412,17 +504,23 @@ export const setBundleEntry = mutation({
     const existing = await bundleEntryRow(ctx, user._id, bundle._id);
     if (!state) {
       if (existing) await ctx.db.delete(existing._id);
-      return { entry: null };
+      return { entry: null, suggestFollow: [] };
     }
+    let suggestFollow: Awaited<ReturnType<typeof followSuggestions>> = [];
     if (existing) {
       await ctx.db.patch(existing._id, { state });
     } else {
-      await ctx.db.insert("collectionEntries", {
+      const entryId = await ctx.db.insert("collectionEntries", {
         userId: user._id,
         bundleId: bundle._id,
         state,
       });
+      suggestFollow = await followSuggestions(
+        ctx,
+        user._id,
+        (await ctx.db.get(entryId))!,
+      );
     }
-    return { entry: { state } };
+    return { entry: { state }, suggestFollow };
   },
 });

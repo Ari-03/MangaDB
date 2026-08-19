@@ -37,11 +37,15 @@ export const Route = createFileRoute("/releases/$month")({
   loaderDeps: ({ search }) => ({
     format: search.format,
     publisher: search.publisher,
+    followed: search.followed,
     view: search.view,
   }),
   loader: async ({ params, deps }) => {
     const anchor = parseMonthParam(params.month);
     if (!anchor) throw notFound();
+    // The followed filter (#29) never reaches the server query — it is a
+    // signed-in client overlay over the same public window; here it only
+    // marks the view as filtered/noindex.
     const data = await fetchMonthReleases({
       data: { ...anchor, format: deps.format, publisher: deps.publisher },
     });
@@ -49,7 +53,7 @@ export const Route = createFileRoute("/releases/$month")({
       anchor,
       today: currentMonth(),
       data,
-      filtered: Boolean(deps.format || deps.publisher || deps.view),
+      filtered: Boolean(deps.format || deps.publisher || deps.followed || deps.view),
     };
   },
   // Indexing policy (spec §11): unfiltered month views are the evergreen

@@ -12,9 +12,11 @@
 
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { FollowPrompt, type FollowSuggestion } from "~/lib/follows";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
@@ -75,6 +77,9 @@ export function ReleaseCollectionControls({ releaseId }: { releaseId: string }) 
 function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
   const data = useQuery(api.collection.entryForRelease, { releaseId });
   const setEntry = useMutation(api.collection.setReleaseEntry);
+  // The post-first-entry follow suggestion (#29) the last mutation returned;
+  // ephemeral — following and permanent dismissal go through FollowPrompt.
+  const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
   if (!data) return null; // loading, signed out, or username pending
   const entry = data.entry;
 
@@ -89,8 +94,12 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
             // Keep the pinned Variant across state changes; removal clears it
             // with the entry.
             variantId: state ? (entry?.variantId ?? undefined) : undefined,
-          })
+          }).then((result) => setSuggestFollow(result.suggestFollow))
         }
+      />
+      <FollowPrompt
+        suggestions={suggestFollow}
+        onDone={() => setSuggestFollow([])}
       />
       {entry && data.variants.length > 0 ? (
         <label className="variant-pick">
@@ -144,14 +153,23 @@ export function BundleCollectionControls({ bundleId }: { bundleId: string }) {
 function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
   const data = useQuery(api.collection.entryForBundle, { bundleId });
   const setEntry = useMutation(api.collection.setBundleEntry);
+  // Follow suggestions (#29) for the member Releases' Series.
+  const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
   if (!data) return null;
   return (
     <div className="collection-controls">
       <StateButtons
         current={data.entry?.state ?? null}
         onPick={(state) =>
-          void setEntry({ bundleId: data.bundleId, state: state ?? undefined })
+          void setEntry({
+            bundleId: data.bundleId,
+            state: state ?? undefined,
+          }).then((result) => setSuggestFollow(result.suggestFollow))
         }
+      />
+      <FollowPrompt
+        suggestions={suggestFollow}
+        onDone={() => setSuggestFollow([])}
       />
       {data.entry?.state === "owned" ? (
         <span className="derived-ownership">

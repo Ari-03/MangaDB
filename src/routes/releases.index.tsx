@@ -31,21 +31,27 @@ export const Route = createFileRoute("/releases/")({
   loaderDeps: ({ search }) => ({
     format: search.format,
     publisher: search.publisher,
+    followed: search.followed,
   }),
   loader: async ({ deps }) => {
     // The Agenda anchors on the month containing today (UTC), computed on the
-    // server so SSR and hydration agree.
+    // server so SSR and hydration agree. The followed filter (#29) never
+    // reaches the server query — it is a signed-in client overlay over the
+    // same public window; here it only marks the view as filtered/noindex.
     const anchor = currentMonth();
-    const data = await fetchMonthReleases({ data: { ...anchor, ...deps } });
+    const data = await fetchMonthReleases({
+      data: { ...anchor, format: deps.format, publisher: deps.publisher },
+    });
     return {
       anchor,
       data,
-      filtered: Boolean(deps.format || deps.publisher),
+      filtered: Boolean(deps.format || deps.publisher || deps.followed),
     };
   },
   // Indexing policy (spec §11): the unfiltered browser is indexable; any
-  // filtered combination is noindex/follow. The canonical always points at
-  // the bare `/releases`, so no query-string variant — including a stray
+  // filtered combination — including the personal followed filter, which is
+  // never indexed — is noindex/follow. The canonical always points at the
+  // bare `/releases`, so no query-string variant — including a stray
   // `?page=N` — is ever the indexed URL.
   head: ({ loaderData }) => ({
     ...pageHead({

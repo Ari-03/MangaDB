@@ -304,6 +304,91 @@ describe("collection.volumeOwnership", () => {
   });
 });
 
+describe("collection follow suggestions (#29)", () => {
+  it("a first entry in a series suggests a follow — a suggestion only", async () => {
+    const t = convexTest(schema);
+    const { seriesId, r1 } = await seed(t);
+    const as = await withUser(t);
+
+    const result = await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r1,
+      state: "wanted",
+    });
+    expect(result.suggestFollow).toEqual([
+      { seriesId, title: "Witch Hat Atelier" },
+    ]);
+    // Nothing followed until the explicit confirmation.
+    const follow = await as.query(api.follows.seriesFollow, { seriesPublicId: 1 });
+    expect(follow?.following).toBe(false);
+  });
+
+  it("appears once per series: later entries and state changes never suggest", async () => {
+    const t = convexTest(schema);
+    const { r1, r2 } = await seed(t);
+    const as = await withUser(t);
+
+    await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" });
+    // State change on the existing entry: not a first entry.
+    const changed = await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r1,
+      state: "owned",
+    });
+    expect(changed.suggestFollow).toEqual([]);
+    // Another release of the same series: the series is already covered.
+    const second = await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r2,
+      state: "wanted",
+    });
+    expect(second.suggestFollow).toEqual([]);
+  });
+
+  it("dismissal suppresses the prompt permanently", async () => {
+    const t = convexTest(schema);
+    const { seriesId, r1 } = await seed(t);
+    const as = await withUser(t);
+
+    await as.mutation(api.follows.dismissFollowPrompt, { seriesId });
+    // Even a genuine first entry stays quiet after dismissal…
+    const first = await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r1,
+      state: "wanted",
+    });
+    expect(first.suggestFollow).toEqual([]);
+    // …and so does re-adding after removing everything.
+    await as.mutation(api.collection.setReleaseEntry, { releaseId: r1 });
+    const again = await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r1,
+      state: "ordered",
+    });
+    expect(again.suggestFollow).toEqual([]);
+  });
+
+  it("an already-followed series never prompts", async () => {
+    const t = convexTest(schema);
+    const { seriesId, r1 } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.follows.setSeriesFollow, { seriesId, following: true });
+    const result = await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r1,
+      state: "wanted",
+    });
+    expect(result.suggestFollow).toEqual([]);
+  });
+
+  it("a bundle entry suggests through its member releases' series", async () => {
+    const t = convexTest(schema);
+    const { seriesId, bundleId } = await seed(t);
+    const as = await withUser(t);
+    const result = await as.mutation(api.collection.setBundleEntry, {
+      bundleId,
+      state: "wanted",
+    });
+    expect(result.suggestFollow).toEqual([
+      { seriesId, title: "Witch Hat Atelier" },
+    ]);
+  });
+});
+
 describe("collection.myCollection", () => {
   it("returns every entry with its state, joined for linking", async () => {
     const t = convexTest(schema);
