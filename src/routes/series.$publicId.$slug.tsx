@@ -3,6 +3,11 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
+import {
+  ReleasePassControls,
+  SeriesReadingControls,
+  VolumeReadCount,
+} from "~/lib/reading";
 import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
@@ -94,6 +99,11 @@ function SeriesPage() {
         ) : null}
       </p>
 
+      {/* Series Reading Status is set only here, by explicit choice (#28);
+          the tracking prompts never change it without confirmation. Renders
+          nothing signed out. */}
+      <SeriesReadingControls seriesPublicId={series.publicId} />
+
       {family ? <FamilySection family={family} self={series} /> : null}
 
       <section className="reading-path">
@@ -108,6 +118,7 @@ function SeriesPage() {
               key={volume.publicId}
               volume={volume}
               seriesTitle={series.title}
+              seriesPublicId={series.publicId}
             />
           ))}
         </ol>
@@ -171,9 +182,11 @@ function seriesLinkParams(publicId: number, title: string) {
 function VolumeItem({
   volume,
   seriesTitle,
+  seriesPublicId,
 }: {
   volume: SeriesPageData["volumes"][number];
   seriesTitle: string;
+  seriesPublicId: number;
 }) {
   const releaseCount = volume.editions.reduce(
     (n, edition) => n + edition.releases.length,
@@ -200,6 +213,11 @@ function VolumeItem({
             {volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume"}
           </Link>
         </span>
+        {/* Durable, edition-independent read count (#28); signed-in only. */}
+        <VolumeReadCount
+          seriesPublicId={seriesPublicId}
+          volumePublicId={volume.publicId}
+        />
       </div>
       {volume.synopsis ? <p className="vol-synopsis">{volume.synopsis}</p> : null}
       <details className="volume-editions">
@@ -331,6 +349,8 @@ function ReleaseRow({ release }: { release: Edition["releases"][number] }) {
           ))}
         </p>
       ) : null}
+      {/* Release Progress pass controls (#28); render nothing signed out. */}
+      <ReleasePassControls releaseId={release.id} />
     </li>
   );
 }

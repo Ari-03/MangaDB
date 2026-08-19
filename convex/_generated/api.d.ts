@@ -17,6 +17,7 @@ import type * as lib_roles from "../lib/roles.js";
 import type * as lib_titles from "../lib/titles.js";
 import type * as lib_usernames from "../lib/usernames.js";
 import type * as moderation from "../moderation.js";
+import type * as reading from "../reading.js";
 import type * as releases from "../releases.js";
 import type * as roles from "../roles.js";
 import type * as seed from "../seed.js";
@@ -38,6 +39,7 @@ declare const fullApi: ApiFromModules<{
   "lib/titles": typeof lib_titles;
   "lib/usernames": typeof lib_usernames;
   moderation: typeof moderation;
+  reading: typeof reading;
   releases: typeof releases;
   roles: typeof roles;
   seed: typeof seed;

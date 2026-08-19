@@ -14,12 +14,18 @@ import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
 
 // ---------- shared resolution & joins ----------
 
-type MergeableTable = "volumes" | "editions" | "releases" | "releaseBundles";
+type MergeableTable =
+  | "series"
+  | "volumes"
+  | "editions"
+  | "releases"
+  | "releaseBundles";
 
 /**
  * Follow a merged record to its surviving record (spec §4/§8), cycle-guarded;
  * hidden records read as absent. Mirrors catalog.ts's resolveActiveSeries.
- * Exported for moderation.ts (revision history resolves the same way).
+ * Exported for moderation.ts (revision history resolves the same way) and
+ * reading.ts (tracking mutations follow merges before touching state).
  */
 export async function followMerges<T extends MergeableTable>(
   ctx: QueryCtx,

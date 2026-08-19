@@ -6,6 +6,7 @@
 import { Link } from "@tanstack/react-router";
 
 import { formatPartialDate, formatPrice } from "~/lib/format";
+import { ReleasePassControls } from "~/lib/reading";
 import { slugParams } from "~/lib/slug";
 
 /** The releaseRow shape from convex/catalogPages.ts, structurally. */
@@ -83,6 +84,8 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
           ))}
         </p>
       ) : null}
+      {/* Release Progress pass controls (#28); render nothing signed out. */}
+      <ReleasePassControls releaseId={release.id} />
     </li>
   );
 }

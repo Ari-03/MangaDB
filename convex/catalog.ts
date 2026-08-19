@@ -112,8 +112,9 @@ export const search = query({
  * Follow a merged Series to its surviving record (spec §4/§8): merged docs
  * keep their public ID and point at the winner, so the losing ID's URL 301s
  * without a redirects table. Cycle-guarded; hidden records read as absent.
+ * Exported for reading.ts (personal tracking resolves Series the same way).
  */
-async function resolveActiveSeries(
+export async function resolveActiveSeries(
   ctx: QueryCtx,
   publicId: number,
 ): Promise<Doc<"series"> | null> {

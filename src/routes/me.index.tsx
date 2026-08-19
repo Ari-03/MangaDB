@@ -4,6 +4,7 @@ import { useAction } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { MyReading } from "~/lib/reading";
 import { convexClient } from "~/providers";
 
 export const Route = createFileRoute("/me/")({
@@ -40,9 +41,8 @@ function MePage() {
       </section>
       <section className="me-section">
         <h2>Reading</h2>
-        <p className="placeholder">
-          Series you follow and your reading progress will appear here.
-        </p>
+        {/* Reading tracking (#28): chosen statuses and active passes. */}
+        <MyReading />
       </section>
       <section className="me-section">
         <h2>Upcoming</h2>

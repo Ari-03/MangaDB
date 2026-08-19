@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
+import { VolumeReadCount } from "~/lib/reading";
 import { parsePublicId, slugParams, volumePath } from "~/lib/slug";
 import { fetchVolumePage, type VolumePageData } from "~/server/catalogPages";
 
@@ -86,6 +87,11 @@ function VolumePage() {
         <span className="fact vol-label">
           {volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume"}
         </span>
+        {/* Durable, edition-independent read count (#28); signed-in only. */}
+        <VolumeReadCount
+          seriesPublicId={series.publicId}
+          volumePublicId={volume.publicId}
+        />
       </p>
       {volume.synopsis ? <p className="vol-synopsis">{volume.synopsis}</p> : null}
 

@@ -978,3 +978,108 @@ button:disabled {
 .audit-list time {
   color: var(--muted);
 }
+
+/* ---------- reading tracking (#28) ---------- */
+
+.reading-status {
+  margin: 0.75rem 0;
+}
+
+.reading-status select {
+  font: inherit;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--card);
+  color: var(--fg);
+}
+
+.volume-read {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  font-size: 0.85rem;
+}
+
+.volume-read .read-count {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.volume-read .read-adjust,
+.pass-controls button {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+.pass-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.pass-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pass-slider input[type="range"] {
+  width: 9rem;
+  accent-color: var(--accent);
+}
+
+.pass-percent {
+  min-width: 2.5rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pass-cancel {
+  color: var(--muted);
+}
+
+.prompt {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.35rem 0.6rem;
+}
+
+.prompt-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pass-done {
+  color: var(--fg);
+}
+
+.my-reading h3 {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.my-reading ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.my-reading .pass-facts {
+  color: var(--muted);
+  font-size: 0.85rem;
+}

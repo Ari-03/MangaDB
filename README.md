@@ -16,12 +16,12 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 |---|---|
 | `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step; `mod.edit.…` + `mod.roles.tsx` are the moderation surfaces from #31) |
 | `src/router.tsx` | Router factory (`getRouter`) |
-| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI) |
+| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI; `reading.tsx` is the signed-in reading-tracking overlay from #28) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
 | `src/server.ts` | Custom Workers entry: canonical-host redirect, then the Start handler |
 | `src/server/` | Server-only code (canonical-host policy, SSR Convex client, SSR Clerk auth/token) |
-| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26; `moderation.ts` + `roles.ts` are the moderation core from #31) |
+| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26; `moderation.ts` + `roles.ts` are the moderation core from #31; `reading.ts` is reading tracking from #28) |
 | `wrangler.jsonc` | Workers config (`nodejs_compat`, custom entry, vars) |
 | `vite.config.ts` | Start + Cloudflare + React plugins |
 
@@ -166,6 +166,41 @@ in the site header. It is deliberately narrow:
 No Volume or Bundle text search in v1, and search pages are noindex — they
 are not in the spec's indexable set.
 
+## Reading tracking (ticket #28)
+
+Spec §3: a signed-in user tracks reading as three separate things —
+**Series Reading Status**, **Release Progress** passes, and **Volume
+Progress** read counts (`convex/reading.ts`; UI overlay in
+`src/lib/reading.tsx`). The controls render as a client-side overlay on the
+public catalog pages and disappear entirely signed out.
+
+- **Series Reading Status** (Plan to Read | Reading | Paused | Dropped |
+  Completed) is set only by explicit choice: the picker on the Series page,
+  or a confirmed prompt. `setSeriesReadingStatus` is the single write path;
+  nothing else ever touches it.
+- **Release Progress** is an active pass on a Release row (Series, Volume,
+  and Edition pages), at most one per (user, release), with an optional
+  0–100% slider. Hitting 100% only opens the completion prompt — the pass
+  completes solely through the confirmed `completePass` mutation; "Not yet"
+  and "Stop without finishing" change no counts.
+- **Confirmed completion** increments the read count of every Volume the
+  Release's Edition covers *completely* — partial coverage is untouched —
+  stamped with one shared `completedAt`. Another completed pass is a reread
+  (count 2, 3, …). **Undo** reverses the most recent completion: it
+  decrements exactly the Volumes whose latest completion still carries that
+  stamp (a newer reread makes an older undo a no-op) and restores the pass
+  at 100%.
+- **Prompts never act**: starting a pass suggests "Reading", and a
+  completion that leaves every Volume of a Series read suggests
+  "Completed" — both render inline, and only their confirm buttons write
+  the status. Declining changes nothing.
+- **Volume Progress is edition-independent and directly editable**
+  (CONTEXT.md): each Volume row shows "Read ×N" with mark-read/+1/−1
+  controls, so offline reads are recordable without a pass.
+
+`/me` → Reading lists the chosen statuses (with volumes-read progress per
+Series) and every active pass, linking back to the Edition row.
+
 ## Moderation core (ticket #31)
 
 Spec §4/§5: immutable, versioned **Proposals** are the single write path for
@@ -272,7 +307,7 @@ Other commands:
 
 ```sh
 npm run typecheck   # tsc --noEmit
-npm test            # vitest (canonical-host + slug + ISBN + title policy; seed, series/volume/edition/bundle pages, isbn lookup, search, accounts via convex-test)
+npm test            # vitest (canonical-host + slug + ISBN + title policy; seed, series/volume/edition/bundle pages, isbn lookup, search, accounts, reading tracking via convex-test)
 npm run build       # production client + Worker bundles into dist/
 npm run preview     # serve the production build locally in workerd
 ```
