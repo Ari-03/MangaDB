@@ -1083,3 +1083,91 @@ button:disabled {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+/* ---------- personal collection (#27) ---------- */
+
+.collection-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.collection-states {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+.collection-states button {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+  border: 0;
+  border-radius: 0;
+  background: var(--card);
+}
+
+.collection-states button + button {
+  border-left: 1px solid var(--border);
+}
+
+.collection-states button.state-active {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-weight: 600;
+}
+
+.variant-pick select {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.35rem;
+}
+
+.derived-ownership {
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
+.volume-ownership {
+  margin: 0.5rem 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: 0.9rem;
+}
+
+.volume-ownership ul {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.my-collection h3 {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.my-collection ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.my-collection .pass-facts {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.my-collection .bundle-derived {
+  margin: 0.25rem 0 0 1.25rem;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}

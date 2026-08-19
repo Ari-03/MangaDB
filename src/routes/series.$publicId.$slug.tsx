@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
+import { ReleaseCollectionControls } from "~/lib/collection";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import {
@@ -349,6 +350,8 @@ function ReleaseRow({ release }: { release: Edition["releases"][number] }) {
           ))}
         </p>
       ) : null}
+      {/* Collection Entry controls (#27); render nothing signed out. */}
+      <ReleaseCollectionControls releaseId={release.id} />
       {/* Release Progress pass controls (#28); render nothing signed out. */}
       <ReleasePassControls releaseId={release.id} />
     </li>

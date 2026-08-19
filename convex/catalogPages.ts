@@ -329,6 +329,8 @@ export const bundlePage = query({
 
     return {
       bundle: {
+        // Document id, for the signed-in collection controls (#27).
+        id: bundle._id,
         publicId: bundle.publicId,
         name: bundle.name,
         format: bundle.format ?? null,

@@ -27,6 +27,19 @@ export async function getUserBySubject(
 }
 
 /**
+ * The viewer's User for personal *queries*: null when signed out or the
+ * username claim is pending, so overlay queries render as "nothing to show"
+ * instead of erroring on public pages. Mutations use requireUser instead.
+ */
+export async function viewerOrNull(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"users"> | null> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) return null;
+  return await getUserBySubject(ctx, identity.subject);
+}
+
+/**
  * The gate for personal mutations and queries: valid identity, a User created
  * (username claimed), and not suspended. Tracking slices call this first.
  */

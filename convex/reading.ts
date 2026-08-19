@@ -22,7 +22,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { editionCoverage, followMerges } from "./catalogPages";
-import { getUserBySubject, requireUser } from "./lib/auth";
+import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseAnchor } from "./lib/titles";
 
 // Mirrors the userSeriesStates.readingStatus union in schema.ts.
@@ -36,19 +36,8 @@ const readingStatusValidator = v.union(
 
 // ---------- shared lookups ----------
 
-/**
- * The viewer's User for personal *queries*: null when signed out or the
- * username claim is pending, so overlay queries render as "nothing to show"
- * instead of erroring on public pages. Mutations use requireUser instead.
- */
-async function viewerOrNull(ctx: QueryCtx): Promise<Doc<"users"> | null> {
-  const identity = await ctx.auth.getUserIdentity();
-  if (!identity) return null;
-  return await getUserBySubject(ctx, identity.subject);
-}
-
 /** The Release resolved through merges; throws when unknown or hidden. */
-async function requireActiveRelease(
+export async function requireActiveRelease(
   ctx: QueryCtx,
   releaseId: Id<"releases">,
 ): Promise<Doc<"releases">> {

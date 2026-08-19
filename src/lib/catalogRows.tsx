@@ -5,6 +5,7 @@
 
 import { Link } from "@tanstack/react-router";
 
+import { ReleaseCollectionControls } from "~/lib/collection";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ReleasePassControls } from "~/lib/reading";
 import { slugParams } from "~/lib/slug";
@@ -84,6 +85,8 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
           ))}
         </p>
       ) : null}
+      {/* Collection Entry controls (#27); render nothing signed out. */}
+      <ReleaseCollectionControls releaseId={release.id} />
       {/* Release Progress pass controls (#28); render nothing signed out. */}
       <ReleasePassControls releaseId={release.id} />
     </li>

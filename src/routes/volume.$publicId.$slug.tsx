@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
+import { VolumeOwnership } from "~/lib/collection";
 import { VolumeReadCount } from "~/lib/reading";
 import { parsePublicId, slugParams, volumePath } from "~/lib/slug";
 import { fetchVolumePage, type VolumePageData } from "~/server/catalogPages";
@@ -94,6 +95,10 @@ function VolumePage() {
         />
       </p>
       {volume.synopsis ? <p className="vol-synopsis">{volume.synopsis}</p> : null}
+
+      {/* Volume ownership (#27): displayed purely through the owned Releases
+          covering it — direct or via an Owned Bundle; no stored Volume state. */}
+      <VolumeOwnership volumePublicId={volume.publicId} />
 
       {editions.length === 0 ? (
         <p className="notice">No releases cover this volume yet.</p>

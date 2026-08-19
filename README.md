@@ -16,12 +16,12 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 |---|---|
 | `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step; `mod.edit.…` + `mod.roles.tsx` are the moderation surfaces from #31) |
 | `src/router.tsx` | Router factory (`getRouter`) |
-| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI; `reading.tsx` is the signed-in reading-tracking overlay from #28) |
+| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI; `collection.tsx` is the signed-in collection overlay from #27; `reading.tsx` is the signed-in reading-tracking overlay from #28) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
 | `src/server.ts` | Custom Workers entry: canonical-host redirect, then the Start handler |
 | `src/server/` | Server-only code (canonical-host policy, SSR Convex client, SSR Clerk auth/token) |
-| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26; `moderation.ts` + `roles.ts` are the moderation core from #31; `reading.ts` is reading tracking from #28) |
+| `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26; `moderation.ts` + `roles.ts` are the moderation core from #31; `collection.ts` is the personal collection from #27; `reading.ts` is reading tracking from #28) |
 | `wrangler.jsonc` | Workers config (`nodejs_compat`, custom entry, vars) |
 | `vite.config.ts` | Start + Cloudflare + React plugins |
 
@@ -165,6 +165,31 @@ in the site header. It is deliberately narrow:
 
 No Volume or Bundle text search in v1, and search pages are noindex — they
 are not in the spec's indexable set.
+
+## Personal collection (ticket #27)
+
+Spec §3: a signed-in user tracks what they own, want, and have ordered
+(`convex/collection.ts`; UI overlay in `src/lib/collection.tsx`). The
+controls render as a client-side overlay on the public catalog pages and
+disappear entirely signed out.
+
+- **Collection Entry** — every Release row (Series, Volume, and Edition
+  pages) and every Bundle page offers Wanted / Ordered / Owned toggles. An
+  entry holds exactly one state; picking another replaces it, picking the
+  current one removes the entry. All transitions are explicit clicks —
+  nothing changes state as a side effect.
+- **Variant pinning** — a Release entry with Variants shows a picker to
+  identify the owned Release Variant (or "Standard cover").
+- **Derived Ownership** — owning a Bundle marks its member Releases as
+  "Owned via {bundle}" (with the bundle-pinned Variant named), computed at
+  read time and never stored. It coexists with direct entries, so removing
+  the Bundle entry never erases a direct entry.
+- **Volume ownership is never stored** — the Volume page shows an "In your
+  collection" summary computed from the owned Releases covering it, direct
+  or derived, with partial coverage labeled.
+
+`/me` → Collection lists every entry grouped by state (Owned / Ordered /
+Wanted); an Owned box set lists its derived member Releases beneath it.
 
 ## Reading tracking (ticket #28)
 

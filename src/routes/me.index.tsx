@@ -4,6 +4,7 @@ import { useAction } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { MyCollection } from "~/lib/collection";
 import { MyReading } from "~/lib/reading";
 import { convexClient } from "~/providers";
 
@@ -35,9 +36,8 @@ function MePage() {
 
       <section className="me-section">
         <h2>Collection</h2>
-        <p className="placeholder">
-          Volumes you own, want, or have ordered will appear here.
-        </p>
+        {/* Personal collection (#27): entries grouped by state. */}
+        <MyCollection />
       </section>
       <section className="me-section">
         <h2>Reading</h2>

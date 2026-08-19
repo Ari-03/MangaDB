@@ -1,5 +1,6 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { BundleCollectionControls } from "~/lib/collection";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
@@ -95,6 +96,10 @@ function BundlePage() {
       {bundle.description ? (
         <p className="release-description">{bundle.description}</p>
       ) : null}
+
+      {/* Collection Entry controls (#27); render nothing signed out. Owning
+          the box set confers Derived Ownership on every member below. */}
+      <BundleCollectionControls bundleId={bundle.id} />
 
       <section className="bundle-members">
         <h2>In this bundle</h2>

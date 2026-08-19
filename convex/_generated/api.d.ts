@@ -10,6 +10,7 @@
 
 import type * as catalog from "../catalog.js";
 import type * as catalogPages from "../catalogPages.js";
+import type * as collection from "../collection.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_moderationFields from "../lib/moderationFields.js";
 import type * as lib_publicIds from "../lib/publicIds.js";
@@ -32,6 +33,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   catalog: typeof catalog;
   catalogPages: typeof catalogPages;
+  collection: typeof collection;
   "lib/auth": typeof lib_auth;
   "lib/moderationFields": typeof lib_moderationFields;
   "lib/publicIds": typeof lib_publicIds;
