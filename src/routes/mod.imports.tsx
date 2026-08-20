@@ -95,7 +95,8 @@ function Imports() {
         Every Approved Source runs unattended on its registry cadence; three
         consecutive failed runs flag it unhealthy here (and email the
         Administrator once per transition).{" "}
-        <Link to="/mod/queue">Review queue</Link>
+        <Link to="/mod/queue">Review queue</Link> ·{" "}
+        <Link to="/mod/launch">Launch</Link>
       </p>
 
       <h2>Sources</h2>

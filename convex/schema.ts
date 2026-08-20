@@ -459,7 +459,10 @@ export default defineSchema({
     comment: v.string(),
     // Source citation for importer-authored Revisions (#13, ANN attribution).
     citation: v.optional(v.object({ sourceName: v.string(), url: v.string() })),
-  }).index("by_record", ["ref.type", "ref.id", "seq"]),
+  })
+    .index("by_record", ["ref.type", "ref.id", "seq"])
+    // Launch gate ④ (#40): verifying a correction produced public Revisions.
+    .index("by_proposal", ["proposalId"]),
 
   // Rejected import conflicts, keyed exactly as #13 specifies; suppression
   // lifts when the source offers a different value, the observation is
@@ -531,9 +534,68 @@ export default defineSchema({
   }).index("by_entity", ["entity"]),
 
   // Singleton. Bootstrap Mode (#15) is switched off permanently before launch.
+  // The launch bookkeeping (#40, spec §7) also lives here: the latest
+  // duplicate-sweep summary (QA gate ③) and the Administrator's attestation
+  // that the correction loop ran end-to-end for real (launch gate ④).
   appConfig: defineTable({
     bootstrapMode: v.boolean(),
+    duplicateSweep: v.optional(
+      v.object({
+        ranAt: v.number(),
+        seriesScanned: v.number(),
+        pairsFlagged: v.number(),
+      }),
+    ),
+    correctionLoop: v.optional(
+      v.object({
+        proposalId: v.id("proposals"),
+        attestedBy: v.id("users"),
+        attestedAt: v.number(),
+      }),
+    ),
   }),
+
+  // ---------- launch QA (#40, spec §7) ----------
+
+  // One row per Series in a drawn quality-gate sample (~50 random, ~50 most
+  // prominent). Verification is by hand; a "failed" row names an error whose
+  // class must be fixed pipeline-wide, after which the sample is redrawn as
+  // the next round — the gate reads only the latest round per kind.
+  qaChecks: defineTable({
+    kind: v.union(v.literal("random"), v.literal("prominent")),
+    round: v.number(),
+    seriesId: v.id("series"),
+    publicId: v.number(),
+    title: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("verified"),
+      v.literal("failed"),
+    ),
+    note: v.optional(v.string()),
+    checkedBy: v.optional(v.id("users")),
+    checkedAt: v.optional(v.number()),
+  }).index("by_kind_round", ["kind", "round"]),
+
+  // Title-similarity duplicate sweep results (QA gate ③): one row per flagged
+  // Series pair, keyed so a re-sweep never re-opens a resolved pair. "merged"
+  // records that the pair was collapsed via the Merge operation (#33);
+  // "distinct" records a human decision that they are different Series.
+  duplicateCandidates: defineTable({
+    pairKey: v.string(),
+    aId: v.id("series"),
+    bId: v.id("series"),
+    aTitle: v.string(),
+    bTitle: v.string(),
+    reason: v.string(),
+    status: v.union(v.literal("open"), v.literal("resolved")),
+    resolution: v.optional(v.union(v.literal("distinct"), v.literal("merged"))),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    note: v.optional(v.string()),
+  })
+    .index("by_pairKey", ["pairKey"])
+    .index("by_status", ["status"]),
 
   // ---------- users & personal tracking ----------
 

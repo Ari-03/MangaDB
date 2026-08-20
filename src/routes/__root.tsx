@@ -2,6 +2,7 @@
 import {
   createRootRoute,
   HeadContent,
+  Link,
   Outlet,
   Scripts,
 } from "@tanstack/react-router";
@@ -44,7 +45,20 @@ function RootComponent() {
     <AppProviders>
       <SiteHeader />
       <Outlet />
+      <SiteFooter />
     </AppProviders>
+  );
+}
+
+// Site-wide footer: the source-attribution / "about the data" page (spec §7,
+// §11) must be reachable from everywhere the data is shown.
+function SiteFooter() {
+  return (
+    <footer className="site-footer">
+      <Link to="/about-the-data">About the data</Link>
+      <span aria-hidden="true">·</span>
+      <Link to="/releases">Release calendar</Link>
+    </footer>
   );
 }
 

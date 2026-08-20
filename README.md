@@ -14,7 +14,7 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 
 | Path | What |
 |---|---|
-| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `publisher.$slug.tsx` is the Publisher Spotlight; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step; `mod.edit.…` + `mod.roles.tsx` are the moderation surfaces from #31) |
+| `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `publisher.$slug.tsx` is the Publisher Spotlight; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step; `mod.edit.…` + `mod.roles.tsx` are the moderation surfaces from #31; `about-the-data.tsx` + `mod.launch.tsx` are the launch pieces from #40) |
 | `src/router.tsx` | Router factory (`getRouter`) |
 | `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI; `collection.tsx` is the signed-in collection overlay from #27; `reading.tsx` is the signed-in reading-tracking overlay from #28) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
@@ -812,6 +812,85 @@ pages stay fetchable, and links the sitemap index.
 **Canonical origin.** Absolute URLs (canonical links, OG URLs, sitemap locs)
 use `VITE_SITE_URL` when set, defaulting to `https://mangadb.org`; the
 runtime `CANONICAL_HOST` var continues to drive the www/HTTPS 301s.
+
+## Seeding, quality gates & launch (ticket #40)
+
+Spec §7, the last mile: `convex/launch.ts` + the `/mod/launch` dashboard
+(`src/routes/mod.launch.tsx`, Data-Team-visible; actions Moderator/
+Administrator-gated server-side), plus the two public-facing pieces — the
+per-Series report affordance and the "about the data" page.
+
+**The seeding runbook.** Against the production Convex deployment, in order
+(each step also has a button on `/mod/launch` once an Administrator exists):
+
+```sh
+npx convex run importSources:seedRegistry '{}'                  # the five registry rows
+npx convex run importSources:setBootstrapModeInternal '{"on":true}'
+npx convex run launch:startSeedStageInternal '{"stage":1}'      # ① Seven Seas + Kodansha
+# wait for stage 1 to complete (repeat sevenSeas:sync '{"maxDetailFetches":…}'
+# for the initial backfill until recordsChanged settles at 0), then:
+npx convex run launch:startSeedStageInternal '{"stage":2}'      # ② ANN full mirror (hours at 1 req/s)
+npx convex run launch:startSeedStageInternal '{"stage":3}'      # ③ PRH full sweep (needs PRH_API_KEY)
+npx convex run launch:startSeedStageInternal '{"stage":4}'      # ④ OpenLibrary dump (needs OPENLIBRARY_DUMP_URL)
+```
+
+`launch.startSeedStage` refuses out-of-order starts and requires Bootstrap
+Mode on; `launch.seedStatus` (and the dashboard) tracks each stage's first
+successful Import Run per source and flags out-of-order completion. Stage ③
+dispatches PRH in `{"mode":"full"}` — the whole-catalog sweep, not the daily
+future window.
+
+**Quality gates** (pass required before Bootstrap Mode turns off; all on
+`/mod/launch`):
+
+1. **Random sample** — `launch.drawQaSample {"kind":"random"}`
+   reservoir-samples ~50 active Series uniformly across the catalog; each is
+   hand-verified (volumes present, dates right, no duplicate) and marked
+   Verified or Failed-with-note on the dashboard.
+2. **Most prominent** — `{"kind":"prominent"}` takes the ~50 Series with the
+   most active Releases, same verification.
+3. **Duplicate sweep** — `launch.runDuplicateSweep` flags every Series pair
+   whose normalized titles/alt-titles collide (exactly, or as the same token
+   set — `convex/lib/qa.ts`). Each open pair is resolved by hand: "Distinct"
+   (durable — the pair never re-flags) or a Merge via `/mod/manage` (the
+   next sweep closes it automatically).
+4. **No systemic error pattern** — a Failed sample row names the error
+   class; fix it pipeline-wide, then **redraw** the sample (a new round —
+   the gate reads only the latest round, so a redraw re-runs the check).
+   There is no numeric error-rate threshold.
+
+**The launch-ready checklist** (`launch.launchChecklist`, computed live):
+① four stages complete in order · ② both samples verified + sweep resolved,
+Bootstrap Mode off · ③ calendar populated + all five sources enabled,
+healthy, and succeeded · ④ correction loop attested · ⑤ the "about the
+data" page (ships with the code). Explicit **non-gates**: digital parity,
+an empty bootstrap-unreviewed backlog, any minimum series count.
+
+**The correction loop, for real (gate ④).** Any signed-in user reports from
+a Series page ("see something missing or wrong? Report it",
+`src/lib/report.tsx` → `convex/reports.ts`): the report lands in the shared
+review queue as a zero-op In-Review Proposal (rate-limited: 10/hour,
+burst 3). A reviewer fixes what it names — a direct edit or a proposal —
+producing a public Revision, then the Administrator records the loop on
+`/mod/launch` (`launch.attestCorrectionLoop` verifies the named proposal is
+approved, human-authored, and produced a Revision).
+
+**The "about the data" page** (`/about-the-data`, linked from the site
+footer): the source list, the honest digital-coverage note (physical
+complete, digital partial), the ANN attribution its license requires, and
+the cover-takedown contact (`data@mangadb.org` — a mailbox the operator
+must actually run).
+
+**Launch.** When every checklist gate is green: Bootstrap Mode off
+permanently (`importSources.setBootstrapMode {"on":false}` — also a
+dashboard button), then open `mangadb.org` (the Deployment section below).
+The bootstrap-unreviewed backlog (`imports.bootstrapBacklog`) is worked
+down post-launch; it never holds the launch.
+
+Tests: `convex/launch.test.ts` (stage ordering + Bootstrap gate, sample
+rounds, sweep durability, attestation, the checklist), `convex/reports.test.ts`
+(the report → queue path, gating, rate limit), `convex/lib/qa.test.ts`
+(the pure sweep + reservoir helpers).
 
 ## Auth (Clerk) — how it works
 

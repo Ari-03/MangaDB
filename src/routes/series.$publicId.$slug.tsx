@@ -14,6 +14,7 @@ import {
   SeriesReadingControls,
   VolumeReadCount,
 } from "~/lib/reading";
+import { SeriesReportAffordance } from "~/lib/report";
 import {
   bookSeriesJsonLd,
   breadcrumbListJsonLd,
@@ -166,6 +167,10 @@ function SeriesPage() {
           ))}
         </ol>
       </section>
+
+      {/* Partially imported Series show as-is; every Series page carries the
+          report affordance feeding the proposal queue (#40, spec §7). */}
+      <SeriesReportAffordance seriesPublicId={series.publicId} />
 
       {/* Public revision history + the data-team entry points (#31/#32). */}
       <RecordHistory type="series" publicId={series.publicId} />

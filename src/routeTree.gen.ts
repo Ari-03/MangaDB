@@ -10,12 +10,14 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AboutTheDataRouteImport } from './routes/about-the-data'
 import { Route as ClaimUsernameRouteImport } from './routes/claim-username'
 import { Route as MeRouteImport } from './routes/me'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
 import { Route as ModImportsRouteImport } from './routes/mod.imports'
+import { Route as ModLaunchRouteImport } from './routes/mod.launch'
 import { Route as ModProposalsRouteImport } from './routes/mod.proposals'
 import { Route as ModQueueRouteImport } from './routes/mod.queue'
 import { Route as ModRolesRouteImport } from './routes/mod.roles'
@@ -42,6 +44,11 @@ import { Route as ModProposeTypeKeyRouteImport } from './routes/mod.propose.$typ
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AboutTheDataRoute = AboutTheDataRouteImport.update({
+  id: '/about-the-data',
+  path: '/about-the-data',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClaimUsernameRoute = ClaimUsernameRouteImport.update({
@@ -72,6 +79,11 @@ const MeIndexRoute = MeIndexRouteImport.update({
 const ModImportsRoute = ModImportsRouteImport.update({
   id: '/mod/imports',
   path: '/mod/imports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ModLaunchRoute = ModLaunchRouteImport.update({
+  id: '/mod/launch',
+  path: '/mod/launch',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModProposalsRoute = ModProposalsRouteImport.update({
@@ -188,11 +200,13 @@ const ModProposeTypeKeyRoute = ModProposeTypeKeyRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/about-the-data': typeof AboutTheDataRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/imports': typeof ModImportsRoute
+  '/mod/launch': typeof ModLaunchRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -219,10 +233,12 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/about-the-data': typeof AboutTheDataRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/imports': typeof ModImportsRoute
+  '/mod/launch': typeof ModLaunchRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -250,11 +266,13 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/about-the-data': typeof AboutTheDataRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/imports': typeof ModImportsRoute
+  '/mod/launch': typeof ModLaunchRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -283,11 +301,13 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/about-the-data'
     | '/claim-username'
     | '/me'
     | '/search'
     | '/isbn/$isbn'
     | '/mod/imports'
+    | '/mod/launch'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -314,10 +334,12 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/about-the-data'
     | '/claim-username'
     | '/search'
     | '/isbn/$isbn'
     | '/mod/imports'
+    | '/mod/launch'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -344,11 +366,13 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/about-the-data'
     | '/claim-username'
     | '/me'
     | '/search'
     | '/isbn/$isbn'
     | '/mod/imports'
+    | '/mod/launch'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -376,11 +400,13 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AboutTheDataRoute: typeof AboutTheDataRoute
   ClaimUsernameRoute: typeof ClaimUsernameRoute
   MeRoute: typeof MeRouteWithChildren
   SearchRoute: typeof SearchRoute
   IsbnIsbnRoute: typeof IsbnIsbnRoute
   ModImportsRoute: typeof ModImportsRoute
+  ModLaunchRoute: typeof ModLaunchRoute
   ModProposalsRoute: typeof ModProposalsRoute
   ModQueueRoute: typeof ModQueueRoute
   ModRolesRoute: typeof ModRolesRoute
@@ -412,6 +438,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/about-the-data': {
+      id: '/about-the-data'
+      path: '/about-the-data'
+      fullPath: '/about-the-data'
+      preLoaderRoute: typeof AboutTheDataRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/claim-username': {
@@ -454,6 +487,13 @@ declare module '@tanstack/react-router' {
       path: '/mod/imports'
       fullPath: '/mod/imports'
       preLoaderRoute: typeof ModImportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mod/launch': {
+      id: '/mod/launch'
+      path: '/mod/launch'
+      fullPath: '/mod/launch'
+      preLoaderRoute: typeof ModLaunchRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/mod/proposals': {
@@ -625,11 +665,13 @@ const MeRouteWithChildren = MeRoute._addFileChildren(MeRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AboutTheDataRoute: AboutTheDataRoute,
   ClaimUsernameRoute: ClaimUsernameRoute,
   MeRoute: MeRouteWithChildren,
   SearchRoute: SearchRoute,
   IsbnIsbnRoute: IsbnIsbnRoute,
   ModImportsRoute: ModImportsRoute,
+  ModLaunchRoute: ModLaunchRoute,
   ModProposalsRoute: ModProposalsRoute,
   ModQueueRoute: ModQueueRoute,
   ModRolesRoute: ModRolesRoute,
