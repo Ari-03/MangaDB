@@ -105,6 +105,15 @@ A marker on a Canonical Record created during Bootstrap Mode that steady-state r
 **Source Observation**:
 A fact reported by an external data source about a Series, Volume, or Release. Source Observations inform MangaDB's data but do not override an approved human decision.
 
+**Withdrawn Observation**:
+A Source Observation whose record disappeared from a complete sweep of its source. It is retained, never deleted, and never changes a Canonical Record by itself; when its linked Release is still future-dated, it queues a possible-cancellation review.
+
+**Import Run**:
+One recorded execution of an Approved Source's import: source, timing, records seen and changed, and errors. Runs happen unattended on the source's registry cadence; three consecutive failed Import Runs mark the source Unhealthy.
+
+**Unhealthy Source**:
+An Approved Source whose last three Import Runs all failed. The transition emails the Administrator once and flags the Data Team dashboard; the first succeeding run restores it to healthy with one recovery email.
+
 **Canonical Record**:
 MangaDB's currently approved representation of a Series, Volume, or Release. This is what the public site displays.
 

@@ -15,6 +15,7 @@ import { Route as MeRouteImport } from './routes/me'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
+import { Route as ModImportsRouteImport } from './routes/mod.imports'
 import { Route as ModProposalsRouteImport } from './routes/mod.proposals'
 import { Route as ModQueueRouteImport } from './routes/mod.queue'
 import { Route as ModRolesRouteImport } from './routes/mod.roles'
@@ -67,6 +68,11 @@ const MeIndexRoute = MeIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => MeRoute,
+} as any)
+const ModImportsRoute = ModImportsRouteImport.update({
+  id: '/mod/imports',
+  path: '/mod/imports',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ModProposalsRoute = ModProposalsRouteImport.update({
   id: '/mod/proposals',
@@ -186,6 +192,7 @@ export interface FileRoutesByFullPath {
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/imports': typeof ModImportsRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -215,6 +222,7 @@ export interface FileRoutesByTo {
   '/claim-username': typeof ClaimUsernameRoute
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/imports': typeof ModImportsRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -246,6 +254,7 @@ export interface FileRoutesById {
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/imports': typeof ModImportsRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -278,6 +287,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/imports'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -307,6 +317,7 @@ export interface FileRouteTypes {
     | '/claim-username'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/imports'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -337,6 +348,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/imports'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -368,6 +380,7 @@ export interface RootRouteChildren {
   MeRoute: typeof MeRouteWithChildren
   SearchRoute: typeof SearchRoute
   IsbnIsbnRoute: typeof IsbnIsbnRoute
+  ModImportsRoute: typeof ModImportsRoute
   ModProposalsRoute: typeof ModProposalsRoute
   ModQueueRoute: typeof ModQueueRoute
   ModRolesRoute: typeof ModRolesRoute
@@ -435,6 +448,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/me/'
       preLoaderRoute: typeof MeIndexRouteImport
       parentRoute: typeof MeRoute
+    }
+    '/mod/imports': {
+      id: '/mod/imports'
+      path: '/mod/imports'
+      fullPath: '/mod/imports'
+      preLoaderRoute: typeof ModImportsRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/mod/proposals': {
       id: '/mod/proposals'
@@ -609,6 +629,7 @@ const rootRouteChildren: RootRouteChildren = {
   MeRoute: MeRouteWithChildren,
   SearchRoute: SearchRoute,
   IsbnIsbnRoute: IsbnIsbnRoute,
+  ModImportsRoute: ModImportsRoute,
   ModProposalsRoute: ModProposalsRoute,
   ModQueueRoute: ModQueueRoute,
   ModRolesRoute: ModRolesRoute,

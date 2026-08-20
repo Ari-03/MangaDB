@@ -492,8 +492,8 @@ absence is never evidence, and a partial sweep never withdraws anything.
 **Import Runs & health** (`convex/imports.ts`). Every run logs source,
 timing, counts, and errors in `importRuns`. Fetches back off exponentially
 within a run; three consecutive failed runs flip the source unhealthy in
-the registry (first success flips it back). The Admin email on transition
-awaits an email provider.
+the registry (first success flips it back), emailing the Administrator once
+per transition — see "Steady-state imports (ticket #37)" below.
 
 **Cadence** (`convex/crons.ts`). One hourly cron tick reads the registry
 and starts every enabled source that is due per its cadence string
@@ -549,8 +549,9 @@ npx convex run sevenSeas:sync '{"maxListingPages":1}'     # quick smoke (no with
 
 Bootstrap seeding order for this source: `seedRegistry` → turn Bootstrap
 Mode on → repeat `sevenSeas:sync` until `recordsChanged` settles at 0. The
-`imports.recentRuns` query (Moderator+) shows run history; Bootstrap Mode is
-switched off permanently before launch (spec §7).
+`imports.recentRuns` query (Data Team) and the `/mod/imports` dashboard show
+run history; Bootstrap Mode is switched off permanently before launch
+(spec §7).
 
 ## Import reconciliation: matching ladder + authority rules (ticket #35)
 
@@ -713,6 +714,62 @@ against a stubbed source: creation, per-format Edition sharing, backbone
 building, linking + authority reconciliation, overlay fills + conflicts,
 leaf-only creation, continuation chaining, withdrawal, steady-state gates).
 
+## Steady-state imports: cadences, retraction, health (ticket #37)
+
+Spec §6: imports as an unattended system once seeding is done. Most of the
+machinery landed with #34/#36; this ticket adds the retraction review, the
+Administrator health emails, and the Data Team dashboard.
+
+**Unattended cadences** (`convex/crons.ts` + `convex/imports.ts`). One
+hourly cron tick reads the Approved Source registry and starts every
+enabled source that is due per its cadence string — Seven Seas & Kodansha
+`daily`, PRH `daily` (future-dated, widening to the full sweep on UTC
+Sundays), ANN `weekly`, OpenLibrary `monthly`. Cadence edits are plain
+registry writes and take effect on the next tick; a still-running run
+defers its source. Transient fetch failures retry with exponential backoff
+inside a run (`convex/lib/http.ts`); a failed run simply resumes at the
+next cadence; every record applies in its own atomic mutation, so a
+mid-run crash never leaves a half-applied record.
+
+**Retraction** (`imports.markWithdrawn`). A record that disappears from a
+complete listing sweep marks its observation **withdrawn** — retained,
+never deleted, and never touching a canonical field (absence is not
+evidence). When the withdrawn observation's linked Release is still
+**future-dated** (comparing the latest day its partial-precision date could
+mean), that is a possible cancellation: one In-Review Proposal queues with
+a pre-filled `hide` op — approve to hide the release, reject to keep it.
+Past-dated linked records are untouched, and the observation's
+`queuedProposalId` dedups so a repeat sweep never double-queues.
+
+**Health emails** (`convex/lib/email.ts` + `imports.healthAlert`). Three
+consecutive failed runs flip a source unhealthy; the first success flips it
+back. Each transition — and only the transition — emails the Administrator
+exactly once: the health flip and the alert scheduling commit atomically in
+`recordSourceOutcome`, so repeated failures while already unhealthy (or
+successes while healthy) never re-send. The unhealthy email carries the
+latest run's error lines. Sending uses the Resend HTTP API; unconfigured
+deployments log and skip, never failing a run:
+
+```sh
+npx convex env set RESEND_API_KEY <re_…>                       # resend.com API key
+npx convex env set IMPORT_ALERT_EMAIL_TO admin@example.com     # the Administrator
+# Optional; defaults to "MangaDB imports <alerts@mangadb.org>" — the sender
+# domain must be verified in Resend either way:
+npx convex env set IMPORT_ALERT_EMAIL_FROM "MangaDB imports <alerts@mangadb.org>"
+```
+
+**The dashboard** (`/mod/imports`, `src/routes/mod.imports.tsx`; Data Team,
+noindex). Every source with its cadence, enablement, health flag (unhealthy
+sources flagged loudly and sorted first), and last-run summary — plus
+inspectable Import Run history filterable by source: status, start time,
+duration, records seen/changed, and the run's error lines
+(`imports.dashboard` + `imports.recentRuns`, both Data-Team-gated).
+
+Tests: `convex/imports.test.ts` (withdrawal review incl. one-click approve
+→ hidden release, past/undated untouched, no-field-nulled, dedup;
+exactly-once emails both ways against a stubbed Resend API; dashboard
+gating and flags) plus the per-adapter withdrawal tests from #34/#36.
+
 ## SEO: metadata, JSON-LD, Open Graph, sitemaps (ticket #39)
 
 Spec §11. All metadata is formula-generated — no hand-written metadata in v1.
@@ -812,6 +869,13 @@ Convex deployment (Convex dashboard → Settings → Environment Variables, or
   deploys; nothing calls it until authed features land.
 - `CLERK_SECRET_KEY` — same secret key again; used by the account-deletion
   action to delete the Clerk identity through Clerk's Backend API.
+- `PRH_API_KEY` + `PRH_IMPRINT_CODES` — the PRH adapter (ticket #36);
+  unset → PRH runs skip as "unconfigured".
+- `OPENLIBRARY_DUMP_URL` — the filtered OpenLibrary dump (ticket #36);
+  unset → OpenLibrary runs skip as "unconfigured".
+- `RESEND_API_KEY` + `IMPORT_ALERT_EMAIL_TO` (+ optional
+  `IMPORT_ALERT_EMAIL_FROM`) — the Administrator source-health alert emails
+  (ticket #37); unset → alerts log and skip.
 
 Other commands:
 

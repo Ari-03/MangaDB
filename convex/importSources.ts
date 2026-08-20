@@ -9,6 +9,7 @@
 // steady-state rules — and is switched off permanently before launch.
 
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import {
   internalMutation,
   internalQuery,
@@ -213,22 +214,34 @@ export const upsert = mutation({
 
 // ---------- health (spec §6: runs & failure) ----------
 
+/** Error lines carried into the unhealthy alert email — enough to act on. */
+const ALERT_ERROR_LINES = 5;
+
 /**
  * Record a run outcome on the source: three consecutive failures flip it
- * unhealthy (dashboard flag; the Admin email on transition needs a live
- * email provider and is wired when one exists), the first success flips it
- * back and resets the streak.
+ * unhealthy, the first success flips it back and resets the streak. Each
+ * transition — and only the transition, never a repeat while the state
+ * holds — schedules exactly one Administrator alert email (#37,
+ * imports.healthAlert): the flip and the scheduling commit atomically in
+ * this mutation, and the guards below never fire twice for one state.
  */
 export async function recordSourceOutcome(
   ctx: MutationCtx,
   sourceKey: string,
   ok: boolean,
+  errors: string[] = [],
 ): Promise<void> {
   const source = await getSourceByKey(ctx, sourceKey);
   if (!source) return;
   if (ok) {
     if (source.healthState === "unhealthy") {
       console.warn(`[imports] source "${sourceKey}" recovered — healthy again`);
+      await ctx.scheduler.runAfter(0, internal.imports.healthAlert, {
+        sourceKey,
+        transition: "recovered",
+        consecutiveFailures: source.consecutiveFailures,
+        errors: [],
+      });
     }
     await ctx.db.patch(source._id, {
       healthState: "healthy",
@@ -242,6 +255,12 @@ export async function recordSourceOutcome(
     console.error(
       `[imports] source "${sourceKey}" is unhealthy after ${failures} consecutive failures`,
     );
+    await ctx.scheduler.runAfter(0, internal.imports.healthAlert, {
+      sourceKey,
+      transition: "unhealthy",
+      consecutiveFailures: failures,
+      errors: errors.slice(0, ALERT_ERROR_LINES),
+    });
   }
   await ctx.db.patch(source._id, {
     consecutiveFailures: failures,

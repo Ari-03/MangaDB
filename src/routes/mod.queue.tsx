@@ -115,7 +115,8 @@ function Queue() {
       <p className="section-hint">
         In-Review proposals, oldest first. Claiming signals who is looking; it
         never locks — any Moderator can decide.{" "}
-        <Link to="/mod/proposals">My proposals</Link>
+        <Link to="/mod/proposals">My proposals</Link> ·{" "}
+        <Link to="/mod/imports">Imports</Link>
       </p>
 
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>

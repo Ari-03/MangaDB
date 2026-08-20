@@ -1517,3 +1517,87 @@ button:disabled {
   margin-left: 0.4rem;
   margin-right: 0;
 }
+
+/* ---------- the imports dashboard (#37) ---------- */
+
+.import-sources {
+  list-style: none;
+  margin: 0.5rem 0 2rem;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.import-source {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.import-source-unhealthy {
+  border-color: #b3261e;
+  border-left-width: 3px;
+}
+
+.import-source-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  align-items: baseline;
+}
+
+.import-flag {
+  color: #b3261e;
+  font-size: 0.85rem;
+}
+
+.import-healthy {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.import-source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.import-runs {
+  list-style: none;
+  margin: 1rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.import-run {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  font-size: 0.9rem;
+}
+
+.import-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+}
+
+.import-run-failed {
+  color: #b3261e;
+  font-weight: 600;
+}
+
+.import-run-errors {
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.import-run-errors ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}

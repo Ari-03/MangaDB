@@ -1,20 +1,26 @@
-// Shared import machinery (ticket #34, spec §6): Import Run logging, the
-// cadence dispatcher that turns registry rows into scheduled adapter runs,
-// the post-sweep withdrawal pass, and the bootstrap-unreviewed backlog
-// query. Source-specific fetch/parse/apply lives in each adapter module
-// (sevenSeas.ts is the first); everything here is source-agnostic.
+// Shared import machinery (tickets #34/#37, spec §6): Import Run logging,
+// the cadence dispatcher that turns registry rows into scheduled adapter
+// runs, the post-sweep withdrawal pass (with its possible-cancellation
+// review), source-health alert email, the Data Team dashboard queries, and
+// the bootstrap-unreviewed backlog query. Source-specific fetch/parse/apply
+// lives in each adapter module; everything here is source-agnostic.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { FunctionReference } from "convex/server";
+import type { Doc } from "./_generated/dataModel";
 import {
   internalAction,
   internalMutation,
   internalQuery,
   query,
 } from "./_generated/server";
-import { recordSourceOutcome } from "./importSources";
-import { requireModerator } from "./lib/roles";
+import type { MutationCtx } from "./_generated/server";
+import { getSourceByKey, recordSourceOutcome } from "./importSources";
+import { sendAdminEmail } from "./lib/email";
+import { alreadyHandled } from "./lib/pipeline";
+import { requireDataTeam, requireModerator } from "./lib/roles";
+import { revisionsOf } from "./moderation";
 
 // ---------- Import Runs (spec §6: runs & failure) ----------
 
@@ -52,15 +58,21 @@ export const finishRun = internalMutation({
       recordsChanged: args.recordsChanged,
       errors: args.errors.slice(0, MAX_RUN_ERRORS),
     });
-    await recordSourceOutcome(ctx, run.sourceKey, args.status === "succeeded");
+    await recordSourceOutcome(
+      ctx,
+      run.sourceKey,
+      args.status === "succeeded",
+      args.errors,
+    );
   },
 });
 
-/** Recent runs of one source (or all), newest first — the ops view. */
+/** Recent runs of one source (or all), newest first — Data Team inspection
+ * of source, timing, records seen/changed, and errors (spec §6, #37). */
 export const recentRuns = query({
   args: { sourceKey: v.optional(v.string()), limit: v.optional(v.number()) },
   handler: async (ctx, { sourceKey, limit }) => {
-    await requireModerator(ctx);
+    await requireDataTeam(ctx);
     const n = Math.min(limit ?? 20, 100);
     if (sourceKey !== undefined) {
       return await ctx.db
@@ -70,6 +82,101 @@ export const recentRuns = query({
         .take(n);
     }
     return await ctx.db.query("importRuns").order("desc").take(n);
+  },
+});
+
+/**
+ * The Data Team dashboard's source table (#37): every registry row with its
+ * health flag and last-run summary, unhealthy sources first.
+ */
+export const dashboard = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireDataTeam(ctx);
+    const sources = await ctx.db.query("approvedSources").collect();
+    const rows = [];
+    for (const source of sources) {
+      const lastRun = await ctx.db
+        .query("importRuns")
+        .withIndex("by_source", (q) => q.eq("sourceKey", source.key))
+        .order("desc")
+        .first();
+      rows.push({
+        key: source.key,
+        name: source.name,
+        enabled: source.enabled,
+        cadence: source.cadence,
+        healthState: source.healthState,
+        consecutiveFailures: source.consecutiveFailures,
+        lastRun: lastRun
+          ? {
+              status: lastRun.status,
+              startedAt: lastRun._creationTime,
+              finishedAt: lastRun.finishedAt ?? null,
+              recordsSeen: lastRun.recordsSeen,
+              recordsChanged: lastRun.recordsChanged,
+              errorCount: lastRun.errors.length,
+            }
+          : null,
+      });
+    }
+    return rows.sort(
+      (a, b) =>
+        Number(b.healthState === "unhealthy") -
+          Number(a.healthState === "unhealthy") || a.key.localeCompare(b.key),
+    );
+  },
+});
+
+// ---------- health alert email (spec §6: runs & failure, #37) ----------
+
+/**
+ * Email the Administrator about a source-health transition. Scheduled by
+ * recordSourceOutcome exactly once per transition — the health flip and the
+ * scheduling commit in the same mutation, so unhealthy → email once,
+ * recovery → email once, and repeated failures while already unhealthy (or
+ * successes while healthy) never re-send. Unconfigured email (no
+ * RESEND_API_KEY) logs and skips; the dashboard flag still shows the state.
+ */
+export const healthAlert = internalAction({
+  args: {
+    sourceKey: v.string(),
+    transition: v.union(v.literal("unhealthy"), v.literal("recovered")),
+    consecutiveFailures: v.number(),
+    errors: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const source: Doc<"approvedSources"> | null = await ctx.runQuery(
+      internal.importSources.getByKey,
+      { key: args.sourceKey },
+    );
+    const name = source?.name ?? args.sourceKey;
+    const subject =
+      args.transition === "unhealthy"
+        ? `[MangaDB] Import source unhealthy: ${name}`
+        : `[MangaDB] Import source recovered: ${name}`;
+    const lines =
+      args.transition === "unhealthy"
+        ? [
+            `The import source "${name}" (${args.sourceKey}) is unhealthy after ${args.consecutiveFailures} consecutive failed runs.`,
+            "",
+            ...(args.errors.length > 0
+              ? ["Errors from the latest run:", ...args.errors.map((e) => `  - ${e}`), ""]
+              : []),
+            "It will keep retrying on its registry cadence; you will get one more email when it recovers.",
+            "Run history: https://mangadb.org/mod/imports",
+          ]
+        : [
+            `The import source "${name}" (${args.sourceKey}) recovered — its latest run succeeded and it is healthy again.`,
+            "Run history: https://mangadb.org/mod/imports",
+          ];
+    const result = await sendAdminEmail({ subject, text: lines.join("\n") });
+    if (!result.sent) {
+      console.warn(
+        `[imports] health alert for "${args.sourceKey}" (${args.transition}) not emailed: ${result.reason}`,
+      );
+    }
+    return result;
   },
 });
 
@@ -198,7 +305,69 @@ export const attachCover = internalMutation({
   },
 });
 
-// ---------- withdrawal (spec §6: observations) ----------
+// ---------- withdrawal (spec §6: observations, #37) ----------
+
+/** yyyymmdd sort key for "today" (UTC) — comparable to releases.pubDate.sort. */
+function todaySort(now: number): number {
+  const d = new Date(now);
+  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+}
+
+/**
+ * Is this partial-precision date still (possibly) in the future? Compares
+ * the latest day the date could mean, so "2026" and "Dec 2026" count as
+ * future all year — a withdrawn listing for either may still be a
+ * cancellation worth reviewing. A date fully in the past never is.
+ */
+export function possiblyFuture(
+  pubDate: { year: number; month?: number; day?: number },
+  now: number,
+): boolean {
+  const latest =
+    pubDate.year * 10000 + (pubDate.month ?? 12) * 100 + (pubDate.day ?? 31);
+  return latest > todaySort(now);
+}
+
+/**
+ * A withdrawn observation whose linked Release is still future-dated is a
+ * possible cancellation: queue one In-Review Proposal — a pre-filled `hide`
+ * op the reviewer approves (confirmed cancellation) or rejects (keep the
+ * release). Past-dated linked records are untouched, unlinked observations
+ * queue nothing, and withdrawal itself never writes a canonical field —
+ * absence is not evidence (spec §6). The observation's queuedProposalId
+ * dedups: one open queue item per observation.
+ */
+async function queueWithdrawalReview(
+  ctx: MutationCtx,
+  sourceName: string,
+  sourceKey: string,
+  observation: Doc<"sourceObservations">,
+): Promise<boolean> {
+  if (observation.recordRef?.type !== "release") return false;
+  const release = await ctx.db.get(observation.recordRef.id);
+  if (!release || release.status !== "active" || release.locked) return false;
+  if (!release.pubDate || !possiblyFuture(release.pubDate, Date.now())) {
+    return false;
+  }
+  if (await alreadyHandled(ctx, observation)) return false;
+  const ref = { type: "release" as const, id: release._id };
+  const latest = (await revisionsOf(ctx, ref))[0];
+  const proposalId = await ctx.db.insert("proposals", {
+    author: { kind: "source", sourceKey },
+    state: "inReview",
+    currentVersionNo: 1,
+    submittedAt: Date.now(),
+  });
+  await ctx.db.insert("proposalVersions", {
+    proposalId,
+    versionNo: 1,
+    ops: [{ kind: "hide", ref, baseRevisionId: latest?._id }],
+    evidence: [{ kind: "observation", observationId: observation._id }],
+    changeComment: `${sourceName} no longer lists this future-dated release — possible cancellation. Approve to hide the release; reject to keep it. Withdrawal by itself never changes a field (absence is not evidence).`,
+  });
+  await ctx.db.patch(observation._id, { queuedProposalId: proposalId });
+  return true;
+}
 
 /**
  * After a COMPLETE listing sweep, observations the sweep did not touch have
@@ -210,10 +379,14 @@ export const attachCover = internalMutation({
  * Withdrawal also lifts the record's conflict suppressions from this source
  * (spec §6: suppression holds until the value, observation, or rules
  * change) — if the record ever reappears, its conflicts get a fresh look.
+ * A withdrawn observation whose linked Release is still future-dated queues
+ * a possible-cancellation review (#37).
  */
 export const markWithdrawn = internalMutation({
   args: { sourceKey: v.string(), notSeenSince: v.number() },
   handler: async (ctx, { sourceKey, notSeenSince }) => {
+    const source = await getSourceByKey(ctx, sourceKey);
+    const sourceName = source?.name ?? sourceKey;
     const stale = await ctx.db
       .query("sourceObservations")
       .withIndex("by_source_seen", (q) =>
@@ -221,6 +394,7 @@ export const markWithdrawn = internalMutation({
       )
       .collect();
     let marked = 0;
+    let reviewsQueued = 0;
     for (const obs of stale) {
       if (obs.withdrawn) continue;
       if (obs.sourceRecordId.startsWith("series:")) continue;
@@ -239,8 +413,11 @@ export const markWithdrawn = internalMutation({
         }
       }
       marked++;
+      if (await queueWithdrawalReview(ctx, sourceName, sourceKey, obs)) {
+        reviewsQueued++;
+      }
     }
-    return { marked };
+    return { marked, reviewsQueued };
   },
 });
 
