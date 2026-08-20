@@ -85,8 +85,12 @@ export type MatchOutcome =
   | { kind: "review"; rung: 2 | 3 | 4; reason: string }
   | { kind: "create"; rung: 5 };
 
-/** Active Series whose title (or an alt title) normalizes to the fact's. */
-async function candidateSeries(
+/**
+ * Active Series whose title (or an alt title) normalizes to the given one.
+ * Exported for the series-structured sources (ANN) and the fill-only source
+ * (OpenLibrary), whose series resolution starts from a bare title.
+ */
+export async function candidateSeries(
   ctx: QueryCtx | MutationCtx,
   seriesTitle: string,
 ): Promise<Doc<"series">[]> {
@@ -143,8 +147,13 @@ export async function matchRelease(
 
   // Rungs ③/④: walk title-matching Series → label-matching Volumes → their
   // covering Editions → Releases, splitting strict full-key hits from
-  // loose title-only candidates.
+  // loose title-only candidates. A candidate that matches the full key
+  // except Format is a SIBLING, not ambiguity: Releases of one Edition
+  // differ exactly in Format/Binding (spec §2), so a publisher's digital
+  // counterpart of an existing print volume is the creation path, never a
+  // review — the creation helper attaches it to the sibling's Edition.
   const strict = new Map<string, Doc<"releases">>();
+  const siblings = new Map<string, Doc<"releases">>();
   const loose = new Map<string, Doc<"releases">>();
   for (const series of await candidateSeries(ctx, fact.seriesTitle)) {
     const volumes = await ctx.db
@@ -172,12 +181,16 @@ export async function matchRelease(
           .collect();
         for (const release of releases) {
           if (release.status !== "active") continue;
-          const fullKey =
+          const sameEdition =
             coversOnlyThisVolume &&
             fact.publisherId !== null &&
-            edition.publisherId === fact.publisherId &&
-            release.format === fact.format;
-          (fullKey ? strict : loose).set(release._id, release);
+            edition.publisherId === fact.publisherId;
+          const bucket = !sameEdition
+            ? loose
+            : release.format === fact.format
+              ? strict
+              : siblings;
+          bucket.set(release._id, release);
         }
       }
     }
@@ -212,5 +225,6 @@ export async function matchRelease(
       reason: `title-only match: ${loose.size} plausible candidate${loose.size === 1 ? "" : "s"} under a same-titled series`,
     };
   }
+  // Only format-siblings (or nothing) found: create the new Release.
   return { kind: "create", rung: 5 };
 }

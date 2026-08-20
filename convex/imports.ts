@@ -99,13 +99,17 @@ export function isDue(
 
 // The code half of the registry: which adapter action serves each source
 // key. A registry row without an adapter is inert data until its adapter
-// ships (Kodansha, PRH, ANN, OpenLibrary are later tickets).
-// Adapters take only optional tuning args, so dispatching with {} is valid.
+// ships. All five v1 sources have adapters (tickets #34/#36); adapters take
+// only optional tuning args, so dispatching with {} is valid.
 const ADAPTERS: Record<
   string,
   FunctionReference<"action", "internal", Record<string, unknown>>
 > = {
   sevenseas: internal.sevenSeas.sync,
+  kodansha: internal.kodansha.sync,
+  ann: internal.ann.sync,
+  prh: internal.prh.sync,
+  openlibrary: internal.openLibrary.sync,
 };
 
 export const enabledSources = internalQuery({
@@ -158,6 +162,39 @@ export const runScheduled = internalAction({
       started.push(source.key);
     }
     return { started };
+  },
+});
+
+// ---------- covers (spec §6) ----------
+
+/**
+ * Attach a stored cover: {storageId, sourceUrl, attribution} per spec §6.
+ * Source-agnostic; adapters only attach when the release has no cover yet
+ * (the publisher's own art wins over a re-import from elsewhere). A racing
+ * duplicate or vanished release deletes the fresh blob instead of orphaning
+ * it; replacing an outdated same-URL-family cover deletes the old blob.
+ */
+export const attachCover = internalMutation({
+  args: {
+    releaseId: v.id("releases"),
+    storageId: v.id("_storage"),
+    sourceUrl: v.string(),
+    attribution: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const release = await ctx.db.get(args.releaseId);
+    if (!release || release.status !== "active" || release.coverImage) {
+      await ctx.storage.delete(args.storageId);
+      return { attached: false };
+    }
+    await ctx.db.patch(args.releaseId, {
+      coverImage: {
+        storageId: args.storageId,
+        sourceUrl: args.sourceUrl,
+        attribution: args.attribution,
+      },
+    });
+    return { attached: true };
   },
 });
 

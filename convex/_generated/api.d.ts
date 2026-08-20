@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as ann from "../ann.js";
 import type * as catalog from "../catalog.js";
 import type * as catalogPages from "../catalogPages.js";
 import type * as collection from "../collection.js";
@@ -15,21 +16,31 @@ import type * as crons from "../crons.js";
 import type * as follows from "../follows.js";
 import type * as importSources from "../importSources.js";
 import type * as imports from "../imports.js";
+import type * as kodansha from "../kodansha.js";
+import type * as lib_ann from "../lib/ann.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_authority from "../lib/authority.js";
+import type * as lib_http from "../lib/http.js";
+import type * as lib_kodansha from "../lib/kodansha.js";
 import type * as lib_matching from "../lib/matching.js";
 import type * as lib_moderationFields from "../lib/moderationFields.js";
 import type * as lib_observations from "../lib/observations.js";
+import type * as lib_openLibrary from "../lib/openLibrary.js";
+import type * as lib_pipeline from "../lib/pipeline.js";
+import type * as lib_prh from "../lib/prh.js";
 import type * as lib_proposalCreates from "../lib/proposalCreates.js";
 import type * as lib_publicIds from "../lib/publicIds.js";
 import type * as lib_reconcile from "../lib/reconcile.js";
 import type * as lib_roles from "../lib/roles.js";
 import type * as lib_sensitiveOps from "../lib/sensitiveOps.js";
 import type * as lib_sevenSeas from "../lib/sevenSeas.js";
+import type * as lib_text from "../lib/text.js";
 import type * as lib_titles from "../lib/titles.js";
 import type * as lib_usernames from "../lib/usernames.js";
 import type * as lib_values from "../lib/values.js";
 import type * as moderation from "../moderation.js";
+import type * as openLibrary from "../openLibrary.js";
+import type * as prh from "../prh.js";
 import type * as proposals from "../proposals.js";
 import type * as publisher from "../publisher.js";
 import type * as reading from "../reading.js";
@@ -49,6 +60,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  ann: typeof ann;
   catalog: typeof catalog;
   catalogPages: typeof catalogPages;
   collection: typeof collection;
@@ -56,21 +68,31 @@ declare const fullApi: ApiFromModules<{
   follows: typeof follows;
   importSources: typeof importSources;
   imports: typeof imports;
+  kodansha: typeof kodansha;
+  "lib/ann": typeof lib_ann;
   "lib/auth": typeof lib_auth;
   "lib/authority": typeof lib_authority;
+  "lib/http": typeof lib_http;
+  "lib/kodansha": typeof lib_kodansha;
   "lib/matching": typeof lib_matching;
   "lib/moderationFields": typeof lib_moderationFields;
   "lib/observations": typeof lib_observations;
+  "lib/openLibrary": typeof lib_openLibrary;
+  "lib/pipeline": typeof lib_pipeline;
+  "lib/prh": typeof lib_prh;
   "lib/proposalCreates": typeof lib_proposalCreates;
   "lib/publicIds": typeof lib_publicIds;
   "lib/reconcile": typeof lib_reconcile;
   "lib/roles": typeof lib_roles;
   "lib/sensitiveOps": typeof lib_sensitiveOps;
   "lib/sevenSeas": typeof lib_sevenSeas;
+  "lib/text": typeof lib_text;
   "lib/titles": typeof lib_titles;
   "lib/usernames": typeof lib_usernames;
   "lib/values": typeof lib_values;
   moderation: typeof moderation;
+  openLibrary: typeof openLibrary;
+  prh: typeof prh;
   proposals: typeof proposals;
   publisher: typeof publisher;
   reading: typeof reading;

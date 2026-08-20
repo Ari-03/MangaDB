@@ -220,11 +220,14 @@ describe("matchRelease — rungs ④ and ⑤", () => {
     expect(outcome).toMatchObject({ kind: "review", rung: 4 });
   });
 
-  it("a title-only candidate (wrong format) always reviews", async () => {
+  it("a same-edition candidate differing only in format is a sibling — creation, not review", async () => {
+    // Releases of one Edition differ exactly in Format/Binding (spec §2): a
+    // publisher's digital counterpart of an existing print volume is a new
+    // sibling Release, not ambiguity for a human to untangle.
     const t = makeT();
     const catalog = await buildCatalog(t, { format: "digital" });
     const outcome = await match(t, fact(catalog.publisherId));
-    expect(outcome).toMatchObject({ kind: "review", rung: 4 });
+    expect(outcome).toMatchObject({ kind: "create", rung: 5 });
   });
 
   it("no plausible candidate at all goes to the creation path", async () => {

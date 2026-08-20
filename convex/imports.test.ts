@@ -45,7 +45,8 @@ describe("importSources.seedRegistry", () => {
     // ANN has no ISBN authority at all (spec §6 table).
     const ann = sources.find((s) => s.key === "ann")!;
     expect(ann.fieldAuthority.isbn).toBeUndefined();
-    expect(ann.enabled).toBe(false);
+    // All five adapters exist (#34/#36), so every row seeds enabled.
+    expect(sources.every((s) => s.enabled)).toBe(true);
   });
 
   it("never overwrites an edited row on re-run", async () => {
@@ -211,9 +212,17 @@ describe("cadence", () => {
     const t = convexTest(schema);
     await t.mutation(internal.importSources.seedRegistry, {});
     const before = await t.query(internal.imports.enabledSources, {});
-    expect(before).toEqual([
-      { key: "sevenseas", cadence: "daily", lastStartedAt: null, lastStatus: null },
+    // All five seeded sources are enabled and unrun.
+    expect(before.map((s) => s.key).sort()).toEqual([
+      "ann",
+      "kodansha",
+      "openlibrary",
+      "prh",
+      "sevenseas",
     ]);
+    expect(
+      before.every((s) => s.lastStartedAt === null && s.lastStatus === null),
+    ).toBe(true);
     const runId = await t.mutation(internal.imports.startRun, {
       sourceKey: "sevenseas",
     });

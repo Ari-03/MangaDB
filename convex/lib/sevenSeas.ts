@@ -47,33 +47,10 @@ export type BookSnapshot = Infer<typeof bookSnapshotValidator>;
 
 // ---------- small text plumbing ----------
 
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-};
-
-/** Decode the HTML entities WordPress emits in titles and rendered HTML. */
-export function decodeEntities(text: string): string {
-  return text
-    .replace(/&#(\d+);/g, (_, code: string) =>
-      String.fromCodePoint(Number(code)),
-    )
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, code: string) =>
-      String.fromCodePoint(parseInt(code, 16)),
-    )
-    .replace(/&([a-zA-Z]+);/g, (m, name: string) => NAMED_ENTITIES[name] ?? m);
-}
-
-/** Strip tags and collapse whitespace — for blurbs kept on the observation. */
-export function stripHtml(html: string): string {
-  return decodeEntities(html.replace(/<[^>]*>/g, " "))
-    .replace(/\s+/g, " ")
-    .trim();
-}
+// Shared with the other adapters' parsers; re-exported to keep this module
+// the one import site for Seven Seas parsing.
+export { decodeEntities, stripHtml } from "./text";
+import { decodeEntities, stripHtml } from "./text";
 
 // ---------- WP REST listing ----------
 

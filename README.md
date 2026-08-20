@@ -474,8 +474,12 @@ edits):
 npx convex run importSources:seedRegistry '{}'
 ```
 
-Only `sevenseas` starts enabled; Kodansha, PRH, ANN, and OpenLibrary rows
-are flipped on as their adapters land in later tickets.
+All five rows seed enabled — every adapter exists (tickets #34/#36). PRH
+and OpenLibrary additionally need environment configuration and skip runs
+as "unconfigured" until it is set (see "Remaining sources" below). On a
+deployment seeded before ticket #36, flip the four newer rows on via
+`importSources.upsert` or the dashboard (`seedRegistry` never overwrites an
+existing row).
 
 **Source Observations** (`convex/lib/observations.ts`). External facts are
 observations, never direct writes: identity is (source, source-record-id),
@@ -616,6 +620,98 @@ Tests: `convex/lib/authority.test.ts` (the decision table),
 `convex/reconcile.test.ts` (end to end through the Seven Seas pipeline on a
 stubbed site: overrides, suppression, source-vs-source conflicts, precision
 refinement, rungs ③/④, the Edition-Line gate, withdrawal).
+
+## Remaining sources: Kodansha, ANN, PRH, OpenLibrary (ticket #36)
+
+Spec §6/§7: the other four v1 sources as registry rows through the same
+pipeline. The apply machinery shared with Seven Seas now lives in
+`convex/lib/pipeline.ts` (creation path, review-queue path, series-link
+reconciliation, queue dedup) and `convex/lib/http.ts` (polite fetch); each
+adapter is only fetch + parse + the source's own shape decisions. One
+ladder refinement landed with this ticket: a candidate matching the full
+publisher+title+label key but differing **only in Format** is a sibling
+Release of the same Edition (spec §2), so it takes the creation path and
+attaches to the sibling's Edition instead of queueing a review.
+
+**Kodansha** (`convex/kodansha.ts`, parsers `convex/lib/kodansha.ts`;
+daily). First-party JSON only — `wp-json/kodansha/v1/release-calendar`
+(~8 weekly buckets keyed by Tuesday) + `/new-releases` (this week, exact
+ISO dates, `series_type` scoping to comics). One catalog item announcing
+`["digital","print"]` yields one observation and one Release **per
+format**, sharing a single Edition. The endpoints expose no ISBNs or
+prices; the PRH overlay supplies those later (Kodansha is
+PRH-distributed). A rolling window is not a catalog sweep, so this adapter
+never withdraws. `npx convex run kodansha:sync '{}'`
+
+**ANN Encyclopedia** (`convex/ann.ts`, parsers `convex/lib/ann.ts`;
+weekly). The full mirror that builds the all-publisher, series-structured
+**Series/Volume backbone** — including VIZ and Square Enix, whose sites are
+never scraped. Enumerates `reports.xml?id=155` and batch-fetches
+`api.xml?manga=…` 50 ids at a time at **1 req/s** (1.1 s pause before every
+request); one action invocation processes a bounded number of batches and
+schedules itself to continue, so the ~40k-entry mirror chains across
+Convex's action time limit under one Import Run — withdrawal fires only
+when the final link reaches the end. ANN's API carries no publisher and no
+ISBN, so ANN never creates Editions or Releases: one manga entry = one
+Series (standard-authority title), "(GN n)"/"(eBook n)" designators define
+the Volumes, and each release line is an observation keyed on ANN's own
+release id that links to the canonical Release once another source creates
+it (series link + label + format is the full key under a linked Series) —
+from then on ANN dates reconcile in at standard authority, which is how
+VIZ dates stay fresh. Citations link the Encyclopedia entry, satisfying
+ANN's attribution license. `npx convex run ann:sync '{}'`
+
+**PRH API** (`convex/prh.ts`, parsers `convex/lib/prh.ts`; daily +
+weekly full sweep). The authoritative date/ISBN/price overlay on
+PRH-distributed records — scope is inherent, the API only returns titles
+PRH distributes. Daily runs fetch future-dated titles (`onsaleFrom`
+today); UTC-Sunday runs (or `{"mode":"full"}`) sweep each configured
+imprint's catalog, and only a complete full sweep withdraws. Unmatched
+titles follow the standard creation boundaries under the imprint's
+publisher (e.g. "Kodansha Comics", "Denpa"). Setup (no live key exists in
+this repo):
+
+```sh
+# 1. Request a key at developer.penguinrandomhouse.com (manual activation).
+# 2. Once active, list imprint codes:
+#    curl "https://api.penguinrandomhouse.com/resources/v2/title/domains/PRH.US/imprints?api_key=KEY"
+#    and pick the manga imprints (Kodansha, Seven Seas, Dark Horse Manga,
+#    Square Enix Manga, Denpa, Vertical, …).
+npx convex env set PRH_API_KEY <key>
+npx convex env set PRH_IMPRINT_CODES CODE1,CODE2,CODE3
+npx convex run prh:sync '{"mode":"full"}'
+```
+
+**OpenLibrary** (`convex/openLibrary.ts`, parsers
+`convex/lib/openLibrary.ts`; monthly). The bulk-dump ISBN fill (seeding
+stage ④): flat records match *into* the existing skeleton and **never
+define Series structure** — a match fills ISBNs (standard), dates (weak),
+binding (standard); an unmatched record may create at most a **leaf**
+Release under a Series, Volume, and Publisher that all already exist (how
+VIZ physical releases materialize under the ANN backbone), and it never
+creates Series/Volumes/Publishers, never queues review proposals, and
+never withdraws. The raw editions dump is ~10 GB, so filter it offline and
+host the result anywhere fetchable:
+
+```sh
+curl -sL https://openlibrary.org/data/ol_dump_editions_latest.txt.gz \
+  | node scripts/filter-openlibrary-dump.mjs > filtered.txt
+# host filtered.txt (any static URL), then:
+npx convex env set OPENLIBRARY_DUMP_URL https://…/filtered.txt
+npx convex run openLibrary:sync '{}'   # streams + self-continues to the end
+```
+
+**Seeding order** (spec §7): `seedRegistry` → Bootstrap Mode on → ①
+`sevenSeas:sync` + `kodansha:sync` until settled → ② `ann:sync` (the
+backbone; hours at 1 req/s) → ③ `prh:sync '{"mode":"full"}'` → ④
+`openLibrary:sync` → quality gates → Bootstrap Mode off, permanently.
+
+Tests: `convex/lib/{kodansha,ann,prh,openLibrary}.test.ts` (parsers against
+captured live payloads / documented shapes) and
+`convex/{kodansha,ann,prh,openLibrary}.test.ts` (each adapter end to end
+against a stubbed source: creation, per-format Edition sharing, backbone
+building, linking + authority reconciliation, overlay fills + conflicts,
+leaf-only creation, continuation chaining, withdrawal, steady-state gates).
 
 ## SEO: metadata, JSON-LD, Open Graph, sitemaps (ticket #39)
 

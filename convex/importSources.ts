@@ -27,12 +27,15 @@ const authorityLevel = v.union(
 const fieldAuthority = v.record(v.string(), authorityLevel);
 
 // The v1 authority table from spec §6, as seed data. `seedRegistry` only
-// inserts missing keys — it never overwrites a row an Administrator edited.
-// Only Seven Seas starts enabled; the other adapters land in later tickets
-// and their rows are flipped on as data when they do. The `price` column
-// extends the spec table as plain registry data (that's the point of the
-// registry): own-catalog publishers and the distributor API are
-// authoritative for their own list prices; ANN/OpenLibrary have none.
+// inserts missing keys — it never overwrites a row an Administrator edited
+// (existing deployments flip sources on via `upsert` or the dashboard).
+// All five v1 adapters exist (tickets #34/#36), so every row seeds enabled;
+// PRH and OpenLibrary additionally need environment configuration (API
+// key/imprints, filtered-dump URL — see README) and skip gracefully as
+// "unconfigured" until it is set. The `price` column extends the spec table
+// as plain registry data (that's the point of the registry): own-catalog
+// publishers and the distributor API are authoritative for their own list
+// prices; ANN/OpenLibrary have none.
 export const V1_SOURCE_DEFAULTS = [
   {
     key: "sevenseas",
@@ -53,7 +56,7 @@ export const V1_SOURCE_DEFAULTS = [
   {
     key: "kodansha",
     name: "Kodansha USA",
-    enabled: false,
+    enabled: true,
     scope: "Kodansha's own catalog",
     fieldAuthority: {
       date: "authoritative",
@@ -69,7 +72,7 @@ export const V1_SOURCE_DEFAULTS = [
   {
     key: "prh",
     name: "Penguin Random House API",
-    enabled: false,
+    enabled: true,
     scope: "PRH-distributed publishers",
     fieldAuthority: {
       date: "authoritative",
@@ -85,7 +88,7 @@ export const V1_SOURCE_DEFAULTS = [
   {
     key: "ann",
     name: "Anime News Network Encyclopedia",
-    enabled: false,
+    enabled: true,
     scope: "All English releases",
     fieldAuthority: {
       date: "standard",
@@ -99,7 +102,7 @@ export const V1_SOURCE_DEFAULTS = [
   {
     key: "openlibrary",
     name: "OpenLibrary",
-    enabled: false,
+    enabled: true,
     scope: "All English releases",
     fieldAuthority: {
       date: "weak",
