@@ -35,6 +35,7 @@ import { Route as SeriesPublicIdSlugRouteImport } from './routes/series.$publicI
 import { Route as VolumePublicIdIndexRouteImport } from './routes/volume.$publicId.index'
 import { Route as VolumePublicIdSlugRouteImport } from './routes/volume.$publicId.$slug'
 import { Route as ModEditTypeKeyRouteImport } from './routes/mod.edit.$type.$key'
+import { Route as ModManageTypeKeyRouteImport } from './routes/mod.manage.$type.$key'
 import { Route as ModProposeTypeKeyRouteImport } from './routes/mod.propose.$type.$key'
 
 const IndexRoute = IndexRouteImport.update({
@@ -168,6 +169,11 @@ const ModEditTypeKeyRoute = ModEditTypeKeyRouteImport.update({
   path: '/mod/edit/$type/$key',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModManageTypeKeyRoute = ModManageTypeKeyRouteImport.update({
+  id: '/mod/manage/$type/$key',
+  path: '/mod/manage/$type/$key',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ModProposeTypeKeyRoute = ModProposeTypeKeyRouteImport.update({
   id: '/mod/propose/$type/$key',
   path: '/mod/propose/$type/$key',
@@ -201,6 +207,7 @@ export interface FileRoutesByFullPath {
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId/': typeof VolumePublicIdIndexRoute
   '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
+  '/mod/manage/$type/$key': typeof ModManageTypeKeyRoute
   '/mod/propose/$type/$key': typeof ModProposeTypeKeyRoute
 }
 export interface FileRoutesByTo {
@@ -229,6 +236,7 @@ export interface FileRoutesByTo {
   '/series/$publicId': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId': typeof VolumePublicIdIndexRoute
   '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
+  '/mod/manage/$type/$key': typeof ModManageTypeKeyRoute
   '/mod/propose/$type/$key': typeof ModProposeTypeKeyRoute
 }
 export interface FileRoutesById {
@@ -259,6 +267,7 @@ export interface FileRoutesById {
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
   '/volume/$publicId/': typeof VolumePublicIdIndexRoute
   '/mod/edit/$type/$key': typeof ModEditTypeKeyRoute
+  '/mod/manage/$type/$key': typeof ModManageTypeKeyRoute
   '/mod/propose/$type/$key': typeof ModProposeTypeKeyRoute
 }
 export interface FileRouteTypes {
@@ -290,6 +299,7 @@ export interface FileRouteTypes {
     | '/series/$publicId/'
     | '/volume/$publicId/'
     | '/mod/edit/$type/$key'
+    | '/mod/manage/$type/$key'
     | '/mod/propose/$type/$key'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -318,6 +328,7 @@ export interface FileRouteTypes {
     | '/series/$publicId'
     | '/volume/$publicId'
     | '/mod/edit/$type/$key'
+    | '/mod/manage/$type/$key'
     | '/mod/propose/$type/$key'
   id:
     | '__root__'
@@ -347,6 +358,7 @@ export interface FileRouteTypes {
     | '/series/$publicId/'
     | '/volume/$publicId/'
     | '/mod/edit/$type/$key'
+    | '/mod/manage/$type/$key'
     | '/mod/propose/$type/$key'
   fileRoutesById: FileRoutesById
 }
@@ -376,6 +388,7 @@ export interface RootRouteChildren {
   SeriesPublicIdIndexRoute: typeof SeriesPublicIdIndexRoute
   VolumePublicIdIndexRoute: typeof VolumePublicIdIndexRoute
   ModEditTypeKeyRoute: typeof ModEditTypeKeyRoute
+  ModManageTypeKeyRoute: typeof ModManageTypeKeyRoute
   ModProposeTypeKeyRoute: typeof ModProposeTypeKeyRoute
 }
 
@@ -563,6 +576,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ModEditTypeKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mod/manage/$type/$key': {
+      id: '/mod/manage/$type/$key'
+      path: '/mod/manage/$type/$key'
+      fullPath: '/mod/manage/$type/$key'
+      preLoaderRoute: typeof ModManageTypeKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/mod/propose/$type/$key': {
       id: '/mod/propose/$type/$key'
       path: '/mod/propose/$type/$key'
@@ -609,6 +629,7 @@ const rootRouteChildren: RootRouteChildren = {
   SeriesPublicIdIndexRoute: SeriesPublicIdIndexRoute,
   VolumePublicIdIndexRoute: VolumePublicIdIndexRoute,
   ModEditTypeKeyRoute: ModEditTypeKeyRoute,
+  ModManageTypeKeyRoute: ModManageTypeKeyRoute,
   ModProposeTypeKeyRoute: ModProposeTypeKeyRoute,
 }
 export const routeTree = rootRouteImport

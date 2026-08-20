@@ -471,6 +471,29 @@ export default defineSchema({
     valueHash: v.string(),
   }).index("by_key", ["ref.type", "ref.id", "field", "sourceKey", "valueHash"]),
 
+  // What one Merge physically did (ticket #33): every reference it repointed
+  // (with the prior value), every duplicate row it deleted, and every row it
+  // inserted — exactly what an explicit Split reverses. One manifest per
+  // merge; `reversedAt` marks a consumed manifest (a loser merged again later
+  // gets a fresh one). The reason/authorship trail lives in Revisions.
+  mergeManifests: defineTable({
+    loserRef: recordRef,
+    survivorRef: recordRef,
+    proposalId: v.id("proposals"),
+    repointed: v.array(
+      v.object({
+        table: v.string(),
+        docId: v.string(),
+        field: v.string(),
+        before: v.optional(v.any()),
+        after: v.optional(v.any()),
+      }),
+    ),
+    removed: v.array(v.object({ table: v.string(), doc: v.any() })),
+    inserted: v.array(v.object({ table: v.string(), docId: v.string() })),
+    reversedAt: v.optional(v.number()),
+  }).index("by_loser", ["loserRef.type", "loserRef.id"]),
+
   importRuns: defineTable({
     sourceKey: v.string(),
     status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed")),
@@ -547,7 +570,10 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_user_release", ["userId", "releaseId"])
-    .index("by_user_bundle", ["userId", "bundleId"]),
+    .index("by_user_bundle", ["userId", "bundleId"])
+    // Reverse lookups for merge transfer + impact previews (ticket #33).
+    .index("by_release", ["releaseId"])
+    .index("by_bundle", ["bundleId"]),
 
   // One row per (user, series) combining every per-series fact; a row exists
   // once the user touches the series in any way.
@@ -568,7 +594,10 @@ export default defineSchema({
     followPromptDismissed: v.boolean(),
     ownershipVisibility: v.optional(visibility),
     readingVisibility: v.optional(visibility),
-  }).index("by_user_series", ["userId", "seriesId"]),
+  })
+    .index("by_user_series", ["userId", "seriesId"])
+    // Reverse lookup for merge transfer + impact previews (ticket #33).
+    .index("by_series", ["seriesId"]),
 
   // An active reading pass; at most one per (user, release). Confirmed
   // completion increments volumeProgress for completely covered Volumes and
@@ -580,7 +609,10 @@ export default defineSchema({
     percent: v.optional(v.number()),
   })
     .index("by_user_release", ["userId", "releaseId"])
-    .index("by_user_series", ["userId", "seriesId"]),
+    .index("by_user_series", ["userId", "seriesId"])
+    // Reverse lookups for merge transfer + impact previews (ticket #33).
+    .index("by_release", ["releaseId"])
+    .index("by_series", ["seriesId"]),
 
   volumeProgress: defineTable({
     userId: v.id("users"),
@@ -591,5 +623,8 @@ export default defineSchema({
     lastCompletedAt: v.optional(v.number()),
   })
     .index("by_user_volume", ["userId", "volumeId"])
-    .index("by_user_series", ["userId", "seriesId"]),
+    .index("by_user_series", ["userId", "seriesId"])
+    // Reverse lookups for merge transfer + impact previews (ticket #33).
+    .index("by_volume", ["volumeId"])
+    .index("by_series", ["seriesId"]),
 });

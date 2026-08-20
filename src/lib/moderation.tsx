@@ -176,6 +176,12 @@ function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) 
       <p className="mod-edit-link">
         <Link to="/mod/edit/$type/$key" params={{ type, key: editKey }}>
           Edit this record
+        </Link>{" "}
+        <span aria-hidden="true">·</span>{" "}
+        {/* The sensitive-operations panel (ticket #33): hide/restore,
+            merge/split, temporary locks. */}
+        <Link to="/mod/manage/$type/$key" params={{ type, key: editKey }}>
+          Manage (hide / merge / lock)
         </Link>
       </p>
     );

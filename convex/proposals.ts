@@ -39,6 +39,15 @@ import {
 } from "./lib/proposalCreates";
 import { fieldDescriptor } from "./lib/moderationFields";
 import { requireDataTeam, requireModerator } from "./lib/roles";
+import {
+  applyHide,
+  applyLock,
+  applyMerge,
+  applyRestore,
+  applySplit,
+  applyUnlock,
+  type OpMeta,
+} from "./lib/sensitiveOps";
 import { sameValue, valueHash } from "./lib/values";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
@@ -757,12 +766,46 @@ export const approveProposal = mutation({
           comment: version.changeComment,
         });
         revisionIds.push(revisionId);
-      } else {
-        // Merge/split/hide/restore/override ops arrive with ticket #33.
+      } else if (op.kind === "clearOverride") {
+        // Override removal arrives with a later slice.
         return fail(
           "unsupportedOp",
           `"${op.kind}" operations are not approvable yet.`,
         );
+      } else {
+        // Sensitive catalog operations (ticket #33): the same apply
+        // functions as the direct Moderator mutations (sensitiveOps.ts) —
+        // each validates the record's current state and throws (rolling the
+        // whole approval back) when the world moved.
+        const meta: OpMeta = {
+          proposalId: args.proposalId,
+          author: proposal.author,
+          approvedBy: user._id,
+          comment: version.changeComment,
+        };
+        if (op.kind === "merge") {
+          revisionIds.push(
+            ...(await applyMerge(
+              ctx,
+              op.survivor as RecordRef,
+              op.merged as RecordRef,
+              meta,
+            )),
+          );
+        } else {
+          const ref = op.ref as RecordRef;
+          const apply =
+            op.kind === "hide"
+              ? applyHide
+              : op.kind === "restore"
+                ? applyRestore
+                : op.kind === "split"
+                  ? applySplit
+                  : op.kind === "lock"
+                    ? applyLock
+                    : applyUnlock;
+          revisionIds.push(...(await apply(ctx, ref, meta)));
+        }
       }
     }
 
@@ -933,11 +976,41 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
           Boolean(doc.locked) ||
           (latest?._id ?? null) !== (op.baseRevisionId ?? null),
       });
+    } else if (op.kind === "merge") {
+      rendered.push({
+        kind: "merge" as const,
+        summary: `Merge ${await refLabel(ctx, op.merged as RecordRef)} into ${await refLabel(ctx, op.survivor as RecordRef)}`,
+      });
     } else {
-      rendered.push({ kind: op.kind });
+      const verb =
+        op.kind === "hide"
+          ? "Hide"
+          : op.kind === "restore"
+            ? "Restore"
+            : op.kind === "split"
+              ? "Split out"
+              : op.kind === "lock"
+                ? "Lock"
+                : op.kind === "unlock"
+                  ? "Unlock"
+                  : "Clear an override on";
+      rendered.push({
+        kind: op.kind,
+        summary: `${verb} ${await refLabel(ctx, op.ref as RecordRef)}`,
+      });
     }
   }
   return rendered;
+}
+
+/** `type "title"` label for a sensitive-op summary line. */
+async function refLabel(
+  ctx: QueryCtx | MutationCtx,
+  ref: RecordRef,
+): Promise<string> {
+  const doc = await getCanonical(ctx, ref);
+  const title = doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)";
+  return `${ref.type} "${title}"`;
 }
 
 /** Evidence rows with observation references resolved for display. */

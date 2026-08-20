@@ -411,6 +411,48 @@ extra setup beyond `npx convex dev` pushing it) enforces per-user token
 buckets: 30 submissions/hour (burst 5) and 120 draft saves/hour (burst 20).
 A single proposal carries at most 25 operations (`bulkCap`).
 
+## Merge, split, hide, restore, and locks (ticket #33)
+
+Spec §5's sensitive catalog operations: the engine in
+`convex/lib/sensitiveOps.ts`, the Moderator surface in
+`convex/sensitiveOps.ts`, and the panel at `/mod/manage/{type}/{key}`
+(reached via "Manage (hide / merge / lock)" on record pages). Every
+operation demands a written reason, shows an impact preview (observation,
+revision, relationship, child-record, and tracking counts), and requires an
+explicit confirmation — enforced again server-side. Each applies as an
+immediately approved Proposal, so the reason and the state change land in
+the record's public history; `approveProposal` applies the same op kinds
+through the same engine if they arrive via the review queue.
+
+**Hide / Restore.** Hide flips `status` to `hidden` — the record leaves
+public discovery (queries read hidden records as absent) while its
+identity, public ID, revision history, and every tracking reference stay
+untouched. Restore flips it back. Restore never reverses a merge.
+
+**Merge.** Picks a survivor and transfers everything from the loser:
+Source Observations and conflict suppressions repoint; compatible
+relationships repoint (self-edges and edges the survivor already carries
+are dropped); child records move (a Series' Volumes append after the
+survivor's reading path, Edition coverage and Bundle memberships dedupe on
+their natural keys); user tracking transfers with the survivor's row
+winning wherever a user tracked both duplicates; release denorms
+(`seriesIds`/`publisherId`) recompute. The loser keeps its public ID and
+history and points at the winner (`status: "merged"` + `mergedIntoId`), so
+every losing-ID URL 301s permanently through the existing route resolution —
+no redirects table.
+
+**Split.** The only reversal of a mistaken merge. Every merge persists a
+`mergeManifests` row (each repointed reference with its prior value, each
+deduped row's contents, each inserted row); Split replays it backward —
+skipping references the world re-aimed since — reactivates the loser, and
+consumes the manifest.
+
+**Locks.** Hidden and Merged records reject ordinary edits by status
+(direct edits, proposal drafts, and approvals all refuse them). Moderators
+can additionally `lockRecord` an active record during a dispute — same
+refusals — and `unlockRecord` when it resolves. Hide and Merge refuse
+temporarily locked records; unlock first, deliberately.
+
 ## Import foundation (ticket #34)
 
 Spec §6/§7: the hybrid data strategy's automated half, proven end to end on

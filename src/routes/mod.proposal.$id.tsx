@@ -130,7 +130,12 @@ function OpsList({ ops }: { ops: RenderedOps }) {
               </ul>
             </>
           ) : (
-            <p>({op.kind} operation — reviewable in a later slice)</p>
+            <p>
+              {/* Sensitive catalog operations (ticket #33) render as a
+                  one-line summary; their full impact preview lives on the
+                  record's manage panel. */}
+              <strong>{op.summary}</strong>
+            </p>
           )}
         </li>
       ))}
