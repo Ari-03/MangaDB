@@ -29,6 +29,8 @@ async function setup(t: ReturnType<typeof convexTest>) {
   await t
     .withIdentity({ subject: ADMIN })
     .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
+  // Stage gating reads enabled flags off the registry, so seed it (idempotent).
+  await t.mutation(internal.importSources.seedRegistry, {});
 }
 
 /** Insert one finished Import Run so a stage/source counts as succeeded. */
@@ -109,6 +111,23 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
     await expect(
       t.withIdentity({ subject: ADMIN }).mutation(api.launch.startSeedStage, { stage: 2 }),
     ).rejects.toThrow(/in order/);
+  });
+
+  it("a disabled source does not hold its stage open", async () => {
+    const t = convexTest(schema);
+    await setup(t);
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: true });
+    // Seven Seas disabled (e.g. its site blocks our egress): Kodansha's
+    // success alone completes stage 1, and stage 2 may start.
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "sevenseas",
+      enabled: false,
+    });
+    await addRun(t, "kodansha");
+    const res = await t
+      .withIdentity({ subject: ADMIN })
+      .mutation(api.launch.startSeedStage, { stage: 2 });
+    expect(res.started).toEqual(["ann"]);
   });
 
   it("starts stage 1's two pilots, and stage 2 once stage 1 completed", async () => {

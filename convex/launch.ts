@@ -19,7 +19,7 @@ import {
   query,
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { getBootstrapMode } from "./importSources";
+import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { findDuplicatePairs, pairKeyOf, Reservoir, type SweepEntry } from "./lib/qa";
 import { requireDataTeam, requireModerator, requireRole } from "./lib/roles";
 
@@ -56,9 +56,18 @@ async function firstSuccessOf(
 type StageStatus = {
   stage: number;
   name: string;
-  sources: Array<{ key: string; firstSucceededAt: number | null; running: boolean }>;
+  sources: Array<{
+    key: string;
+    enabled: boolean;
+    firstSucceededAt: number | null;
+    running: boolean;
+  }>;
   complete: boolean;
-  /** When the stage completed: the latest of its sources' first successes. */
+  /**
+   * When the stage completed: the latest of its enabled sources' first
+   * successes. Null for a stage whose sources are all disabled — it counts
+   * as complete (deliberately skipped) but anchors no ordering.
+   */
   completedAt: number | null;
 };
 
@@ -77,19 +86,24 @@ async function stageStatuses(ctx: QueryCtx | MutationCtx): Promise<{
         .first();
       sources.push({
         key,
+        enabled: (await getSourceByKey(ctx, key))?.enabled ?? false,
         firstSucceededAt: await firstSuccessOf(ctx, key),
         running: lastRun?.status === "running",
       });
     }
-    const complete = sources.every((s) => s.firstSucceededAt !== null);
+    // A disabled source can never run, so it can't hold its stage open
+    // (e.g. a source whose site blocks our egress, or PRH pre-key).
+    const required = sources.filter((s) => s.enabled);
+    const complete = required.every((s) => s.firstSucceededAt !== null);
     stages.push({
       stage: def.stage,
       name: def.name,
       sources,
       complete,
-      completedAt: complete
-        ? Math.max(...sources.map((s) => s.firstSucceededAt!))
-        : null,
+      completedAt:
+        complete && required.length > 0
+          ? Math.max(...required.map((s) => s.firstSucceededAt!))
+          : null,
     });
   }
   // "In order": every completed stage's sources first succeeded after the
@@ -100,7 +114,14 @@ async function stageStatuses(ctx: QueryCtx | MutationCtx): Promise<{
     const prev = stages[i - 1]!;
     const cur = stages[i]!;
     if (!cur.complete) continue;
-    if (!prev.complete || prev.completedAt! > cur.completedAt!) orderedOk = false;
+    if (!prev.complete) orderedOk = false;
+    // Vacuous stages (all sources disabled) have no time anchor to compare.
+    else if (
+      prev.completedAt !== null &&
+      cur.completedAt !== null &&
+      prev.completedAt > cur.completedAt
+    )
+      orderedOk = false;
   }
   return { stages, orderedOk };
 }
@@ -147,6 +168,7 @@ async function startStage(ctx: MutationCtx, stage: number) {
   const current = stages.find((s) => s.stage === stage)!;
   const started: string[] = [];
   for (const source of current.sources) {
+    if (!source.enabled) continue; // disabled sources aren't part of the seed
     if (source.running) continue; // a still-running run defers its source
     // PRH stage ③ is the full catalog sweep, not the daily future window.
     const args = source.key === "prh" ? { mode: "full" as const } : {};
