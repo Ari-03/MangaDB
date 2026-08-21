@@ -13,10 +13,11 @@
     // The canonical public host (spec §12). Requests for www.<host> 301 to the
     // apex; hosts that don't match (workers.dev previews, localhost) are
     // served as-is. Set to "" to disable redirects entirely.
-    "CANONICAL_HOST": "mangadb.org"
-    // VITE_CONVEX_URL is intentionally not set here: set it per environment
-    //   wrangler deploy --var VITE_CONVEX_URL:https://<deployment>.convex.cloud
-    // or add it under `vars` once the Convex deployment exists (see README).
+    "CANONICAL_HOST": "mangadb.org",
+    // Public values (they ship in the client bundle anyway); secrets like
+    // CLERK_SECRET_KEY go through `wrangler secret put` instead.
+    "VITE_CONVEX_URL": "https://intent-curlew-625.convex.cloud",
+    "VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cHJlc2VudC1ncmFja2xlLTk1NjQuY2xlcmsuYWNjb3VudHMuZGV2JA"
   }
   // When mangadb.org is attached to the Worker, add:
   // "routes": [
