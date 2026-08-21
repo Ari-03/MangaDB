@@ -20,6 +20,7 @@ import {
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
+import { ensurePublisher } from "./lib/pipeline";
 import { findDuplicatePairs, pairKeyOf, Reservoir, type SweepEntry } from "./lib/qa";
 import { requireDataTeam, requireModerator, requireRole } from "./lib/roles";
 
@@ -203,6 +204,58 @@ export const startSeedStage = mutation({
 export const startSeedStageInternal = internalMutation({
   args: { stage: v.number() },
   handler: async (ctx, { stage }) => await startStage(ctx, stage),
+});
+
+/**
+ * The spec's "small publisher list" (§8 search, §6 matching rung ③) as
+ * canonical rows. Sources resolve publisher NAMES against existing rows only
+ * (normalized-prefix match, so "VIZ Media LLC" hits "VIZ Media") and never
+ * create publishers — without these rows OpenLibrary can't materialize leaf
+ * Releases under the ANN backbone. One short-named row per publisher family;
+ * idempotent by slug. Operator escape hatch:
+ *   npx convex run launch:seedPublishers '{}'
+ */
+const CANONICAL_PUBLISHERS = [
+  { name: "VIZ Media", slug: "viz-media" },
+  { name: "Kodansha", slug: "kodansha" },
+  { name: "Seven Seas Entertainment", slug: "seven-seas" },
+  { name: "Yen Press", slug: "yen-press" },
+  { name: "Dark Horse", slug: "dark-horse" },
+  { name: "Square Enix", slug: "square-enix" },
+  { name: "Vertical", slug: "vertical" },
+  { name: "Denpa", slug: "denpa" },
+  { name: "Tokyopop", slug: "tokyopop" },
+  { name: "Del Rey Manga", slug: "del-rey-manga" },
+  { name: "Udon Entertainment", slug: "udon-entertainment" },
+  { name: "One Peace Books", slug: "one-peace-books" },
+  { name: "Kaiten Books", slug: "kaiten-books" },
+  { name: "J-Novel Club", slug: "j-novel-club" },
+  { name: "Drawn & Quarterly", slug: "drawn-and-quarterly" },
+  { name: "Fantagraphics", slug: "fantagraphics" },
+  { name: "Titan Manga", slug: "titan-manga" },
+  { name: "ABLAZE", slug: "ablaze" },
+  { name: "Ize Press", slug: "ize-press" },
+  { name: "CMX", slug: "cmx" },
+  { name: "Digital Manga", slug: "digital-manga" },
+  { name: "NETCOMICS", slug: "netcomics" },
+  { name: "ComicsOne", slug: "comicsone" },
+  { name: "Star Fruit Books", slug: "star-fruit-books" },
+  { name: "Glacier Bay Books", slug: "glacier-bay-books" },
+  { name: "FAKKU", slug: "fakku" },
+  { name: "Irodori Comics", slug: "irodori-comics" },
+  { name: "Last Gasp", slug: "last-gasp" },
+  { name: "Kuma", slug: "kuma" },
+];
+
+export const seedPublishers = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const created: string[] = [];
+    for (const pub of CANONICAL_PUBLISHERS) {
+      if ((await ensurePublisher(ctx, pub)).created) created.push(pub.slug);
+    }
+    return { created, total: CANONICAL_PUBLISHERS.length };
+  },
 });
 
 // ---------- QA gate ①/②: the two hand-verification samples ----------
