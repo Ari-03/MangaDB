@@ -24,7 +24,17 @@ const MANGA_PUBLISHERS =
 
 const input = process.argv[2];
 const raw = input ? createReadStream(input) : process.stdin;
-const stream = (input ?? "-").endsWith(".gz") ? raw.pipe(createGunzip()) : raw;
+
+// Sniff the gzip magic bytes (1f 8b) instead of trusting the filename, so
+// piped stdin (`curl … .txt.gz | node …`) is decompressed too.
+const firstChunk = await new Promise((resolve, reject) => {
+  raw.once("error", reject);
+  raw.once("readable", () => resolve(raw.read()));
+});
+if (firstChunk) raw.unshift(firstChunk);
+const isGzip =
+  firstChunk && firstChunk.length >= 2 && firstChunk[0] === 0x1f && firstChunk[1] === 0x8b;
+const stream = isGzip ? raw.pipe(createGunzip()) : raw;
 
 const lines = createInterface({ input: stream, crlfDelay: Infinity });
 let kept = 0;

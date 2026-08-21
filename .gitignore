@@ -8,3 +8,4 @@ dist/
 .dev.vars.*
 worker-configuration.d.ts
 .tanstack/
+filtered.txt
