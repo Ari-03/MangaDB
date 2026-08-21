@@ -299,6 +299,21 @@ export const setBootstrapMode = mutation({
 });
 
 /**
+ * Operator escape hatch mirroring setBootstrapModeInternal: toggle a source
+ * without an Administrator sign-in (e.g. a source whose site blocks our
+ * egress IPs, pending an allowlist request):
+ *   npx convex run importSources:setEnabledInternal '{"key":"sevenseas","enabled":false}'
+ */
+export const setEnabledInternal = internalMutation({
+  args: { key: v.string(), enabled: v.boolean() },
+  handler: async (ctx, { key, enabled }) => {
+    const source = await getSourceByKey(ctx, key.trim().toLowerCase());
+    if (!source) throw new Error(`No source with key "${key}".`);
+    await ctx.db.patch(source._id, { enabled });
+  },
+});
+
+/**
  * Operator escape hatch for dev/seeding before any Administrator exists:
  *   npx convex run importSources:setBootstrapModeInternal '{"on":true}'
  */
