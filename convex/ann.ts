@@ -136,22 +136,25 @@ export const sync = internalAction({
       let reachedEnd = false;
 
       while (batchesDone < maxBatches && !reachedEnd) {
-        const pageStart = nskip;
         const reportRes = await politeFetch(
           `${REPORT_URL}&nlist=${REPORT_PAGE}&nskip=${nskip}`,
           delay,
         );
-        const ids = parseReport(await reportRes.text()).map((item) => item.id);
-        if (ids.length === 0) {
+        const reportXml = await reportRes.text();
+        // Paging and the end-of-enumeration signal follow the page's RAW
+        // <item> count: parseReport filters non-manga rows, so its length
+        // under-counts the page and would end the mirror at the first page
+        // containing any filtered row (and desync nskip).
+        const rawCount = (reportXml.match(/<item>/g) ?? []).length;
+        const ids = parseReport(reportXml).map((item) => item.id);
+        if (rawCount === 0) {
           reachedEnd = true;
           break;
         }
 
-        for (
-          let offset = 0;
-          offset < ids.length && batchesDone < maxBatches;
-          offset += BATCH_SIZE
-        ) {
+        // Budget is checked per page (a page is ≤10 batches), so nskip stays
+        // page-aligned and continuations never resume mid-page.
+        for (let offset = 0; offset < ids.length; offset += BATCH_SIZE) {
           const batch = ids.slice(offset, offset + BATCH_SIZE);
           try {
             const apiRes = await politeFetch(
@@ -176,14 +179,12 @@ export const sync = internalAction({
             errors.push(`batch @${nskip + offset}: ${errorMessage(e)}`);
           }
           batchesDone++;
-          nskip += batch.length;
         }
+        nskip += rawCount;
 
-        // A short report page whose ids are fully consumed = the end of the
-        // enumeration; a full page loops for the next one.
-        if (nskip - pageStart === ids.length && ids.length < REPORT_PAGE) {
-          reachedEnd = true;
-        }
+        // A short raw page = the end of the enumeration; a full page loops
+        // for the next one.
+        if (rawCount < REPORT_PAGE) reachedEnd = true;
       }
 
       if (!reachedEnd) {

@@ -291,16 +291,17 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
   it("mirrors in chained links and withdraws entries a complete mirror stopped seeing", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    // 60 entries: a 50-id batch + a 10-id batch. With maxBatches 1 the first
-    // link stops mid-mirror and hands the run to a scheduled continuation.
-    const many: FixtureManga[] = Array.from({ length: 60 }, (_, i) => ({
+    // 510 entries: a full 500-item report page (10 batches) + a short second
+    // page. Budget is page-aligned, so with maxBatches 10 the first link
+    // stops at the page boundary and hands the run to a continuation.
+    const many: FixtureManga[] = Array.from({ length: 510 }, (_, i) => ({
       id: 1000 + i,
       title: `Chain Series ${i}`,
       releases: [{ annId: 20000 + i, date: "2026-03-03", designator: "GN 1" }],
     }));
     stubAnn(many);
-    const first = await sync(t, { maxBatches: 1 });
-    expect(first).toMatchObject({ continued: true, recordsSeen: 50 });
+    const first = await sync(t, { maxBatches: 10 });
+    expect(first).toMatchObject({ continued: true, recordsSeen: 500 });
     // The run stays open across the chain.
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
@@ -313,8 +314,8 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     vi.useRealTimers();
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
-      expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 60 });
-      expect(await ctx.db.query("series").collect()).toHaveLength(60);
+      expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 510 });
+      expect(await ctx.db.query("series").collect()).toHaveLength(510);
     });
 
     // Now drop one entry from ANN and mirror again: it withdraws.
@@ -328,7 +329,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       const kept = observations.find((o) => o.sourceRecordId === "manga:1001")!;
       expect(kept.withdrawn).toBe(false);
     });
-  });
+  }, 30000); // 510 fixture records across three mirror passes
 
   it("defaults to ANN's 1 req/s etiquette", async () => {
     const t = makeT();
