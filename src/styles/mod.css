@@ -1,0 +1,923 @@
+/* Moderation surfaces (#31/#32/#37/#40): revision history, edit forms, proposals + review queue, imports dashboard, launch dashboard. Owner: mod port. */
+
+/* These are the data team's working tools, not catalog display. They borrow
+   the Bookshelf vocabulary — warm surfaces, hairlines, the gold accent, the
+   display face on headings — but never the furniture: no ledges, no cover
+   shadows, no ornament. Density and legibility first; colour only where it
+   carries state. */
+
+:root {
+  /* Two states the shared tokens have no colour for: something is wrong
+     (failed run, stale proposal, open gate) and something needs attention. */
+  --mod-bad:  #e8836d;
+  --mod-warn: #e0b256;
+}
+[data-theme="light"] {
+  --mod-bad:  #a8341c;
+  --mod-warn: #8a6316;
+}
+
+/* ---------- page frame ---------------------------------------------------- */
+
+/* Every /mod route's <main>. Narrower than the catalog: these pages are read
+   line by line, not scanned as a wall of covers. */
+.mod-page {
+  max-width: 1080px;
+  padding-bottom: 24px;
+}
+
+.mod-page h1 {
+  font-size: clamp(1.7rem, 1.35rem + 1.2vw, 2.3rem);
+  letter-spacing: -0.02em;
+}
+
+/* a page title that carries state beside it */
+.mod-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* A bare section heading on a tool page (imports, launch). Panels carry a
+   class and draw their own header band, so they are deliberately excluded. */
+.mod-page > h2,
+.mod-page > section:not([class]) > h2 {
+  margin-top: 36px;
+  font-size: 1.12rem;
+}
+.mod-page > h2 + .section-hint,
+.mod-page > section:not([class]) > h2 + .section-hint { margin-top: 6px; }
+
+/* The standing explanation under a page or panel title. */
+.mod-page .section-hint {
+  margin-top: 10px;
+  max-width: 78ch;
+  color: var(--text-dim);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+.mod-page .section-hint a {
+  color: var(--accent);
+  border-bottom: 1px solid transparent;
+}
+.mod-page .section-hint a:hover { border-bottom-color: var(--accent); }
+
+/* The cross-links between the data team's tools, lifted out of the prose. */
+.mod-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 18px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+.mod-tools a {
+  color: var(--text-dim);
+  padding: 4px 0;
+  border-bottom: 2px solid transparent;
+}
+.mod-tools a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ---------- panels and rows ----------------------------------------------- */
+
+/* One block of the workroom: a titled surface with hairline-separated rows. */
+.mod-panel {
+  margin-top: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.mod-panel > h2 {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.02rem;
+}
+
+.mod-panel > .section-hint,
+.mod-panel > p,
+.mod-panel > form,
+.mod-panel > div {
+  padding-inline: 18px;
+}
+.mod-panel > .section-hint:first-of-type { margin: 14px 0; }
+/* lists run to the panel's edge; prose and forms get a foot */
+.mod-panel > p:last-child,
+.mod-panel > form:last-child,
+.mod-panel > div:last-child { margin-bottom: 16px; }
+
+/* Every list on these pages is the same object: a bordered ledger of
+   hairline-separated rows, never a stack of cards. */
+.queue-list,
+.import-sources,
+.import-runs,
+.launch-gates,
+.seed-stages,
+.qa-rows,
+.duplicate-queue,
+.roster-list,
+.audit-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.mod-panel > .roster-list,
+.mod-panel > .audit-list {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+}
+/* A row flagged for attention keeps its rule but gains a coloured edge. */
+.mod-flagged { box-shadow: inset 3px 0 0 var(--mod-bad); }
+
+/* Dates and counts read as a column wherever they stack. */
+.mod-page time { font-variant-numeric: tabular-nums; }
+
+.mod-page code {
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 0.86em;
+}
+
+.mod-empty {
+  margin: 0;
+  padding: 16px 18px;
+  color: var(--text-mute);
+  font-size: 0.9rem;
+}
+
+/* ---------- status chips -------------------------------------------------- */
+
+/* Worn beside a proposal state, a source's health, a run's outcome. Always
+   composed with .chip from the shell. */
+.mod-chip { font-size: 0.72rem; }
+.mod-chip--ok   { color: var(--ok);       border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.mod-chip--info { color: var(--info);     border-color: color-mix(in srgb, var(--info) 55%, transparent); }
+.mod-chip--warn { color: var(--mod-warn); border-color: color-mix(in srgb, var(--mod-warn) 55%, transparent); }
+.mod-chip--bad  { color: var(--mod-bad);  border-color: color-mix(in srgb, var(--mod-bad) 60%, transparent); background: color-mix(in srgb, var(--mod-bad) 10%, var(--surface-2)); }
+.mod-chip--mute { color: var(--text-mute); }
+
+/* ---------- forms --------------------------------------------------------- */
+
+.mod-form {
+  display: grid;
+  gap: 16px;
+  max-width: 40rem;
+  margin-top: 18px;
+}
+.mod-panel > .mod-form { margin: 16px 0; }
+
+.mod-form label,
+.mod-edit-form label {
+  display: grid;
+  gap: 5px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.mod-page input[type="text"],
+.mod-page input[type="url"],
+.mod-page input:not([type]),
+.mod-page textarea,
+.mod-page select {
+  font: inherit;
+  font-weight: 400;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.mod-page textarea { line-height: 1.5; resize: vertical; }
+.mod-page input::placeholder,
+.mod-page textarea::placeholder { color: var(--text-mute); }
+.mod-page input:focus-visible,
+.mod-page textarea:focus-visible,
+.mod-page select:focus-visible { outline-offset: 1px; }
+.mod-page input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--accent);
+}
+
+.field-help {
+  font-weight: 400;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-mute);
+}
+
+/* Year / month / day and amount / currency: several small inputs, one label. */
+.date-fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin: 0;
+  padding: 12px 16px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.date-fieldset legend {
+  padding: 0 6px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.date-fieldset label { gap: 4px; }
+.date-fieldset input { max-width: 7rem; }
+.mod-page .date-fieldset input { background: var(--surface); }
+.date-fieldset .field-help { flex-basis: 100%; }
+
+/* A row of buttons ending a form or a panel. */
+.mod-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The shell's .btn is a class, so the legacy element-level button rules in
+   other page files win on `button[type=submit]`. Pin ours back. */
+.mod-page button.btn { background: var(--surface-2); border-color: var(--line-strong); color: var(--text); }
+.mod-page button.btn:hover { background: var(--surface-3); }
+.mod-page button.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.mod-page button.btn-primary:hover { background: var(--gold); border-color: var(--gold); }
+.mod-page button.btn:disabled { opacity: 0.45; cursor: default; transform: none; }
+.mod-page button.btn:disabled:hover { background: var(--surface-2); }
+.mod-page button.btn-primary:disabled:hover { background: var(--accent); }
+
+.mod-page .form-error {
+  margin: 0;
+  color: var(--mod-bad);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+/* ---------- filters ------------------------------------------------------- */
+
+.queue-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px 18px;
+  margin: 20px 0 0;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.queue-filters label {
+  display: grid;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-mute);
+}
+.mod-page .queue-filters input,
+.mod-page .queue-filters select {
+  min-width: 11rem;
+  padding: 6px 10px;
+  font-size: 0.88rem;
+}
+/* the two checkbox filters read as a line, not a stacked field */
+.queue-filters .filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  align-self: center;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.mod-page .queue-filters .filter-toggle input { min-width: 0; }
+
+/* ---------- revision history (#31) ---------------------------------------- */
+
+/* On a public catalog page this must stay quiet: a hairline disclosure the
+   reader can ignore, opened only by someone who cares who changed what. */
+.record-history {
+  margin-top: 2.5rem;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.record-history > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+  list-style: none;
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.record-history > summary::-webkit-details-marker { display: none; }
+.record-history > summary:hover { color: var(--accent); }
+.record-history > summary::before {
+  content: "▸";
+  font-size: 0.7em;
+  color: var(--text-mute);
+}
+.record-history[open] > summary::before { content: "▾"; }
+.record-history-count {
+  font-weight: 400;
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.record-history .section-hint {
+  margin: 8px 0 0;
+  max-width: 74ch;
+  color: var(--text-mute);
+  font-size: 0.85rem;
+}
+
+.revision-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.revision {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+
+.revision-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  color: var(--text-mute);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+.revision-seq { font-weight: 800; color: var(--text-dim); }
+.revision-author { color: var(--text-dim); }
+.revision-meta time { margin-left: auto; }
+
+.revision-comment {
+  margin: 6px 0 0;
+  color: var(--text);
+}
+
+/* before → after, one line per field */
+.revision-changes {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--text-mute);
+}
+.revision-changes code {
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.86em;
+}
+.revision-changes del {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--mod-bad) 70%, transparent);
+}
+.revision-changes ins {
+  text-decoration: none;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.revision-citation {
+  margin: 6px 0 0;
+  color: var(--text-mute);
+  font-size: 0.82rem;
+}
+.revision-citation a { color: var(--accent); border-bottom: 1px solid transparent; }
+.revision-citation a:hover { border-bottom-color: var(--accent); }
+
+/* The data-team entry points on a public page: text links, never buttons. */
+.mod-edit-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: var(--text-mute);
+}
+.mod-edit-link a {
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--line-strong);
+}
+.mod-edit-link a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ---------- edit + propose forms (#31/#32) -------------------------------- */
+
+.mod-edit-form {
+  display: grid;
+  gap: 16px;
+  max-width: 40rem;
+  margin-top: 24px;
+}
+
+/* ---------- review queue + proposals (#32) -------------------------------- */
+
+.queue-row {
+  padding: 13px 18px;
+  border-top: 1px solid var(--line);
+}
+.queue-row:first-child { border-top: 0; }
+.queue-row:hover { background: var(--surface-2); }
+.queue-row > a {
+  font-weight: 700;
+  font-size: 0.98rem;
+  border-bottom: 1px solid transparent;
+}
+.queue-row > a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+.queue-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  margin-top: 6px;
+  color: var(--text-mute);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-warnings { color: var(--mod-warn); }
+
+.proposal-actions {
+  margin-top: 26px;
+  padding: 0 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.proposal-actions > h2 {
+  margin: 0 -18px 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.02rem;
+}
+.proposal-actions label {
+  display: grid;
+  gap: 5px;
+  margin: 16px 0;
+  max-width: 40rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+/* one immutable version, or the mutable draft */
+.proposal-version {
+  margin-top: 26px;
+  padding: 0 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.proposal-version > h2 {
+  margin: 0 -18px 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.02rem;
+}
+.proposal-version > h3 {
+  margin: 20px 0 8px;
+  font-size: 0.92rem;
+  color: var(--text-dim);
+}
+.proposal-version > .revision-comment { margin-top: 14px; }
+.proposal-version > .section-hint { margin-top: 8px; }
+
+.proposal-ops {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.proposal-op {
+  padding: 10px 0 10px 14px;
+  border-left: 2px solid var(--line-strong);
+}
+.proposal-op p { font-size: 0.92rem; }
+.proposal-op .revision-changes { margin-top: 6px; }
+
+.proposal-base { color: var(--text-mute); font-size: 0.84rem; font-weight: 400; }
+.temp-id { font-size: 0.8rem; color: var(--text-mute); }
+
+.proposal-evidence {
+  margin: 8px 0 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 5px;
+  font-size: 0.88rem;
+  color: var(--text-dim);
+}
+.proposal-evidence a { color: var(--accent); word-break: break-word; }
+.proposal-evidence a:hover { border-bottom: 1px solid var(--accent); }
+
+/* internal discussion — data-team only, never public */
+.proposal-notes {
+  margin-top: 26px;
+  padding: 0 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.proposal-notes > h2 {
+  margin: 0 -18px 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.02rem;
+}
+.proposal-notes > .section-hint { margin-top: 14px; }
+.proposal-notes ol {
+  list-style: none;
+  margin: 14px 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  font-size: 0.9rem;
+}
+.proposal-notes ol li {
+  padding-left: 14px;
+  border-left: 2px solid var(--line-strong);
+  color: var(--text-dim);
+}
+.proposal-notes ol strong { color: var(--text); }
+.proposal-notes label {
+  display: grid;
+  gap: 5px;
+  margin: 16px 0;
+  max-width: 40rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+/* ---------- sensitive operations (#33) ------------------------------------ */
+
+.manage-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  color: var(--text-dim);
+  font-size: 0.92rem;
+}
+
+.impact-preview {
+  margin-top: 22px;
+  padding: 0 18px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.impact-preview h3 {
+  margin: 0 -18px 0;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.96rem;
+}
+.impact-preview ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.impact-preview li {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.89rem;
+  color: var(--text-dim);
+}
+.impact-preview li:last-child { border-bottom: 0; }
+.impact-preview strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.manage-action {
+  margin-top: 26px;
+  padding: 0 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.manage-action > h2 {
+  margin: 0 -18px 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.02rem;
+}
+.manage-action > .section-hint { margin-top: 14px; }
+.manage-action form {
+  display: grid;
+  gap: 14px;
+  max-width: 40rem;
+  margin-top: 16px;
+}
+.manage-action form > label:not(.manage-confirm) {
+  display: grid;
+  gap: 5px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+/* the deliberate second step: reading the impact preview is asserted here */
+.manage-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: var(--r-sm);
+  background: var(--accent-tint);
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ---------- imports dashboard (#37) --------------------------------------- */
+
+.import-source,
+.import-run {
+  padding: 13px 18px;
+  border-top: 1px solid var(--line);
+}
+.import-source:first-child,
+.import-run:first-child { border-top: 0; }
+.import-source:hover,
+.import-run:hover { background: var(--surface-2); }
+
+/* three consecutive failures: the row has to be impossible to skim past */
+.import-source-unhealthy {
+  box-shadow: inset 3px 0 0 var(--mod-bad);
+  background: color-mix(in srgb, var(--mod-bad) 7%, transparent);
+}
+.import-source-unhealthy:hover {
+  background: color-mix(in srgb, var(--mod-bad) 11%, transparent);
+}
+
+.import-source-head,
+.import-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+}
+.import-source-head strong,
+.import-run-head strong { font-size: 0.98rem; }
+
+.import-flag { color: var(--mod-bad); font-size: 0.84rem; font-weight: 800; }
+
+.import-source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 5px;
+  color: var(--text-mute);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-run-head {
+  font-size: 0.88rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-run-errors {
+  margin-top: 7px;
+  color: var(--text-mute);
+  font-size: 0.84rem;
+}
+.import-run-errors summary { cursor: pointer; }
+.import-run-errors summary:hover { color: var(--accent); }
+.import-run-errors ul {
+  margin: 6px 0 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 4px;
+}
+.import-run-errors code { word-break: break-word; }
+
+/* ---------- launch dashboard (#40) ---------------------------------------- */
+
+/* The gate list is the page's one loud element: seven lines, each either
+   satisfied or not, nothing between. */
+
+.launch-gates li {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 18px;
+  border-top: 1px solid var(--line);
+  font-size: 0.92rem;
+}
+.launch-gates li:first-child { border-top: 0; }
+.launch-gates li span[aria-hidden] {
+  justify-self: center;
+  font-weight: 800;
+}
+
+.gate-pass { color: var(--ok); }
+.gate-open { color: var(--mod-bad); }
+.launch-gates .gate-pass { color: var(--text-dim); }
+.launch-gates .gate-pass span[aria-hidden] { color: var(--ok); }
+.launch-gates .gate-open span[aria-hidden] { color: var(--mod-bad); }
+
+.mod-page .notice.launch-ready {
+  border-left-color: var(--ok);
+  color: var(--text);
+}
+.mod-page .notice.gate-pass { color: var(--text-dim); border-left-color: var(--ok); }
+
+
+.seed-stages > li {
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+}
+.seed-stages > li:first-child { border-top: 0; }
+.mod-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.mod-row-head strong { font-size: 0.98rem; }
+.seed-stages > li > button { margin-top: 12px; }
+.seed-stages ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+  color: var(--text-mute);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.seed-stages > li > .mod-actions { margin-top: 12px; }
+
+
+.qa-sample > h3 {
+  margin: 22px 0 0;
+  font-size: 0.98rem;
+}
+.qa-sample:first-of-type > h3 { margin-top: 14px; }
+
+.qa-rows,
+.duplicate-queue { font-size: 0.89rem; }
+.qa-rows li,
+.duplicate-queue li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 9px 18px;
+  border-top: 1px solid var(--line);
+  color: var(--text-dim);
+}
+.qa-rows li:hover,
+.duplicate-queue li:hover { background: var(--surface-2); }
+.qa-rows a,
+.duplicate-queue a { border-bottom: 1px solid transparent; font-weight: 700; }
+.qa-rows a:hover,
+.duplicate-queue a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.qa-rows em,
+.duplicate-queue em { color: var(--text-mute); font-style: normal; }
+
+.qa-actions,
+.qa-fail-form {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.mod-page .qa-fail-form input { min-width: 16rem; padding: 5px 10px; font-size: 0.85rem; }
+.qa-actions a {
+  border-bottom: 0;
+  color: var(--accent);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.attest-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+}
+.mod-page .attest-form input { max-width: 22rem; }
+.attest-form .form-error { flex-basis: 100%; }
+
+/* ---------- roles (#31) ---------------------------------------------------- */
+
+.roster-list,
+.audit-list { font-size: 0.89rem; margin-bottom: 0; }
+.roster-list > li,
+.audit-list > li {
+  padding: 11px 18px;
+  border-top: 1px solid var(--line);
+}
+.roster-list > li:first-child,
+.audit-list > li:first-child { border-top: 0; }
+
+.roster-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.roster-name { font-weight: 700; }
+.roster-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.audit-list > li {
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.audit-list time {
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+}
+
+/* ---------- responsive ----------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .mod-panel > h2,
+  .mod-panel > h3,
+  .queue-row,
+  .import-source,
+  .import-run,
+  .launch-gates li,
+  .seed-stages > li,
+  .qa-rows li,
+  .duplicate-queue li,
+  .roster-list > li,
+  .audit-list > li { padding-inline: 14px; }
+
+  .mod-panel > .section-hint,
+  .mod-panel > p,
+  .mod-panel > form,
+  .mod-panel > div { padding-inline: 14px; }
+
+  .proposal-actions,
+  .proposal-version,
+  .proposal-notes,
+  .manage-action,
+  .impact-preview,
+  .queue-filters { padding-inline: 14px; }
+
+  .proposal-actions > h2,
+  .proposal-version > h2,
+  .proposal-notes > h2,
+  .manage-action > h2,
+  .impact-preview h3 { margin-inline: -14px; padding-inline: 14px; }
+
+  .queue-filters .filter-toggle { flex-basis: 100%; }
+  .qa-actions,
+  .qa-fail-form { margin-left: 0; }
+  .mod-page .qa-fail-form input { min-width: 0; flex: 1 1 12rem; }
+  .revision-meta time { margin-left: 0; }
+  .mod-form,
+  .mod-edit-form { max-width: none; }
+}

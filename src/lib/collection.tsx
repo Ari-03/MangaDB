@@ -31,9 +31,11 @@ type CollectionState = keyof typeof STATE_LABELS;
 const STATE_ORDER: CollectionState[] = ["wanted", "ordered", "owned"];
 
 /**
- * The three-state toggle group. Exactly one state can be active; clicking
- * the active state removes the entry (state -> null), clicking another
- * replaces it — the exactly-one-state invariant rendered as controls.
+ * The three-state segmented control. Exactly one state can be active;
+ * clicking the active state removes the entry (state -> null), clicking
+ * another replaces it — the exactly-one-state invariant rendered as
+ * controls. Styling keys off `aria-pressed`, so the pressed look and the
+ * announced state can never drift apart.
  */
 function StateButtons({
   current,
@@ -43,13 +45,22 @@ function StateButtons({
   onPick: (state: CollectionState | null) => void;
 }) {
   return (
-    <span className="collection-states" role="group" aria-label="Collection state">
+    <span
+      className="collection-states"
+      role="group"
+      aria-label="Collection state"
+    >
       {STATE_ORDER.map((state) => (
         <button
           key={state}
           type="button"
           aria-pressed={current === state}
           className={current === state ? "state-active" : undefined}
+          title={
+            current === state
+              ? "Remove this from your collection"
+              : `Mark as ${STATE_LABELS[state].toLowerCase()}`
+          }
           onClick={() => onPick(current === state ? null : state)}
         >
           {STATE_LABELS[state]}
@@ -67,7 +78,11 @@ function StateButtons({
  * Owned Bundles. Mounts anywhere a Release row renders — Series, Volume, and
  * Edition pages; renders nothing signed out.
  */
-export function ReleaseCollectionControls({ releaseId }: { releaseId: string }) {
+export function ReleaseCollectionControls({
+  releaseId,
+}: {
+  releaseId: string;
+}) {
   if (!convexClient) return null;
   // Release rows carry the Convex document id serialized through the SSR
   // loader; re-brand it for the typed function references.
@@ -103,15 +118,17 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
       />
       {entry && data.variants.length > 0 ? (
         <label className="variant-pick">
-          Variant{" "}
+          <span className="variant-pick-label">Variant</span>
           <select
+            className="select"
             value={entry.variantId ?? ""}
             onChange={(event) => {
               const value = event.currentTarget.value;
               void setEntry({
                 releaseId: data.releaseId,
                 state: entry.state,
-                variantId: value === "" ? undefined : (value as Id<"releaseVariants">),
+                variantId:
+                  value === "" ? undefined : (value as Id<"releaseVariants">),
               });
             }}
           >
@@ -135,7 +152,9 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
           >
             {bundle.bundleName}
           </Link>
-          {bundle.pinnedVariantName ? ` (${bundle.pinnedVariantName} variant)` : ""}
+          {bundle.pinnedVariantName
+            ? ` (${bundle.pinnedVariantName} variant)`
+            : ""}
         </span>
       ))}
     </div>
@@ -187,7 +206,11 @@ function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
  * (direct or via an Owned Bundle), since no Volume-ownership state exists.
  * Renders nothing signed out or when nothing covering it is owned.
  */
-export function VolumeOwnership({ volumePublicId }: { volumePublicId: number }) {
+export function VolumeOwnership({
+  volumePublicId,
+}: {
+  volumePublicId: number;
+}) {
   if (!convexClient) return null;
   return <VolumeOwnershipInner volumePublicId={volumePublicId} />;
 }
@@ -197,7 +220,7 @@ function VolumeOwnershipInner({ volumePublicId }: { volumePublicId: number }) {
   if (!data || data.owned.length === 0) return null;
   return (
     <div className="volume-ownership" role="status">
-      <strong>In your collection</strong> through:
+      <p className="volume-ownership-lede">On your shelf through</p>
       <ul>
         {data.owned.map((item, i) => (
           <li key={i}>
@@ -221,7 +244,10 @@ function VolumeOwnershipInner({ volumePublicId }: { volumePublicId: number }) {
                 — via{" "}
                 <Link
                   to="/bundle/$publicId/$slug"
-                  params={slugParams(item.via.bundlePublicId, item.via.bundleName)}
+                  params={slugParams(
+                    item.via.bundlePublicId,
+                    item.via.bundleName,
+                  )}
                 >
                   {item.via.bundleName}
                 </Link>
@@ -269,12 +295,19 @@ function MyCollectionInner() {
           <h3>{STATE_LABELS[group.state]}</h3>
           <ul>
             {group.entries.map((entry) => (
-              <li key={entry.kind === "release" ? entry.releaseId : entry.bundleId}>
+              <li
+                key={
+                  entry.kind === "release" ? entry.releaseId : entry.bundleId
+                }
+              >
                 {entry.kind === "release" ? (
                   <>
                     <Link
                       to="/edition/$publicId/$slug"
-                      params={slugParams(entry.editionPublicId, entry.editionTitle)}
+                      params={slugParams(
+                        entry.editionPublicId,
+                        entry.editionTitle,
+                      )}
                       hash={entry.anchor}
                     >
                       {entry.editionTitle}
@@ -283,7 +316,9 @@ function MyCollectionInner() {
                       {entry.format === "physical"
                         ? `Physical${entry.binding ? ` · ${entry.binding}` : ""}`
                         : "Digital"}
-                      {entry.variantName ? ` · ${entry.variantName} variant` : ""}
+                      {entry.variantName
+                        ? ` · ${entry.variantName} variant`
+                        : ""}
                     </span>
                   </>
                 ) : (

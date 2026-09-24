@@ -1,0 +1,346 @@
+/* Covers, shelves and the ledge: the shared cover-forward vocabulary (cover, cloth placeholder, on-cover badges, quick actions, shelf grid + rail, empty shelf). Page CSS composes these; it does not redefine them. */
+/* --- 6. Covers and shelves ---------------------------------------------- */
+
+.shelf {
+  display: grid;
+  overflow-x: clip;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--cover-w), 46%), 1fr));
+  column-gap: 0;
+  row-gap: 34px;
+  align-items: start;
+}
+
+.shelf-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0 13px;
+  min-width: 0;
+}
+
+.cover-wrap { position: relative; }
+
+.cover-link {
+  display: block;
+  border-radius: 3px 5px 5px 3px;
+}
+.cover-link:focus-visible { outline-offset: 5px; }
+
+.cover {
+  display: block;
+  position: relative;
+  aspect-ratio: 2 / 3;
+  border-radius: 3px 5px 5px 3px;
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow: var(--cover-shadow);
+  transition: transform 170ms cubic-bezier(.22,.7,.3,1), box-shadow 170ms ease;
+}
+/* the spine edge of a shelved book */
+.cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(0,0,0,0.42) 0, rgba(0,0,0,0.05) 7px, rgba(0,0,0,0) 14px, rgba(0,0,0,0) 82%, rgba(255,255,255,0.07) 100%);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+}
+.cover img { width: 100%; height: 100%; object-fit: cover; }
+
+.shelf-item:hover .cover,
+.cover-link:hover .cover,
+.cover-link:focus-visible .cover {
+  transform: translateY(-7px);
+  box-shadow: var(--cover-shadow-hi);
+}
+
+/* placeholder: an unjacketed book in coloured cloth */
+.cover-ph {
+  width: 100%; height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 16px 13px 13px 20px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--cloth) 88%, #ffffff) 0%, var(--cloth) 46%, color-mix(in srgb, var(--cloth) 80%, #000000) 100%);
+  color: #fdf6ea;
+}
+.cover-ph::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 11px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--cloth) 60%, #000) 0%, color-mix(in srgb, var(--cloth) 92%, #fff) 70%, color-mix(in srgb, var(--cloth) 70%, #000) 100%);
+}
+.cover-ph-title {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 24;
+  font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.22;
+  letter-spacing: -0.008em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cover:has(.cover-badges) .cover-ph-title { margin-top: 30px; }
+
+/* Under ~80px of cover width a title is unreadable, so small placeholders drop
+   it and carry a single numeral instead (volume number, or a publisher
+   monogram for a oneshot). The full title is always next to the cover. */
+.cover-ph-mark {
+  display: none;
+  margin: auto 0;
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 40;
+  font-weight: 700;
+  font-size: 1.15rem;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  text-align: center;
+  color: rgba(255, 250, 240, 0.94);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* a series shelf: one trade dress, a big volume number */
+.cover-ph--numbered { justify-content: flex-end; gap: 2px; padding: 16px 14px 14px 22px; }
+.cover-ph-series {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: rgba(255, 250, 240, 0.78);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cover-ph-num {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 90;
+  font-weight: 700;
+  font-size: 2.6rem;
+  line-height: 0.92;
+  letter-spacing: -0.03em;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.32);
+}
+.cover-ph-foot {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: rgba(255, 248, 236, 0.72);
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 248, 236, 0.28);
+  padding-top: 7px;
+}
+.cover-ph-foot span {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* collection state badge, worn on the cover itself */
+.cover-badges {
+  position: absolute;
+  top: 8px; left: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  z-index: 2;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  border-radius: var(--r-pill);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.badge svg { width: 11px; height: 11px; }
+.badge--owned   { background: var(--on-cover-accent); color: #1a1206; }
+.badge--ordered { background: var(--on-cover-scrim); color: var(--on-cover-accent); box-shadow: inset 0 0 0 1.5px var(--on-cover-accent), 0 2px 6px rgba(0,0,0,.3); }
+.badge--wanted  { background: rgba(26, 18, 6, 0.66); color: var(--on-cover-ink); box-shadow: inset 0 0 0 1.5px rgba(246, 239, 227, 0.72), 0 2px 6px rgba(0,0,0,.3); }
+.badge--read    { background: var(--on-cover-scrim); color: var(--on-cover-ok); box-shadow: inset 0 0 0 1.5px currentColor; }
+
+.cover-flag {
+  position: absolute;
+  top: 8px; right: 8px;
+  z-index: 2;
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--on-cover-scrim);
+  color: var(--on-cover-accent);
+  font-size: 0.8rem;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* hover: quick collection actions slide up from the cover's foot */
+.cover-actions {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+  padding: 9px 8px;
+  background: linear-gradient(180deg, transparent, rgba(10, 7, 4, 0.92) 42%);
+  transform: translateY(103%);
+  opacity: 0;
+  transition: transform 170ms ease, opacity 170ms ease;
+}
+.shelf-item:hover .cover-actions,
+.shelf-item:focus-within .cover-actions { transform: translateY(0); opacity: 1; }
+.quick-btn {
+  flex: 1;
+  padding: 5px 0;
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(246, 236, 218, 0.34);
+  background: rgba(246, 236, 218, 0.1);
+  color: #f6efe3;
+  font-size: 0.74rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.quick-btn:hover { background: var(--on-cover-accent); border-color: var(--on-cover-accent); color: #1a1206; }
+
+/* the ledge: drawn by the caption so it sits between cover and label */
+.caption {
+  position: relative;
+  margin-top: 21px;
+  padding-top: 2px;
+  min-width: 0;
+}
+/* Every item draws the plank from its own left edge to the end of the shelf,
+   so a part-filled row still gets furniture all the way across. The planks
+   overlap, so they are fully opaque: the underside shade is a solid gradient
+   into the page, not a translucent drop shadow that would band. */
+.caption::before {
+  content: "";
+  position: absolute;
+  top: -14px;
+  left: -13px; right: -100vw;
+  height: 16px;
+  background-image: var(--ledge), var(--ledge-shade);
+  background-size: 100% 9px, 100% 7px;
+  background-position: top, bottom;
+  background-repeat: no-repeat;
+  border-top: 1px solid var(--ledge-edge);
+}
+/* a horizontally scrolling shelf must not extend its planks past the viewport */
+.rail .caption::before { right: -13px; }
+.caption-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cover-link:hover + .caption .caption-title,
+.caption-title:hover { color: var(--accent); }
+.caption-meta {
+  margin-top: 3px;
+  font-size: 0.8rem;
+  color: var(--text-mute);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.caption-meta > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.caption-title { min-height: 2.34em; }
+.caption-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: 0.6; }
+.star { color: var(--accent); font-size: 0.82rem; }
+
+.note {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
+.note a { color: var(--accent); border-bottom: 1px solid transparent; }
+.note a:hover { border-bottom-color: var(--accent); }
+
+/* horizontally scrolling shelf (followed series, publisher lanes) */
+.rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: var(--cover-w);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
+}
+.rail > .shelf-item { scroll-snap-align: start; }
+
+/* empty shelf invitation (signed-out): three ghosted spines, copy beside them */
+.empty-shelf {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 32px;
+  padding: 24px 28px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+.ghost-shelf {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 84px);
+  column-gap: 10px;
+  padding-bottom: 18px;
+}
+.ghost-spine { position: relative; }
+.ghost-shelf .cover {
+  opacity: 0.45;
+  filter: grayscale(0.55);
+  box-shadow: none;
+}
+.ghost-shelf::after {
+  content: "";
+  position: absolute;
+  left: -10px; right: -10px; bottom: 0;
+  height: 9px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  box-shadow: var(--ledge-shadow);
+  opacity: 0.75;
+}
+.ghost-star {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 2rem;
+  color: var(--text-dim);
+  z-index: 2;
+}
+.empty-note {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+}
+.empty-note p { max-width: 52ch; }
+
+
+/* --- Covers responsive --- */
+@media (max-width: 1180px) { :root { --cover-w: 150px; } }
+@media (max-width: 720px)  { :root { --cover-w: 128px; } }
+@media (max-width: 420px)  { :root { --cover-w: 132px; } .shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

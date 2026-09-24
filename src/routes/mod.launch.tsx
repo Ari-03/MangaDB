@@ -38,7 +38,7 @@ function errorMessage(err: unknown): string {
 function LaunchPage() {
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           The launch dashboard needs a configured Convex deployment (see the
           README).
@@ -54,7 +54,7 @@ function LaunchGate() {
   const isModerator = useIsModerator();
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
@@ -64,7 +64,7 @@ function LaunchGate() {
   );
   if (!isDataTeam) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Data team only</h1>
         <p className="notice">
           The launch dashboard is visible to Editors, Moderators, and
@@ -88,7 +88,7 @@ const timestamp = (ms: number) =>
 
 function Launch({ canAct }: { canAct: boolean }) {
   return (
-    <main className="launch-page">
+    <main className="mod-page launch-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>Launch</span>
@@ -97,10 +97,12 @@ function Launch({ canAct }: { canAct: boolean }) {
       <p className="section-hint">
         Spec §7: run the four seed stages in order under Bootstrap Mode, pass
         the quality gates, switch Bootstrap Mode off permanently, and verify
-        the checklist before opening mangadb.org.{" "}
-        <Link to="/mod/imports">Imports</Link> ·{" "}
-        <Link to="/mod/queue">Review queue</Link>
+        the checklist before opening mangadb.org.
       </p>
+      <nav className="mod-tools" aria-label="Data team tools">
+        <Link to="/mod/imports">Imports</Link>
+        <Link to="/mod/queue">Review queue</Link>
+      </nav>
 
       <Checklist />
       <SeedStages canAct={canAct} />
@@ -168,6 +170,7 @@ function SeedStages({ canAct }: { canAct: boolean }) {
             {" "}
             <button
               type="button"
+              className="btn btn-sm"
               onClick={() => {
                 setError(null);
                 setBootstrap({ on: !status.bootstrapMode }).catch(
@@ -186,14 +189,16 @@ function SeedStages({ canAct }: { canAct: boolean }) {
       <ol className="seed-stages">
         {status.stages.map((stage) => (
           <li key={stage.stage}>
-            <strong>{stage.name}</strong>{" "}
-            {stage.complete ? (
-              <span className="gate-pass">
-                complete {stage.completedAt ? timestamp(stage.completedAt) : ""}
-              </span>
-            ) : (
-              <span className="gate-open">not complete</span>
-            )}
+            <div className="mod-row-head">
+              <strong>{stage.name}</strong>
+              {stage.complete ? (
+                <span className="chip mod-chip mod-chip--ok">
+                  Complete{stage.completedAt ? ` ${timestamp(stage.completedAt)}` : ""}
+                </span>
+              ) : (
+                <span className="chip mod-chip mod-chip--mute">Not complete</span>
+              )}
+            </div>
             <ul>
               {stage.sources.map((source) => (
                 <li key={source.key}>
@@ -209,6 +214,7 @@ function SeedStages({ canAct }: { canAct: boolean }) {
             {canAct && !stage.complete ? (
               <button
                 type="button"
+                className="btn btn-sm"
                 onClick={() => {
                   setError(null);
                   start({ stage: stage.stage }).catch((err: unknown) =>
@@ -283,6 +289,7 @@ function SampleTable({
             {" "}
             <button
               type="button"
+              className="btn btn-sm"
               disabled={drawing}
               onClick={() => {
                 setError(null);
@@ -311,8 +318,18 @@ function SampleTable({
               >
                 {row.title}
               </Link>{" "}
-              — {row.status}
-              {row.note ? <em> ({row.note})</em> : null}
+              <span
+                className={`chip mod-chip mod-chip--${
+                  row.status === "verified"
+                    ? "ok"
+                    : row.status === "failed"
+                      ? "bad"
+                      : "mute"
+                }`}
+              >
+                {row.status}
+              </span>
+              {row.note ? <em>{row.note}</em> : null}
               {canAct && row.status === "pending" ? (
                 failing === row._id ? (
                   <span className="qa-fail-form">
@@ -323,6 +340,7 @@ function SampleTable({
                     />
                     <button
                       type="button"
+                      className="btn btn-sm btn-primary"
                       onClick={() => {
                         setError(null);
                         record({
@@ -339,7 +357,11 @@ function SampleTable({
                     >
                       Record failure
                     </button>
-                    <button type="button" onClick={() => setFailing(null)}>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => setFailing(null)}
+                    >
                       Cancel
                     </button>
                   </span>
@@ -347,6 +369,7 @@ function SampleTable({
                   <span className="qa-actions">
                     <button
                       type="button"
+                      className="btn btn-sm"
                       onClick={() => {
                         setError(null);
                         record({
@@ -359,6 +382,7 @@ function SampleTable({
                     </button>
                     <button
                       type="button"
+                      className="btn btn-sm"
                       onClick={() => {
                         setFailing(row._id);
                         setNote("");
@@ -404,6 +428,7 @@ function DuplicateSweep({ canAct }: { canAct: boolean }) {
             {" "}
             <button
               type="button"
+              className="btn btn-sm"
               disabled={running}
               onClick={() => {
                 setError(null);
@@ -429,6 +454,7 @@ function DuplicateSweep({ canAct }: { canAct: boolean }) {
                 <span className="qa-actions">
                   <button
                     type="button"
+                    className="btn btn-sm"
                     onClick={() => {
                       setError(null);
                       resolve({
@@ -513,7 +539,9 @@ function CorrectionLoop({ canAct }: { canAct: boolean }) {
             placeholder="Approved proposal ID"
             required
           />
-          <button type="submit">Attest</button>
+          <button type="submit" className="btn btn-sm btn-primary">
+            Attest
+          </button>
           {error ? <p className="form-error">{error}</p> : null}
         </form>
       ) : (

@@ -11,6 +11,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
+import { coverIsbnForRelease, coverUrl } from "./lib/covers";
 
 // ---------- shared resolution & joins ----------
 
@@ -126,9 +127,8 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     pubDate: release.pubDate ?? null,
     price: release.price ?? null,
     description: release.description ?? null,
-    coverUrl: release.coverImage
-      ? await ctx.storage.getUrl(release.coverImage.storageId)
-      : null,
+    coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
+    coverIsbn: await coverIsbnForRelease(ctx, release),
     variants,
     bundles,
   };
@@ -359,9 +359,7 @@ export const bundlePage = query({
           publisher && publisher.status === "active"
             ? { name: publisher.name, slug: publisher.slug }
             : null,
-        coverUrl: bundle.coverImage
-          ? await ctx.storage.getUrl(bundle.coverImage.storageId)
-          : null,
+        coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
       },
       members,
     };

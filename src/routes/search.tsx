@@ -1,5 +1,7 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import type { CSSProperties } from "react";
 
+import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
 import { seriesPath } from "~/lib/slug";
 import { fetchSearchResults, type SearchResults } from "~/server/search";
@@ -54,35 +56,42 @@ function SearchPage() {
 
   return (
     <main className="search-page">
-      <h1>Search</h1>
-      <form
-        className="search-form"
-        role="search"
-        action="/search"
-        method="get"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const value = new FormData(event.currentTarget).get("q");
-          void navigate({
-            to: "/search",
-            search: { q: typeof value === "string" ? value : "" },
-          });
-        }}
-      >
-        <input
-          type="search"
-          name="q"
-          defaultValue={q}
-          placeholder="Series title or ISBN…"
-          aria-label="Search series, publishers, or an ISBN"
-          autoFocus
-        />
-        <button type="submit">Search</button>
-      </form>
-      <p className="section-hint">
-        Searches series titles (including alternate titles) and publishers.
-        Paste an ISBN to jump straight to that book.
-      </p>
+      <div className="acct-head">
+        <h1 className="acct-title">Search the shelves</h1>
+        {/* A real GET form: the page works before hydration, and with JS the
+            submit becomes a client-side navigation. */}
+        <form
+          className="search-form"
+          role="search"
+          action="/search"
+          method="get"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const value = new FormData(event.currentTarget).get("q");
+            void navigate({
+              to: "/search",
+              search: { q: typeof value === "string" ? value : "" },
+            });
+          }}
+        >
+          <input
+            className="search-field"
+            type="search"
+            name="q"
+            defaultValue={q}
+            placeholder="Series title, publisher, or ISBN"
+            aria-label="Search series, publishers, or an ISBN"
+            autoFocus
+          />
+          <button className="btn btn-primary" type="submit">
+            Search
+          </button>
+        </form>
+        <p className="search-note">
+          Series titles — including alternate titles — and publishers. Paste an
+          ISBN to jump straight to that book.
+        </p>
+      </div>
 
       {results === null ? (
         <p className="notice">
@@ -105,50 +114,105 @@ function SearchResultsView({
 }) {
   if (results.series.length === 0 && results.publishers.length === 0) {
     return (
-      <p className="notice">
-        No series or publishers match “{q}”.
-      </p>
+      <div className="empty-shelf">
+        <div className="ghost-shelf" aria-hidden="true">
+          <div className="ghost-spine">
+            <span className="cover">
+              <span className="cover-ph" style={{ "--cloth": "#455060" } as CSSProperties} />
+            </span>
+          </div>
+          <div className="ghost-spine">
+            <span className="cover">
+              <span className="cover-ph" style={{ "--cloth": "#7a2e2a" } as CSSProperties} />
+            </span>
+          </div>
+          <div className="ghost-spine">
+            <span className="cover">
+              <span className="cover-ph" style={{ "--cloth": "#2b5d5b" } as CSSProperties} />
+            </span>
+          </div>
+        </div>
+        <div className="empty-note">
+          <p>
+            Nothing on the shelf matches “{q}”. Try fewer words, the Japanese
+            title, or browse what is coming out this month.
+          </p>
+          <Link className="btn" to="/releases">
+            Open the release agenda
+          </Link>
+        </div>
+      </div>
     );
   }
   return (
     <>
       {results.series.length > 0 ? (
         <section className="search-results">
-          <h2>Series</h2>
-          <ul className="result-list">
+          <div className="section-head">
+            <h2 className="section-title">Series</h2>
+            <p className="section-note">
+              {results.series.length}{" "}
+              {results.series.length === 1 ? "match" : "matches"} for “{q}”
+            </p>
+          </div>
+          <div className="shelf">
             {results.series.map((s) => (
-              <li key={s.publicId}>
-                <Link
-                  to="/series/$publicId/$slug"
-                  params={seriesLinkParams(s.publicId, s.title)}
-                >
-                  {s.title}
-                </Link>
-                {s.altTitles.length > 0 ? (
-                  <span className="result-alt">
-                    {" "}
-                    also known as {s.altTitles.join(", ")}
-                  </span>
-                ) : null}
-              </li>
+              <div className="shelf-item" key={s.publicId}>
+                <div className="cover-wrap">
+                  <Link
+                    className="cover-link"
+                    to="/series/$publicId/$slug"
+                    params={seriesLinkParams(s.publicId, s.title)}
+                  >
+                    {/* A Series has no volume or publisher of its own, so
+                        the coverless book is plain cloth with the title. */}
+                    <Cover title={s.title} lazy={false} />
+                  </Link>
+                </div>
+                <div className="caption">
+                  <Link
+                    className="caption-title"
+                    to="/series/$publicId/$slug"
+                    params={seriesLinkParams(s.publicId, s.title)}
+                  >
+                    {s.title}
+                  </Link>
+                  {s.altTitles.length > 0 ? (
+                    <p className="result-alt">
+                      also known as {s.altTitles.join(", ")}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
             ))}
-          </ul>
+          </div>
         </section>
       ) : null}
 
       {results.publishers.length > 0 ? (
         <section className="search-results">
-          <h2>Publishers</h2>
-          <ul className="result-list">
+          <div className="section-head">
+            <h2 className="section-title">Publishers</h2>
+          </div>
+          <div className="pub-hits">
             {results.publishers.map((p) => (
               // The Publisher Spotlight page (ticket #25, spec §11).
-              <li key={p.slug}>
-                <Link to="/publisher/$slug" params={{ slug: p.slug }}>
-                  {p.name}
-                </Link>
-              </li>
+              <Link
+                className="pub-hit"
+                key={p.slug}
+                to="/publisher/$slug"
+                params={{ slug: p.slug }}
+              >
+                <span className="pub-mark" aria-hidden="true">
+                  {p.name.slice(0, 1)}
+                </span>
+                <span>
+                  <span className="pub-hit-name">{p.name}</span>
+                  <span className="pub-hit-meta">Publisher spotlight</span>
+                </span>
+              </Link>
             ))}
-          </ul>
+          </div>
         </section>
       ) : null}
     </>

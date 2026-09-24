@@ -1,0 +1,694 @@
+/* Edition, Bundle, Publisher Spotlight pages (#23/#25), the shared catalog
+   Release row + coverage chips (lib/catalogRows.tsx), and the personal
+   collection controls (#27). Owner: catalog-edition port.
+
+   The Release row and the collection controls also render on the Volume page,
+   which another page file owns: everything here is therefore scoped under
+   .release-row / .coverage-chips / .collection-controls so neither file has to
+   know about the other. */
+
+/* --- Detail hero: Edition and Bundle share one shape ---------------------
+   A jacketed book on the left standing on its own ledge, its facts on the
+   right. The cover is the page's subject, so it is the only thing here that
+   carries weight; everything beside it stays quiet. */
+
+.detail-hero {
+  display: grid;
+  grid-template-columns: 296px minmax(0, 1fr);
+  gap: 52px;
+  align-items: start;
+  padding-block: 12px 44px;
+}
+
+.detail-cover-plate {
+  position: relative;
+}
+
+/* the shelf plank the hero book stands on */
+.detail-cover-plate::after {
+  content: "";
+  position: absolute;
+  left: -18px;
+  right: -18px;
+  top: calc(296px * 1.5 + 14px);
+  height: 13px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  box-shadow: var(--ledge-shadow);
+  border-radius: 1px;
+}
+
+.detail-cover .cover {
+  border-radius: 4px 9px 9px 4px;
+}
+
+/* the cloth placeholder scales with the hero, not with a shelf thumbnail */
+.detail-cover .cover-ph {
+  padding: 30px 24px 22px 36px;
+}
+.detail-cover .cover-ph::before {
+  width: 19px;
+}
+.detail-cover .cover-ph-title {
+  font-size: 1.62rem;
+  -webkit-line-clamp: 7;
+}
+.detail-cover .cover-ph-series {
+  font-size: 1rem;
+}
+.detail-cover .cover-ph-num {
+  font-size: 4.6rem;
+}
+.detail-cover .cover-ph-foot {
+  font-size: 0.86rem;
+  padding-top: 11px;
+}
+
+.detail-title {
+  font-size: clamp(1.9rem, 1.35rem + 2.1vw, 2.9rem);
+  letter-spacing: -0.026em;
+  max-width: 20ch;
+}
+
+.fact-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.fact-chips a.chip {
+  transition:
+    border-color 140ms ease,
+    color 140ms ease;
+}
+.fact-chips a.chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* Edition Line Position rides inside its Edition Line chip, never beside the
+   canonical Volume numbering. */
+.fact-chips .line-position {
+  padding-left: 7px;
+  margin-left: 1px;
+  border-left: 1px solid color-mix(in srgb, var(--gold) 40%, transparent);
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.detail-line {
+  margin-top: 18px;
+}
+.detail-blurb {
+  margin-top: 16px;
+  max-width: 62ch;
+  color: var(--text-dim);
+  line-height: 1.68;
+}
+.detail-note {
+  margin-top: 18px;
+  max-width: 58ch;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  color: var(--text-mute);
+}
+
+/* The release list lives beside the cover, so its heading is a rung inside
+   the hero rather than a new page section. */
+.detail-section-head {
+  margin-top: 34px;
+  margin-bottom: 15px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.detail-section-head .section-title {
+  font-size: 1.3rem;
+}
+
+/* the bundle's collection control sits under its cover, on the ledge */
+.detail-cover .collection-controls {
+  margin-top: 40px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+.detail-cover .collection-states {
+  justify-content: space-between;
+}
+.detail-cover .collection-states button {
+  flex: 1;
+}
+.detail-cover .derived-ownership {
+  text-align: left;
+}
+
+/* --- Volume Coverage chips ----------------------------------------------
+   Canonical Volume numbering. Partial coverage is drawn as an unfinished
+   chip — dashed edge, the extent spelled out — so it can never be read as
+   another complete volume. */
+
+.coverage-chips {
+  margin-top: 14px;
+}
+
+.coverage-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.coverage-lede {
+  font-size: 0.86rem;
+  color: var(--text-mute);
+  margin-right: 2px;
+}
+.coverage-list a.chip {
+  transition:
+    border-color 140ms ease,
+    color 140ms ease;
+}
+.coverage-list a.chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip--partial {
+  border-style: dashed;
+  background: transparent;
+}
+.chip-extent {
+  font-weight: 600;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--text-mute);
+}
+
+.coverage-notes {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0 0 0 13px;
+  border-left: 2px solid var(--line-strong);
+  display: grid;
+  gap: 3px;
+  font-size: 0.82rem;
+  color: var(--text-mute);
+}
+
+/* --- Release rows -------------------------------------------------------
+   One row per purchasable form. Rows of the same Edition differ only in
+   Format and Binding, so the Format chip leads and the identifiers line up
+   in a tabular column beneath it. Shared with the Volume page. */
+
+.release-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.release-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 22px;
+  align-items: start;
+  padding: 16px 20px;
+  /* /isbn/{isbn} scrolls straight to a row: clear the sticky header. */
+  scroll-margin-top: calc(var(--header-h) + 18px);
+  transition: background 160ms ease;
+}
+.release-row + .release-row {
+  border-top: 1px solid var(--line);
+}
+/* /isbn/{isbn} 301s to this row's fragment: say so when it lands. */
+.release-row:target {
+  background: var(--accent-tint);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.release-row .release-main {
+  min-width: 0;
+}
+
+.release-row .release-title {
+  font-family: var(--display);
+  font-variation-settings:
+    "SOFT" 40,
+    "WONK" 1,
+    "opsz" 30;
+  font-weight: 700;
+  font-size: 1.06rem;
+  margin-bottom: 8px;
+}
+.release-row .release-title a:hover {
+  color: var(--accent);
+}
+
+.release-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.88rem;
+  color: var(--text-dim);
+}
+.release-binding {
+  text-transform: capitalize;
+}
+.release-date {
+  font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.release-price {
+  font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.release-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: 7px;
+}
+.release-isbn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--display);
+  font-variation-settings: "opsz" 14;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.release-isbn-kind {
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: var(--text-mute);
+}
+
+.release-row .release-description {
+  margin-top: 10px;
+  max-width: 64ch;
+  font-size: 0.87rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+/* Variants and bundles belong to the Release above them, so they hang off it
+   rather than starting a row of their own. */
+.release-row .release-variants,
+.release-row .release-bundles {
+  margin-top: 9px;
+  padding-left: 13px;
+  border-left: 2px solid var(--line-strong);
+  font-size: 0.82rem;
+  color: var(--text-mute);
+}
+.release-row .release-bundles a {
+  color: var(--accent);
+  border-bottom: 1px solid transparent;
+}
+.release-row .release-bundles a:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* The controls column is bounded so a row with a variant picker and a derived
+   ownership note cannot starve the facts beside it. Signed out it has no
+   children at all, and the `auto` track collapses to nothing. */
+.release-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 9px;
+  max-width: 290px;
+}
+.release-side:empty {
+  display: none;
+}
+.release-side .collection-controls {
+  flex-direction: column;
+  align-items: flex-end;
+}
+.release-side .pass-controls {
+  justify-content: flex-end;
+}
+
+/* --- Publisher Spotlight (#25) ------------------------------------------ */
+
+.pub-hero {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 36px;
+  align-items: start;
+  padding-block: 18px 30px;
+}
+
+/* No publisher logos are on file, so the imprint's own name is set as the
+   plaque — a spine label rather than a fabricated mark. */
+.pub-logo {
+  height: 128px;
+  display: grid;
+  place-items: center;
+  padding: 0 16px;
+  text-align: center;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface-3);
+  color: var(--text);
+  font-family: var(--display);
+  font-variation-settings:
+    "SOFT" 30,
+    "WONK" 0,
+    "opsz" 40;
+  font-weight: 700;
+  font-size: 1.62rem;
+  line-height: 1.04;
+  letter-spacing: -0.02em;
+  box-shadow: var(--ledge-shadow);
+}
+
+.pub-title {
+  font-size: clamp(2rem, 1.5rem + 2vw, 3rem);
+  letter-spacing: -0.026em;
+}
+.pub-blurb {
+  margin-top: 12px;
+  max-width: 62ch;
+  color: var(--text-dim);
+  line-height: 1.66;
+}
+.pub-cta {
+  margin-top: 20px;
+}
+
+.publisher-lane-month + .publisher-lane-month {
+  margin-top: 44px;
+}
+.publisher-lane-month h3 {
+  font-size: 1.02rem;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-dim);
+}
+/* The agenda sets its own rhythm for a full month page; inside a bounded lane
+   it sits closer to the month it belongs to. */
+.publisher-lane-month .agenda {
+  margin: 8px 0 0;
+}
+.publisher-lane-month h3 a {
+  transition: color 140ms ease;
+}
+.publisher-lane-month h3 a:hover {
+  color: var(--accent);
+}
+
+.lane-more {
+  margin-top: 20px;
+}
+
+/* --- Directory rows ------------------------------------------------------
+   Where to go next from a book: its series, its publisher. A list of doors,
+   not a third shelf of covers. */
+
+.directory {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: 12px;
+}
+.directory-row {
+  display: grid;
+  gap: 2px;
+  padding: 15px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+}
+.directory-row:hover {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.directory-name {
+  font-family: var(--display);
+  font-variation-settings:
+    "SOFT" 40,
+    "WONK" 1,
+    "opsz" 30;
+  font-weight: 700;
+  font-size: 1.06rem;
+}
+.directory-meta {
+  font-size: 0.84rem;
+  color: var(--text-mute);
+}
+
+/* --- Personal collection (#27) ------------------------------------------
+   Exactly one state per entry, so the control is one segmented switch rather
+   than three independent toggles. The pressed look keys off aria-pressed, so
+   what is announced and what is drawn cannot drift apart. */
+
+.collection-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.collection-states {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+}
+.collection-states button {
+  padding: 5px 13px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-mute);
+  font-size: 0.77rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    background 130ms ease,
+    color 130ms ease;
+}
+.collection-states button:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.collection-states button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.collection-states button[aria-pressed="true"]:hover {
+  background: var(--gold);
+}
+
+.variant-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.8rem;
+  color: var(--text-mute);
+}
+.variant-pick .select {
+  padding: 5px 30px 5px 12px;
+  font-size: 0.8rem;
+}
+.variant-pick-label {
+  font-weight: 700;
+}
+
+.derived-ownership {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: right;
+}
+.derived-ownership a {
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.derived-ownership a:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* Ownership of a Volume is never stored: it is read off the owned Releases
+   that cover it, so the panel names each one. */
+.volume-ownership {
+  margin: 12px 0 18px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+.volume-ownership-lede {
+  font-weight: 800;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+.volume-ownership ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+.volume-ownership a {
+  color: var(--text);
+  font-weight: 700;
+}
+.volume-ownership a:hover {
+  color: var(--accent);
+}
+.volume-ownership .pass-facts {
+  color: var(--text-mute);
+  font-size: 0.84rem;
+}
+
+.my-collection {
+  display: grid;
+  gap: 22px;
+}
+.my-collection-group h3 {
+  font-size: 1rem;
+  margin-bottom: 9px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+.my-collection ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+  font-size: 0.9rem;
+}
+.my-collection a {
+  font-weight: 700;
+}
+.my-collection a:hover {
+  color: var(--accent);
+}
+.my-collection .pass-facts {
+  color: var(--text-mute);
+  font-size: 0.84rem;
+}
+.my-collection .bundle-derived {
+  margin: 5px 0 0 16px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-strong);
+  gap: 3px;
+  font-size: 0.85rem;
+}
+
+/* --- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 1080px) {
+  .detail-hero {
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 40px;
+  }
+  .detail-cover-plate::after {
+    top: calc(240px * 1.5 + 14px);
+  }
+  .detail-cover .cover-ph-title {
+    font-size: 1.36rem;
+  }
+  .detail-cover .cover-ph-num {
+    font-size: 3.8rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .detail-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 30px;
+    padding-block: 6px 26px;
+  }
+  /* the plank belongs under the book; the card below it may run wider */
+  .detail-cover-plate {
+    max-width: 208px;
+  }
+  .detail-cover-plate::after {
+    top: calc(208px * 1.5 + 12px);
+    left: -12px;
+    right: -12px;
+  }
+  .detail-cover .cover-ph {
+    padding: 20px 16px 15px 26px;
+  }
+  .detail-cover .cover-ph-title {
+    font-size: 1.16rem;
+  }
+  .detail-cover .cover-ph-num {
+    font-size: 3.2rem;
+  }
+  .detail-cover .cover-ph-foot {
+    font-size: 0.74rem;
+  }
+  .detail-cover .collection-controls {
+    margin-top: 30px;
+  }
+  .detail-title {
+    max-width: none;
+  }
+
+  .release-row {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 15px 16px;
+  }
+  .release-side {
+    align-items: flex-start;
+    max-width: none;
+  }
+  .release-side .collection-controls {
+    align-items: flex-start;
+  }
+  .release-side .pass-controls {
+    justify-content: flex-start;
+  }
+  .release-side .derived-ownership {
+    text-align: left;
+  }
+  .collection-controls {
+    justify-content: flex-start;
+  }
+  .derived-ownership {
+    text-align: left;
+  }
+
+  .pub-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+    padding-block: 6px 24px;
+  }
+  /* The plaque is the publisher's name set as a spine label; stacked above
+     the same name as an h1 it only repeats itself, so it steps aside. */
+  .pub-logo {
+    display: none;
+  }
+  .pub-cta .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}

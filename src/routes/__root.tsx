@@ -9,7 +9,7 @@ import {
 import { createServerFn } from "@tanstack/react-start";
 import type { ReactNode } from "react";
 
-import { AppProviders, SiteHeader } from "~/providers";
+import { AppProviders, BrandMark, SiteHeader } from "~/providers";
 import { ssrAuth } from "~/server/auth";
 import stylesUrl from "../styles.css?url";
 
@@ -19,6 +19,14 @@ const fetchSsrAuth = createServerFn({ method: "GET" }).handler(async () => {
   return await ssrAuth();
 });
 
+// Dark is the default shelf: <html> ships with data-theme="dark" and the OS
+// preference is deliberately ignored. A saved choice wins, applied before
+// first paint so there is no flash; ?theme= is an escape hatch for previews.
+const THEME_BOOT = `(function(){var p=null;try{p=localStorage.getItem("mangadb-theme")}catch(e){}var q=/[?&]theme=(light|dark)/.exec(location.search);if(q){p=q[1]}if(p==="light"||p==="dark"){document.documentElement.dataset.theme=p}})();`;
+
+const FONTS_URL =
+  "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..800,0..100,0..1&family=Nunito+Sans:opsz,wght@6..12,300..900&display=swap";
+
 export const Route = createRootRoute({
   // Merged into router context: `userId` (Clerk subject, null signed out) and
   // `convexToken` for authed SSR reads via convexServerClient(token).
@@ -27,6 +35,8 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "color-scheme", content: "dark light" },
+      { name: "theme-color", content: "#15110c" },
       { title: "MangaDB" },
       {
         name: "description",
@@ -34,7 +44,12 @@ export const Route = createRootRoute({
           "Track English manga volume releases: what volumes exist, when each edition comes out, and which ones you own, want, or have read.",
       },
     ],
-    links: [{ rel: "stylesheet", href: stylesUrl }],
+    links: [
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      { rel: "stylesheet", href: FONTS_URL },
+      { rel: "stylesheet", href: stylesUrl },
+    ],
   }),
   shellComponent: RootDocument,
   component: RootComponent,
@@ -55,17 +70,41 @@ function RootComponent() {
 function SiteFooter() {
   return (
     <footer className="site-footer">
-      <Link to="/about-the-data">About the data</Link>
-      <span aria-hidden="true">·</span>
-      <Link to="/releases">Release calendar</Link>
+      <div className="container footer-inner">
+        <div>
+          <Link to="/" className="brand">
+            <BrandMark />
+            MangaDB
+          </Link>
+          <p className="footer-blurb">
+            An open database of English manga volume releases. Every edition,
+            every release date, and the shelf you keep at home.
+          </p>
+        </div>
+        <div className="footer-cols">
+          <div className="footer-col">
+            <h4>Browse</h4>
+            <Link to="/releases">Release calendar</Link>
+            <Link to="/series">Series</Link>
+            <Link to="/search" search={{ q: "" }}>Search</Link>
+          </div>
+          <div className="footer-col">
+            <h4>The data</h4>
+            <Link to="/about-the-data">About the data</Link>
+          </div>
+        </div>
+      </div>
     </footer>
   );
 }
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: the boot script may flip data-theme to
+    // "light" before React hydrates, which is intended.
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
         <HeadContent />
       </head>
       <body>

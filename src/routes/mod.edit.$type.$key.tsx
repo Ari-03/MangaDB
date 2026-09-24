@@ -50,7 +50,7 @@ function ModEditPage() {
 
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           Moderation needs a configured Convex deployment (see the README).
         </p>
@@ -59,7 +59,7 @@ function ModEditPage() {
   }
   if (!isRecordType(type)) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Unknown record type</h1>
         <p className="notice">
           Nothing editable lives at this address. <Link to="/">Go home</Link>.
@@ -75,14 +75,14 @@ function ModEditGate({ type, editKey }: { type: RecordType; editKey: string }) {
   const viewer = useQuery(api.users.viewer, {});
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
   }
   if (!isModerator) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Moderators only</h1>
         <p className="notice">
           Direct edits are for Moderators and Administrators.{" "}
@@ -107,14 +107,14 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
 
   if (form === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Loading…</p>
       </main>
     );
   }
   if (form === null) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Record not found</h1>
         <p className="notice">
           No {type} matches this address. <Link to="/">Go home</Link>.
@@ -178,7 +178,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
   };
 
   return (
-    <main className="mod-edit-page">
+    <main className="mod-page mod-edit-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>Edit</span>
@@ -225,8 +225,12 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
               required
             />
           </label>
-          <div>
-            <button type="submit" disabled={busy || dirty.size === 0 || comment.trim() === ""}>
+          <div className="mod-actions">
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={busy || dirty.size === 0 || comment.trim() === ""}
+            >
               {busy ? "Saving…" : "Save as approved change"}
             </button>
           </div>

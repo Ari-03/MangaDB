@@ -7,7 +7,11 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { PROPOSAL_WARNINGS } from "../../convex/proposals";
 import { mutationErrorMessage } from "~/lib/editForm";
-import { renderFieldValue, useIsDataTeam } from "~/lib/moderation";
+import {
+  ProposalStateChip,
+  renderFieldValue,
+  useIsDataTeam,
+} from "~/lib/moderation";
 import { convexClient } from "~/providers";
 
 /**
@@ -32,7 +36,7 @@ function ProposalPage() {
   const { id } = Route.useParams();
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           Proposals need a configured Convex deployment (see the README).
         </p>
@@ -47,14 +51,14 @@ function ProposalGate({ id }: { id: string }) {
   const viewer = useQuery(api.users.viewer, {});
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
   }
   if (!isDataTeam) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Data team only</h1>
         <p className="notice">
           Pending proposals are Data-Team-only in v1.{" "}
@@ -65,14 +69,6 @@ function ProposalGate({ id }: { id: string }) {
   }
   return <ProposalDetail id={id} />;
 }
-
-const STATE_LABELS: Record<string, string> = {
-  draft: "Draft",
-  inReview: "In Review",
-  approved: "Approved",
-  rejected: "Rejected",
-  withdrawn: "Withdrawn",
-};
 
 function warningLabel(warning: string): string {
   return (
@@ -117,7 +113,9 @@ function OpsList({ ops }: { ops: RenderedOps }) {
                   (base: revision #{op.base.seq}
                   {op.base.comment ? ` — ${op.base.comment}` : ""})
                 </span>{" "}
-                {op.stale ? <strong className="queue-stale">stale</strong> : null}
+                {op.stale ? (
+                  <span className="chip mod-chip mod-chip--bad">stale</span>
+                ) : null}
               </p>
               <ul className="revision-changes">
                 {op.changes.map((change) => (
@@ -204,14 +202,14 @@ function ProposalDetail({ id }: { id: string }) {
 
   if (detail === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Loading…</p>
       </main>
     );
   }
   if (detail === null) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Proposal not found</h1>
         <p className="notice">
           No proposal lives at this address. <Link to="/mod/queue">Back to the queue</Link>.
@@ -270,16 +268,19 @@ function ProposalDetail({ id }: { id: string }) {
   const currentVersion = detail.versions.find((version) => version.current);
 
   return (
-    <main className="mod-proposal-page">
+    <main className="mod-page mod-proposal-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <Link to="/mod/queue">Review queue</Link> <span aria-hidden="true">/</span>{" "}
         <span>Proposal</span>
       </nav>
-      <h1>
-        Proposal: {STATE_LABELS[detail.state] ?? detail.state}
-        {detail.stale ? <span className="queue-stale"> · stale</span> : null}
-      </h1>
+      <div className="mod-title-row">
+        <h1>Proposal</h1>
+        <ProposalStateChip state={detail.state} />
+        {detail.stale ? (
+          <span className="chip mod-chip mod-chip--bad">stale</span>
+        ) : null}
+      </div>
       <p className="section-hint">
         By{" "}
         {detail.author.kind === "user"
@@ -304,12 +305,18 @@ function ProposalDetail({ id }: { id: string }) {
       (detail.state === "draft" || detail.state === "inReview") ? (
         <section className="proposal-actions">
           <h2>Your proposal</h2>
+          <div className="mod-actions">
           {detail.state === "draft" ? (
-            <button disabled={busy} onClick={() => void onSubmitDraft()}>
+            <button
+              className="btn btn-sm btn-primary"
+              disabled={busy}
+              onClick={() => void onSubmitDraft()}
+            >
               Submit for review
             </button>
-          ) : null}{" "}
+          ) : null}
           <button
+            className="btn btn-sm"
             disabled={busy}
             onClick={() =>
               void run(async () => {
@@ -323,8 +330,9 @@ function ProposalDetail({ id }: { id: string }) {
             }
           >
             Rebase onto current records
-          </button>{" "}
+          </button>
           <button
+            className="btn btn-sm"
             disabled={busy}
             onClick={() =>
               void run(() => withdrawProposal({ proposalId }), "Withdrawn.")
@@ -332,6 +340,7 @@ function ProposalDetail({ id }: { id: string }) {
           >
             Withdraw
           </button>
+          </div>
           {pendingWarnings ? (
             <div className="notice">
               <p>This submission carries warnings:</p>
@@ -341,6 +350,7 @@ function ProposalDetail({ id }: { id: string }) {
                 ))}
               </ul>
               <button
+                className="btn btn-sm btn-primary"
                 disabled={busy}
                 onClick={() => void onSubmitDraft(pendingWarnings)}
               >
@@ -355,25 +365,33 @@ function ProposalDetail({ id }: { id: string }) {
       {detail.viewer.canReview && detail.state === "inReview" ? (
         <section className="proposal-actions">
           <h2>Review</h2>
-          <button
-            disabled={busy}
-            onClick={() =>
-              void run(() => claimProposal({ proposalId }), "Claimed.")
-            }
-          >
-            Claim
-          </button>{" "}
-          <button
-            disabled={busy}
-            onClick={() =>
-              void run(() => unclaimProposal({ proposalId }), "Unclaimed.")
-            }
-          >
-            Unclaim
-          </button>{" "}
-          <button disabled={busy || detail.stale} onClick={() => void onApprove()}>
-            Approve this version
-          </button>
+          <div className="mod-actions">
+            <button
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={() =>
+                void run(() => claimProposal({ proposalId }), "Claimed.")
+              }
+            >
+              Claim
+            </button>
+            <button
+              className="btn btn-sm"
+              disabled={busy}
+              onClick={() =>
+                void run(() => unclaimProposal({ proposalId }), "Unclaimed.")
+              }
+            >
+              Unclaim
+            </button>
+            <button
+              className="btn btn-sm btn-primary"
+              disabled={busy || detail.stale}
+              onClick={() => void onApprove()}
+            >
+              Approve this version
+            </button>
+          </div>
           <label>
             Decision note (required to reject or request changes)
             <textarea
@@ -382,28 +400,32 @@ function ProposalDetail({ id }: { id: string }) {
               rows={2}
             />
           </label>
-          <button
-            disabled={busy || decisionNote.trim() === ""}
-            onClick={() =>
-              void run(
-                () => requestChanges({ proposalId, note: decisionNote }),
-                "Returned to Draft — the author can revise and resubmit.",
-              )
-            }
-          >
-            Request changes
-          </button>{" "}
-          <button
-            disabled={busy || decisionNote.trim() === ""}
-            onClick={() =>
-              void run(
-                () => rejectProposal({ proposalId, note: decisionNote }),
-                "Rejected.",
-              )
-            }
-          >
-            Reject
-          </button>
+          <div className="mod-actions">
+            <button
+              className="btn btn-sm"
+              disabled={busy || decisionNote.trim() === ""}
+              onClick={() =>
+                void run(
+                  () => requestChanges({ proposalId, note: decisionNote }),
+                  "Returned to Draft — the author can revise and resubmit.",
+                )
+              }
+            >
+              Request changes
+            </button>
+            <button
+              className="btn btn-sm"
+              disabled={busy || decisionNote.trim() === ""}
+              onClick={() =>
+                void run(
+                  () => rejectProposal({ proposalId, note: decisionNote }),
+                  "Rejected.",
+                )
+              }
+            >
+              Reject
+            </button>
+          </div>
         </section>
       ) : null}
 
@@ -482,6 +504,7 @@ function ProposalDetail({ id }: { id: string }) {
           />
         </label>
         <button
+          className="btn btn-sm btn-primary"
           disabled={busy || discussionNote.trim() === ""}
           onClick={() =>
             void run(async () => {

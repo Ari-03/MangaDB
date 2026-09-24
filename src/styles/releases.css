@@ -1,0 +1,490 @@
+/* Releases browser: Agenda + Month Grid (#24). Owner: releases port.
+   Composes the shared vocabulary in tokens/shell/covers: .chip, .select,
+   .notice, .cover + .cover-ph, .cover-link, .star. Prototype sections 9
+   (toolbar), 10 (agenda) and 11 (month grid) of 05-bookshelf. */
+
+.releases-page { padding-bottom: 8px; }
+/* Empty window, sign-in prompt, unconfigured Convex: the notice replaces the
+   agenda/grid, so it keeps their gap under the toolbar. */
+.releases-page > .notice { margin-top: 24px; }
+
+/* --- Masthead ------------------------------------------------------------ */
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.page-title { font-size: clamp(1.9rem, 1.3rem + 2vw, 2.9rem); }
+.page-kicker { color: var(--text-mute); font-size: 0.95rem; margin-bottom: 4px; }
+/* Pages that have not adopted .page-kicker yet still label their masthead. */
+.eyebrow { color: var(--text-mute); font-size: 0.95rem; margin: 0 0 4px; }
+
+.month-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+}
+.month-nav a,
+.month-nav span {
+  padding: 7px 13px;
+  border-radius: var(--r-pill);
+  font-weight: 700;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+}
+.month-nav a:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--surface);
+}
+.month-nav [aria-current="date"] {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+/* --- Toolbar ------------------------------------------------------------- */
+
+.toolbar {
+  margin-top: 22px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+}
+
+/* The filter GET form lays its controls straight onto the toolbar's line. */
+.filter-bar { display: contents; }
+
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.seg-btn {
+  padding: 6px 15px;
+  border-radius: var(--r-pill);
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn.is-on { background: var(--accent); color: var(--accent-ink); }
+
+.filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.85rem;
+  color: var(--text-mute);
+}
+
+/* The followed-Series filter: a real checkbox wearing a pill. */
+.toggle-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 130ms ease, color 130ms ease, background 130ms ease;
+}
+.toggle-pill input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+.toggle-pill:hover { border-color: var(--accent); }
+.toggle-pill:has(input:checked) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.toggle-pill:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.toggle-pill .star { font-size: 0.9rem; line-height: 1; }
+.toggle-pill:has(input:checked) .star { color: inherit; }
+
+.result-count {
+  margin-left: auto;
+  font-size: 0.86rem;
+  color: var(--text-mute);
+}
+
+.releases-page > .notice a {
+  color: var(--accent);
+  font-weight: 700;
+  border-bottom: 1px solid transparent;
+}
+.releases-page > .notice a:hover { border-bottom-color: var(--accent); }
+
+/* An action inside running text (clearing the filters from the empty state). */
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 700;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+.link-btn:hover { border-bottom-color: var(--accent); }
+
+/* --- Agenda -------------------------------------------------------------- */
+
+.agenda { margin: 30px 0 10px; }
+
+.day {
+  display: grid;
+  grid-template-columns: 124px minmax(0, 1fr);
+  gap: 26px;
+  padding: 26px 0 8px;
+  scroll-margin-top: calc(var(--header-h) + 18px);
+}
+.day + .day { border-top: 1px solid var(--line); }
+
+.day-marker {
+  position: sticky;
+  top: calc(var(--header-h) + 18px);
+  align-self: start;
+}
+/* The day is the agenda's heading; the rows under it are a list, not 200
+   more headings. */
+.day-date { font-family: var(--sans); font-weight: 700; letter-spacing: 0; }
+.day-num {
+  display: block;
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 50, "WONK" 1, "opsz" 90;
+  font-weight: 700;
+  font-size: 3.1rem;
+  line-height: 0.92;
+  color: var(--text);
+}
+.day-dow {
+  display: block;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+/* Releases whose day the publisher has not announced (spec §10). */
+.day-tba {
+  display: block;
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 45, "WONK" 1, "opsz" 40;
+  font-weight: 700;
+  font-size: 1.2rem;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  color: var(--text-dim);
+}
+.day-count { font-size: 0.8rem; color: var(--text-mute); margin-top: 8px; }
+
+.day-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(392px, 100%), 1fr));
+  gap: 9px;
+  align-content: start;
+}
+
+.rel {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px 10px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+.rel:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+  transform: translateX(2px);
+}
+.rel.is-followed { border-left: 3px solid var(--accent); padding-left: 9px; }
+
+/* A 64px cover is too small for the cloth placeholder's title, so it wears
+   the volume numeral instead (the full title is right next to it). */
+.rel-cover { display: block; width: 64px; }
+.rel-cover .cover { border-radius: 2px 4px 4px 2px; }
+.rel-cover .cover-ph {
+  justify-content: center;
+  padding: 7px 5px 7px 11px;
+}
+.rel-cover .cover-ph::before { width: 6px; }
+.rel-cover .cover-ph-title,
+.rel-cover .cover-ph-foot { display: none; }
+.rel-cover .cover-ph-mark {
+  display: block;
+  font-size: 0.8rem;
+  line-height: 1.15;
+  overflow: hidden;
+}
+.rel:hover .cover { transform: translateY(-3px); box-shadow: var(--cover-shadow-hi); }
+
+.rel-main { min-width: 0; }
+.rel-title {
+  font-family: var(--sans);
+  font-weight: 800;
+  letter-spacing: -0.005em;
+  font-size: 0.97rem;
+  line-height: 1.3;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rel-title a:hover { color: var(--accent); }
+.rel-vol {
+  color: var(--text-dim);
+  font-weight: 700;
+  border-bottom: 1px solid transparent;
+}
+.rel-vol:hover { border-bottom-color: currentColor; }
+
+.rel-meta {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.84rem;
+  color: var(--text-mute);
+}
+.rel-meta a { border-bottom: 1px solid transparent; }
+.rel-meta a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* --- Month grid (week rows) ----------------------------------------------
+   Nearly every release in a month lands on the same weekday, so a 7-column
+   calendar would be ~85% empty cells. One row per week instead: a dated
+   gutter, the week's publication day(s) with a cover strip on a ledge, and
+   the quiet days as ticks. */
+
+.month-weeks {
+  margin: 28px 0 12px;
+  display: grid;
+  gap: 14px;
+}
+.week-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  padding: 18px 20px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+/* A whole week with nothing published: a quiet tick line, not a panel. */
+.week-row.is-quiet {
+  align-items: center;
+  padding: 11px 20px;
+  border-style: dashed;
+  background: transparent;
+}
+.week-row.is-quiet .week-gutter {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.week-row.is-quiet .wk-kicker,
+.week-row.is-quiet .wk-range { display: none; }
+.week-row.is-quiet .wk-date {
+  font-size: 1.02rem;
+  margin-top: 0;
+  color: var(--text-dim);
+}
+
+.wk-kicker {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-mute);
+}
+.wk-date {
+  display: block;
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 45, "WONK" 1, "opsz" 60;
+  font-weight: 700;
+  font-size: 1.5rem;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin-top: 2px;
+}
+.week-row--tba .wk-date { font-size: 1.22rem; }
+.wk-range { display: block; font-size: 0.82rem; color: var(--text-mute); }
+.wk-total {
+  display: block;
+  margin-top: 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.week-body { display: grid; gap: 16px; min-width: 0; }
+.rel-day { display: grid; gap: 10px; min-width: 0; }
+.rd-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.rd-date {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 45, "WONK" 1, "opsz" 40;
+  font-weight: 700;
+  font-size: 1.18rem;
+  letter-spacing: -0.015em;
+}
+.rd-dow { color: var(--accent); }
+.rd-count { font-size: 0.82rem; font-weight: 700; color: var(--text-mute); }
+.rd-link {
+  margin-left: auto;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+  border-bottom: 1px solid transparent;
+}
+.rd-link:hover { border-bottom-color: var(--accent); }
+
+.wk-covers {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  padding-bottom: 14px;
+}
+.wk-covers::after {
+  content: "";
+  position: absolute;
+  left: -6px; right: -6px; bottom: 0;
+  height: 7px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  border-radius: 1px;
+}
+.wk-covers .cover { border-radius: 2px 4px 4px 2px; }
+.wk-covers .cover-ph { padding: 10px 8px 8px 14px; }
+.wk-covers .cover-ph::before { width: 7px; }
+.wk-covers .cover-ph-title { font-size: 0.74rem; -webkit-line-clamp: 4; }
+.wk-covers .cover-ph-foot { font-size: 0.6rem; padding-top: 5px; }
+.wk-more {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 2 / 3;
+  border-radius: 3px;
+  border: 1px dashed var(--line-strong);
+  text-align: center;
+  padding: 6px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.25;
+  color: var(--text-mute);
+  transition: color 130ms ease, border-color 130ms ease;
+}
+.wk-more:hover { color: var(--accent); border-color: var(--accent); }
+
+.wk-quiet {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  font-size: 0.78rem;
+  color: var(--text-mute);
+}
+/* A whole week without a release needs no divider above its ticks. */
+.week-body > .wk-quiet:first-child { padding-top: 0; border-top: 0; }
+.wk-quiet .qd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  opacity: 0.8;
+}
+.wk-quiet .qd::after {
+  content: "";
+  display: block;
+  width: 12px;
+  height: 2px;
+  margin-top: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.45;
+}
+
+/* --- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .wk-covers { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .wk-covers > *:nth-child(n + 6):not(:last-child) { display: none; }
+}
+
+@media (max-width: 960px) {
+  .week-row { grid-template-columns: 128px minmax(0, 1fr); gap: 18px; }
+  .wk-covers { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .wk-covers > *:nth-child(n + 5):not(:last-child) { display: none; }
+}
+
+@media (max-width: 720px) {
+  .month-nav { margin-left: -13px; margin-right: auto; }
+
+  .toolbar { border-radius: var(--r-lg); gap: 10px; }
+  .toolbar > *,
+  .filter-bar > * { width: 100%; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; text-align: center; }
+  .filter { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; }
+  .filter .select { width: 100%; }
+  .toggle-pill { justify-content: center; }
+  .result-count { margin-left: 0; }
+
+  .day { grid-template-columns: 1fr; gap: 12px; padding-block-start: 20px; }
+  .day-marker {
+    position: static;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding-bottom: 2px;
+  }
+  .day-date { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .day-num { font-size: 2rem; }
+  .day-count { margin-top: 0; margin-left: auto; }
+
+  .rel { grid-template-columns: 54px minmax(0, 1fr); gap: 12px; padding: 10px; }
+  .rel-cover { width: 54px; }
+
+  .week-row { grid-template-columns: 1fr; gap: 14px; padding: 16px 14px 14px; }
+  .week-row.is-quiet { grid-template-columns: 88px minmax(0, 1fr); gap: 12px; padding: 10px 14px; }
+  .wk-date { font-size: 1.3rem; display: inline; }
+  .wk-range { display: inline; margin-left: 8px; }
+  .wk-total { margin-top: 4px; }
+  .wk-covers { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .wk-covers > *:nth-child(n + 4):not(:last-child) { display: none; }
+  .wk-covers .cover-ph-title,
+  .wk-covers .cover-ph-foot { display: none; }
+  .wk-covers .cover-ph { justify-content: center; padding: 6px 4px 6px 9px; }
+  .wk-covers .cover-ph-mark { display: block; }
+  .wk-more { font-size: 0.74rem; }
+}

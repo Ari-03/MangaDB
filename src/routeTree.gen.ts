@@ -24,6 +24,7 @@ import { Route as ModRolesRouteImport } from './routes/mod.roles'
 import { Route as PublisherSlugRouteImport } from './routes/publisher.$slug'
 import { Route as ReleasesIndexRouteImport } from './routes/releases.index'
 import { Route as ReleasesMonthRouteImport } from './routes/releases.$month'
+import { Route as SeriesIndexRouteImport } from './routes/series.index'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as UUsernameRouteImport } from './routes/u.$username'
@@ -114,6 +115,11 @@ const ReleasesIndexRoute = ReleasesIndexRouteImport.update({
 const ReleasesMonthRoute = ReleasesMonthRouteImport.update({
   id: '/releases/$month',
   path: '/releases/$month',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SeriesIndexRoute = SeriesIndexRouteImport.update({
+  id: '/series/',
+  path: '/series/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInSplatRoute = SignInSplatRouteImport.update({
@@ -217,6 +223,7 @@ export interface FileRoutesByFullPath {
   '/u/$username': typeof UUsernameRoute
   '/me/': typeof MeIndexRoute
   '/releases/': typeof ReleasesIndexRoute
+  '/series/': typeof SeriesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
@@ -249,6 +256,7 @@ export interface FileRoutesByTo {
   '/u/$username': typeof UUsernameRoute
   '/me': typeof MeIndexRoute
   '/releases': typeof ReleasesIndexRoute
+  '/series': typeof SeriesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
@@ -283,6 +291,7 @@ export interface FileRoutesById {
   '/u/$username': typeof UUsernameRoute
   '/me/': typeof MeIndexRoute
   '/releases/': typeof ReleasesIndexRoute
+  '/series/': typeof SeriesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
@@ -318,6 +327,7 @@ export interface FileRouteTypes {
     | '/u/$username'
     | '/me/'
     | '/releases/'
+    | '/series/'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
     | '/mod/proposal/$id'
@@ -350,6 +360,7 @@ export interface FileRouteTypes {
     | '/u/$username'
     | '/me'
     | '/releases'
+    | '/series'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
     | '/mod/proposal/$id'
@@ -383,6 +394,7 @@ export interface FileRouteTypes {
     | '/u/$username'
     | '/me/'
     | '/releases/'
+    | '/series/'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
     | '/mod/proposal/$id'
@@ -416,6 +428,7 @@ export interface RootRouteChildren {
   SignUpSplatRoute: typeof SignUpSplatRoute
   UUsernameRoute: typeof UUsernameRoute
   ReleasesIndexRoute: typeof ReleasesIndexRoute
+  SeriesIndexRoute: typeof SeriesIndexRoute
   BundlePublicIdSlugRoute: typeof BundlePublicIdSlugRoute
   EditionPublicIdSlugRoute: typeof EditionPublicIdSlugRoute
   ModProposalIdRoute: typeof ModProposalIdRoute
@@ -536,6 +549,13 @@ declare module '@tanstack/react-router' {
       path: '/releases/$month'
       fullPath: '/releases/$month'
       preLoaderRoute: typeof ReleasesMonthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/series/': {
+      id: '/series/'
+      path: '/series'
+      fullPath: '/series/'
+      preLoaderRoute: typeof SeriesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in/$': {
@@ -681,6 +701,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignUpSplatRoute: SignUpSplatRoute,
   UUsernameRoute: UUsernameRoute,
   ReleasesIndexRoute: ReleasesIndexRoute,
+  SeriesIndexRoute: SeriesIndexRoute,
   BundlePublicIdSlugRoute: BundlePublicIdSlugRoute,
   EditionPublicIdSlugRoute: EditionPublicIdSlugRoute,
   ModProposalIdRoute: ModProposalIdRoute,

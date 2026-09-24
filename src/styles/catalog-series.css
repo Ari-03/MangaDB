@@ -1,0 +1,693 @@
+/* Series + Volume pages (#22/#23) — the Reading Path. Also the reading
+   tracking controls (#28) and the per-Series report affordance (#40), whose
+   markup lives in lib/reading.tsx and lib/report.tsx. Owner: catalog-series.
+
+   The shape of both pages: a book standing on a ledge on the left, its facts
+   on the right, then the canonical Volume sequence as a wall of covers. The
+   Release row, coverage chips and collection controls belong to
+   styles/catalog-edition.css; nothing here redefines them. */
+
+/* --- Series hero --------------------------------------------------------
+   The representative cover stands on its own plank so the page opens the way
+   a shelf does: one book facing out, everything else in support. */
+
+.series-hero {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  gap: 44px;
+  align-items: start;
+  padding-block: 10px 26px;
+}
+/* the hero already sits under the breadcrumb, so the first shelf below it
+   needs less air than a section that follows another section */
+.series-hero + .section { padding-block-start: 34px; }
+
+.series-cover { position: relative; }
+.series-cover .cover { border-radius: 3px 7px 7px 3px; }
+.series-cover::after {
+  content: "";
+  position: absolute;
+  left: -14px;
+  right: -14px;
+  bottom: -16px;
+  height: 11px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  box-shadow: var(--ledge-shadow);
+  border-radius: 1px;
+}
+
+/* the cloth binding scales with the hero, not with a shelf thumbnail */
+.series-cover .cover-ph { padding: 26px 20px 20px 32px; }
+.series-cover .cover-ph::before { width: 16px; }
+.series-cover .cover-ph-title { font-size: 1.42rem; -webkit-line-clamp: 7; }
+.series-cover .cover-ph-foot { font-size: 0.8rem; padding-top: 10px; }
+
+.series-hero-aside .note { margin-top: 28px; }
+.series-hero-aside .note + .note { margin-top: 8px; }
+
+.series-title {
+  font-size: clamp(2.1rem, 1.5rem + 2.2vw, 3.1rem);
+  letter-spacing: -0.026em;
+  max-width: 18ch;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.chips a.chip { transition: border-color 140ms ease, color 140ms ease; }
+.chips a.chip:hover { border-color: var(--accent); color: var(--accent); }
+
+.facts {
+  margin: 24px 0 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(198px, 1fr));
+  gap: 16px 30px;
+  max-width: 760px;
+}
+.fact-term {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-mute);
+}
+.fact-def {
+  margin: 2px 0 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+.fact-sub {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.fact-def a { border-bottom: 1px solid var(--line-strong); }
+.fact-def a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* --- The tracking bar ---------------------------------------------------
+   Follow, Reading Status, per-Series visibility and reading progress, all of
+   them signed-in only. Each control renders nothing signed out, which leaves
+   the bar with no children at all — so the public page never shows an empty
+   frame. */
+
+.owner-bar {
+  margin-top: 26px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.owner-bar:empty { display: none; }
+
+.follow-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 130ms ease, color 130ms ease, background 130ms ease;
+}
+.follow-btn svg { width: 13px; height: 13px; }
+.follow-btn:hover { border-color: var(--accent); color: var(--accent); }
+.follow-btn.is-following {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.follow-btn.is-following:hover { background: var(--gold); border-color: var(--gold); color: var(--accent-ink); }
+
+.follow-hint {
+  order: 9;
+  flex-basis: 100%;
+  font-size: 0.82rem;
+  color: var(--text-mute);
+}
+
+.track-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-mute);
+}
+.track-field .select { font-size: 0.85rem; }
+
+/* Per-Series visibility (lib/sharing.tsx) is a <details>; in the bar its
+   summary wears the same pill as the other controls and the two selects drop
+   onto their own band underneath. */
+.owner-bar .series-visibility { font-size: 0.85rem; }
+.owner-bar .series-visibility > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.owner-bar .series-visibility > summary::-webkit-details-marker { display: none; }
+.owner-bar .series-visibility > summary:hover { border-color: var(--accent); color: var(--accent); }
+.owner-bar .series-visibility[open] {
+  flex-basis: 100%;
+  order: 8;
+}
+.owner-bar .series-visibility .vis-hint {
+  display: block;
+  margin-top: 10px;
+  max-width: 70ch;
+  font-size: 0.82rem;
+  color: var(--text-mute);
+}
+.owner-bar .series-visibility .vis-hint a { color: var(--accent); }
+/* the two segmented pills (sharing.tsx) sit side by side inside the bar */
+.owner-bar .series-visibility .vis-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 22px 0 0;
+  font-size: 0.82rem;
+}
+.owner-bar .series-visibility .vis-legend {
+  font-weight: 700;
+  color: var(--text-mute);
+}
+
+.progress {
+  flex: 1 1 200px;
+  min-width: 170px;
+}
+.progress-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-mute);
+}
+.progress-track {
+  height: 8px;
+  margin-top: 7px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--accent), var(--gold));
+}
+
+/* --- The volume wall ----------------------------------------------------
+   The cloth binding carries the Volume Label the publisher prints; the badge
+   carries the canonical Volume Position. They are never the same field, so
+   they never share one mark. */
+
+.cover-badges .vol-index {
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  background: var(--on-cover-scrim);
+  color: var(--on-cover-ink);
+  font-family: var(--display);
+  font-variation-settings: "opsz" 20;
+  font-weight: 700;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+
+.caption-open { border-bottom: 1px solid var(--line-strong); }
+.caption-open:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Volume Progress: a durable read count, edited in place. Sits in the shelf
+   caption on the Series page and in the tracking card on the Volume page. */
+.volume-read {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 0.8rem;
+}
+.volume-read .read-count {
+  font-weight: 800;
+  color: var(--accent);
+}
+.volume-read .read-adjust {
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.volume-read .read-adjust:hover { border-color: var(--accent); color: var(--accent); }
+
+/* --- Volume panels: the editions, stacked like laid-down books -----------
+   Still a <details> per Volume, so the whole reading path stays keyboard
+   operable and readable with no JavaScript. */
+
+.vol-panels { display: grid; gap: 10px; }
+
+.vol-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  transition: border-color 140ms ease;
+  scroll-margin-top: calc(var(--header-h) + 16px);
+}
+.vol-panel:hover { border-color: var(--line-strong); }
+.vol-panel[open] {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+}
+
+.vol-panel-head {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 42px 14px 18px;
+  cursor: pointer;
+  list-style: none;
+}
+.vol-panel-head::-webkit-details-marker { display: none; }
+/* the chevron keeps its corner however the head wraps */
+.vol-panel-head::after {
+  content: "";
+  position: absolute;
+  right: 20px;
+  top: 21px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-mute);
+  border-bottom: 2px solid var(--text-mute);
+  transform: rotate(45deg);
+  transition: transform 160ms ease;
+}
+.vol-panel[open] .vol-panel-head::after { transform: rotate(-135deg); }
+
+.vol-panel-title { font-size: 1.15rem; }
+.vol-panel-note {
+  margin-left: auto;
+  font-size: 0.86rem;
+  color: var(--text-mute);
+}
+
+.vol-panel-body { padding: 4px 18px 20px; }
+.vol-synopsis {
+  max-width: 68ch;
+  margin-bottom: 16px;
+  font-size: 0.92rem;
+  line-height: 1.62;
+  color: var(--text-dim);
+}
+.vol-panel-body > .note { margin-top: 16px; }
+.vol-panel-body > .note a { color: var(--accent); border-bottom: 1px solid transparent; }
+.vol-panel-body > .note a:hover { border-bottom-color: var(--accent); }
+
+/* --- Edition spines -----------------------------------------------------
+   Each Edition is a book lying on its side: a head band with its short mark,
+   the identity in the middle, and its Releases banded down the end. */
+
+.spines { display: grid; gap: 12px; }
+
+.spine {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) minmax(0, auto);
+  border-radius: 4px 9px 9px 4px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--cloth) 84%, #fff) 0%,
+    var(--cloth) 40%,
+    color-mix(in srgb, var(--cloth) 72%, #000) 100%
+  );
+  box-shadow: var(--cover-shadow);
+  overflow: hidden;
+  color: #fdf6ea;
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+.spine:hover { transform: translateX(4px); box-shadow: var(--cover-shadow-hi); }
+
+.spine-head {
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.26);
+  border-right: 1px solid rgba(255, 255, 255, 0.16);
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.spine-body {
+  padding: 13px 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+.spine-title {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 30;
+  font-weight: 700;
+  font-size: 1.04rem;
+}
+.spine-title a { border-bottom: 1px solid rgba(255, 255, 255, 0.3); }
+.spine-title a:hover { border-bottom-color: #fff; }
+.spine-cov { font-size: 0.84rem; color: rgba(255, 250, 240, 0.82); }
+.spine-line { font-size: 0.8rem; color: rgba(255, 250, 240, 0.7); }
+
+.spine-releases {
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.2);
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  min-width: 300px;
+}
+.spine-rel { padding: 6px 0; }
+.spine-rel + .spine-rel {
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  padding-top: 10px;
+}
+.spine-rel-facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: rgba(255, 250, 240, 0.9);
+}
+.spine-rel .chip {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fffaf0;
+}
+.spine-rel-date { font-weight: 800; font-variant-numeric: tabular-nums; }
+.spine-rel-isbn {
+  font-family: var(--display);
+  font-variation-settings: "opsz" 14;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  color: rgba(255, 250, 240, 0.72);
+}
+.spine-rel-price { font-weight: 800; }
+.spine-rel-note {
+  margin-top: 6px;
+  padding-left: 11px;
+  border-left: 2px solid rgba(255, 255, 255, 0.3);
+  font-size: 0.78rem;
+  color: rgba(255, 250, 240, 0.76);
+}
+.spine-rel-note a { border-bottom: 1px solid rgba(255, 255, 255, 0.45); }
+.spine-rel-controls:not(:empty) { margin-top: 8px; }
+
+/* --- Series Family ------------------------------------------------------ */
+
+.family-relationships {
+  list-style: none;
+  margin: 22px 0 0;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--line-strong);
+  display: grid;
+  gap: 4px;
+  font-size: 0.86rem;
+  color: var(--text-mute);
+}
+
+/* --- Report affordance (#40) -------------------------------------------- */
+
+.series-report {
+  margin-top: 54px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.report-lede {
+  max-width: 62ch;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+.report-form { display: grid; gap: 12px; max-width: 46rem; }
+.report-field { display: grid; gap: 6px; font-size: 0.9rem; font-weight: 700; }
+.report-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font: inherit;
+  font-weight: 400;
+  resize: vertical;
+}
+.report-form textarea::placeholder { color: var(--text-mute); }
+.report-actions { display: flex; gap: 10px; }
+.form-error { font-size: 0.86rem; color: #e08a6a; }
+[data-theme="light"] .form-error { color: #a23c15; }
+
+/* --- Volume page --------------------------------------------------------
+   The book itself on the left with what the viewer owns and has read under
+   it; the editions that collect it on the right. */
+
+.volume-hero {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 48px;
+  align-items: start;
+  padding-block: 10px 30px;
+}
+
+.volume-cover { position: relative; }
+.volume-cover .cover { border-radius: 4px 9px 9px 4px; }
+.volume-cover::after {
+  content: "";
+  position: absolute;
+  left: -18px;
+  right: -18px;
+  bottom: -18px;
+  height: 13px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  box-shadow: var(--ledge-shadow);
+}
+.volume-cover .cover-ph { padding: 30px 24px 22px 36px; }
+.volume-cover .cover-ph::before { width: 19px; }
+.volume-cover .cover-ph-series { font-size: 1rem; }
+.volume-cover .cover-ph-num { font-size: 4.6rem; }
+.volume-cover .cover-ph-title { font-size: 1.6rem; -webkit-line-clamp: 7; }
+
+/* Ownership + read count. Both render nothing signed out, so the card is
+   empty then and hides itself. */
+.track-card {
+  margin-top: 44px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+.track-card:empty { display: none; }
+.track-card .volume-read { margin-top: 0; }
+.track-card .volume-ownership + .volume-read { margin-top: 12px; }
+
+.volume-title {
+  font-size: clamp(2rem, 1.5rem + 2vw, 2.9rem);
+  letter-spacing: -0.026em;
+  max-width: 20ch;
+}
+
+.synopsis {
+  margin-top: 20px;
+  max-width: 68ch;
+  color: var(--text-dim);
+  line-height: 1.68;
+}
+.synopsis p + p { margin-top: 12px; }
+
+.volume-editions-head {
+  margin-top: 38px;
+  margin-bottom: 18px;
+}
+
+.vol-edition + .vol-edition { margin-top: 26px; }
+.vol-edition-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.vol-edition-name {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 30;
+  font-weight: 700;
+  font-size: 1.12rem;
+}
+.vol-edition-name a:hover { color: var(--accent); }
+.vol-edition-extent {
+  font-size: 0.84rem;
+  color: var(--text-mute);
+}
+.vol-edition-note {
+  margin-bottom: 12px;
+  padding-left: 13px;
+  border-left: 2px solid var(--line-strong);
+  font-size: 0.84rem;
+  color: var(--text-mute);
+}
+.vol-edition .coverage-chips { margin: 0 0 12px; }
+
+/* --- Reading passes and prompts (#28) -----------------------------------
+   A pass is a reading attempt through one Release; nothing here ever writes
+   a Reading Status on its own, so every suggestion is a prompt with an
+   explicit button. */
+
+.pass-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+.pass-controls button {
+  padding: 4px 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pass-controls button:hover { border-color: var(--accent); color: var(--accent); }
+.pass-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-mute);
+  font-weight: 700;
+}
+.pass-slider input[type="range"] {
+  width: 8rem;
+  accent-color: var(--accent);
+}
+.pass-percent {
+  min-width: 2.6rem;
+  font-variant-numeric: tabular-nums;
+}
+.pass-cancel { color: var(--text-mute); }
+.pass-facts { color: var(--text-mute); font-size: 0.84rem; }
+
+.prompt {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-tint);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+.prompt button {
+  padding: 4px 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.prompt button:hover { border-color: var(--accent); color: var(--accent); }
+.prompt-line {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* --- /me reading overview (markup in lib/reading.tsx) ------------------- */
+
+.my-reading h3 {
+  margin: 18px 0 8px;
+  font-size: 1rem;
+}
+.my-reading ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 0.92rem;
+}
+.my-reading a:hover { color: var(--accent); }
+
+/* --- Responsive --------------------------------------------------------- */
+
+@media (max-width: 960px) {
+  .series-hero { grid-template-columns: 186px minmax(0, 1fr); gap: 28px; }
+  .volume-hero { grid-template-columns: 236px minmax(0, 1fr); gap: 32px; }
+  .spine { grid-template-columns: 30px minmax(0, 1fr); }
+  .spine-releases {
+    grid-column: 1 / -1;
+    min-width: 0;
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+  }
+}
+
+@media (max-width: 720px) {
+  .series-hero { grid-template-columns: 1fr; gap: 30px; }
+  .series-cover { max-width: 190px; }
+  .series-hero-aside .note { margin-top: 24px; }
+  .volume-hero { grid-template-columns: 1fr; gap: 34px; }
+  .volume-cover { max-width: 210px; }
+  .track-card { margin-top: 34px; }
+  .facts { gap: 14px 20px; }
+  .owner-bar { gap: 12px; }
+  .track-field { width: 100%; justify-content: space-between; }
+  .track-field .select { flex: 1 1 auto; min-width: 0; max-width: 62%; }
+  .owner-bar .series-visibility,
+  .owner-bar .series-visibility > summary,
+  .follow-btn { width: 100%; justify-content: center; }
+  .vol-panel-head { padding: 12px 38px 12px 14px; }
+  .vol-panel-head::after { right: 16px; }
+  .vol-panel-note { margin-left: 0; flex-basis: 100%; }
+  .vol-panel-body { padding: 4px 14px 18px; }
+  .vol-edition-extent { flex-basis: 100%; }
+}
+
+/* Motion here is only ever a response to a pointer or a disclosure; when the
+   viewer asks for less, drop it entirely. */
+@media (prefers-reduced-motion: reduce) {
+  .spine,
+  .follow-btn,
+  .vol-panel,
+  .vol-panel-head::after { transition: none; }
+  .spine:hover { transform: none; }
+}

@@ -29,7 +29,7 @@ function ProposeNewPage() {
   const { seriesPublicId } = Route.useParams();
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           Proposals need a configured Convex deployment (see the README).
         </p>
@@ -39,7 +39,7 @@ function ProposeNewPage() {
   const publicId = Number(seriesPublicId);
   if (!Number.isInteger(publicId)) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Unknown series</h1>
         <p className="notice">
           Nothing lives at this address. <Link to="/">Go home</Link>.
@@ -55,14 +55,14 @@ function Gate({ publicId }: { publicId: number }) {
   const viewer = useQuery(api.users.viewer, {});
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
   }
   if (!isDataTeam) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Data team only</h1>
         <p className="notice">
           Proposing new records needs an Editor (or stronger) role.{" "}
@@ -102,14 +102,14 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
 
   if (form === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Loading…</p>
       </main>
     );
   }
   if (form === null) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Series not found</h1>
         <p className="notice">
           No active series matches this address. <Link to="/">Go home</Link>.
@@ -220,7 +220,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
   };
 
   return (
-    <main className="mod-edit-page">
+    <main className="mod-page mod-edit-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>Propose new records</span>
@@ -351,16 +351,18 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
             placeholder="https://publisher.example/the-announcement"
           />
         </label>
-        <div>
+        <div className="mod-actions">
           <button
             type="button"
+            className="btn"
             disabled={busy || publisherId === ""}
             onClick={() => void onSaveDraft()}
           >
             Save draft
-          </button>{" "}
+          </button>
           <button
             type="submit"
+            className="btn btn-primary"
             disabled={busy || publisherId === "" || comment.trim() === ""}
           >
             {busy ? "Working…" : "Submit for review"}
@@ -379,6 +381,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
             </ul>
             <button
               type="button"
+              className="btn btn-sm btn-primary"
               disabled={busy}
               onClick={() => void onSubmit(pendingWarnings)}
             >

@@ -29,12 +29,18 @@ function SignUpPage() {
   }
   return (
     <main className="auth-page">
-      <SignUp
-        routing="path"
-        path="/sign-up"
-        signInUrl="/sign-in"
-        fallbackRedirectUrl="/me"
-      />
+      <div className="auth-card">
+        <div className="auth-head">
+          <h1>Start your shelf</h1>
+          <p>An account keeps your collection, reading history and follows — and nothing is public until you say so.</p>
+        </div>
+        <SignUp
+          routing="path"
+          path="/sign-up"
+          signInUrl="/sign-in"
+          fallbackRedirectUrl="/me"
+        />
+      </div>
     </main>
   );
 }

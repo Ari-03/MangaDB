@@ -27,7 +27,7 @@ export const Route = createFileRoute("/mod/roles")({
 function ModRolesPage() {
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           Moderation needs a configured Convex deployment (see the README).
         </p>
@@ -42,14 +42,14 @@ function ModRolesGate() {
   const viewer = useQuery(api.users.viewer, {});
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
   }
   if (!isModerator) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Moderators only</h1>
         <p className="notice">
           Role governance is for Moderators and Administrators.{" "}
@@ -108,7 +108,7 @@ function ModRolesContent() {
   };
 
   return (
-    <main>
+    <main className="mod-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>Roles</span>
@@ -119,11 +119,16 @@ function ModRolesContent() {
         change is audited permanently, and revoking a role never rewrites past
         attribution.
       </p>
+      <nav className="mod-tools" aria-label="Data team tools">
+        <Link to="/mod/queue">Review queue</Link>
+        <Link to="/mod/imports">Imports</Link>
+        <Link to="/mod/launch">Launch</Link>
+      </nav>
 
-      <section className="me-section">
+      <section className="mod-panel">
         <h2>Appoint</h2>
         <form
-          className="username-form"
+          className="mod-form"
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
@@ -165,42 +170,51 @@ function ModRolesContent() {
               onChange={(event) => setReason(event.target.value)}
             />
           </label>
-          <div>
-            <button type="submit" disabled={busy}>
+          <div className="mod-actions">
+            <button type="submit" className="btn btn-primary" disabled={busy}>
               Appoint
             </button>
           </div>
+          {error ? <p className="form-error">{error}</p> : null}
         </form>
-        {error ? <p className="form-error">{error}</p> : null}
       </section>
 
-      <section className="me-section">
+      <section className="mod-panel">
         <h2>Roster</h2>
         {roster === undefined ? (
-          <p className="placeholder">Loading…</p>
+          <p className="mod-empty">Loading…</p>
         ) : roster.length === 0 ? (
-          <p className="placeholder">Nobody holds a role yet.</p>
+          <p className="mod-empty">Nobody holds a role yet.</p>
         ) : (
           <ul className="roster-list">
             {roster.map((member) => (
               <li key={member.username} className="roster-row">
-                <span>
+                <span className="roster-name">
                   @{member.username} — {ROLE_LABELS[member.role]}
-                  {member.suspended ? " (suspended)" : ""}
-                </span>{" "}
+                  {member.suspended ? (
+                    <>
+                      {" "}
+                      <span className="chip mod-chip mod-chip--bad">
+                        Suspended
+                      </span>
+                    </>
+                  ) : null}
+                </span>
                 <span className="roster-actions">
                   <button
                     type="button"
+                    className="btn btn-sm"
                     disabled={busy}
                     onClick={() =>
                       void run(() => revoke({ username: member.username }))
                     }
                   >
                     Revoke
-                  </button>{" "}
+                  </button>
                   {member.suspended ? (
                     <button
                       type="button"
+                      className="btn btn-sm"
                       disabled={busy}
                       onClick={() =>
                         void run(() => reinstate({ username: member.username }))
@@ -211,6 +225,7 @@ function ModRolesContent() {
                   ) : (
                     <button
                       type="button"
+                      className="btn btn-sm"
                       disabled={busy}
                       onClick={() => {
                         const why = window.prompt(
@@ -232,15 +247,15 @@ function ModRolesContent() {
         )}
       </section>
 
-      <section className="me-section">
+      <section className="mod-panel">
         <h2>Audit trail</h2>
         <p className="section-hint">
           Append-only; entries survive even account deletion.
         </p>
         {auditLog === undefined ? (
-          <p className="placeholder">Loading…</p>
+          <p className="mod-empty">Loading…</p>
         ) : auditLog.length === 0 ? (
-          <p className="placeholder">No role changes recorded yet.</p>
+          <p className="mod-empty">No role changes recorded yet.</p>
         ) : (
           <ul className="audit-list">
             {auditLog.map((entry, i) => (

@@ -37,13 +37,19 @@ export function SeriesReportAffordance({
           </p>
         )
       ) : (
-        <button
-          type="button"
-          className="report-toggle"
-          onClick={() => setOpen(true)}
-        >
-          See something missing or wrong? Report it
-        </button>
+        <>
+          <p className="report-lede">
+            A missing volume, a wrong date, a duplicate series — tell the data
+            team and an editor will pick it up.
+          </p>
+          <button
+            type="button"
+            className="btn btn-sm report-toggle"
+            onClick={() => setOpen(true)}
+          >
+            Report something wrong
+          </button>
+        </>
       )}
     </section>
   );
@@ -97,8 +103,8 @@ function ReportForm({
           .catch((err: unknown) => setError(errorMessage(err)));
       }}
     >
-      <label>
-        What's missing or wrong?
+      <label className="report-field">
+        <span>What's missing or wrong?</span>
         <textarea
           value={message}
           onChange={(event) => setMessage(event.target.value)}
@@ -110,10 +116,14 @@ function ReportForm({
       </label>
       {error ? <p className="form-error">{error}</p> : null}
       <div className="report-actions">
-        <button type="submit" disabled={message.trim() === ""}>
+        <button
+          type="submit"
+          className="btn btn-sm btn-primary"
+          disabled={message.trim() === ""}
+        >
           Send report
         </button>
-        <button type="button" onClick={onDone}>
+        <button type="button" className="btn btn-sm" onClick={onDone}>
           Cancel
         </button>
       </div>

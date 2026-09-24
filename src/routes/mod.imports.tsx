@@ -25,7 +25,7 @@ export const Route = createFileRoute("/mod/imports")({
 function ImportsPage() {
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           The imports dashboard needs a configured Convex deployment (see the
           README).
@@ -41,14 +41,14 @@ function ImportsGate() {
   const viewer = useQuery(api.users.viewer, {});
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
   }
   if (!isDataTeam) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Data team only</h1>
         <p className="notice">
           The imports dashboard is visible to Editors, Moderators, and
@@ -85,7 +85,7 @@ function Imports() {
   });
 
   return (
-    <main className="imports-page">
+    <main className="mod-page imports-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>Imports</span>
@@ -94,10 +94,12 @@ function Imports() {
       <p className="section-hint">
         Every Approved Source runs unattended on its registry cadence; three
         consecutive failed runs flag it unhealthy here (and email the
-        Administrator once per transition).{" "}
-        <Link to="/mod/queue">Review queue</Link> ·{" "}
-        <Link to="/mod/launch">Launch</Link>
+        Administrator once per transition).
       </p>
+      <nav className="mod-tools" aria-label="Data team tools">
+        <Link to="/mod/queue">Review queue</Link>
+        <Link to="/mod/launch">Launch</Link>
+      </nav>
 
       <h2>Sources</h2>
       {sources === undefined ? (
@@ -116,19 +118,26 @@ function Imports() {
               <div className="import-source-head">
                 <strong>{source.name}</strong>
                 {source.healthState === "unhealthy" ? (
-                  <strong className="import-flag">
-                    UNHEALTHY — {source.consecutiveFailures} consecutive failed
-                    runs
-                  </strong>
+                  <>
+                    <span className="chip mod-chip mod-chip--bad">
+                      Unhealthy
+                    </span>
+                    <strong className="import-flag">
+                      {source.consecutiveFailures} consecutive failed runs
+                    </strong>
+                  </>
                 ) : (
-                  <span className="import-healthy">healthy</span>
+                  <span className="chip mod-chip mod-chip--ok">Healthy</span>
+                )}
+                {source.enabled ? null : (
+                  <span className="chip mod-chip mod-chip--mute">Disabled</span>
                 )}
               </div>
               <div className="import-source-meta">
                 <span>
-                  <code>{source.key}</code> · {source.cadence}
-                  {source.enabled ? "" : " · disabled"}
+                  <code>{source.key}</code>
                 </span>
+                <span>{source.cadence}</span>
                 <span>
                   {source.lastRun
                     ? `last run ${source.lastRun.status} ${timestamp(source.lastRun.startedAt)} — ${source.lastRun.recordsSeen} seen, ${source.lastRun.recordsChanged} changed${source.lastRun.errorCount > 0 ? `, ${source.lastRun.errorCount} error${source.lastRun.errorCount === 1 ? "" : "s"}` : ""}`
@@ -161,13 +170,24 @@ function Imports() {
       ) : (
         <ol className="import-runs">
           {runs.map((run) => (
-            <li key={run._id} className="import-run">
+            <li
+              key={run._id}
+              className={
+                run.status === "failed"
+                  ? "import-run mod-flagged"
+                  : "import-run"
+              }
+            >
               <div className="import-run-head">
                 <strong>{run.sourceKey}</strong>
                 <span
-                  className={
-                    run.status === "failed" ? "import-run-failed" : undefined
-                  }
+                  className={`chip mod-chip mod-chip--${
+                    run.status === "failed"
+                      ? "bad"
+                      : run.status === "running"
+                        ? "info"
+                        : "ok"
+                  }`}
                 >
                   {run.status}
                 </span>

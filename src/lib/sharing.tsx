@@ -4,6 +4,8 @@
 // - SeriesVisibilityControls on the Series page: the per-Series overrides,
 //   each either "default" (follow the account default) or an explicit
 //   public/private choice for exactly this Series.
+// Both are segmented pills rather than selects: there are only two or three
+// states and the current one should be readable without opening anything.
 // Everything fetches through the reactive Convex client; signed-out viewers
 // get null from the queries, so the public pages render without the controls.
 
@@ -15,6 +17,7 @@ import { convexClient } from "~/providers";
 
 type Kind = "ownership" | "reading";
 type Visibility = "public" | "private";
+type Choice = Visibility | "default";
 
 const KIND_LABELS: Record<Kind, string> = {
   ownership: "Collection (Owned)",
@@ -27,6 +30,46 @@ const KIND_HINTS: Record<Kind, string> = {
   reading:
     "Public shows your reading statuses, volume read counts, and active passes.",
 };
+
+/**
+ * One segmented pill: a real radio group, so it is keyboard-operable and
+ * announces the current state. `name` must be unique per group on the page.
+ */
+function VisibilitySegments({
+  name,
+  labelledBy,
+  value,
+  options,
+  onPick,
+}: {
+  name: string;
+  labelledBy: string;
+  value: Choice;
+  options: Array<{ value: Choice; label: string }>;
+  onPick: (next: Choice) => void;
+}) {
+  return (
+    <span className="seg-pill" role="radiogroup" aria-labelledby={labelledBy}>
+      {options.map((option) => (
+        <label className="seg-opt" key={option.value}>
+          <input
+            type="radio"
+            name={name}
+            value={option.value}
+            checked={value === option.value}
+            onChange={() => onPick(option.value)}
+          />
+          <span>{option.label}</span>
+        </label>
+      ))}
+    </span>
+  );
+}
+
+const PUBLIC_PRIVATE: Array<{ value: Choice; label: string }> = [
+  { value: "private", label: "Private" },
+  { value: "public", label: "Public" },
+];
 
 // ---------- /me defaults ----------
 
@@ -51,30 +94,29 @@ function SharingSettingsInner() {
 
   return (
     <div className="sharing-settings">
-      <p>
+      <p className="sharing-lede">
         Your tracking is private by default. Ownership and Reading are shared
         separately; each series page can override your default for that series.
         Series follows always stay private.
       </p>
       {(["ownership", "reading"] as const).map((kind) => (
-        <label key={kind} className="visibility-control">
-          {KIND_LABELS[kind]}{" "}
-          <select
+        <div className="vis-field" key={kind}>
+          <span className="vis-legend" id={`visibility-${kind}-label`}>
+            {KIND_LABELS[kind]}
+          </span>
+          <VisibilitySegments
+            name={`visibility-${kind}`}
+            labelledBy={`visibility-${kind}-label`}
             value={defaults[kind]}
-            onChange={(event) =>
-              void setDefault({
-                kind,
-                visibility: event.currentTarget.value as Visibility,
-              })
+            options={PUBLIC_PRIVATE}
+            onPick={(next) =>
+              void setDefault({ kind, visibility: next as Visibility })
             }
-          >
-            <option value="private">Private</option>
-            <option value="public">Public</option>
-          </select>
-          <span className="section-hint"> {KIND_HINTS[kind]}</span>
-        </label>
+          />
+          <p className="vis-hint">{KIND_HINTS[kind]}</p>
+        </div>
       ))}
-      <p>
+      <p className="sharing-profile-link">
         Your public profile:{" "}
         <Link to="/u/$username" params={{ username: viewer.username }}>
           /u/{viewer.username}
@@ -91,8 +133,9 @@ function SharingSettingsInner() {
 
 /**
  * The per-Series visibility overrides on the Series page (spec §3): one
- * select per surface, defaulting to the account default and overridable to
- * public or private for exactly this Series. Renders nothing signed out.
+ * segmented pill per surface, defaulting to the account default and
+ * overridable to public or private for exactly this Series. Renders nothing
+ * signed out.
  */
 export function SeriesVisibilityControls({
   seriesPublicId,
@@ -115,7 +158,7 @@ function SeriesVisibilityControlsInner({
   return (
     <details className="series-visibility">
       <summary>Sharing for this series</summary>
-      <p className="section-hint">
+      <p className="vis-hint">
         Overrides your account defaults for this series only, on{" "}
         <Link to="/u/$username" params={{ username: state.username }}>
           your public profile
@@ -123,27 +166,36 @@ function SeriesVisibilityControlsInner({
         .
       </p>
       {(["ownership", "reading"] as const).map((kind) => (
-        <label key={kind} className="visibility-control">
-          {KIND_LABELS[kind]}{" "}
-          <select
+        <div className="vis-field" key={kind}>
+          <span
+            className="vis-legend"
+            id={`series-visibility-${seriesPublicId}-${kind}-label`}
+          >
+            {KIND_LABELS[kind]}
+          </span>
+          <VisibilitySegments
+            name={`series-visibility-${seriesPublicId}-${kind}`}
+            labelledBy={`series-visibility-${seriesPublicId}-${kind}-label`}
             value={state.overrides[kind] ?? "default"}
-            onChange={(event) =>
+            options={[
+              {
+                value: "default",
+                label:
+                  state.defaults[kind] === "public"
+                    ? "Default: public"
+                    : "Default: private",
+              },
+              ...PUBLIC_PRIVATE,
+            ]}
+            onPick={(next) =>
               void setOverride({
                 seriesId: state.seriesId,
                 kind,
-                visibility: event.currentTarget.value as
-                  | Visibility
-                  | "default",
+                visibility: next,
               })
             }
-          >
-            <option value="default">
-              Default ({state.defaults[kind] === "public" ? "Public" : "Private"})
-            </option>
-            <option value="public">Public</option>
-            <option value="private">Private</option>
-          </select>
-        </label>
+          />
+        </div>
       ))}
     </details>
   );

@@ -110,8 +110,13 @@ export const Route = createFileRoute("/releases/$month")({
 
 function MonthNotFound() {
   return (
-    <main>
-      <h1>Month not found</h1>
+    <main className="releases-page">
+      <div className="page-head">
+        <div>
+          <p className="page-kicker">English manga releases</p>
+          <h1 className="page-title">Month not found</h1>
+        </div>
+      </div>
       <p className="notice">
         Months live at <code>/releases/{"{yyyy-mm}"}</code>, like{" "}
         <code>/releases/{monthParam(currentMonth())}</code>.{" "}

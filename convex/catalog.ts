@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
+import { coverUrl, seriesCover } from "./lib/covers";
 
 // Cap per-table counting so the scaffold query stays cheap even once imports
 // start filling the catalog; the home page renders "N+" past the cap.
@@ -46,6 +47,45 @@ export const listSeries = query({
     return docs
       .filter((doc) => doc.status === "active")
       .map((doc) => ({ publicId: doc.publicId, title: doc.title }));
+  },
+});
+
+/**
+ * The newest Series in the catalog (highest public IDs), each with a jacket
+ * for the home page's "recently added" shelf. Small and bounded: the shelf
+ * is a taste of the catalog, search and the browser are the way in.
+ */
+export const RECENT_SERIES_MAX = 28;
+export const recentSeries = query({
+  args: { limit: v.number() },
+  handler: async (ctx, { limit }) => {
+    const take = Math.max(1, Math.min(RECENT_SERIES_MAX, Math.floor(limit)));
+    // Look a little past the limit and seat the Series that have a jacket
+    // first: a shelf of the newest announcements is mostly books whose art
+    // no one has published yet, and a wall of cloth is not a taste of the
+    // catalog. Cloth fills whatever is left, newest first.
+    const docs = await ctx.db
+      .query("series")
+      .withIndex("by_publicId")
+      .order("desc")
+      .take(take * 3);
+    type Shelved = {
+      publicId: number;
+      title: string;
+      coverUrl: string | null;
+      coverIsbn: string | null;
+    };
+    const jacketed: Array<Shelved> = [];
+    const cloth: Array<Shelved> = [];
+    for (const doc of docs) {
+      if (doc.status !== "active") continue;
+      const entry = { publicId: doc.publicId, title: doc.title, ...(await seriesCover(ctx, doc._id)) };
+      (entry.coverUrl || entry.coverIsbn ? jacketed : cloth).push(entry);
+      if (jacketed.length === take) break;
+    }
+    return [...jacketed, ...cloth]
+      .slice(0, take)
+      .sort((a, b) => b.publicId - a.publicId);
   },
 });
 
@@ -218,9 +258,12 @@ export const seriesPage = query({
     const volumes = [];
     // Series pages pick a representative release cover at query time (spec
     // §8): the first covering Release with a cover, in reading order. It
-    // fronts the cover-led OG/Twitter card (spec §11, ticket #39).
-    let representativeCover: Id<"_storage"> | null = null;
+    // fronts the cover-led OG/Twitter card (spec §11, ticket #39). Each
+    // Volume also carries the first real cover among its own Releases, so
+    // the Reading Path can show the books rather than placeholders.
+    let representativeCover: string | null = null;
     for (const volume of volumeDocs) {
+      let volumeCover: string | null = null;
       const coveringRows = await ctx.db
         .query("volumeCoverages")
         .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
@@ -282,8 +325,9 @@ export const seriesPage = query({
             bundles.push({ publicId: bundle.publicId, name: bundle.name });
           }
 
-          if (representativeCover === null && release.coverImage) {
-            representativeCover = release.coverImage.storageId;
+          if (volumeCover === null && release.coverImage) {
+            volumeCover = await coverUrl(ctx, release.coverImage.storageId);
+            if (representativeCover === null) representativeCover = volumeCover;
           }
 
           releases.push({
@@ -322,6 +366,7 @@ export const seriesPage = query({
         position: volume.position,
         label: volume.label ?? null,
         synopsis: volume.synopsis ?? null,
+        coverUrl: volumeCover,
         editions,
       });
     }
@@ -335,9 +380,7 @@ export const seriesPage = query({
       },
       family,
       volumes,
-      coverUrl: representativeCover
-        ? await ctx.storage.getUrl(representativeCover)
-        : null,
+      coverUrl: representativeCover,
     };
   },
 });

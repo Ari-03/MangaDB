@@ -1,0 +1,180 @@
+/* Home page (#21/#22) — the Bookshelf hero and its shelves. Owner: home port.
+   Composes shell.css (.section/.btn) and covers.css (.shelf/.cover/.caption);
+   only the hero's own furniture lives here. */
+
+/* The hero sets its own top rhythm, so the default page frame stands down. */
+.home { padding-top: 0; }
+
+/* --- Hero ---------------------------------------------------------------- */
+
+.hero {
+  padding-block: 46px 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 56px;
+  align-items: center;
+}
+/* No covers to stand beside the copy (an empty month, or Convex unconfigured). */
+.hero--solo {
+  grid-template-columns: minmax(0, 1fr);
+  padding-block: 58px 22px;
+}
+.hero--solo .hero-copy { max-width: 60ch; }
+
+.hero-title {
+  font-size: clamp(2.5rem, 1.6rem + 3vw, 4rem);
+  font-variation-settings: "SOFT" 55, "WONK" 1, "opsz" 130;
+  letter-spacing: -0.025em;
+  line-height: 1.02;
+}
+
+.hero-sub {
+  margin-top: 20px;
+  max-width: 46ch;
+  color: var(--text-dim);
+  font-size: 1.06rem;
+  line-height: 1.6;
+}
+
+.hero-cta {
+  margin-top: 28px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hero-notice { margin-top: 30px; max-width: 52ch; }
+
+/* --- Stat row ------------------------------------------------------------ */
+
+.stat-row {
+  margin-top: 34px;
+  display: flex;
+  gap: 0;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.stat {
+  padding-right: 22px;
+  margin-right: 22px;
+  border-right: 1px solid var(--line);
+}
+.stat:last-child { border-right: 0; margin-right: 0; padding-right: 0; }
+.stat-num {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 60;
+  font-weight: 700;
+  font-size: 1.6rem;
+  line-height: 1.1;
+  color: var(--gold);
+}
+.stat-label { font-size: 0.82rem; color: var(--text-mute); }
+
+/* --- Hero shelf: short ledges of this month's covers --------------------- */
+
+.hero-shelf {
+  display: grid;
+  gap: 26px;
+  padding: 26px 22px 12px;
+  border-radius: var(--r-lg);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 70%, transparent),
+    color-mix(in srgb, var(--bg-deep) 88%, transparent)
+  );
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+/* A row is a plank: covers stand on it left to right, and a thin month simply
+   leaves the rest of the plank bare. --hero-cols (set per shelf by the route)
+   is how wide one book may grow, so one cover never fills the whole plank. */
+.hero-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--hero-cols, 5), minmax(0, 1fr));
+  justify-content: start;
+  padding-bottom: 18px;
+}
+.hero-row::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 9px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  box-shadow: var(--ledge-shadow);
+}
+.hero-row .cover-link {
+  display: block;
+  min-width: 0;
+  max-width: 152px;
+  padding: 0 6px;
+}
+.hero-row .cover { border-radius: 2px 4px 4px 2px; }
+
+/* One orchestrated page-load moment: the books are shelved, row by row. */
+@media (prefers-reduced-motion: no-preference) {
+  .hero-row .cover-link { animation: shelve 620ms cubic-bezier(.2,.75,.3,1) backwards; }
+  .hero-row .cover-link:nth-child(1) { animation-delay: 40ms; }
+  .hero-row .cover-link:nth-child(2) { animation-delay: 100ms; }
+  .hero-row .cover-link:nth-child(3) { animation-delay: 160ms; }
+  .hero-row .cover-link:nth-child(4) { animation-delay: 220ms; }
+  .hero-row .cover-link:nth-child(5) { animation-delay: 280ms; }
+  .hero-row:nth-child(2) .cover-link { animation-delay: 200ms; }
+  .hero-row:nth-child(3) .cover-link { animation-delay: 320ms; }
+}
+@keyframes shelve {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+/* --- Series link list (the fallback under four series) ------------------- */
+
+.series-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.series-links a {
+  display: inline-block;
+  padding: 9px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font-weight: 700;
+  font-size: 0.94rem;
+  transition: border-color 130ms ease, color 130ms ease;
+}
+.series-links a:hover { border-color: var(--accent); color: var(--accent); }
+
+/* --- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 36px;
+  }
+  .hero-shelf { order: 2; }
+}
+
+@media (max-width: 720px) {
+  .hero { padding-block: 30px 6px; }
+  .hero-shelf { padding: 20px 14px 8px; gap: 20px; }
+  /* Three books read at phone width; the rest of the row stands down. */
+  .hero-row .cover-link { max-width: calc(100% / 3); }
+  .hero-row .cover-link:nth-child(n + 4) { display: none; }
+  /* Too narrow for a title (covers.css): the cloth carries its volume
+     numeral instead, and the shelf below still spells every book out. */
+  .hero-row .cover-ph-title,
+  .hero-row .cover-ph-foot { display: none; }
+  .hero-row .cover-ph { justify-content: center; padding: 6px 4px 6px 9px; }
+  .hero-row .cover-ph-mark { display: block; }
+  .stat-row { display: grid; grid-template-columns: repeat(2, 1fr); row-gap: 16px; }
+  .stat { border-right: 0; padding-right: 0; margin-right: 0; }
+  .stat-num { font-size: 1.45rem; }
+}
