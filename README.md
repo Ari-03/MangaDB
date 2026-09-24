@@ -19,11 +19,47 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 | `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI; `collection.tsx` is the signed-in collection overlay from #27; `reading.tsx` is the signed-in reading-tracking overlay from #28) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
-| `src/server.ts` | Custom Workers entry: canonical-host redirect, then the Start handler |
+| `src/server.ts` | Custom Workers entry: canonical-host redirect, the `/covers/{isbn13}.jpg` cover-art route, then the Start handler |
+| `src/styles/` | The stylesheet, split by concern: `tokens.css` (colour/type tokens, dark default + `[data-theme=light]`), `shell.css` (header, footer, buttons, chips), `covers.css` (covers, shelves, the ledge), then one file per page group |
 | `src/server/` | Server-only code (canonical-host policy, SSR Convex client, SSR Clerk auth/token) |
 | `convex/` | Convex schema + functions (`schema.ts` is the v1 schema from wayfinder #11; `catalog.ts` public catalog reads; `releases.ts` the Releases-browser month window from #24; `seed.ts` the dev seed from #22; `users.ts` + `lib/` are accounts from #26; `moderation.ts` + `roles.ts` are the moderation core from #31; `collection.ts` is the personal collection from #27; `reading.ts` is reading tracking from #28; `importSources.ts` + `imports.ts` + `sevenSeas.ts` + `crons.ts` are the import foundation from #34) |
 | `wrangler.jsonc` | Workers config (`nodejs_compat`, custom entry, vars) |
 | `vite.config.ts` | Start + Cloudflare + React plugins |
+
+## Look and feel
+
+The public site wears the "Bookshelf" look: a warm dark shelf by default with a
+light paper theme behind the header toggle (persisted in `localStorage`; the OS
+preference is deliberately ignored), Fraunces for display type and Nunito Sans
+for text. Covers sit like jacketed books and rows of them stand on a ledge;
+books with no art on file render as cloth bindings carrying their title, never
+a broken image. `src/lib/cover.tsx` is the one `<Cover>` component every page
+uses. The five mock-ups the look was chosen from live on the
+`prototype/site-redesign` branch.
+
+### Cover art
+
+Nothing image-shaped lives in Convex for most of the catalog. `/covers/{isbn13}.jpg`
+(`src/server/covers.ts`) serves jacket art for any Release with an ISBN-13:
+edge cache → the `mangadb-covers` R2 bucket → the distribution CDN Penguin
+Random House runs for the publishers it carries (most English manga). Known
+"no image" and "coming soon" stand-ins are rejected by size and hash, so those
+books stay cloth. `<Cover isbn13>` derives the URL and falls back to cloth on a
+404. The few stored covers (Kodansha imports) still win where they exist, and
+`convex/lib/covers.ts` hides the blank SVG some importers stored.
+
+## Series library (`/series`)
+
+Browse every Series with sort (title, recently added, most volumes, latest
+release, upcoming next, most followed, most collected), filters (publisher,
+format, first letter), and title search — all in the URL, working before
+hydration, paging with "Show more". It reads `seriesStats`, one denormalized
+row per active Series that `seriesBrowse.rebuild` refreshes every six hours
+(`crons.ts`; `npx convex run seriesBrowse:rebuild` by hand), so every sort is
+an index range with an exact keyset cursor and no import write path changed.
+Popularity is the signals the catalog has — Series Follows and distinct
+collectors — not ratings, which v1 does not model. The Source Status filter
+appears once any importer supplies a status.
 
 ## Local development
 
