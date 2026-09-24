@@ -15,9 +15,13 @@ const COVER_PATH = /^\/covers\/(97[89]\d{10})\.jpg$/;
 const UPSTREAM = "https://images.penguinrandomhouse.com/cover/";
 // PRH's "no image available" stand-in is ~2.3 KB; real jackets are 20 KB+.
 const MIN_COVER_BYTES = 5000;
-// Its "Cover Coming Soon" card for unannounced books is one fixed JPEG; we
-// recognise it by hash so those books stay cloth until real art exists.
-const PLACEHOLDER_SHA256 = new Set(["6fcf7ec371385bdb11d7dec2a49f0bcf6777dba4bf7ca5ee38359659f7bf1af3"]);
+// Its "coming soon" cards for unannounced books are fixed JPEGs (two styles
+// seen so far); we recognise them by hash so those books stay cloth until
+// real art exists.
+const PLACEHOLDER_SHA256 = new Set([
+  "6fcf7ec371385bdb11d7dec2a49f0bcf6777dba4bf7ca5ee38359659f7bf1af3", // "Cover Coming Soon" card
+  "ad57672ff95addb88dfbb030720b9b67013b996752ee23276a44779514da9c24", // grey "Coming Soon" tile
+]);
 const HIT_TTL = 60 * 60 * 24 * 30; // a jacket rarely changes
 const MISS_TTL = 60 * 60 * 24; // recheck missing art daily
 const USER_AGENT = "MangaDB/1.0 (+https://mangadb.org/about-the-data)";

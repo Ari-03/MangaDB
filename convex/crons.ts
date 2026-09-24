@@ -10,4 +10,9 @@ const crons = cronJobs();
 
 crons.interval("import cadence tick", { hours: 1 }, internal.imports.runScheduled, {});
 
+// The /series library reads denormalized per-Series rows (seriesBrowse.ts);
+// this refreshes them so counts, dates, and popularity lag the catalog by
+// at most this long.
+crons.interval("series browse stats", { hours: 6 }, internal.seriesBrowse.rebuild, {});
+
 export default crons;

@@ -165,6 +165,54 @@ export default defineSchema({
     description: v.optional(v.string()),
   }).index("by_slug", ["slug"]),
 
+  // Series browse (the /series library): one denormalized row per active
+  // Series, rebuilt on a schedule by seriesBrowse.rebuild so the browse
+  // page can sort and page by index without touching the import write
+  // paths. Everything here is derived; the canonical records stay the
+  // source of truth. Numbers are yyyymmdd sort keys like releases.pubDate.
+  seriesStats: defineTable({
+    seriesId: v.id("series"),
+    publicId: v.number(),
+    title: v.string(),
+    // Lower-cased, leading article dropped, so "The Apothecary Diaries"
+    // shelves under A.
+    titleSort: v.string(),
+    // "a".."z" or "#" for titles that start with a digit or symbol.
+    letter: v.string(),
+    sourceStatus: v.union(
+      v.literal("ongoing"),
+      v.literal("completed"),
+      v.literal("hiatus"),
+      v.literal("cancelled"),
+      v.literal("unknown"),
+    ),
+    publishers: v.array(v.object({ name: v.string(), slug: v.string() })),
+    hasPhysical: v.boolean(),
+    hasDigital: v.boolean(),
+    volumeCount: v.number(),
+    releaseCount: v.number(),
+    firstReleaseSort: v.number(),
+    latestReleaseSort: v.number(),
+    // Earliest future release, or 0 when nothing is announced.
+    nextReleaseSort: v.number(),
+    // Series Follows and distinct users with a Collection Entry on any of
+    // its Releases: the popularity signals the catalog actually has.
+    followers: v.number(),
+    collectors: v.number(),
+    coverUrl: v.union(v.string(), v.null()),
+    coverIsbn: v.union(v.string(), v.null()),
+    rebuiltAt: v.number(),
+  })
+    .index("by_series", ["seriesId"])
+    .index("by_publicId", ["publicId"])
+    .index("by_title", ["titleSort", "publicId"])
+    .index("by_volumes", ["volumeCount", "publicId"])
+    .index("by_latest", ["latestReleaseSort", "publicId"])
+    .index("by_next", ["nextReleaseSort", "publicId"])
+    .index("by_followers", ["followers", "publicId"])
+    .index("by_collectors", ["collectors", "publicId"])
+    .index("by_rebuiltAt", ["rebuiltAt"]),
+
   publisherSlugRedirects: defineTable({
     fromSlug: v.string(),
     publisherId: v.id("publishers"),

@@ -1,0 +1,140 @@
+/* Series library (/series). Composes the Releases browser's masthead and
+   toolbar (.page-head, .toolbar, .filter, .seg, .result-count in
+   releases.css) and the shared shelf (covers.css); owns only the letter
+   index, the search field, the caption's sort line, and "Show more". */
+
+.library-page > .notice { margin-top: 24px; }
+.library-page > .notice a {
+  color: var(--accent);
+  font-weight: 700;
+  border-bottom: 1px solid transparent;
+}
+.library-page > .notice a:hover { border-bottom-color: var(--accent); }
+
+/* --- Title search inside the toolbar ------------------------------------ */
+
+.library-search {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 0;
+  max-width: 300px;
+  margin-left: auto;
+}
+.library-search .search-input { padding: 8px 40px 8px 14px; }
+.library-search-btn {
+  position: absolute;
+  right: 4px; top: 50%;
+  transform: translateY(-50%);
+  width: 30px; height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+}
+.library-search-btn:hover { color: var(--accent); background: var(--surface-2); }
+.library-search-btn svg { width: 16px; height: 16px; }
+
+/* --- Letter index --------------------------------------------------------
+   The strip stands on its own slim plank, like the lettered labels on a
+   library shelf end; the lit letter rises off it. */
+
+.letter-strip {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.9fr repeat(27, minmax(0, 1fr));
+  margin: 26px 0 38px;
+  padding-bottom: 5px;
+}
+.letter-strip::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  box-shadow: var(--ledge-shadow);
+  opacity: 0.7;
+}
+.letter {
+  display: grid;
+  place-items: center;
+  min-height: 38px;
+  padding: 2px 0 4px;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 45, "WONK" 1, "opsz" 36;
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--text-mute);
+  transition: color 120ms ease, background 120ms ease, transform 150ms ease;
+}
+.letter:first-child {
+  font-family: var(--sans);
+  font-variation-settings: normal;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+.letter:hover { color: var(--text); background: var(--surface); }
+.letter.is-on {
+  color: var(--accent);
+  background: var(--accent-tint);
+  transform: translateY(-3px);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* --- Shelf captions ------------------------------------------------------ */
+
+.caption-sub {
+  margin-top: 6px;
+  min-height: 1.5rem;
+  display: flex;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.caption-sub .chip { padding: 1px 9px; font-size: 0.72rem; }
+
+/* --- Show more ----------------------------------------------------------- */
+
+.library-more {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin-top: 44px;
+}
+.library-more .btn { min-width: 180px; justify-content: center; }
+.library-more .btn:disabled { opacity: 0.6; cursor: progress; transform: none; }
+.library-more-error { font-size: 0.86rem; color: var(--text-mute); }
+
+/* --- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .library-search { max-width: none; flex-basis: 100%; margin-left: 0; }
+}
+
+@media (max-width: 960px) {
+  /* 28 labels as two rows of 14 */
+  .letter-strip {
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+    row-gap: 6px;
+  }
+  .letter-strip .letter:first-child { font-size: 0.74rem; }
+}
+
+@media (max-width: 720px) {
+  .library-toolbar .seg { grid-template-columns: repeat(3, 1fr); }
+  .library-toolbar .filter { grid-template-columns: 76px minmax(0, 1fr); }
+  .letter { min-height: 34px; font-size: 0.95rem; }
+  .letter-strip { margin: 20px 0 30px; }
+}
+
+/* Two title lines' worth, so every card's meta line starts at the same height. */
+.library-shelf .caption-title { min-height: 2.6em; }

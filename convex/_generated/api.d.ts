@@ -55,6 +55,7 @@ import type * as roles from "../roles.js";
 import type * as seed from "../seed.js";
 import type * as sensitiveOps from "../sensitiveOps.js";
 import type * as seo from "../seo.js";
+import type * as seriesBrowse from "../seriesBrowse.js";
 import type * as sevenSeas from "../sevenSeas.js";
 import type * as sharing from "../sharing.js";
 import type * as users from "../users.js";
@@ -113,6 +114,7 @@ declare const fullApi: ApiFromModules<{
   seed: typeof seed;
   sensitiveOps: typeof sensitiveOps;
   seo: typeof seo;
+  seriesBrowse: typeof seriesBrowse;
   sevenSeas: typeof sevenSeas;
   sharing: typeof sharing;
   users: typeof users;

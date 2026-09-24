@@ -65,6 +65,7 @@ export function SiteHeader() {
   const [open, setOpen] = useState(false);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const releasesCurrent = pathname.startsWith("/releases");
+  const seriesCurrent = pathname.startsWith("/series");
   return (
     <header className="site-header">
       <div className="container header-inner">
@@ -80,6 +81,14 @@ export function SiteHeader() {
             aria-current={releasesCurrent ? "page" : undefined}
           >
             Releases
+          </Link>
+          {/* The Series library; a Series page counts as being in it. */}
+          <Link
+            to="/series"
+            className={seriesCurrent ? "nav-link is-current" : "nav-link"}
+            aria-current={seriesCurrent ? "page" : undefined}
+          >
+            Series
           </Link>
         </nav>
         <HeaderSearch />
@@ -108,6 +117,9 @@ export function SiteHeader() {
           </Link>
           <Link to="/releases" className="nav-link" onClick={() => setOpen(false)}>
             Releases
+          </Link>
+          <Link to="/series" className="nav-link" onClick={() => setOpen(false)}>
+            Series
           </Link>
           {clerkEnabled ? <AuthNav mobile /> : null}
         </div>
