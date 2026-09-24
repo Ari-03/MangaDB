@@ -92,7 +92,9 @@
    is how wide one book may grow, so one cover never fills the whole plank. */
 .hero-row {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(var(--hero-cols, 5), minmax(0, 1fr));
+  justify-content: start;
   padding-bottom: 18px;
 }
 .hero-row::after {
@@ -106,9 +108,8 @@
 }
 .hero-row .cover-link {
   display: block;
-  flex: 1 1 0;
   min-width: 0;
-  max-width: min(calc(100% / var(--hero-cols, 5)), 152px);
+  max-width: 152px;
   padding: 0 6px;
 }
 .hero-row .cover { border-radius: 2px 4px 4px 2px; }

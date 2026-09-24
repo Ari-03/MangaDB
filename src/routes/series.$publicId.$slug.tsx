@@ -423,6 +423,7 @@ function VolumeShelfItem({
           aria-label={title}
         >
           <Cover
+            src={volume.coverUrl}
             title={title}
             // A Volume Label goes on the cloth as the big number; an
             // unlabeled Volume (a oneshot, an extra) carries its title

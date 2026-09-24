@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
+import { coverUrl } from "./lib/covers";
 
 // Cap per-table counting so the scaffold query stays cheap even once imports
 // start filling the catalog; the home page renders "N+" past the cap.
@@ -218,9 +219,12 @@ export const seriesPage = query({
     const volumes = [];
     // Series pages pick a representative release cover at query time (spec
     // §8): the first covering Release with a cover, in reading order. It
-    // fronts the cover-led OG/Twitter card (spec §11, ticket #39).
-    let representativeCover: Id<"_storage"> | null = null;
+    // fronts the cover-led OG/Twitter card (spec §11, ticket #39). Each
+    // Volume also carries the first real cover among its own Releases, so
+    // the Reading Path can show the books rather than placeholders.
+    let representativeCover: string | null = null;
     for (const volume of volumeDocs) {
+      let volumeCover: string | null = null;
       const coveringRows = await ctx.db
         .query("volumeCoverages")
         .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
@@ -282,8 +286,9 @@ export const seriesPage = query({
             bundles.push({ publicId: bundle.publicId, name: bundle.name });
           }
 
-          if (representativeCover === null && release.coverImage) {
-            representativeCover = release.coverImage.storageId;
+          if (volumeCover === null && release.coverImage) {
+            volumeCover = await coverUrl(ctx, release.coverImage.storageId);
+            if (representativeCover === null) representativeCover = volumeCover;
           }
 
           releases.push({
@@ -322,6 +327,7 @@ export const seriesPage = query({
         position: volume.position,
         label: volume.label ?? null,
         synopsis: volume.synopsis ?? null,
+        coverUrl: volumeCover,
         editions,
       });
     }
@@ -335,9 +341,7 @@ export const seriesPage = query({
       },
       family,
       volumes,
-      coverUrl: representativeCover
-        ? await ctx.storage.getUrl(representativeCover)
-        : null,
+      coverUrl: representativeCover,
     };
   },
 });

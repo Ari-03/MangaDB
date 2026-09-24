@@ -22,6 +22,7 @@ import type * as launch from "../launch.js";
 import type * as lib_ann from "../lib/ann.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_authority from "../lib/authority.js";
+import type * as lib_covers from "../lib/covers.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_http from "../lib/http.js";
 import type * as lib_kodansha from "../lib/kodansha.js";
@@ -79,6 +80,7 @@ declare const fullApi: ApiFromModules<{
   "lib/ann": typeof lib_ann;
   "lib/auth": typeof lib_auth;
   "lib/authority": typeof lib_authority;
+  "lib/covers": typeof lib_covers;
   "lib/email": typeof lib_email;
   "lib/http": typeof lib_http;
   "lib/kodansha": typeof lib_kodansha;

@@ -13,6 +13,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { PUBLISHER_SCAN_CAP } from "./catalog";
 import { editionTitle, releaseAnchor } from "./lib/titles";
+import { coverUrl } from "./lib/covers";
 
 // A month window holds hundreds of releases across all publishers (spec §8);
 // the cap only guards against pathology, mirroring COUNT_CAP elsewhere.
@@ -167,9 +168,7 @@ export async function joinBrowseRows(
         publisherDoc && publisherDoc.status === "active"
           ? { name: publisherDoc.name, slug: publisherDoc.slug }
           : null,
-      coverUrl: release.coverImage
-        ? await ctx.storage.getUrl(release.coverImage.storageId)
-        : null,
+      coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
     });
   }
 
