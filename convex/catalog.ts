@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
-import { coverUrl } from "./lib/covers";
+import { coverUrl, seriesCover } from "./lib/covers";
 
 // Cap per-table counting so the scaffold query stays cheap even once imports
 // start filling the catalog; the home page renders "N+" past the cap.
@@ -47,6 +47,45 @@ export const listSeries = query({
     return docs
       .filter((doc) => doc.status === "active")
       .map((doc) => ({ publicId: doc.publicId, title: doc.title }));
+  },
+});
+
+/**
+ * The newest Series in the catalog (highest public IDs), each with a jacket
+ * for the home page's "recently added" shelf. Small and bounded: the shelf
+ * is a taste of the catalog, search and the browser are the way in.
+ */
+export const RECENT_SERIES_MAX = 28;
+export const recentSeries = query({
+  args: { limit: v.number() },
+  handler: async (ctx, { limit }) => {
+    const take = Math.max(1, Math.min(RECENT_SERIES_MAX, Math.floor(limit)));
+    // Look a little past the limit and seat the Series that have a jacket
+    // first: a shelf of the newest announcements is mostly books whose art
+    // no one has published yet, and a wall of cloth is not a taste of the
+    // catalog. Cloth fills whatever is left, newest first.
+    const docs = await ctx.db
+      .query("series")
+      .withIndex("by_publicId")
+      .order("desc")
+      .take(take * 3);
+    type Shelved = {
+      publicId: number;
+      title: string;
+      coverUrl: string | null;
+      coverIsbn: string | null;
+    };
+    const jacketed: Array<Shelved> = [];
+    const cloth: Array<Shelved> = [];
+    for (const doc of docs) {
+      if (doc.status !== "active") continue;
+      const entry = { publicId: doc.publicId, title: doc.title, ...(await seriesCover(ctx, doc._id)) };
+      (entry.coverUrl || entry.coverIsbn ? jacketed : cloth).push(entry);
+      if (jacketed.length === take) break;
+    }
+    return [...jacketed, ...cloth]
+      .slice(0, take)
+      .sort((a, b) => b.publicId - a.publicId);
   },
 });
 

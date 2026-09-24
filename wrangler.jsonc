@@ -9,6 +9,10 @@
   "observability": {
     "enabled": true
   },
+  // Cover art cache (see src/server/covers.ts): /covers/{isbn13}.jpg is fetched
+  // from the publisher-distribution CDN on first request, kept here, and
+  // served from the edge after that. Nothing cover-shaped lives in Convex.
+  "r2_buckets": [{ "binding": "COVERS", "bucket_name": "mangadb-covers" }],
   "vars": {
     // The canonical public host (spec §12). Requests for www.<host> 301 to the
     // apex; hosts that don't match (workers.dev previews, localhost) are

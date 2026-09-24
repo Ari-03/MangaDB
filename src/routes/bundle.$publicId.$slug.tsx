@@ -111,6 +111,7 @@ function BundlePage() {
           <div className="detail-cover-plate">
             <Cover
               src={bundle.coverUrl}
+              isbn13={bundle.isbn13}
               title={bundle.name}
               foot={[
                 members.length === 1 ? "1 book" : `${members.length} books`,

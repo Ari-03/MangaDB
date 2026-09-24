@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
 import { ReleaseCollectionControls } from "~/lib/collection";
-import { Cover, clothColor } from "~/lib/cover";
+import { Cover, clothColor, firstIsbn } from "~/lib/cover";
 import { SeriesFollowControls } from "~/lib/follows";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import {
@@ -177,6 +177,7 @@ function SeriesPage() {
   const page = Route.useLoaderData();
   const { series, family, volumes, coverUrl } = page;
   const facts = packagingFacts(volumes);
+  const heroIsbn = firstIsbn(volumes.flatMap((volume) => volume.editions));
 
   return (
     <main className="series-page">
@@ -191,12 +192,12 @@ function SeriesPage() {
             {/* The representative cover the query picked: the first Release
                 with art in reading order. Coverless Series get the cloth
                 binding rather than a broken image. */}
-            <Cover src={coverUrl} title={series.title} lazy={false} />
+            <Cover src={coverUrl} isbn13={heroIsbn} title={series.title} lazy={false} />
           </div>
           {facts.dateSpan ? (
             <p className="note">English releases on file: {facts.dateSpan}.</p>
           ) : null}
-          {coverUrl ? null : (
+          {coverUrl || heroIsbn ? null : (
             <p className="note">No cover art on file yet.</p>
           )}
         </div>
@@ -424,6 +425,7 @@ function VolumeShelfItem({
         >
           <Cover
             src={volume.coverUrl}
+            isbn13={firstIsbn(volume.editions)}
             title={title}
             // A Volume Label goes on the cloth as the big number; an
             // unlabeled Volume (a oneshot, an extra) carries its title

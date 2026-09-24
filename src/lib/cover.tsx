@@ -4,7 +4,7 @@
 // art. Collection state is worn on the cover itself as a badge, and the
 // followed-Series marker (#29) sits in the opposite corner.
 
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 // Cloth colours for coverless books. Picked deterministically from the title
 // so the same book is always the same colour across pages and reloads.
@@ -12,6 +12,34 @@ const CLOTH = [
   "#8a4426", "#6b2f4a", "#2b5d5b", "#3d5a3a", "#5a3d7a", "#7a5a2b",
   "#2f4d6b", "#7a2f2f", "#4a5a2b", "#6b4a2f", "#2b6b5a", "#7a3d5a",
 ];
+
+/**
+ * Cover art by ISBN-13, served from our own domain (src/server/covers.ts):
+ * the Worker fetches it from the publisher-distribution CDN on first request
+ * and keeps it. A Release with an ISBN therefore always has a cover URL; the
+ * 404 for art nobody has is caught by <Cover> and drawn as cloth.
+ */
+export function coverPath(isbn13: string): string {
+  return `/covers/${isbn13}.jpg`;
+}
+
+/**
+ * The ISBN to derive a page's hero cover from when no stored art exists:
+ * the first physical Release with an ISBN across the given Editions, else
+ * the first Release with one at all.
+ */
+export function firstIsbn(
+  editions: ReadonlyArray<{
+    releases: ReadonlyArray<{ isbn13: string | null; format?: string }>;
+  }>,
+): string | null {
+  const releases = editions.flatMap((edition) => edition.releases);
+  return (
+    releases.find((r) => r.format === "physical" && r.isbn13)?.isbn13 ??
+    releases.find((r) => r.isbn13)?.isbn13 ??
+    null
+  );
+}
 
 export function clothColor(seed: string): string {
   let hash = 0;
@@ -65,6 +93,8 @@ export function CoverBadge({ state, label }: { state: CollectionState; label?: s
 type CoverProps = {
   /** Cover art URL; when absent the cloth placeholder renders. */
   src?: string | null;
+  /** ISBN-13 to derive a cover URL from when `src` is absent. */
+  isbn13?: string | null;
   /** The book's title, used for alt text and printed on the placeholder. */
   title: string;
   /** Placeholder foot, e.g. the volume label and publisher. */
@@ -85,6 +115,7 @@ type CoverProps = {
 
 export function Cover({
   src,
+  isbn13,
   title,
   foot,
   numbered,
@@ -95,10 +126,31 @@ export function Cover({
 }: CoverProps) {
   const seed = numbered ? numbered.series : title;
   const style = { "--cloth": clothColor(seed) } as CSSProperties;
+  // An ISBN-derived URL can 404 (no art anywhere); when it does, the cloth
+  // binding takes over. Stored covers never fail this way.
+  const [broken, setBroken] = useState(false);
+  const img = useRef<HTMLImageElement>(null);
+  const url = src ?? (isbn13 ? coverPath(isbn13) : null);
+  const art = broken ? null : url;
+  // A server-rendered <img> can fail before React hydrates, and that error
+  // event is gone by the time onError is attached; a finished image with no
+  // pixels is the tell.
+  useEffect(() => {
+    const el = img.current;
+    if (el && el.complete && el.naturalWidth === 0) setBroken(true);
+  }, [url]);
   return (
     <span className={className ? `cover ${className}` : "cover"}>
-      {src ? (
-        <img src={src} alt={`Cover of ${title}`} loading={lazy ? "lazy" : "eager"} width={400} height={600} />
+      {art ? (
+        <img
+          ref={img}
+          src={art}
+          alt={`Cover of ${title}`}
+          loading={lazy ? "lazy" : "eager"}
+          width={400}
+          height={600}
+          onError={() => setBroken(true)}
+        />
       ) : numbered ? (
         <span className="cover-ph cover-ph--numbered" style={style} aria-label={`${title} (no cover on file)`}>
           <span className="cover-ph-series">{numbered.series}</span>

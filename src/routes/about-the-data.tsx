@@ -122,7 +122,10 @@ function AboutTheData() {
       <h2>Covers &amp; takedown</h2>
       <p>
         Cover images belong to their publishers and are shown to identify each
-        release, with the source credited. If you hold rights to a cover (or
+        release, with the source credited. Jacket art is looked up by ISBN
+        from the distribution catalog Penguin Random House operates for the
+        publishers it carries, and kept in our own cache so pages never lean
+        on a third party while you browse. If you hold rights to a cover (or
         anything else here) and want it corrected or removed, email{" "}
         <a href={`mailto:${DATA_CONTACT_EMAIL}`}>{DATA_CONTACT_EMAIL}</a> with
         the page link — takedowns are honored promptly.

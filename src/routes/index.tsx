@@ -21,12 +21,15 @@ import { fetchMonthReleases, type BrowseRelease } from "~/server/releases";
 // query. Runs only on the server; the Convex URL never reaches the client
 // bundle by way of this function. #22 adds the browse list of Series so the
 // catalog is reachable by link, not just by URL.
+/** Two ledges of the newest Series in the catalog. */
+const SERIES_SHELF_LIMIT = 14;
+
 const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
   const convex = convexServerClient();
   if (!convex) return null;
   const [stats, series] = await Promise.all([
     convex.query(api.catalog.stats, {}),
-    convex.query(api.catalog.listSeries, {}),
+    convex.query(api.catalog.recentSeries, { limit: SERIES_SHELF_LIMIT }),
   ]);
   return { stats, series };
 });
@@ -132,9 +135,9 @@ function Home() {
       {series.length > 0 ? (
         <section className="section">
           <div className="section-head">
-            <h2 className="section-title">Series</h2>
+            <h2 className="section-title">Recently added series</h2>
             <p className="section-note">
-              Every series MangaDB tracks, by catalog number
+              The newest additions to the catalog
             </p>
             <Link className="section-link" to="/search" search={{ q: "" }}>
               Search all series
@@ -155,10 +158,14 @@ function Home() {
                       tabIndex={-1}
                       aria-hidden="true"
                     >
-                      {/* No Series-level cover art is on file yet, so every
-                          Series stands as a cloth-bound book carrying its own
-                          title; the cloth colour is keyed to that title. */}
-                      <Cover title={entry.title} />
+                      {/* The Series' first jacket (lib/covers.ts); a Series
+                          with no art anywhere stands as a cloth-bound book
+                          carrying its own title. */}
+                      <Cover
+                        src={entry.coverUrl}
+                        isbn13={entry.coverIsbn}
+                        title={entry.title}
+                      />
                     </Link>
                   </div>
                   <div className="caption">
@@ -221,6 +228,7 @@ function HeroShelf({ releases }: { releases: Array<BrowseRelease> }) {
             <EditionLink className="cover-link" release={release} key={release.id}>
               <Cover
                 src={release.coverUrl}
+                isbn13={release.coverIsbn}
                 title={releaseTitle(release)}
                 foot={[release.volumeLabel, release.publisher?.name]}
                 lazy={index > 0}
@@ -370,6 +378,7 @@ function Shelf({
               <EditionLink className="cover-link" release={release}>
                 <Cover
                   src={release.coverUrl}
+                  isbn13={release.coverIsbn}
                   title={releaseTitle(release)}
                   foot={[release.volumeLabel, release.publisher?.name]}
                   lazy={!eager}
