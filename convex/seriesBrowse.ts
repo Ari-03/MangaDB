@@ -433,12 +433,6 @@ async function stillPublic(ctx: QueryCtx, row: StatsRow): Promise<boolean> {
   return series !== null && series.status === "active" && !series.mergedIntoId;
 }
 
-/** Search pages carry their offset in the cursor's id slot. */
-function searchOffset(raw: string | null | undefined): number {
-  const c = decodeCursor(raw);
-  return c && c.v === "search" ? c.id : 0;
-}
-
 export const browse = query({
   args: {
     sort: sortValidator,
@@ -462,11 +456,13 @@ export const browse = query({
     };
 
     // Search: the title index ranks the candidate set, the sort then orders
-    // it in memory and pages walk it by offset. Upcoming keeps "nothing
-    // announced" (0) at the end.
+    // it in memory and pages resume after the last row returned — the same
+    // (value, publicId) cursor the index sorts use, so a Series added or
+    // hidden between requests shifts nothing already seen. Upcoming keeps
+    // "nothing announced" (0) at the end.
     const needle = args.q?.trim();
     if (needle) {
-      const offset = searchOffset(args.cursor);
+      const after = decodeCursor(args.cursor);
       const hits = await ctx.db
         .query("series")
         .withSearchIndex("search_title", (q) => q.search("searchText", needle))
@@ -481,17 +477,19 @@ export const browse = query({
         if (row && matches(row, filters)) rows.push(row);
       }
       const { field } = SORT_INDEX[args.sort];
-      rows.sort((a, b) => {
-        const av = a[field] as string | number;
-        const bv = b[field] as string | number;
-        if (args.sort === "upcoming" && (av === 0) !== (bv === 0)) return av === 0 ? 1 : -1;
-        const cmp = av < bv ? -1 : av > bv ? 1 : a.publicId - b.publicId;
+      const compare = (a: Cursor, b: Cursor) => {
+        if (args.sort === "upcoming" && (a.v === 0) !== (b.v === 0)) return a.v === 0 ? 1 : -1;
+        const cmp = a.v < b.v ? -1 : a.v > b.v ? 1 : a.id - b.id;
         return order === "asc" ? cmp : -cmp;
-      });
-      const page = rows.slice(offset, offset + pageSize);
+      };
+      const keyOf = (row: StatsRow): Cursor => ({ v: row[field], id: row.publicId });
+      rows.sort((a, b) => compare(keyOf(a), keyOf(b)));
+      const start = after ? rows.findIndex((row) => compare(keyOf(row), after) > 0) : 0;
+      const page = start < 0 ? [] : rows.slice(start, start + pageSize);
+      const edge = page[page.length - 1];
       return {
         items: page.map(card),
-        nextCursor: offset + pageSize < rows.length ? encodeCursor({ v: "search", id: offset + pageSize }) : null,
+        nextCursor: edge && start + pageSize < rows.length ? encodeCursor(keyOf(edge)) : null,
       };
     }
 
