@@ -1,6 +1,6 @@
 # Porting the Bookshelf look into the real MangaDB app
 
-The owner picked prototype `prototypes/site-redesign/05-bookshelf/` as the look and feel
+The owner picked prototype `05-bookshelf` (branch `prototype/site-redesign`, `prototypes/site-redesign/`) as the look and feel
 for the production site, with the instruction: **"very subtle skeuomorphism — you are at a
 bookshelf, you're reading."** Subtle means: the shelf ledge under rows of covers, covers
 that sit like jacketed books (spine shading, lift on hover), coverless books as cloth-bound

@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "prototype:redesign": "python3 -m http.server 4174 --directory prototypes/site-redesign",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
