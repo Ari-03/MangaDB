@@ -176,3 +176,69 @@ describe("sort keys", () => {
     expect(letterFor("zom 100")).toBe("z");
   });
 });
+
+describe("seriesBrowse review follow-ups", () => {
+  it("drops a Series hidden since the last rebuild from browse and search", async () => {
+    const { t, ids } = await seeded();
+    await t.run((ctx) => ctx.db.patch(ids.quiet.seriesId, { status: "hidden" }));
+    const all = await t.query(api.seriesBrowse.browse, { sort: "title" });
+    expect(all.items.map((i) => i.title)).toEqual(["Tokyo Ghoul"]);
+    const hits = await t.query(api.seriesBrowse.browse, { sort: "title", q: "cartographer" });
+    expect(hits.items).toEqual([]);
+  });
+
+  it("keeps an active Series when an older overlapping run sweeps", async () => {
+    const { t, ids } = await seeded();
+    // A row rewritten by an earlier-started run carries an older stamp.
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.ghoul.seriesId))
+        .unique();
+      await ctx.db.patch(row!._id, { rebuiltAt: 1 });
+    });
+    await t.mutation(internal.seriesBrowse.sweepStale, { before: Date.now() });
+    const rows = await t.run((ctx) => ctx.db.query("seriesStats").collect());
+    expect(rows.map((r) => r.title).sort()).toEqual(["The Quiet Cartographer", "Tokyo Ghoul"]);
+  });
+
+  it("counts a month-precision date in the current month as upcoming", async () => {
+    const t = convexTest(schema);
+    const now = new Date();
+    const ym = now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100;
+    await t.run(async (ctx) => {
+      const pub = await ctx.db.insert("publishers", { status: "active", name: "P", slug: "p" });
+      const seriesId = await ctx.db.insert("series", { status: "active", publicId: 9, title: "Soon", altTitles: [], searchText: "Soon" });
+      const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: 900, seriesId, position: 1 });
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 900, publisherId: pub });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
+      await ctx.db.insert("releases", {
+        status: "active", editionId, publisherId: pub, seriesIds: [seriesId], format: "physical", language: "en",
+        pubDate: { year: Math.floor(ym / 10000), month: Math.floor(ym / 100) % 100, sort: ym },
+      });
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    const upcoming = await t.query(api.seriesBrowse.browse, { sort: "upcoming" });
+    expect(upcoming.items.map((i) => [i.title, i.nextReleaseSort])).toEqual([["Soon", ym]]);
+  });
+
+  it("pages search results", async () => {
+    const t = convexTest(schema);
+    await t.run(async (ctx) => {
+      const pub = await ctx.db.insert("publishers", { status: "active", name: "P", slug: "p" });
+      for (let i = 1; i <= 3; i++) {
+        const seriesId = await ctx.db.insert("series", { status: "active", publicId: i, title: `Echo ${i}`, altTitles: [], searchText: `Echo ${i}` });
+        const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: i, seriesId, position: 1 });
+        const editionId = await ctx.db.insert("editions", { status: "active", publicId: i, publisherId: pub });
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
+      }
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    const p1 = await t.query(api.seriesBrowse.browse, { sort: "title", q: "echo", pageSize: 2 });
+    expect(p1.items.map((i) => i.title)).toEqual(["Echo 1", "Echo 2"]);
+    expect(p1.nextCursor).not.toBeNull();
+    const p2 = await t.query(api.seriesBrowse.browse, { sort: "title", q: "echo", pageSize: 2, cursor: p1.nextCursor });
+    expect(p2.items.map((i) => i.title)).toEqual(["Echo 3"]);
+    expect(p2.nextCursor).toBeNull();
+  });
+});

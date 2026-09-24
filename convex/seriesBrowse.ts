@@ -43,7 +43,8 @@ const PAGE_MAX = 56;
 // bounds the scan so an over-selective filter can't read the whole table.
 const SCAN_CHUNK = 120;
 const SCAN_MAX = 1200;
-const SEARCH_LIMIT = 60;
+// Full-text search ranks up to this many titles; paging walks that set.
+const SEARCH_LIMIT = 300;
 
 // ---------- Rebuild (scheduled) ----------
 
@@ -105,6 +106,13 @@ export const rebuildBatch = internalMutation({
   },
 });
 
+/**
+ * Rows this run did not touch are candidates, but a row only goes when its
+ * Series is really gone (hidden, merged, deleted): two runs can overlap — a
+ * manual one beside the cron — and the earlier-started run rewrites rows
+ * with its older timestamp. An active Series' row is stamped forward
+ * instead so it leaves the candidate set.
+ */
 export const sweepStale = internalMutation({
   args: { before: v.number() },
   handler: async (ctx, { before }) => {
@@ -112,7 +120,14 @@ export const sweepStale = internalMutation({
       .query("seriesStats")
       .withIndex("by_rebuiltAt", (q) => q.lt("rebuiltAt", before))
       .take(STALE_SWEEP);
-    for (const row of stale) await ctx.db.delete(row._id);
+    for (const row of stale) {
+      const series = await ctx.db.get(row.seriesId);
+      if (series && series.status === "active") {
+        await ctx.db.patch(row._id, { rebuiltAt: before });
+      } else {
+        await ctx.db.delete(row._id);
+      }
+    }
     return stale.length;
   },
 });
@@ -167,7 +182,10 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
       if (sort > 0) {
         if (first === 0 || sort < first) first = sort;
         if (sort > latest) latest = sort;
-        if (sort > today && (next === 0 || sort < next)) next = sort;
+        // A month-precision date (yyyymm00) in the current month is still
+        // to come — its day is unannounced, not past.
+        const forthcoming = sort > today || (sort % 100 === 0 && sort >= today - (today % 100));
+        if (forthcoming && (next === 0 || sort < next)) next = sort;
       }
       if (!cover.url) {
         const url = await coverUrl(ctx, release.coverImage?.storageId);
@@ -231,8 +249,16 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     .query("seriesStats")
     .withIndex("by_series", (q) => q.eq("seriesId", series._id))
     .unique();
-  if (existing) await ctx.db.replace(existing._id, row);
-  else await ctx.db.insert("seriesStats", row);
+  if (existing) {
+    // Never move the stamp backwards: an overlapping older run must not
+    // make a fresher row look stale to the newer run's sweep.
+    await ctx.db.replace(existing._id, {
+      ...row,
+      rebuiltAt: Math.max(existing.rebuiltAt, rebuiltAt),
+    });
+  } else {
+    await ctx.db.insert("seriesStats", row);
+  }
 }
 
 /** "The Apothecary Diaries" → "apothecary diaries": articles don't shelve. */
@@ -401,6 +427,18 @@ async function readChunk(
   return [...head, ...tail];
 }
 
+/** Whether the row's Series is still an active, unmerged public record. */
+async function stillPublic(ctx: QueryCtx, row: StatsRow): Promise<boolean> {
+  const series = await ctx.db.get(row.seriesId);
+  return series !== null && series.status === "active" && !series.mergedIntoId;
+}
+
+/** Search pages carry their offset in the cursor's id slot. */
+function searchOffset(raw: string | null | undefined): number {
+  const c = decodeCursor(raw);
+  return c && c.v === "search" ? c.id : 0;
+}
+
 export const browse = query({
   args: {
     sort: sortValidator,
@@ -423,17 +461,19 @@ export const browse = query({
       letter: args.letter && /^[a-z#]$/.test(args.letter) ? args.letter : undefined,
     };
 
-    // Search is one page: the title index ranks, the sort then orders that
-    // set in memory. Upcoming keeps "nothing announced" (0) at the end.
+    // Search: the title index ranks the candidate set, the sort then orders
+    // it in memory and pages walk it by offset. Upcoming keeps "nothing
+    // announced" (0) at the end.
     const needle = args.q?.trim();
     if (needle) {
+      const offset = searchOffset(args.cursor);
       const hits = await ctx.db
         .query("series")
         .withSearchIndex("search_title", (q) => q.search("searchText", needle))
         .take(SEARCH_LIMIT);
       const rows: Array<StatsRow> = [];
       for (const hit of hits) {
-        if (hit.status !== "active") continue;
+        if (hit.status !== "active" || hit.mergedIntoId) continue;
         const row = await ctx.db
           .query("seriesStats")
           .withIndex("by_series", (q) => q.eq("seriesId", hit._id))
@@ -448,7 +488,11 @@ export const browse = query({
         const cmp = av < bv ? -1 : av > bv ? 1 : a.publicId - b.publicId;
         return order === "asc" ? cmp : -cmp;
       });
-      return { items: rows.slice(0, pageSize).map(card), nextCursor: null };
+      const page = rows.slice(offset, offset + pageSize);
+      return {
+        items: page.map(card),
+        nextCursor: offset + pageSize < rows.length ? encodeCursor({ v: "search", id: offset + pageSize }) : null,
+      };
     }
 
     const filtered = Boolean(filters.publisher || filters.status || filters.format || filters.letter);
@@ -472,7 +516,11 @@ export const browse = query({
       scanned += chunk.length;
       if (chunk.length < want) exhausted = true;
       for (const row of chunk) {
-        if (matches(row, filters)) items.push(row);
+        if (!matches(row, filters)) continue;
+        // The row lags its Series by up to a rebuild; a Series hidden or
+        // merged since must not surface from the library meanwhile.
+        if (!(await stillPublic(ctx, row))) continue;
+        items.push(row);
         if (items.length === target) break;
       }
       const last = chunk[chunk.length - 1];
@@ -480,13 +528,17 @@ export const browse = query({
     }
     const page = items.slice(0, pageSize);
     const edge = page[page.length - 1];
-    const more = items.length > pageSize && edge !== undefined;
-    return {
-      items: page.map(card),
-      nextCursor: more
+    // More to come either because a row past the page was seen, or because
+    // the scan budget ran out before the index did: a sparse filter then
+    // returns a short page and resumes from the last row scanned.
+    const budgetSpent = !exhausted && items.length <= pageSize && scanned >= SCAN_MAX;
+    const nextCursor =
+      items.length > pageSize && edge
         ? encodeCursor({ v: edge[SORT_INDEX[args.sort].field], id: edge.publicId })
-        : null,
-    };
+        : budgetSpent && cursor
+          ? encodeCursor(cursor)
+          : null;
+    return { items: page.map(card), nextCursor };
   },
 });
 
