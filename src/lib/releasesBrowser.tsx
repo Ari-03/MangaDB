@@ -16,6 +16,7 @@ import { useQuery } from "convex/react";
 
 import { api } from "../../convex/_generated/api";
 import { convexClient } from "~/providers";
+import { Cover } from "~/lib/cover";
 import {
   addMonths,
   daysInMonth,
@@ -27,7 +28,7 @@ import {
   weekdayName,
   type YearMonth,
 } from "~/lib/month";
-import { slugify } from "~/lib/slug";
+import { slugParams } from "~/lib/slug";
 import type { BrowseRelease, MonthReleasesData } from "~/server/releases";
 
 export type ReleaseFormat = "physical" | "digital";
@@ -124,18 +125,21 @@ function BrowserView({
       ? data.releases.filter(followsFilter)
       : data.releases
     : null;
+  const filtered = Boolean(
+    filters.format || filters.publisher || filters.followed,
+  );
 
   return (
     <main className="releases-page">
-      <header className="browse-masthead">
+      <div className="page-head">
         <div>
-          <p className="eyebrow">English manga releases</p>
-          <h1>{monthTitle(anchor)}</h1>
+          <p className="page-kicker">English manga releases</p>
+          <h1 className="page-title">{monthTitle(anchor)}</h1>
         </div>
         <MonthNav view={view} anchor={anchor} today={today} filters={filters} />
-      </header>
+      </div>
 
-      <div className="browse-controls">
+      <div className="toolbar">
         <ViewToggle view={view} anchor={anchor} today={today} filters={filters} />
         {data ? (
           <FilterBar
@@ -150,11 +154,7 @@ function BrowserView({
             onChange={onFiltersChange}
           />
         ) : null}
-        {releases ? (
-          <span className="result-count">
-            {releases.length} {releases.length === 1 ? "release" : "releases"}
-          </span>
-        ) : null}
+        {releases ? <ResultCount releases={releases} /> : null}
       </div>
 
       {data === null || releases === null ? (
@@ -164,15 +164,27 @@ function BrowserView({
         </p>
       ) : filters.followed && followedSeries === null ? (
         <p className="notice">
-          Sign in to see only releases from series you follow.
+          {/* Clerk owns /sign-in; a plain anchor leaves the router out of it. */}
+          <a href="/sign-in">Sign in</a> to see only releases from series you
+          follow.
         </p>
       ) : releases.length === 0 ? (
         <p className="notice">
           No releases{" "}
-          {filters.format || filters.publisher || filters.followed
-            ? "match these filters "
-            : ""}
+          {filtered ? "match these filters " : ""}
           in {monthTitle(anchor)}.
+          {filtered ? (
+            <>
+              {" "}
+              <button
+                className="link-btn"
+                type="button"
+                onClick={() => onFiltersChange({})}
+              >
+                Clear the filters
+              </button>
+            </>
+          ) : null}
         </p>
       ) : view === "grid" ? (
         <GridView
@@ -191,6 +203,29 @@ function BrowserView({
     </main>
   );
 }
+
+/** "12 releases · 3 publication days" — the window's size, not a filter. */
+function ResultCount({ releases }: { releases: Array<BrowseRelease> }) {
+  const days = new Set(
+    releases.filter((release) => release.day !== null).map((r) => r.day),
+  ).size;
+  return (
+    <p className="result-count">
+      {releases.length} {releases.length === 1 ? "release" : "releases"}
+      {days > 0
+        ? ` · ${days} publication ${days === 1 ? "day" : "days"}`
+        : null}
+    </p>
+  );
+}
+
+/**
+ * `/releases` is the parent route of every month URL, and a month link's
+ * search is a subset of the current one, so the router's default prefix
+ * matching would mark the wrong nav item `aria-current="page"`. The masthead
+ * and the view toggle say "current" themselves.
+ */
+const EXACT_ACTIVE = { exact: true } as const;
 
 /** Search object for month-route links, keeping `view=agenda` sticky. */
 function monthSearch(view: "agenda" | "grid", filters: BrowseFilters) {
@@ -217,6 +252,7 @@ function MonthNav({
         to="/releases/$month"
         params={{ month: monthParam(prev) }}
         search={monthSearch(view, filters)}
+        activeOptions={EXACT_ACTIVE}
         rel="nofollow"
       >
         ← {shortName(prev)}
@@ -226,7 +262,7 @@ function MonthNav({
       ) : view === "agenda" ? (
         // The current month's Agenda is canonically `/releases` (spec §10:
         // Agenda is the first-visit default).
-        <Link to="/releases" search={filters}>
+        <Link to="/releases" search={filters} activeOptions={EXACT_ACTIVE}>
           This month
         </Link>
       ) : (
@@ -234,6 +270,7 @@ function MonthNav({
           to="/releases/$month"
           params={{ month: monthParam(today) }}
           search={filters}
+          activeOptions={EXACT_ACTIVE}
         >
           This month
         </Link>
@@ -242,6 +279,7 @@ function MonthNav({
         to="/releases/$month"
         params={{ month: monthParam(next) }}
         search={monthSearch(view, filters)}
+        activeOptions={EXACT_ACTIVE}
         rel="nofollow"
       >
         {shortName(next)} →
@@ -250,6 +288,7 @@ function MonthNav({
   );
 }
 
+/** The Agenda | Month grid segmented control; the current view is not a link. */
 function ViewToggle({
   view,
   anchor,
@@ -262,30 +301,43 @@ function ViewToggle({
   filters: BrowseFilters;
 }) {
   return (
-    <nav className="view-toggle" aria-label="View">
+    <nav className="seg" aria-label="View">
       {view === "agenda" ? (
-        <span aria-current="page">Agenda</span>
+        <span className="seg-btn is-on" aria-current="page">
+          Agenda
+        </span>
       ) : sameMonth(anchor, today) ? (
-        <Link to="/releases" search={filters}>
+        <Link
+          className="seg-btn"
+          to="/releases"
+          search={filters}
+          activeOptions={EXACT_ACTIVE}
+        >
           Agenda
         </Link>
       ) : (
         <Link
+          className="seg-btn"
           to="/releases/$month"
           params={{ month: monthParam(anchor) }}
           search={{ ...filters, view: "agenda" }}
+          activeOptions={EXACT_ACTIVE}
           rel="nofollow"
         >
           Agenda
         </Link>
       )}
       {view === "grid" ? (
-        <span aria-current="page">Month grid</span>
+        <span className="seg-btn is-on" aria-current="page">
+          Month grid
+        </span>
       ) : (
         <Link
+          className="seg-btn"
           to="/releases/$month"
           params={{ month: monthParam(anchor) }}
           search={filters}
+          activeOptions={EXACT_ACTIVE}
         >
           Month grid
         </Link>
@@ -298,8 +350,11 @@ function ViewToggle({
  * Format + Publisher + followed-Series filters, identical in both views. A
  * real GET form whose fields mirror the search params, so it works before
  * hydration (submit) and after it (change handlers navigate immediately).
- * The followed checkbox appears only for signed-in viewers (or to switch an
+ * The followed toggle appears only for signed-in viewers (or to switch an
  * already-on followed filter off) — followed is never a separate section.
+ *
+ * The form is `display: contents`, so its controls sit directly on the
+ * toolbar's flex line while still submitting as one GET form.
  */
 function FilterBar({
   action,
@@ -324,9 +379,10 @@ function FilterBar({
       onSubmit={(event) => event.preventDefault()}
     >
       {keepViewParam ? <input type="hidden" name="view" value="agenda" /> : null}
-      <label>
+      <label className="filter">
         <span className="filter-label">Format</span>
         <select
+          className="select"
           name="format"
           value={filters.format ?? ""}
           onChange={(event) => {
@@ -343,9 +399,10 @@ function FilterBar({
           <option value="digital">Digital</option>
         </select>
       </label>
-      <label>
+      <label className="filter">
         <span className="filter-label">Publisher</span>
         <select
+          className="select"
           name="publisher"
           value={filters.publisher ?? ""}
           onChange={(event) => {
@@ -362,7 +419,9 @@ function FilterBar({
         </select>
       </label>
       {showFollowed ? (
-        <label className="filter-followed">
+        // A real checkbox worn as a pill: the GET fallback still submits
+        // `followed=on`, and the pill lights up from :has(:checked).
+        <label className="toggle-pill filter-followed">
           <input
             type="checkbox"
             name="followed"
@@ -375,11 +434,16 @@ function FilterBar({
               })
             }
           />
+          <span className="star" aria-hidden="true">
+            ★
+          </span>
           <span className="filter-label">Followed series</span>
         </label>
       ) : null}
       <noscript>
-        <button type="submit">Apply</button>
+        <button className="btn btn-sm" type="submit">
+          Apply
+        </button>
       </noscript>
     </form>
   );
@@ -397,6 +461,35 @@ function groupByDay(releases: Array<BrowseRelease>) {
     ([a], [b]) => (a ?? 0) - (b ?? 0),
   );
 }
+
+/** "3 releases" — every count in the browser reads the same way. */
+function releaseCount(n: number): string {
+  return `${n} ${n === 1 ? "release" : "releases"}`;
+}
+
+/** The row's book title: the Series (or crossover Series) it publishes. */
+function releaseTitle(release: BrowseRelease): string {
+  return release.series.map((series) => series.title).join(" × ");
+}
+
+/**
+ * The Agenda's per-day anchor, so the Month Grid can link a day straight to
+ * its section. Month-qualified because the Publisher page stacks several
+ * months of AgendaView on one document.
+ */
+function dayAnchorId(anchor: YearMonth, day: number | null): string {
+  return `day-${monthParam(anchor)}-${day === null ? "tba" : String(day).padStart(2, "0")}`;
+}
+
+const LONG_WEEKDAYS: Record<string, string> = {
+  Sun: "Sunday",
+  Mon: "Monday",
+  Tue: "Tuesday",
+  Wed: "Wednesday",
+  Thu: "Thursday",
+  Fri: "Friday",
+  Sat: "Saturday",
+};
 
 // ---------- Agenda (spec §10: cover-led chronological default) ----------
 
@@ -416,29 +509,37 @@ export function AgendaView({
 }) {
   return (
     <div className="agenda">
-      {groupByDay(releases).map(([day, dayReleases]) => (
-        <section key={day ?? "tba"} className="agenda-group">
-          <div className="agenda-date">
-            {day === null ? (
-              <span className="agenda-tba">Day to be announced</span>
-            ) : (
-              <>
-                <strong>{day}</strong>
-                <span>{weekdayName(anchor, day)}</span>
-              </>
-            )}
-          </div>
-          <ol className="agenda-cards">
-            {dayReleases.map((release) => (
-              <ReleaseCard
-                key={release.id}
-                release={release}
-                followedSeries={followedSeries}
-              />
-            ))}
-          </ol>
-        </section>
-      ))}
+      {groupByDay(releases).map(([day, dayReleases]) => {
+        const short = day === null ? null : weekdayName(anchor, day);
+        return (
+          <section key={day ?? "tba"} className="day" id={dayAnchorId(anchor, day)}>
+            <div className="day-marker">
+              <h2 className="day-date">
+                {day === null ? (
+                  <span className="day-tba">Day to be announced</span>
+                ) : (
+                  <>
+                    <span className="day-dow">
+                      {short === null ? "" : (LONG_WEEKDAYS[short] ?? short)}
+                    </span>
+                    <span className="day-num">{day}</span>
+                  </>
+                )}
+              </h2>
+              <p className="day-count">{releaseCount(dayReleases.length)}</p>
+            </div>
+            <ol className="day-list">
+              {dayReleases.map((release) => (
+                <ReleaseRow
+                  key={release.id}
+                  release={release}
+                  followedSeries={followedSeries}
+                />
+              ))}
+            </ol>
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -458,7 +559,7 @@ function isFollowed(
 function FollowedMarker() {
   return (
     <span
-      className="followed-marker"
+      className="star"
       title="You follow this series"
       aria-label="You follow this series"
     >
@@ -467,85 +568,111 @@ function FollowedMarker() {
   );
 }
 
-function seriesLinkParams(publicId: number, title: string) {
-  return { publicId: String(publicId), slug: slugify(title) };
-}
-
-function ReleaseCard({
+/**
+ * One Release on the shelf: cover, the Series it belongs to, the Volume label
+ * linking the Edition page at this Release's row (spec §11 — a Release has no
+ * page of its own), Publisher, and Format/Binding.
+ *
+ * Collection state is deliberately absent: it is per-Release and personal,
+ * and the only query for it is one-release-at-a-time, so a month window would
+ * open hundreds of subscriptions. Shelf-state controls live on the Edition
+ * page the Volume label links to.
+ */
+function ReleaseRow({
   release,
   followedSeries = null,
 }: {
   release: BrowseRelease;
   followedSeries?: FollowedSeriesSet;
 }) {
+  const title = releaseTitle(release);
+  const volumeLabel = release.volumeLabel || "Edition";
+  const editionParams = slugParams(
+    release.edition.publicId,
+    release.edition.title,
+  );
+  const followed = isFollowed(release, followedSeries);
   return (
-    <li className="release-card">
-      <Cover release={release} />
-      <div className="release-card-body">
-        <h3>
-          {isFollowed(release, followedSeries) ? <FollowedMarker /> : null}
-          {release.series.map((series, i) => (
-            <span key={series.publicId}>
-              {i > 0 ? " × " : ""}
-              <Link
-                to="/series/$publicId/$slug"
-                params={seriesLinkParams(series.publicId, series.title)}
-              >
-                {series.title}
-              </Link>
-            </span>
-          ))}
-          {release.volumeLabel ? ` — ${release.volumeLabel}` : ""}
-        </h3>
-        {release.lineName ? (
-          <p className="release-card-line">
-            {release.lineName}
-            {release.linePosition ? ` ${release.linePosition}` : ""}
-          </p>
-        ) : null}
-      </div>
-      <div className="release-card-meta">
-        <span className={`format-badge ${release.format}`}>
-          {FORMAT_LABELS[release.format]}
-          {release.binding ? ` · ${release.binding}` : ""}
-        </span>
-        {release.publisher ? (
-          // The Publisher Spotlight page (ticket #25, spec §11).
+    <li className={followed ? "rel is-followed" : "rel"}>
+      {/* The cover repeats the Volume label's link, so it stays out of the
+          tab order and off the accessibility tree. */}
+      <Link
+        className="rel-cover"
+        to="/edition/$publicId/$slug"
+        params={editionParams}
+        hash={release.anchor}
+        tabIndex={-1}
+        aria-hidden="true"
+      >
+        <Cover
+          src={release.coverUrl}
+          title={`${title} ${volumeLabel}`.trim()}
+          foot={[release.volumeLabel, release.publisher?.name]}
+        />
+      </Link>
+      <div className="rel-main">
+        <p className="rel-title">
+          <span className="rel-series">
+            {release.series.map((series, i) => (
+              <span key={series.publicId}>
+                {i > 0 ? " × " : ""}
+                <Link
+                  to="/series/$publicId/$slug"
+                  params={slugParams(series.publicId, series.title)}
+                >
+                  {series.title}
+                </Link>
+              </span>
+            ))}
+          </span>
           <Link
-            className="release-card-publisher"
-            to="/publisher/$slug"
-            params={{ slug: release.publisher.slug }}
+            className="rel-vol"
+            to="/edition/$publicId/$slug"
+            params={editionParams}
+            hash={release.anchor}
           >
-            {release.publisher.name}
+            {volumeLabel}
           </Link>
-        ) : null}
+          {followed ? <FollowedMarker /> : null}
+        </p>
+        <div className="rel-meta">
+          {release.publisher ? (
+            // The Publisher Spotlight page (ticket #25, spec §11).
+            <Link to="/publisher/$slug" params={{ slug: release.publisher.slug }}>
+              {release.publisher.name}
+            </Link>
+          ) : null}
+          <span className={`chip chip--${release.format}`}>
+            {FORMAT_LABELS[release.format]}
+            {release.binding ? ` · ${release.binding}` : ""}
+          </span>
+          {release.lineName ? (
+            <span className="chip chip--line">
+              {release.lineName}
+              {release.linePosition ? ` ${release.linePosition}` : ""}
+            </span>
+          ) : null}
+        </div>
       </div>
     </li>
   );
 }
 
-function Cover({ release }: { release: BrowseRelease }) {
-  const title = release.series.map((series) => series.title).join(" × ");
-  return release.coverUrl ? (
-    <img
-      className="release-cover"
-      src={release.coverUrl}
-      alt={`Cover of ${title} ${release.volumeLabel}`.trim()}
-      loading="lazy"
-    />
-  ) : (
-    // Covers arrive with the importers; until then the placeholder keeps the
-    // browser cover-led without fabricating art.
-    <span className="release-cover release-cover-placeholder" aria-hidden="true">
-      {title}
-    </span>
-  );
-}
-
 // ---------- Month Grid (spec §10: month-at-a-glance sibling) ----------
 
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
-const GRID_CELL_MAX = 3;
+// Nearly every release in a month lands on the same weekday, so a seven-column
+// calendar would be ~85% empty cells. The grid is one row per week instead: a
+// dated gutter, the week's publication day(s) as a strip of covers on a ledge,
+// and the quiet days as ticks.
+
+/** Covers shown per day strip before the rest collapse into "+N more". */
+const STRIP_MAX = 7;
+
+/** "31 Aug" for any day offset in the anchor month; 0 and negatives roll back. */
+function dayLabel(anchor: YearMonth, day: number): string {
+  const date = new Date(Date.UTC(anchor.year, anchor.month - 1, day));
+  return `${date.getUTCDate()} ${MONTH_NAMES[date.getUTCMonth()]!.slice(0, 3)}`;
+}
 
 function GridView({
   anchor,
@@ -568,93 +695,161 @@ function GridView({
       else byDay.set(release.day, [release]);
     }
   }
-  const days = Array.from({ length: daysInMonth(anchor) }, (_, i) => i + 1);
+
+  const length = daysInMonth(anchor);
+  // Weeks run Sunday to Saturday; the first one reaches back into last month.
+  const weekStarts: Array<number> = [];
+  for (let start = 1 - firstWeekday(anchor); start <= length; start += 7) {
+    weekStarts.push(start);
+  }
 
   return (
-    <>
+    <div className="month-weeks">
       {tba.length > 0 ? (
-        <section className="grid-tba">
-          <h2>This month, day to be announced</h2>
-          <ol className="agenda-cards">
-            {tba.map((release) => (
-              <ReleaseCard
-                key={release.id}
-                release={release}
-                followedSeries={followedSeries}
-              />
-            ))}
-          </ol>
+        <section className="week-row week-row--tba">
+          <div className="week-gutter">
+            <span className="wk-kicker">This month</span>
+            <span className="wk-date">Day to be announced</span>
+            <span className="wk-total">{releaseCount(tba.length)}</span>
+          </div>
+          <div className="week-body">
+            <CoverStrip
+              anchor={anchor}
+              filters={filters}
+              day={null}
+              releases={tba}
+              followedSeries={followedSeries}
+            />
+          </div>
         </section>
       ) : null}
-      <div className="calendar-grid">
-        {WEEKDAYS.map((weekday) => (
-          <div key={weekday} className="weekday">
-            {weekday}
-          </div>
-        ))}
-        {Array.from({ length: firstWeekday(anchor) }, (_, i) => (
-          <div key={`pad-${i}`} className="calendar-day outside" />
-        ))}
-        {days.map((day) => {
-          const dayReleases = byDay.get(day) ?? [];
-          return (
-            <div key={day} className="calendar-day">
-              <div className="day-number">
-                <span>{day}</span>
-                {dayReleases.length > 0 ? (
-                  <span className="day-count">{dayReleases.length}</span>
-                ) : null}
-              </div>
-              {dayReleases.slice(0, GRID_CELL_MAX).map((release) => (
-                <GridItem
-                  key={release.id}
-                  release={release}
-                  followedSeries={followedSeries}
-                />
-              ))}
-              {dayReleases.length > GRID_CELL_MAX ? (
-                <Link
-                  className="calendar-more"
-                  to="/releases/$month"
-                  params={{ month: monthParam(anchor) }}
-                  search={{ ...filters, view: "agenda" }}
-                  rel="nofollow"
-                >
-                  +{dayReleases.length - GRID_CELL_MAX} more
-                </Link>
+
+      {weekStarts.map((start) => {
+        const days = [0, 1, 2, 3, 4, 5, 6]
+          .map((offset) => start + offset)
+          .filter((day) => day >= 1 && day <= length);
+        const active = days.filter((day) => byDay.has(day));
+        const quiet = days.filter((day) => !byDay.has(day));
+        const total = active.reduce(
+          (sum, day) => sum + (byDay.get(day)?.length ?? 0),
+          0,
+        );
+        return (
+          // A week nobody publishes in is a tick line, not a panel.
+          <section
+            key={start}
+            className={total > 0 ? "week-row" : "week-row is-quiet"}
+          >
+            <div className="week-gutter">
+              <span className="wk-kicker">Week of</span>
+              <span className="wk-date">{dayLabel(anchor, start)}</span>
+              <span className="wk-range">to {dayLabel(anchor, start + 6)}</span>
+              {total > 0 ? (
+                <span className="wk-total">{releaseCount(total)}</span>
               ) : null}
             </div>
-          );
-        })}
-      </div>
-    </>
+            <div className="week-body">
+              {active.map((day) => (
+                <div key={day} className="rel-day">
+                  <div className="rd-head">
+                    <h2 className="rd-date">
+                      <span className="rd-dow">{weekdayName(anchor, day)}</span>{" "}
+                      {day} {MONTH_NAMES[anchor.month - 1]}
+                    </h2>
+                    <span className="rd-count">
+                      {releaseCount(byDay.get(day)?.length ?? 0)}
+                    </span>
+                    <Link
+                      className="rd-link"
+                      to="/releases/$month"
+                      params={{ month: monthParam(anchor) }}
+                      search={{ ...filters, view: "agenda" }}
+                      hash={dayAnchorId(anchor, day)}
+                      rel="nofollow"
+                    >
+                      Open this day in the agenda
+                    </Link>
+                  </div>
+                  <CoverStrip
+                    anchor={anchor}
+                    filters={filters}
+                    day={day}
+                    releases={byDay.get(day) ?? []}
+                    followedSeries={followedSeries}
+                  />
+                </div>
+              ))}
+              {quiet.length > 0 ? (
+                <p className="wk-quiet">
+                  No releases{" "}
+                  {quiet.map((day) => (
+                    <span key={day} className="qd">
+                      {day}
+                    </span>
+                  ))}
+                </p>
+              ) : null}
+            </div>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
-function GridItem({
-  release,
+/** A day's covers on a ledge; the overflow collapses into one "+N more" tile. */
+function CoverStrip({
+  anchor,
+  filters,
+  day,
+  releases,
   followedSeries,
 }: {
-  release: BrowseRelease;
+  anchor: YearMonth;
+  filters: BrowseFilters;
+  day: number | null;
+  releases: Array<BrowseRelease>;
   followedSeries: FollowedSeriesSet;
 }) {
-  const lead = release.series[0];
-  if (!lead) return null;
+  const overflow = releases.length > STRIP_MAX ? releases.length - STRIP_MAX + 1 : 0;
+  const shown = overflow > 0 ? releases.slice(0, STRIP_MAX - 1) : releases;
   return (
-    <Link
-      className="calendar-item"
-      to="/series/$publicId/$slug"
-      params={seriesLinkParams(lead.publicId, lead.title)}
-      title={`${release.series.map((s) => s.title).join(" × ")} ${release.volumeLabel} · ${FORMAT_LABELS[release.format]}${release.publisher ? ` · ${release.publisher.name}` : ""}`}
-    >
-      <strong>
-        {isFollowed(release, followedSeries) ? <FollowedMarker /> : null}
-        {lead.title}
-      </strong>
-      <span>
-        {release.volumeLabel || "Release"} ·{" "}
-        {FORMAT_LABELS[release.format]}
-      </span>
-    </Link>
+    <div className="wk-covers">
+      {shown.map((release) => {
+        const title = releaseTitle(release);
+        const full = `${title} ${release.volumeLabel}`.trim();
+        return (
+          <Link
+            key={release.id}
+            className="cover-link"
+            to="/edition/$publicId/$slug"
+            params={slugParams(release.edition.publicId, release.edition.title)}
+            hash={release.anchor}
+            title={full}
+          >
+            <Cover
+              src={release.coverUrl}
+              title={full}
+              foot={[release.volumeLabel, release.publisher?.name]}
+              followed={isFollowed(release, followedSeries)}
+            />
+          </Link>
+        );
+      })}
+      {overflow > 0 ? (
+        <Link
+          className="wk-more"
+          to="/releases/$month"
+          params={{ month: monthParam(anchor) }}
+          search={{ ...filters, view: "agenda" }}
+          hash={dayAnchorId(anchor, day)}
+          rel="nofollow"
+        >
+          +{overflow}
+          <br />
+          more
+        </Link>
+      ) : null}
+    </div>
   );
 }

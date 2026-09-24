@@ -38,7 +38,7 @@ const RECORD_TYPES = [
 function QueuePage() {
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           The review queue needs a configured Convex deployment (see the
           README).
@@ -54,14 +54,14 @@ function QueueGate() {
   const viewer = useQuery(api.users.viewer, {});
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
   }
   if (!isDataTeam) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Data team only</h1>
         <p className="notice">
           The review queue is visible to Editors, Moderators, and
@@ -106,7 +106,7 @@ function Queue() {
   });
 
   return (
-    <main className="mod-queue-page">
+    <main className="mod-page mod-queue-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>Review queue</span>
@@ -114,11 +114,13 @@ function Queue() {
       <h1>Review queue</h1>
       <p className="section-hint">
         In-Review proposals, oldest first. Claiming signals who is looking; it
-        never locks — any Moderator can decide.{" "}
-        <Link to="/mod/proposals">My proposals</Link> ·{" "}
-        <Link to="/mod/imports">Imports</Link> ·{" "}
-        <Link to="/mod/launch">Launch</Link>
+        never locks — any Moderator can decide.
       </p>
+      <nav className="mod-tools" aria-label="Data team tools">
+        <Link to="/mod/proposals">My proposals</Link>
+        <Link to="/mod/imports">Imports</Link>
+        <Link to="/mod/launch">Launch</Link>
+      </nav>
 
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>
         <label>
@@ -164,20 +166,20 @@ function Queue() {
             onChange={(e) => setMinAgeHours(e.target.value)}
           />
         </label>
-        <label>
+        <label className="filter-toggle">
           <input
             type="checkbox"
             checked={staleOnly}
             onChange={(e) => setStaleOnly(e.target.checked)}
-          />{" "}
+          />
           Stale only
         </label>
-        <label>
+        <label className="filter-toggle">
           <input
             type="checkbox"
             checked={warningsOnly}
             onChange={(e) => setWarningsOnly(e.target.checked)}
-          />{" "}
+          />
           With warnings only
         </label>
       </form>
@@ -189,7 +191,10 @@ function Queue() {
       ) : (
         <ol className="queue-list">
           {rows.map((row) => (
-            <li key={row.proposalId} className="queue-row">
+            <li
+              key={row.proposalId}
+              className={row.stale ? "queue-row mod-flagged" : "queue-row"}
+            >
               <Link to="/mod/proposal/$id" params={{ id: row.proposalId }}>
                 {row.comment || "(no comment)"}
               </Link>
@@ -200,11 +205,15 @@ function Queue() {
                     : `import: ${row.author.sourceKey}`}
                 </span>
                 <span>
-                  v{row.versionNo} · {row.opCount} op{row.opCount === 1 ? "" : "s"} (
-                  {row.opKinds.join(", ")}) · {row.recordTypes.join(", ")}
+                  v{row.versionNo} — {row.opCount} op
+                  {row.opCount === 1 ? "" : "s"} ({row.opKinds.join(", ")})
                 </span>
+                <span>{row.recordTypes.join(", ")}</span>
                 <span>waiting {formatAge(row.ageMs)}</span>
-                {row.stale ? <strong className="queue-stale">stale</strong> : null}
+                {row.claimedBy ? <span>claimed by @{row.claimedBy}</span> : null}
+                {row.stale ? (
+                  <span className="chip mod-chip mod-chip--bad">stale</span>
+                ) : null}
                 {row.warnings.length > 0 ? (
                   <span className="queue-warnings">
                     warnings:{" "}
@@ -218,7 +227,6 @@ function Queue() {
                       .join("; ")}
                   </span>
                 ) : null}
-                {row.claimedBy ? <span>claimed by @{row.claimedBy}</span> : null}
               </div>
             </li>
           ))}

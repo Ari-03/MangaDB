@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kodansha — MangaDB</title>
+<meta name="description" content="Kodansha on MangaDB: 52 English releases in September 2026 across 33 series.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,300..700;1,400..600&family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+  /* Dark is the default, always: the hardcoded data-theme="dark" on <html>
+     stands unless a saved choice or ?theme= overrides it. The OS
+     prefers-color-scheme deliberately does not get a vote. */
+  (function () {
+    var q = new URLSearchParams(location.search).get('theme');
+    var t = q || localStorage.getItem('mangadb-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <div class="masthead__in">
+    <a class="wordmark" href="index.html">Manga<em>DB</em></a>
+    <nav class="nav" aria-label="Sections">
+        <a href="index.html">Home</a>
+        <a href="releases.html">Releases</a>
+        <a href="releases-grid.html">Month grid</a>
+        <a href="series.html">Series</a>
+        <a href="publisher.html" aria-current="page">Publishers</a>
+    </nav>
+    <div class="mast-actions">
+      <label class="search">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span class="skip">Search series, volumes and publishers</span>
+        <input type="search" placeholder="Search MangaDB" aria-label="Search series, volumes and publishers">
+      </label>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme">
+        <svg class="i-moon" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 9.6A6 6 0 0 1 6.4 2.5a6 6 0 1 0 7.1 7.1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        <svg class="i-sun" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="3.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 .8v1.8M8 13.4v1.8M.8 8h1.8M13.4 8h1.8M2.9 2.9l1.3 1.3M11.8 11.8l1.3 1.3M13.1 2.9l-1.3 1.3M4.2 11.8l-1.3 1.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      </button>
+        <a class="signin" href="series.html">Sign in</a>
+      <button class="drawer-toggle" type="button" data-drawer-toggle aria-expanded="false" aria-controls="drawer" aria-label="Open menu">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4h13M1.5 8h13M1.5 12h13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="drawer" id="drawer" data-open="false">
+    <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="releases.html">Releases</a></li>
+        <li><a href="releases-grid.html">Month grid</a></li>
+        <li><a href="series.html">Series</a></li>
+        <li><a href="publisher.html" aria-current="page">Publishers</a></li>
+        <li><a href="volume.html">Volume</a></li>
+    </ul>
+    <label class="search">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <input type="search" placeholder="Search MangaDB" aria-label="Search">
+    </label>
+  </div>
+</header>
+
+<main id="main">
+
+  <div class="wrap pubhero">
+    <div>
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <a href="index.html">MangaDB</a><span aria-hidden="true">/</span>
+        <a href="publisher.html">Publishers</a><span aria-hidden="true">/</span>
+        <span>Kodansha</span>
+      </nav>
+      <p class="dept">Publisher spotlight</p>
+      <h1>Kodansha</h1>
+      <p class="lede">The largest English manga list in this month's data: 52 releases
+      across 37 series, split almost evenly between print and digital, every one of
+      them on a Tuesday.</p>
+    </div>
+      <p class="pubmark">52<span class="pubmark__note">releases in September</span></p>
+  </div>
+
+  <div class="wrap">
+    <dl class="facts">
+      <div><dt>Founded</dt><dd>1909, Tokyo</dd></div>
+      <div><dt>English imprint</dt><dd>Kodansha USA Publishing</dd></div>
+      <div><dt>Releases in September</dt><dd>52</dd></div>
+      <div><dt>Series with a release</dt><dd>37</dd></div>
+      <div><dt>Formats</dt><dd>Physical and digital</dd></div>
+      <div><dt>Edition lines</dt><dd>Grimoire Edition, Omnibus, 20th Anniversary Edition</dd></div>
+    </dl>
+    <div class="linkrow">
+      <a class="btn btn--solid" href="releases.html">See all 52 Kodansha releases in September</a>
+      <a class="btn btn--ghost" href="releases-grid.html">Kodansha in the month grid</a>
+      <span class="sidenote">Filtered views are shareable and always canonicalise back to the
+      unfiltered agenda.</span>
+    </div>
+  </div>
+
+  <section class="section wrap">
+    <div class="section__head">
+      <div class="hgroup">
+        <p class="dept">Still to come</p>
+        <h2>Out in the next four weeks</h2>
+      </div>
+      <a class="more" href="releases.html">Continue in the agenda</a>
+    </div>
+    <div class="rail">
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t2"><span class="slip-label">34</span><span class="slip-title">Blue Lock</span><img src="https://intent-curlew-625.convex.cloud/api/storage/261b3a6b-66ac-41aa-bc90-a05dcf275657" alt="Cover of Blue Lock Vol. 34" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Blue Lock</h3>
+        <p class="meta">Vol. 34</p>
+        <p class="meta">Kodansha, Sep 22</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">5</span><span class="slip-title">Cells at Work! Lady</span><img src="https://intent-curlew-625.convex.cloud/api/storage/4c2740de-304e-498e-85b7-1788f6f7f26e" alt="Cover of Cells at Work! Lady Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Cells at Work! Lady</h3>
+        <p class="meta">Vol. 5</p>
+        <p class="meta">Kodansha, Sep 22</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">Witch Hat Atelier: Grimoire Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Witch Hat Atelier: Grimoire Edition</h3>
+        <p class="meta">Vol. 2</p>
+        <p class="meta">Kodansha, Sep 22</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t2"><span class="slip-label">7</span><span class="slip-title">I Have a Crush at Work</span><img src="https://intent-curlew-625.convex.cloud/api/storage/c7f88f10-7eed-46d7-8066-24f04a934243" alt="Cover of I Have a Crush at Work Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>I Have a Crush at Work</h3>
+        <p class="meta">Vol. 7</p>
+        <p class="meta">Kodansha, Sep 29</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t3"><span class="slip-label">19</span><span class="slip-title">Am I Actually the Strongest? (Manga)</span></span>
+        <h3>Am I Actually the Strongest? (Manga)</h3>
+        <p class="meta">Vol. 19</p>
+        <p class="meta">Kodansha, Sep 29</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t6"><span class="slip-label">3</span><span class="slip-title">Dragon Head Omnibus</span></span>
+        <h3>Dragon Head Omnibus</h3>
+        <p class="meta">Vol. 3</p>
+        <p class="meta">Kodansha, Sep 29</p>
+      </a>
+    </div>
+  </section>
+
+  <section class="section wrap section--tight">
+    <div class="section__head">
+      <div class="hgroup">
+        <p class="dept">Just out</p>
+        <h2>Shipped earlier in September</h2>
+      </div>
+    </div>
+    <div class="rail rail--quiet">
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t2"><span class="slip-label">1</span><span class="slip-title">Cells at Work! Picture Book</span><img src="https://intent-curlew-625.convex.cloud/api/storage/f67c0c0c-5a7c-4223-b91b-d27056790b4e" alt="Cover of Cells at Work! Picture Book Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Cells at Work! Picture Book</h3>
+        <p class="meta">Vol. 1</p>
+        <p class="meta">Kodansha, Sep 15</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t4"><span class="slip-label">5</span><span class="slip-title">How to Treat a Lady Knight Right</span><img src="https://intent-curlew-625.convex.cloud/api/storage/1b6d5e05-e7ea-4ab6-9de9-3c4d49ebe3a8" alt="Cover of How to Treat a Lady Knight Right Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>How to Treat a Lady Knight Right</h3>
+        <p class="meta">Vol. 5</p>
+        <p class="meta">Kodansha, Sep 15</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t4"><span class="slip-label">7</span><span class="slip-title">Love, That&#x27;s an Understatement</span><img src="https://intent-curlew-625.convex.cloud/api/storage/255037cd-dba9-40ef-8b67-8d5e96b992ec" alt="Cover of Love, That&#x27;s an Understatement Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Love, That&#x27;s an Understatement</h3>
+        <p class="meta">Vol. 7</p>
+        <p class="meta">Kodansha, Sep 15</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">MARS 30th Anniversary Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/9d241aa7-4f54-4c9c-a6d7-9f62ce501d9d" alt="Cover of MARS 30th Anniversary Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>MARS 30th Anniversary Edition</h3>
+        <p class="meta">Vol. 2</p>
+        <p class="meta">Kodansha, Sep 15</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t1"><span class="slip-label">7</span><span class="slip-title">MF Ghost</span><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt="Cover of MF Ghost Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>MF Ghost</h3>
+        <p class="meta">Vol. 7</p>
+        <p class="meta">Kodansha, Sep 15</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t4"><span class="slip-label">5</span><span class="slip-title">Girlfriend, Girlfriend Omnibus</span><img src="https://intent-curlew-625.convex.cloud/api/storage/ecbddb31-d276-4010-ae08-64e5a0921ede" alt="Cover of Girlfriend, Girlfriend Omnibus Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Girlfriend, Girlfriend Omnibus</h3>
+        <p class="meta">Vol. 5</p>
+        <p class="meta">Kodansha, Sep 8</p>
+      </a>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <div class="section__head">
+      <div class="hgroup">
+        <p class="dept">On the list</p>
+        <h2>Series publishing this month</h2>
+      </div>
+      <a class="more" href="series.html">Browse all series</a>
+    </div>
+    <div class="index-list">
+      <a href="series.html"><span class="name">Initial D Omnibus</span><span class="count">2 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">MF Ghost</span><span class="count">2 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">WIND BREAKER</span><span class="count">2 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">FAIRY TAIL: 100 Years Quest</span><span class="count">2 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">The Heroic Legend of Arslan</span><span class="count">2 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">Blue Lock</span><span class="count">1 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">Witch Hat Atelier: Grimoire Edition</span><span class="count">1 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">Giant Killing</span><span class="count">1 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">Nina the Starry Bride</span><span class="count">1 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">A Couple of Cuckoos</span><span class="count">1 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">Cells at Work! Lady</span><span class="count">1 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="series.html"><span class="name">Ya Boy Kongming!</span><span class="count">1 in September</span><span class="arrow">&rarr;</span></a>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <div class="section__head">
+      <div class="hgroup">
+        <p class="dept">Elsewhere</p>
+        <h2>Other publishers in September</h2>
+      </div>
+      <a class="more" href="index.html">All publishers</a>
+    </div>
+    <div class="index-list">
+      <a href="publisher.html"><span class="name">Seven Seas Entertainment</span><span class="count">53 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Tokyopop</span><span class="count">15 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Kodansha Comics</span><span class="count">13 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Titan Manga</span><span class="count">9 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Square Enix Manga</span><span class="count">7 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">TOKYOPOP LoveLove</span><span class="count">6 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Ghost Ship</span><span class="count">6 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Steamship</span><span class="count">3 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Yen Press</span><span class="count">3 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Dark Horse Manga</span><span class="count">2 in September</span><span class="arrow">&rarr;</span></a>
+      <a href="publisher.html"><span class="name">Vertical Comics</span><span class="count">2 in September</span><span class="arrow">&rarr;</span></a>
+    </div>
+  </section>
+
+</main>
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot__grid">
+      <div class="foot__about">
+        <h4>MangaDB</h4>
+        <p>An open database of English manga volume releases: what exists, when each
+        edition arrives, and which copies are on your shelf.</p>
+      </div>
+      <div>
+        <h4>Browse</h4>
+        <ul>
+          <li><a href="releases.html">Release agenda</a></li>
+          <li><a href="releases-grid.html">Month grid</a></li>
+          <li><a href="series.html">Series</a></li>
+          <li><a href="publisher.html">Publishers</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Your shelf</h4>
+        <ul>
+          <li><a href="releases.html">My upcoming releases</a></li>
+          <li><a href="volume.html">Collection</a></li>
+          <li><a href="series.html">Series I follow</a></li>
+          <li><a href="volume.html">Reading history</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>The database</h4>
+        <ul>
+          <li><a href="index.html">Editing guidelines</a></li>
+          <li><a href="index.html">Revision history</a></li>
+          <li><a href="index.html">Source attribution</a></li>
+          <li><a href="index.html">API</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot__legal">
+      <p class="meta">Prototype built from 171 real September 2026 records. Cover art belongs to its publishers.</p>
+      <p class="meta">Every page in this mock-up:
+        <a class="tlink" href="index.html">Home</a>,
+        <a class="tlink" href="releases.html">Agenda</a>,
+        <a class="tlink" href="releases-grid.html">Month grid</a>,
+        <a class="tlink" href="series.html">Series</a>,
+        <a class="tlink" href="volume.html">Volume</a>,
+        <a class="tlink" href="publisher.html">Publisher</a>.</p>
+    </div>
+  </div>
+</footer>
+<script>
+  (function () {
+    var root = document.documentElement;
+    function current() {
+      /* data-theme is always present (hardcoded dark + boot script), so the
+         OS preference never enters the decision. */
+      return root.getAttribute('data-theme') || 'dark';
+    }
+    document.querySelectorAll('[data-theme-toggle]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var next = current() === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        localStorage.setItem('mangadb-theme', next);
+        b.setAttribute('aria-label', next === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+      });
+    });
+    var dt = document.querySelector('[data-drawer-toggle]'), dr = document.getElementById('drawer');
+    if (dt && dr) dt.addEventListener('click', function () {
+      var open = dr.getAttribute('data-open') === 'true';
+      dr.setAttribute('data-open', String(!open));
+      dt.setAttribute('aria-expanded', String(!open));
+    });
+    document.querySelectorAll('[data-toggle-group]').forEach(function (group) {
+      group.addEventListener('click', function (e) {
+        var btn = e.target.closest('button[aria-pressed]');
+        if (!btn) return;
+        var on = btn.getAttribute('aria-pressed') === 'true';
+        if (group.hasAttribute('data-exclusive'))
+          group.querySelectorAll('button[aria-pressed]').forEach(function (b) {
+            b.setAttribute('aria-pressed', 'false');
+          });
+        btn.setAttribute('aria-pressed', String(!on));
+      });
+    });
+  })();
+</script>
+</body>
+</html>

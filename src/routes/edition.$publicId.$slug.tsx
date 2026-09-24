@@ -1,7 +1,17 @@
-import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  notFound,
+  redirect,
+} from "@tanstack/react-router";
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
-import { ModEditLink, ModReleaseEditLinks, RecordHistory } from "~/lib/moderation";
+import { Cover } from "~/lib/cover";
+import {
+  ModEditLink,
+  ModReleaseEditLinks,
+  RecordHistory,
+} from "~/lib/moderation";
 import {
   bookJsonLd,
   breadcrumbListJsonLd,
@@ -77,7 +87,10 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
               ? [
                   {
                     name: primarySeries.title,
-                    path: seriesPath(primarySeries.publicId, primarySeries.title),
+                    path: seriesPath(
+                      primarySeries.publicId,
+                      primarySeries.title,
+                    ),
                   },
                 ]
               : []),
@@ -113,15 +126,24 @@ function EditionNotFound() {
     <main>
       <h1>Edition not found</h1>
       <p className="notice">
-        No edition lives at this address. <Link to="/">Browse the catalog</Link>.
+        No edition lives at this address. <Link to="/">Browse the catalog</Link>
+        .
       </p>
     </main>
   );
 }
 
 function EditionPage() {
-  const { edition, series, coverage, releases } = Route.useLoaderData();
+  const { edition, series, coverage, releases, coverUrl } =
+    Route.useLoaderData();
   const primarySeries = series[0];
+  // One covered Volume with a Label gets the numbered cloth spine (one trade
+  // dress, a big number); an omnibus keeps the title placeholder.
+  const single = coverage.length === 1 ? coverage[0] : undefined;
+  const numbered =
+    single && single.label && primarySeries
+      ? { series: primarySeries.title, number: single.label }
+      : undefined;
 
   return (
     <main className="edition-page">
@@ -141,44 +163,122 @@ function EditionPage() {
         <span>Edition</span>
       </nav>
 
-      <h1>{edition.title}</h1>
-      <p className="series-facts">
-        {edition.publisher ? (
-          <span className="fact">Published by {edition.publisher.name}</span>
-        ) : null}
-        {edition.lineName ? (
-          <span className="fact">
-            {edition.lineName} edition line
-            {/* Edition Line Position: publisher package numbering, never the
-                canonical Volume number (spec §2). */}
-            {edition.linePosition ? (
-              <span className="line-position" title="Position within the edition line">
-                {" "}
-                · line #{edition.linePosition}
+      <section className="detail-hero">
+        <div className="detail-cover">
+          <div className="detail-cover-plate">
+            <Cover
+              src={coverUrl}
+              title={edition.title}
+              foot={[
+                single
+                  ? `Vol ${single.label ?? `#${single.position}`}`
+                  : "Edition",
+                edition.publisher?.name,
+              ]}
+              numbered={numbered}
+              lazy={false}
+            />
+          </div>
+        </div>
+
+        <div className="detail-body">
+          <h1 className="detail-title">{edition.title}</h1>
+          <p className="fact-chips">
+            {edition.publisher ? (
+              <Link
+                className="chip"
+                to="/publisher/$slug"
+                params={{ slug: edition.publisher.slug }}
+              >
+                {edition.publisher.name}
+              </Link>
+            ) : null}
+            {edition.lineName ? (
+              // Edition Line Position: publisher package numbering, never the
+              // canonical Volume number (spec §2).
+              <span className="chip chip--line">
+                {edition.lineName}
+                {edition.linePosition ? (
+                  <span
+                    className="line-position"
+                    title="Position within the edition line"
+                  >
+                    position {edition.linePosition}
+                  </span>
+                ) : null}
               </span>
             ) : null}
-          </span>
-        ) : null}
-      </p>
+            <span className="chip">
+              {releases.length === 1
+                ? "1 release"
+                : `${releases.length} releases`}
+            </span>
+          </p>
 
-      {coverage.length > 0 ? <CoverageChips coverage={coverage} /> : null}
+          {coverage.length > 0 ? <CoverageChips coverage={coverage} /> : null}
 
-      <section className="edition-releases">
-        <h2>Releases</h2>
-        <p className="section-hint">
-          The purchasable forms of this edition — differing only in format and
-          binding. Paste an ISBN into search to land on its row.
-        </p>
-        {releases.length === 0 ? (
-          <p className="notice">No releases recorded for this edition yet.</p>
-        ) : (
-          <ul className="release-list">
-            {releases.map((release) => (
-              <ReleaseRow key={release.id} release={release} />
-            ))}
-          </ul>
-        )}
+          <p className="detail-note">
+            One publisher, one packaging of the content. Paste an ISBN into
+            search to land on its row below.
+          </p>
+
+          <div className="section-head detail-section-head" id="releases">
+            <h2 className="section-title">Releases</h2>
+            <p className="section-note">
+              The purchasable forms, differing only in format and binding.
+            </p>
+          </div>
+          {releases.length === 0 ? (
+            <p className="notice">No releases recorded for this edition yet.</p>
+          ) : (
+            <ul className="release-rows">
+              {releases.map((release) => (
+                <ReleaseRow key={release.id} release={release} />
+              ))}
+            </ul>
+          )}
+        </div>
       </section>
+
+      <hr className="rule" />
+
+      {series.length > 0 || edition.publisher ? (
+        <section className="section">
+          <div className="section-head">
+            <h2 className="section-title">Keep browsing</h2>
+            <p className="section-note">
+              Other packagings of this content are listed on the series page.
+            </p>
+          </div>
+          <div className="directory">
+            {series.map((entry) => (
+              <Link
+                key={entry.publicId}
+                className="directory-row"
+                to="/series/$publicId/$slug"
+                params={slugParams(entry.publicId, entry.title)}
+              >
+                <span className="directory-name">{entry.title}</span>
+                <span className="directory-meta">
+                  Series &middot; every volume and the editions covering it
+                </span>
+              </Link>
+            ))}
+            {edition.publisher ? (
+              <Link
+                className="directory-row"
+                to="/publisher/$slug"
+                params={{ slug: edition.publisher.slug }}
+              >
+                <span className="directory-name">{edition.publisher.name}</span>
+                <span className="directory-meta">
+                  Publisher &middot; profile and upcoming releases
+                </span>
+              </Link>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       {/* Public revision history + the moderator edit entry point (#31). */}
       <RecordHistory type="edition" publicId={edition.publicId} />

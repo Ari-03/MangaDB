@@ -1,4 +1,9 @@
-import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  notFound,
+  redirect,
+} from "@tanstack/react-router";
 
 import {
   addMonths,
@@ -130,6 +135,7 @@ function groupLaneByMonth(upcoming: PublisherPageData["upcoming"]) {
 function PublisherPage() {
   const { publisher, upcoming, upcomingCapped, editionCount } =
     Route.useLoaderData();
+  const groups = groupLaneByMonth(upcoming);
 
   return (
     <main className="publisher-page">
@@ -138,41 +144,62 @@ function PublisherPage() {
         <span>Publisher</span>
       </nav>
 
-      <header>
-        <p className="eyebrow">Publisher</p>
-        <h1>{publisher.name}</h1>
-        {publisher.description ? <p>{publisher.description}</p> : null}
-        <p className="series-facts">
+      <header className="pub-hero">
+        <span className="pub-logo" aria-hidden="true">
+          {publisher.name}
+        </span>
+        <div className="pub-body">
+          <h1 className="pub-title">{publisher.name}</h1>
+          {publisher.description ? (
+            <p className="pub-blurb">{publisher.description}</p>
+          ) : null}
           {editionCount.count > 0 ? (
-            <span className="fact">
-              {editionCount.count}
-              {editionCount.capped ? "+" : ""} edition
-              {editionCount.count === 1 && !editionCount.capped ? "" : "s"} in
-              the catalog
-            </span>
+            <p className="fact-chips">
+              <span className="chip">
+                {editionCount.count}
+                {editionCount.capped ? "+" : ""} edition
+                {editionCount.count === 1 && !editionCount.capped ? "" : "s"} in
+                the catalog
+              </span>
+            </p>
           ) : null}
           {/* The clear route into the main Releases browser, pre-filtered
               (prototype #17): cross-publisher comparison lives there. */}
+          <p className="pub-cta">
+            <Link
+              className="btn btn-primary"
+              to="/releases"
+              search={{ publisher: publisher.slug }}
+            >
+              Every {publisher.name} release in the calendar
+            </Link>
+          </p>
+        </div>
+      </header>
+
+      <hr className="rule" />
+
+      <section className="section publisher-upcoming">
+        <div className="section-head">
+          <h2 className="section-title">
+            Landing in the next {LANE_HORIZON_MONTHS} months
+          </h2>
+          <p className="section-note">
+            Past months, other publishers and format filters live in the release
+            browser.
+          </p>
           <Link
-            className="fact"
+            className="section-link"
             to="/releases"
             search={{ publisher: publisher.slug }}
           >
-            Browse all {publisher.name} releases in the calendar →
+            Open the release browser
           </Link>
-        </p>
-      </header>
+        </div>
 
-      <section className="publisher-upcoming">
-        <h2>Upcoming releases</h2>
-        <p className="section-hint">
-          The next {LANE_HORIZON_MONTHS} months of {publisher.name} releases.
-          The full calendar — past months, other publishers, format filters —
-          lives in the release browser.
-        </p>
-        {upcoming.length === 0 ? (
+        {groups.length === 0 ? (
           <p className="notice">
-            No upcoming releases from {publisher.name} in the next{" "}
+            Nothing announced from {publisher.name} in the next{" "}
             {LANE_HORIZON_MONTHS} months.{" "}
             <Link to="/releases" search={{ publisher: publisher.slug }}>
               See their full release calendar
@@ -180,7 +207,7 @@ function PublisherPage() {
             .
           </p>
         ) : (
-          groupLaneByMonth(upcoming).map((group) => {
+          groups.map((group) => {
             const anchor: YearMonth = {
               year: group.year,
               month: group.month ?? 1,
@@ -206,8 +233,9 @@ function PublisherPage() {
             );
           })
         )}
+
         {upcomingCapped ? (
-          <p className="section-hint">
+          <p className="note lane-more">
             Showing the next {upcoming.length}.{" "}
             <Link to="/releases" search={{ publisher: publisher.slug }}>
               See every {publisher.name} release in the browser

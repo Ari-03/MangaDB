@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MF Ghost — series — MangaDB</title>
+<meta name="description" content="MF Ghost: the canonical volume sequence, every edition, and every English release.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..800,0..100,0..1&family=Nunito+Sans:opsz,wght@6..12,300..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+  (function () {
+    /* Dark is the default shelf: <html> ships with data-theme="dark" and the OS
+       preference is deliberately ignored. A saved choice wins; ?theme= is a
+       preview escape hatch for screenshots. */
+    var pick = null;
+    try { pick = localStorage.getItem("mangadb-theme"); } catch (e) {}
+    var q = /[?&]theme=(light|dark)/.exec(location.search);
+    if (q) { pick = q[1]; }
+    if (pick === "light" || pick === "dark") { document.documentElement.dataset.theme = pick; }
+  })();
+</script>
+</head>
+<body>
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="index.html"><svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="4.6" height="14" rx="1.1" fill="currentColor"/><rect x="8.6" y="6" width="4.6" height="11" rx="1.1" fill="currentColor" opacity=".72"/><rect x="14.8" y="4.4" width="4.2" height="12.6" rx="1.1" fill="currentColor" opacity=".46" transform="rotate(8 16.9 10.7)"/><rect x="1" y="18.6" width="24" height="3.1" rx="1.2" fill="currentColor"/></svg>MangaDB</a>
+    <nav class="nav" aria-label="Main"><a class="nav-link" href="index.html">Home</a><a class="nav-link" href="releases.html">Releases</a><a class="nav-link is-current" href="series.html" aria-current="page">Series</a><a class="nav-link" href="publisher.html">Publishers</a></nav>
+    <form class="search" role="search" action="index.html" onsubmit="return false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="7.2" cy="7.2" r="4.4"/><path d="m10.6 10.6 3 3"/></svg>
+      <input class="search-input" type="search" placeholder="Search series, volumes, ISBN" aria-label="Search MangaDB">
+    </form>
+    <div class="header-actions">
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch between light and dark"><svg class="sun" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 1.6v2M10 16.4v2M1.6 10h2M16.4 10h2M4.1 4.1l1.4 1.4M14.5 14.5l1.4 1.4M15.9 4.1l-1.4 1.4M5.5 14.5l-1.4 1.4"/></svg><svg class="moon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 12.2A7 7 0 0 1 7.8 3.5a7 7 0 1 0 8.7 8.7z"/></svg></button>
+      <button class="icon-btn menu-toggle" type="button" aria-label="Open menu" aria-expanded="false"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14"/></svg></button>
+      <a class="account" href="series.html"><span class="avatar">AK</span><span>My shelf</span></a>
+    </div>
+  </div>
+  <div class="mobile-nav" id="mobile-nav">
+    <div class="container mobile-nav-inner">
+      <input class="search-input" type="search" placeholder="Search series, volumes, ISBN" aria-label="Search MangaDB">
+      <a class="nav-link" href="index.html">Home</a><a class="nav-link" href="releases.html">Releases</a><a class="nav-link is-current" href="series.html" aria-current="page">Series</a><a class="nav-link" href="publisher.html">Publishers</a>
+      <a class="nav-link" href="volume.html">My releases</a>
+    </div>
+  </div>
+</header>
+<main>
+  <div class="container">
+    <nav class="breadcrumb" aria-label="Breadcrumb" style="padding-top:22px">
+      <a href="index.html">MangaDB</a><span class="sep">/</span>
+      <a href="series.html">Series</a><span class="sep">/</span>
+      <span>MF Ghost</span>
+    </nav>
+
+    <section class="series-hero">
+      <div>
+        <div class="series-cover">
+          <span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt="Cover of MF Ghost Vol. 7" width="400" height="600"></span>
+        </div>
+        <p class="note" style="margin-top:28px">Latest volume on the shelf: Vol. 7, out 15 Sep 2026</p>
+      </div>
+      <div>
+        <h1 class="series-title">MF Ghost</h1>
+        <p class="series-native">Shuichi Shigeno &mdash; serialised in Young Magazine</p>
+        <p class="series-blurb">Self-driving cars own the highways of near-future Japan, so the last human drivers race the twisting mountain roads instead. Kanata Livington arrives from England with a racing licence, a missing father, and no idea how deep the MFG circuit runs.</p>
+        <div class="chips">
+          <span class="chip">Ongoing</span>
+          <span class="chip">Racing</span>
+          <span class="chip">Seinen</span>
+          <a class="chip chip--line" href="volume.html">Deluxe Edition &mdash; Deluxe Edition 1 covers Vol. 1&ndash;3</a>
+        </div>
+        <dl class="facts">
+          <div><dt class="fact-term">Source status</dt><dd class="fact-def">Ongoing in Japan</dd></div>
+          <div><dt class="fact-term">Volumes</dt><dd class="fact-def">12 in the canonical sequence</dd></div>
+          <div><dt class="fact-term">English publisher</dt><dd class="fact-def"><a href="publisher.html">Kodansha</a></dd></div>
+          <div><dt class="fact-term">Editions</dt><dd class="fact-def">9 editions across 2 edition lines</dd></div>
+          <div><dt class="fact-term">Series family</dt><dd class="fact-def"><a href="series.html">Initial D</a> &mdash; sequel</dd></div>
+          <div><dt class="fact-term">Alternative titles</dt><dd class="fact-def">MFG, MF Ghost (Kodansha digital)</dd></div>
+        </dl>
+
+        <div class="owner-bar">
+          <button class="state-btn is-owned" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg>Following</button>
+          <label class="filter">Reading status
+            <select class="select" aria-label="Reading status">
+              <option selected>Reading</option><option>Plan to read</option><option>Paused</option>
+              <option>Dropped</option><option>Completed</option>
+            </select>
+          </label>
+          <label class="filter">Visibility
+            <select class="select" aria-label="Tracking visibility">
+              <option selected>Private</option>
+              <option>Followers only</option><option>Public</option>
+            </select>
+          </label>
+          <div class="progress">
+            <div class="label">6 of 7 released volumes read</div>
+            <div class="progress-track"><div class="progress-fill" style="width:86%"></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2 class="section-title">Reading path</h2>
+        <p class="section-note">The canonical volume sequence. Open a volume to see every edition and release that covers it.</p>
+        <a class="section-link" href="volume.html">Volume 7 is open below</a>
+      </div>
+      <div class="shelf">
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 1"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#81312d"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">1</span></span><span class="tick-row"><span class="tick is-on" title="Owned"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg></span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 1</a>
+          <div class="caption-meta">Owned &middot; read once</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 2"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#762d29"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">2</span></span><span class="tick-row"><span class="tick is-on" title="Owned"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg></span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 2</a>
+          <div class="caption-meta">Owned &middot; read once</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 3"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#7e2f2b"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">3</span></span><span class="tick-row"><span class="tick is-on" title="Owned"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg></span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 3</a>
+          <div class="caption-meta">Owned &middot; read once</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 4"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#732b27"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">4</span></span><span class="tick-row"><span class="tick is-on" title="Owned"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg></span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 4</a>
+          <div class="caption-meta">Owned &middot; read once</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 5"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#7a2e2a"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">5</span></span><span class="tick-row"><span class="tick is-on" title="Owned"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg></span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 5</a>
+          <div class="caption-meta">Owned &middot; read once</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 6"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/6ba57eb4-6315-41af-9817-17032c5f9cae" alt="Cover of MF Ghost Vol. 6" loading="lazy" width="400" height="600"><span class="tick-row"><span class="tick is-on" title="Owned"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg></span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 6</a>
+          <div class="caption-meta">Owned &middot; read twice</div>
+        </div>
+      </div>
+      <div class="shelf-item is-open">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 7"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt="Cover of MF Ghost Vol. 7" loading="lazy" width="400" height="600"><span class="cover-badges"><span class="badge badge--wanted"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.6h8v11l-4-3-4 3z"/></svg>Wanted</span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 7</a>
+          <div class="caption-meta">Out 15 Sep &middot; 2 editions</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 8"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#7e2f2b"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">8</span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 8</a>
+          <div class="caption-meta">Announced for Jan 2027</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 9"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#732b27"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">9</span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 9</a>
+          <div class="caption-meta">No English release yet</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 10"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#7a2e2a"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">10</span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 10</a>
+          <div class="caption-meta">No English release yet</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 11"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#81312d"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">11</span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 11</a>
+          <div class="caption-meta">No English release yet</div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <a class="cover-link" href="volume.html" aria-label="MF Ghost Vol. 12"><span class="cover"><span class="cover-ph cover-ph--numbered" style="--cloth:#762d29"><span class="cover-ph-series">MF Ghost</span><span class="cover-ph-num">12</span></span></span></a>
+        <div class="caption">
+          <a class="caption-title" href="volume.html">Volume 12</a>
+          <div class="caption-meta">No English release yet</div>
+        </div>
+      </div>
+      </div>
+    </section>
+
+    <section class="vol-panel">
+      <div class="vol-panel-head">
+        <h3 class="vol-panel-title">Volume 7 &mdash; editions and releases</h3>
+        <span class="chip">Canonical position #7</span>
+        <span class="chip">Volume label &ldquo;Vol. 7&rdquo;</span>
+        <p class="vol-panel-note">2 editions, 4 releases</p>
+      </div>
+      <div class="spines">
+      <article class="spine" style="--cloth:#2f4a6b">
+        <div class="spine-head">7</div>
+        <div class="spine-body">
+          <h4 class="spine-title"><a href="volume.html">MF Ghost Vol. 7</a></h4>
+          <p class="spine-cov">Kodansha &middot; covers Volume 7 completely</p>
+        </div>
+        <div class="spine-releases">
+          <div class="spine-rel"><span class="chip">Physical &middot; paperback</span><span>15 Sep 2026</span><button class="own" type="button">Own</button></div>
+          <div class="spine-rel"><span class="chip">Digital</span><span>15 Sep 2026</span><button class="own" type="button">Own</button></div>
+        </div>
+      </article>
+      <article class="spine" style="--cloth:#7a2e2a">
+        <div class="spine-head">D3</div>
+        <div class="spine-body">
+          <h4 class="spine-title"><a href="volume.html">MF Ghost Deluxe Edition 3</a></h4>
+          <p class="spine-cov">Kodansha &middot; Deluxe Edition, position 3 &middot; covers Vol. 7, 8 and 9 completely</p>
+        </div>
+        <div class="spine-releases">
+          <div class="spine-rel"><span class="chip">Physical &middot; hardcover</span><span>16 Feb 2027</span><button class="own" type="button">Want</button></div>
+          <div class="spine-rel"><span class="chip">Digital</span><span>16 Feb 2027</span><button class="own" type="button">Want</button></div>
+        </div>
+      </article>
+      </div>
+      <p class="note" style="margin-top:18px">Deluxe Edition numbering runs separately from the canonical sequence: Deluxe Edition 1 covers Vol. 1&ndash;3, Deluxe Edition 2 covers Vol. 4&ndash;6. <a class="section-link" href="volume.html">Open the full volume page</a></p>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2 class="section-title">Series family: Initial D</h2>
+        <p class="section-note">Related series share a shelf but keep their own volume sequences</p>
+      </div>
+      <div class="shelf">
+      <div class="shelf-item">
+        <div class="cover-wrap">
+          <a class="cover-link" href="series.html"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Initial D</span></span></span></a>
+          <div class="cover-actions"><button class="quick-btn" type="button">Want</button><button class="quick-btn" type="button">Own</button></div>
+        </div>
+        <div class="caption">
+          <a class="caption-title" href="series.html">Initial D</a>
+          <div class="caption-meta"><span>48 volumes &middot; predecessor</span><span class="dot"></span><span>Kodansha</span></div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <div class="cover-wrap">
+          <a class="cover-link" href="series.html"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt="Cover of Initial D Omnibus " loading="lazy" width="400" height="600"></span></a>
+          <div class="cover-actions"><button class="quick-btn" type="button">Want</button><button class="quick-btn" type="button">Own</button></div>
+        </div>
+        <div class="caption">
+          <a class="caption-title" href="series.html">Initial D Omnibus</a>
+          <div class="caption-meta"><span>11 omnibus editions</span><span class="dot"></span><span>Kodansha</span></div>
+        </div>
+      </div>
+      <div class="shelf-item">
+        <div class="cover-wrap">
+          <a class="cover-link" href="series.html"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt="Cover of MF Ghost " loading="lazy" width="400" height="600"></span></a>
+          <div class="cover-actions"><button class="quick-btn" type="button">Want</button><button class="quick-btn" type="button">Own</button></div>
+        </div>
+        <div class="caption">
+          <a class="caption-title" href="series.html">MF Ghost</a>
+          <div class="caption-meta"><span>12 volumes &middot; this series</span><span class="dot"></span><span>Kodansha</span></div>
+        </div>
+      </div>
+      </div>
+    </section>
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div>
+      <a class="brand" href="index.html"><svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="4.6" height="14" rx="1.1" fill="currentColor"/><rect x="8.6" y="6" width="4.6" height="11" rx="1.1" fill="currentColor" opacity=".72"/><rect x="14.8" y="4.4" width="4.2" height="12.6" rx="1.1" fill="currentColor" opacity=".46" transform="rotate(8 16.9 10.7)"/><rect x="1" y="18.6" width="24" height="3.1" rx="1.2" fill="currentColor"/></svg> MangaDB</a>
+      <p class="footer-blurb">An open database of English manga volume releases. Every edition, every release date, and the shelf you keep at home.</p>
+    </div>
+    <div class="footer-cols">
+      <div class="footer-col">
+        <h4>Browse</h4>
+        <a href="releases.html">Release agenda</a>
+        <a href="releases-grid.html">Month grid</a>
+        <a href="series.html">Series</a>
+        <a href="publisher.html">Publishers</a>
+      </div>
+      <div class="footer-col">
+        <h4>Contribute</h4>
+        <a href="index.html">Editing guidelines</a>
+        <a href="index.html">Recent revisions</a>
+        <a href="index.html">Report a wrong date</a>
+        <a href="index.html">Source attribution</a>
+      </div>
+      <div class="footer-col">
+        <h4>About</h4>
+        <a href="index.html">What MangaDB tracks</a>
+        <a href="index.html">API</a>
+        <a href="index.html">Privacy</a>
+        <a href="index.html">Terms</a>
+      </div>
+    </div>
+  </div>
+</footer>
+<script>
+  (function () {
+    var root = document.documentElement;
+    var toggle = document.querySelector(".theme-toggle");
+    if (toggle) {
+      toggle.addEventListener("click", function () {
+        var next = root.dataset.theme === "light" ? "dark" : "light";
+        root.dataset.theme = next;
+        try { localStorage.setItem("mangadb-theme", next); } catch (e) {}
+      });
+    }
+    var menu = document.querySelector(".menu-toggle");
+    var drawer = document.getElementById("mobile-nav");
+    if (menu && drawer) {
+      menu.addEventListener("click", function () {
+        var open = drawer.classList.toggle("is-open");
+        menu.setAttribute("aria-expanded", String(open));
+      });
+    }
+    document.querySelectorAll("[data-expand]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var panel = document.getElementById(btn.dataset.expand);
+        if (!panel) return;
+        var open = panel.hasAttribute("hidden");
+        if (open) { panel.removeAttribute("hidden"); } else { panel.setAttribute("hidden", ""); }
+        btn.setAttribute("aria-expanded", String(open));
+      });
+    });
+  })();
+</script>
+</body>
+</html>

@@ -47,7 +47,7 @@ function ModProposePage() {
   const { type, key } = Route.useParams();
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           Proposals need a configured Convex deployment (see the README).
         </p>
@@ -56,7 +56,7 @@ function ModProposePage() {
   }
   if (!isRecordType(type)) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Unknown record type</h1>
         <p className="notice">
           Nothing proposable lives at this address. <Link to="/">Go home</Link>.
@@ -72,14 +72,14 @@ function ProposeGate({ type, editKey }: { type: RecordType; editKey: string }) {
   const viewer = useQuery(api.users.viewer, {});
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
   }
   if (!isDataTeam) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Data team only</h1>
         <p className="notice">
           Proposing changes needs an Editor (or stronger) role.{" "}
@@ -109,14 +109,14 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
 
   if (form === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Loading…</p>
       </main>
     );
   }
   if (form === null) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Record not found</h1>
         <p className="notice">
           No {type} matches this address. <Link to="/">Go home</Link>.
@@ -209,7 +209,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
   };
 
   return (
-    <main className="mod-edit-page">
+    <main className="mod-page mod-edit-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>Propose</span>
@@ -278,16 +278,18 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
               rows={2}
             />
           </label>
-          <div>
+          <div className="mod-actions">
             <button
               type="button"
+              className="btn"
               disabled={busy || dirty.size === 0}
               onClick={() => void onSaveDraft()}
             >
               Save draft
-            </button>{" "}
+            </button>
             <button
               type="submit"
+              className="btn btn-primary"
               disabled={busy || dirty.size === 0 || comment.trim() === ""}
             >
               {busy ? "Working…" : "Submit for review"}
@@ -307,6 +309,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
               </ul>
               <button
                 type="button"
+                className="btn btn-sm btn-primary"
                 disabled={busy}
                 onClick={() => void onSubmit(pendingWarnings)}
               >

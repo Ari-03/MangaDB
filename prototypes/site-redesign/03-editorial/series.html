@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Witch Hat Atelier — MangaDB</title>
+<meta name="description" content="Witch Hat Atelier: 14 volumes from Kodansha, every edition and release that covers them.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,300..700;1,400..600&family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+  /* Dark is the default, always: the hardcoded data-theme="dark" on <html>
+     stands unless a saved choice or ?theme= overrides it. The OS
+     prefers-color-scheme deliberately does not get a vote. */
+  (function () {
+    var q = new URLSearchParams(location.search).get('theme');
+    var t = q || localStorage.getItem('mangadb-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <div class="masthead__in">
+    <a class="wordmark" href="index.html">Manga<em>DB</em></a>
+    <nav class="nav" aria-label="Sections">
+        <a href="index.html">Home</a>
+        <a href="releases.html">Releases</a>
+        <a href="releases-grid.html">Month grid</a>
+        <a href="series.html" aria-current="page">Series</a>
+        <a href="publisher.html">Publishers</a>
+    </nav>
+    <div class="mast-actions">
+      <label class="search">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span class="skip">Search series, volumes and publishers</span>
+        <input type="search" placeholder="Search MangaDB" aria-label="Search series, volumes and publishers">
+      </label>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme">
+        <svg class="i-moon" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 9.6A6 6 0 0 1 6.4 2.5a6 6 0 1 0 7.1 7.1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        <svg class="i-sun" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="3.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 .8v1.8M8 13.4v1.8M.8 8h1.8M13.4 8h1.8M2.9 2.9l1.3 1.3M11.8 11.8l1.3 1.3M13.1 2.9l-1.3 1.3M4.2 11.8l-1.3 1.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      </button>
+        <div class="account">
+          <a class="account__link" href="releases.html">My releases</a>
+          <a class="avatar" href="series.html" title="Aritra Das — profile">AD</a>
+        </div>
+      <button class="drawer-toggle" type="button" data-drawer-toggle aria-expanded="false" aria-controls="drawer" aria-label="Open menu">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4h13M1.5 8h13M1.5 12h13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="drawer" id="drawer" data-open="false">
+    <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="releases.html">Releases</a></li>
+        <li><a href="releases-grid.html">Month grid</a></li>
+        <li><a href="series.html" aria-current="page">Series</a></li>
+        <li><a href="publisher.html">Publishers</a></li>
+        <li><a href="volume.html">Volume</a></li>
+    </ul>
+    <label class="search">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <input type="search" placeholder="Search MangaDB" aria-label="Search">
+    </label>
+  </div>
+</header>
+
+<main id="main">
+
+  <article class="spread wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="index.html">MangaDB</a><span aria-hidden="true">/</span>
+      <a href="index.html">Series</a><span aria-hidden="true">/</span>
+      <span>Witch Hat Atelier</span>
+    </nav>
+
+    <p class="dept">Series</p>
+    <h1>Witch Hat Atelier</h1>
+    <p class="spread__native">Tongari B&#333;shi no Atelier</p>
+
+    <div class="spread__grid">
+      <figure class="spread__cover" style="margin:0">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">Witch Hat Atelier: Grimoire Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <figcaption class="caption">Grimoire Edition 2, the most recent release. Hardcover,
+        22 September 2026.</figcaption>
+        <div class="chips">
+          <a class="chip" href="index.html">L'Atelier des Sorciers</a>
+          <a class="chip" href="index.html">Atelier of Witch Hat</a>
+          <a class="chip" href="index.html">Das Geheimnis der Zauberh&uuml;te</a>
+          <a class="chip" href="index.html">Fantasy</a>
+          <a class="chip" href="index.html">Seinen</a>
+        </div>
+      </figure>
+
+      <div>
+        <p class="pullquote">In a world where magic is a birthright, Coco learns the truth:
+        witches do not speak their spells, they draw them. One forbidden glimpse of a pen at
+        work costs her everything and lands her in Qifrey's workshop, where every rule exists
+        for a reason nobody will explain.
+        <span class="pullquote__by">Kamome Shirahama, serialized in Morning Two since 2016</span></p>
+
+        <dl class="facts">
+          <div><dt>Source status</dt><dd>Ongoing</dd></div>
+          <div><dt>Volumes</dt><dd>14 in the reading path</dd></div>
+          <div><dt>Author and artist</dt><dd>Kamome Shirahama</dd></div>
+          <div><dt>English publisher</dt><dd><a href="publisher.html">Kodansha</a></dd></div>
+          <div><dt>Edition lines</dt><dd>Standard, Grimoire Edition</dd></div>
+          <div><dt>Formats</dt><dd>Physical and digital</dd></div>
+          <div><dt>First English release</dt><dd>19 March 2019</dd></div>
+          <div><dt>Latest release</dt><dd><a href="releases.html">22 September 2026</a></dd></div>
+          <div><dt>Series family</dt><dd><a href="series.html">Witch Hat Atelier</a>, with
+            <a href="series.html">Witch Hat Atelier Kitchen</a> (spinoff)</dd></div>
+          <div><dt>Serialized in</dt><dd>Morning Two, Kodansha, since 2016</dd></div>
+        </dl>
+
+        <div class="controls" data-toggle-group>
+          <span class="controls__label">You</span>
+          <button class="pill-btn" type="button" aria-pressed="true">&#9733; Following</button>
+          <span class="segmented" data-toggle-group data-exclusive>
+            <button type="button" aria-pressed="false">Plan to read</button>
+            <button type="button" aria-pressed="true">Reading</button>
+            <button type="button" aria-pressed="false">Paused</button>
+            <button type="button" aria-pressed="false">Dropped</button>
+            <button type="button" aria-pressed="false">Completed</button>
+          </span>
+          <span class="field">
+            <label for="vis">Visible to</label>
+            <select id="vis">
+              <option>Only me</option>
+              <option>Anyone with my profile link</option>
+              <option>Everyone</option>
+            </select>
+          </span>
+        </div>
+        <p class="meta" style="margin-top:12px">You own 4 of 14 volumes and have read 5. Ownership stays private unless you change it here.</p>
+      </div>
+    </div>
+  </article>
+
+  <section class="section wrap">
+    <div class="section__head">
+      <div class="hgroup">
+        <p class="dept">Reading path</p>
+        <h2>The canonical volume sequence</h2>
+      </div>
+      <a class="more" href="volume.html">Open Vol. 5</a>
+    </div>
+    <p class="deck" style="margin-bottom:28px">Fourteen volumes in publication order. Open one to
+    see every edition that covers it, including omnibus editions that span several volumes at once.</p>
+    <div class="seq">
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t3"><span class="slip-label">1</span><span class="slip-title">Witch Hat Atelier, Vol. 1</span></span>
+        <span class="vol__label">Vol. 1</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t4"><span class="slip-label">2</span><span class="slip-title">Witch Hat Atelier, Vol. 2</span></span>
+        <span class="vol__label">Vol. 2</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">3</span><span class="slip-title">Witch Hat Atelier, Vol. 3</span></span>
+        <span class="vol__label">Vol. 3</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t6"><span class="slip-label">4</span><span class="slip-title">Witch Hat Atelier, Vol. 4</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2, which collects Vol. 4" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <span class="vol__label">Vol. 4</span>
+        <span class="vol__note">In Grimoire Edition 2</span>
+      </a>
+      <a class="vol vol--current" href="volume.html" aria-current="true">
+        <span class="cover cover--none  cover--t1"><span class="slip-label">5</span><span class="slip-title">Witch Hat Atelier, Vol. 5</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2, which collects Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <span class="vol__label">Vol. 5</span>
+        <span class="vol__note">In Grimoire Edition 2</span>
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t2"><span class="slip-label">6</span><span class="slip-title">Witch Hat Atelier, Vol. 6</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2, which collects Vol. 6" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <span class="vol__label">Vol. 6</span>
+        <span class="vol__note">In Grimoire Edition 2</span>
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t3"><span class="slip-label">7</span><span class="slip-title">Witch Hat Atelier, Vol. 7</span></span>
+        <span class="vol__label">Vol. 7</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t4"><span class="slip-label">8</span><span class="slip-title">Witch Hat Atelier, Vol. 8</span></span>
+        <span class="vol__label">Vol. 8</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">9</span><span class="slip-title">Witch Hat Atelier, Vol. 9</span></span>
+        <span class="vol__label">Vol. 9</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t3"><span class="slip-label">10</span><span class="slip-title">Witch Hat Atelier, Vol. 10</span></span>
+        <span class="vol__label">Vol. 10</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t4"><span class="slip-label">11</span><span class="slip-title">Witch Hat Atelier, Vol. 11</span></span>
+        <span class="vol__label">Vol. 11</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">12</span><span class="slip-title">Witch Hat Atelier, Vol. 12</span></span>
+        <span class="vol__label">Vol. 12</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t6"><span class="slip-label">13</span><span class="slip-title">Witch Hat Atelier, Vol. 13</span></span>
+        <span class="vol__label">Vol. 13</span>
+        
+      </a>
+      <a class="vol" href="volume.html">
+        <span class="cover cover--none  cover--t1"><span class="slip-label">14</span><span class="slip-title">Witch Hat Atelier, Vol. 14</span></span>
+        <span class="vol__label">Vol. 14</span>
+        
+      </a>
+    </div>
+
+    <div class="expanded">
+      <div class="expanded__head">
+        <div>
+          <p class="dept">Open volume</p>
+          <h3>Vol. 5 &mdash; two editions, five releases</h3>
+        </div>
+        <a class="more" href="volume.html">Full volume page</a>
+      </div>
+      <p class="deck" style="margin:14px 0 6px">Position #5 in the reading path. Read 1 time.</p>
+      <div class="edition">
+        <span class="edition__cover"><span class="cover cover--none  cover--t1"><span class="slip-label">5</span><span class="slip-title">Witch Hat Atelier, Vol. 5</span></span></span>
+        <div>
+          <p class="edition__name">Standard Edition</p>
+          <p class="edition__coverage">Kodansha. Covers <em>Vol.&nbsp;5</em> completely. No edition line.</p>
+          <table class="reltable">
+            <thead><tr><th>Release</th><th>Published</th><th>ISBN-13</th><th>Price</th><th>Collection</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Physical, paperback</td>
+                <td data-th="Published">16 June 2020</td>
+                <td class="isbn" data-th="ISBN-13">978-1-64651-013-9</td>
+                <td data-th="Price">$12.99</td>
+                <td data-th="Collection"><button class="mini-btn" type="button" aria-pressed="true">Owned</button></td>
+              </tr>
+              <tr class="variant">
+                <td>Barnes &amp; Noble exclusive cover</td>
+                <td data-th="Published">16 June 2020</td>
+                <td class="isbn" data-th="ISBN-13">&mdash;</td>
+                <td data-th="Price">$12.99</td>
+                <td data-th="Collection"><span class="meta">Release variant</span></td>
+              </tr>
+              <tr>
+                <td>Digital</td>
+                <td data-th="Published">16 June 2020</td>
+                <td class="isbn" data-th="ISBN-13">978-1-64651-014-6</td>
+                <td data-th="Price">$10.99</td>
+                <td data-th="Collection"><button class="mini-btn" type="button" aria-pressed="false">Add</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="edition">
+        <span class="edition__cover"><span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">Witch Hat Atelier: Grimoire Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span></span>
+        <div>
+          <p class="edition__name">Grimoire Edition 2</p>
+          <p class="edition__coverage">Kodansha, edition line <a class="tlink" href="series.html">Grimoire Edition</a>,
+          position 2. Covers <em>Vol.&nbsp;4, Vol.&nbsp;5 and Vol.&nbsp;6</em> completely.</p>
+          <p class="coverage-note">Edition line numbering runs separately from the reading path:
+          this is the second Grimoire Edition, and it is where volumes 4 to 6 live.</p>
+          <table class="reltable">
+            <thead><tr><th>Release</th><th>Published</th><th>ISBN-13</th><th>Price</th><th>Collection</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Physical, hardcover</td>
+                <td data-th="Published">22 September 2026</td>
+                <td class="isbn" data-th="ISBN-13">978-1-64651-882-1</td>
+                <td data-th="Price">$34.99</td>
+                <td data-th="Collection"><button class="mini-btn" type="button" aria-pressed="true">Ordered</button></td>
+              </tr>
+              <tr>
+                <td>Digital</td>
+                <td data-th="Published">22 September 2026</td>
+                <td class="isbn" data-th="ISBN-13">978-1-64651-883-8</td>
+                <td data-th="Price">$29.99</td>
+                <td data-th="Collection"><button class="mini-btn" type="button" aria-pressed="false">Add</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="bundle">
+        <span class="cover cover--none  cover--t6"><span class="slip-label slip-label--word">Set</span><span class="slip-title">Witch Hat Atelier Box Set</span></span>
+        <div>
+          <h4><a class="tlink" href="volume.html">Witch Hat Atelier Volumes 1&ndash;6 Box Set</a></h4>
+          <p class="meta">Release bundle, Kodansha, 12 November 2024. Owning the box set gives you
+          derived ownership of the paperback release above.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap">
+    <div class="section__head">
+      <div class="hgroup">
+        <p class="dept">Nearby</p>
+        <h2>Also out this month from Kodansha</h2>
+      </div>
+      <a class="more" href="publisher.html">Publisher spotlight</a>
+    </div>
+    <div class="rail">
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t2"><span class="slip-label">34</span><span class="slip-title">Blue Lock</span><img src="https://intent-curlew-625.convex.cloud/api/storage/261b3a6b-66ac-41aa-bc90-a05dcf275657" alt="Cover of Blue Lock Vol. 34" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Blue Lock</h3>
+        <p class="meta">Vol. 34</p>
+        <p class="meta">Kodansha, Sep 22</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">5</span><span class="slip-title">Cells at Work! Lady</span><img src="https://intent-curlew-625.convex.cloud/api/storage/4c2740de-304e-498e-85b7-1788f6f7f26e" alt="Cover of Cells at Work! Lady Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Cells at Work! Lady</h3>
+        <p class="meta">Vol. 5</p>
+        <p class="meta">Kodansha, Sep 22</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">Witch Hat Atelier: Grimoire Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>Witch Hat Atelier: Grimoire Edition</h3>
+        <p class="meta">Vol. 2</p>
+        <p class="meta">Kodansha, Sep 22</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t2"><span class="slip-label">30</span><span class="slip-title">A Couple of Cuckoos</span></span>
+        <h3>A Couple of Cuckoos</h3>
+        <p class="meta">Vol. 30</p>
+        <p class="meta">Kodansha, Sep 22</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">1</span><span class="slip-title">Cells at Work! Cat</span></span>
+        <h3>Cells at Work! Cat</h3>
+        <p class="meta">Vol. 1</p>
+        <p class="meta">Kodansha Comics, Sep 22</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t2"><span class="slip-label">7</span><span class="slip-title">I Have a Crush at Work</span><img src="https://intent-curlew-625.convex.cloud/api/storage/c7f88f10-7eed-46d7-8066-24f04a934243" alt="Cover of I Have a Crush at Work Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+        <h3>I Have a Crush at Work</h3>
+        <p class="meta">Vol. 7</p>
+        <p class="meta">Kodansha, Sep 29</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t1"><span class="slip-label">19</span><span class="slip-title">Am I Actually the Strongest? (Manga)</span></span>
+        <h3>Am I Actually the Strongest? (Manga)</h3>
+        <p class="meta">Vol. 19</p>
+        <p class="meta">Kodansha, Sep 29</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t1"><span class="slip-label">3</span><span class="slip-title">Dragon Head Omnibus</span></span>
+        <h3>Dragon Head Omnibus</h3>
+        <p class="meta">Vol. 3</p>
+        <p class="meta">Kodansha, Sep 29</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t5"><span class="slip-label">11</span><span class="slip-title">I Left my A-Rank Party to Help My Former Students Reach the Dungeon Depths!</span></span>
+        <h3>I Left my A-Rank Party to Help My Former Students Reach the Dungeon Depths!</h3>
+        <p class="meta">Vol. 11</p>
+        <p class="meta">Kodansha, Sep 29</p>
+      </a>
+      <a class="railcard" href="volume.html">
+        <span class="cover cover--none  cover--t6"><span class="slip-label">6</span><span class="slip-title">Omega Megaera</span></span>
+        <h3>Omega Megaera</h3>
+        <p class="meta">Vol. 6</p>
+        <p class="meta">Kodansha Comics, Sep 29</p>
+      </a>
+    </div>
+  </section>
+
+</main>
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot__grid">
+      <div class="foot__about">
+        <h4>MangaDB</h4>
+        <p>An open database of English manga volume releases: what exists, when each
+        edition arrives, and which copies are on your shelf.</p>
+      </div>
+      <div>
+        <h4>Browse</h4>
+        <ul>
+          <li><a href="releases.html">Release agenda</a></li>
+          <li><a href="releases-grid.html">Month grid</a></li>
+          <li><a href="series.html">Series</a></li>
+          <li><a href="publisher.html">Publishers</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Your shelf</h4>
+        <ul>
+          <li><a href="releases.html">My upcoming releases</a></li>
+          <li><a href="volume.html">Collection</a></li>
+          <li><a href="series.html">Series I follow</a></li>
+          <li><a href="volume.html">Reading history</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>The database</h4>
+        <ul>
+          <li><a href="index.html">Editing guidelines</a></li>
+          <li><a href="index.html">Revision history</a></li>
+          <li><a href="index.html">Source attribution</a></li>
+          <li><a href="index.html">API</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot__legal">
+      <p class="meta">Prototype built from 171 real September 2026 records. Cover art belongs to its publishers.</p>
+      <p class="meta">Every page in this mock-up:
+        <a class="tlink" href="index.html">Home</a>,
+        <a class="tlink" href="releases.html">Agenda</a>,
+        <a class="tlink" href="releases-grid.html">Month grid</a>,
+        <a class="tlink" href="series.html">Series</a>,
+        <a class="tlink" href="volume.html">Volume</a>,
+        <a class="tlink" href="publisher.html">Publisher</a>.</p>
+    </div>
+  </div>
+</footer>
+<script>
+  (function () {
+    var root = document.documentElement;
+    function current() {
+      /* data-theme is always present (hardcoded dark + boot script), so the
+         OS preference never enters the decision. */
+      return root.getAttribute('data-theme') || 'dark';
+    }
+    document.querySelectorAll('[data-theme-toggle]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var next = current() === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        localStorage.setItem('mangadb-theme', next);
+        b.setAttribute('aria-label', next === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+      });
+    });
+    var dt = document.querySelector('[data-drawer-toggle]'), dr = document.getElementById('drawer');
+    if (dt && dr) dt.addEventListener('click', function () {
+      var open = dr.getAttribute('data-open') === 'true';
+      dr.setAttribute('data-open', String(!open));
+      dt.setAttribute('aria-expanded', String(!open));
+    });
+    document.querySelectorAll('[data-toggle-group]').forEach(function (group) {
+      group.addEventListener('click', function (e) {
+        var btn = e.target.closest('button[aria-pressed]');
+        if (!btn) return;
+        var on = btn.getAttribute('aria-pressed') === 'true';
+        if (group.hasAttribute('data-exclusive'))
+          group.querySelectorAll('button[aria-pressed]').forEach(function (b) {
+            b.setAttribute('aria-pressed', 'false');
+          });
+        btn.setAttribute('aria-pressed', String(!on));
+      });
+    });
+  })();
+</script>
+</body>
+</html>

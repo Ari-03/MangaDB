@@ -1,0 +1,2075 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Release agenda, September 2026 — MangaDB</title>
+<meta name="description" content="Every English manga volume released in September 2026, grouped by publication day.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..800,0..100,0..1&family=Nunito+Sans:opsz,wght@6..12,300..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+  (function () {
+    /* Dark is the default shelf: <html> ships with data-theme="dark" and the OS
+       preference is deliberately ignored. A saved choice wins; ?theme= is a
+       preview escape hatch for screenshots. */
+    var pick = null;
+    try { pick = localStorage.getItem("mangadb-theme"); } catch (e) {}
+    var q = /[?&]theme=(light|dark)/.exec(location.search);
+    if (q) { pick = q[1]; }
+    if (pick === "light" || pick === "dark") { document.documentElement.dataset.theme = pick; }
+  })();
+</script>
+</head>
+<body>
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="index.html"><svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="4.6" height="14" rx="1.1" fill="currentColor"/><rect x="8.6" y="6" width="4.6" height="11" rx="1.1" fill="currentColor" opacity=".72"/><rect x="14.8" y="4.4" width="4.2" height="12.6" rx="1.1" fill="currentColor" opacity=".46" transform="rotate(8 16.9 10.7)"/><rect x="1" y="18.6" width="24" height="3.1" rx="1.2" fill="currentColor"/></svg>MangaDB</a>
+    <nav class="nav" aria-label="Main"><a class="nav-link" href="index.html">Home</a><a class="nav-link is-current" href="releases.html" aria-current="page">Releases</a><a class="nav-link" href="series.html">Series</a><a class="nav-link" href="publisher.html">Publishers</a></nav>
+    <form class="search" role="search" action="index.html" onsubmit="return false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="7.2" cy="7.2" r="4.4"/><path d="m10.6 10.6 3 3"/></svg>
+      <input class="search-input" type="search" placeholder="Search series, volumes, ISBN" aria-label="Search MangaDB">
+    </form>
+    <div class="header-actions">
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch between light and dark"><svg class="sun" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 1.6v2M10 16.4v2M1.6 10h2M16.4 10h2M4.1 4.1l1.4 1.4M14.5 14.5l1.4 1.4M15.9 4.1l-1.4 1.4M5.5 14.5l-1.4 1.4"/></svg><svg class="moon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 12.2A7 7 0 0 1 7.8 3.5a7 7 0 1 0 8.7 8.7z"/></svg></button>
+      <button class="icon-btn menu-toggle" type="button" aria-label="Open menu" aria-expanded="false"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14"/></svg></button>
+      <a class="account" href="series.html"><span class="avatar">AK</span><span>My shelf</span></a>
+    </div>
+  </div>
+  <div class="mobile-nav" id="mobile-nav">
+    <div class="container mobile-nav-inner">
+      <input class="search-input" type="search" placeholder="Search series, volumes, ISBN" aria-label="Search MangaDB">
+      <a class="nav-link" href="index.html">Home</a><a class="nav-link is-current" href="releases.html" aria-current="page">Releases</a><a class="nav-link" href="series.html">Series</a><a class="nav-link" href="publisher.html">Publishers</a>
+      <a class="nav-link" href="volume.html">My releases</a>
+    </div>
+  </div>
+</header>
+<main>
+  <div class="container">
+    <div class="page-head">
+      <div>
+        <p class="page-kicker">English manga releases</p>
+        <h1 class="page-title">September 2026</h1>
+      </div>
+      <nav class="month-nav" aria-label="Month">
+        <a href="releases.html">&larr; August</a>
+        <a href="releases.html">This month</a>
+        <a href="releases.html">October &rarr;</a>
+      </nav>
+    </div>
+
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="View">
+        <a class="seg-btn is-on" href="releases.html" aria-current="page">Agenda</a>
+        <a class="seg-btn" href="releases-grid.html">Month grid</a>
+      </div>
+      <label class="filter">Format
+        <select class="select" aria-label="Filter by format">
+          <option>All formats</option><option>Physical</option><option>Digital</option>
+        </select>
+      </label>
+      <label class="filter">Publisher
+        <select class="select" aria-label="Filter by publisher">
+          <option>All publishers</option><option>Kodansha</option><option>Seven Seas Entertainment</option>
+          <option>Tokyopop</option><option>Kodansha Comics</option><option>Titan Manga</option>
+          <option>Square Enix Manga</option><option>Ghost Ship</option><option>Yen Press</option>
+        </select>
+      </label>
+      <button class="toggle-pill is-on" type="button" aria-pressed="true">&#9733; Followed series first</button>
+      <p class="result-count">171 releases &middot; 5 publication days</p>
+    </div>
+
+    <div class="agenda">
+      <section class="day">
+        <div class="day-marker">
+          <div class="day-dow">Tuesday</div>
+          <div class="day-num">1</div>
+          <div class="day-count">36 releases</div>
+        </div>
+        <div class="day-list">
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/580bf8e1-f567-4f72-8023-c2653c8e67e6" alt="Cover of Initial D Omnibus Vol. 11" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Initial D Omnibus</a> <span class="rel-vol">Vol. 11</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn is-owned" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg>Owned</button></div>
+        </article>
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt="Cover of Initial D Omnibus Vol. 11" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Initial D Omnibus</a> <span class="rel-vol">Vol. 11</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; hardcover</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn is-owned" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg>Owned</button></div>
+        </article>
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/6ba57eb4-6315-41af-9817-17032c5f9cae" alt="Cover of MF Ghost Vol. 6" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">MF Ghost</a> <span class="rel-vol">Vol. 6</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn is-owned" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg>Owned</button></div>
+        </article>
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/532dde5a-86e0-4eee-8da4-e001332635dd" alt="Cover of Nina the Starry Bride Vol. 17" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Nina the Starry Bride</a> <span class="rel-vol">Vol. 17</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn is-ordered" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M2 5.2 8 2.3l6 2.9v5.6L8 13.7 2 10.8z"/><path d="M2 5.2 8 8l6-2.8M8 8v5.7"/></svg>Ordered</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/3f9c99d5-ea48-43af-b1b5-9c9c11c517fb" alt="Cover of How to Grill Our Love Vol. 1" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">How to Grill Our Love</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/9e10860e-6451-4432-8cc5-197d35b52aca" alt="Cover of Shugo Chara! 20th Anniversary Edition Vol. 3" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Shugo Chara! 20th Anniversary Edition</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/a72167ee-2946-41e9-b4eb-2ecd405257a9" alt="Cover of Shugo Chara! 20th Anniversary Edition Vol. 3" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Shugo Chara! 20th Anniversary Edition</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; hardcover</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/a467f83e-3c80-49f3-b164-e40e838a0781" alt="Cover of The Heroic Legend of Arslan Vol. 23" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Heroic Legend of Arslan</a> <span class="rel-vol">Vol. 23</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/eff1efba-6cf8-47b0-a20c-45fbd1752138" alt="Cover of The World is Dancing Vol. 4" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The World is Dancing</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/857d4bfd-0add-4e5a-b870-3e6afdf132cb" alt="Cover of Tune In to the Midnight Heart Vol. 9" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Tune In to the Midnight Heart</a> <span class="rel-vol">Vol. 9</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/600b8792-e289-45fe-9a7a-b7d2c7b79e26" alt="Cover of Tune In to the Midnight Heart Vol. 9" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Tune In to the Midnight Heart</a> <span class="rel-vol">Vol. 9</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">10 Things I Want to Do Before I Turn 40 - Part</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">10 Things I Want to Do Before I Turn 40 - Part</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Always a Catch!</span><span class="cover-ph-mark">8</span><span class="cover-ph-foot"><span>Vol. 08</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Always a Catch!</a> <span class="rel-vol">Vol. 08</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Square Enix Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Cheeky Devil Cop!</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Cheeky Devil Cop!</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Dai Dark Deluxe Edition 1 (Vol. 1-3 Hardcover Omnibus)</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Dai Dark Deluxe Edition 1 (Vol. 1-3 Hardcover Omnibus)</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; hardcover</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Dungeon Elf</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Dungeon Elf</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">I Got Married to the Girl I Hate Most in Class</span><span class="cover-ph-mark">7</span><span class="cover-ph-foot"><span>Vol. 7</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I Got Married to the Girl I Hate Most in Class</a> <span class="rel-vol">Vol. 7</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">Initial D Omnibus 11 (Vol. 21-22)</span><span class="cover-ph-mark">11</span><span class="cover-ph-foot"><span>Vol. 11</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Initial D Omnibus 11 (Vol. 21-22)</a> <span class="rel-vol">Vol. 11</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; hardcover</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">Luna Knight</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Luna Knight</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Masters of the Universe: Legends of Eternia, Issue #1</span><span class="cover-ph-mark">TP</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Masters of the Universe: Legends of Eternia, Issue #1</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Miss Kobayashi&#x27;s Dragon Maid</span><span class="cover-ph-mark">17</span><span class="cover-ph-foot"><span>Vol. 17</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Miss Kobayashi&#x27;s Dragon Maid</a> <span class="rel-vol">Vol. 17</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Monster Guild: The Dark Lord&#x27;s (No-Good) Comeback!</span><span class="cover-ph-mark">11</span><span class="cover-ph-foot"><span>Vol. 11</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Monster Guild: The Dark Lord&#x27;s (No-Good) Comeback!</a> <span class="rel-vol">Vol. 11</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">My Contract With the Apothecary Monster</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">My Contract With the Apothecary Monster</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">TOKYOPOP LoveLove</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a6a1f"><span class="cover-ph-title">Precarious Woman Executive Miss Black General</span><span class="cover-ph-mark">13</span><span class="cover-ph-foot"><span>Vol. 13</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Precarious Woman Executive Miss Black General</a> <span class="rel-vol">Vol. 13</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Printernia Nippon: My Squishy Bio-Printed Pet</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Printernia Nippon: My Squishy Bio-Printed Pet</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Seaside Stranger Vol. 7: Harukaze no Étranger</span><span class="cover-ph-mark">7</span><span class="cover-ph-foot"><span>Vol. 7</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Seaside Stranger Vol. 7: Harukaze no Étranger</a> <span class="rel-vol">Vol. 7</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Stick it - Cozy Crime Scenes</span><span class="cover-ph-mark">TP</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Stick it - Cozy Crime Scenes</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Stick it - Tiny Bookshops</span><span class="cover-ph-mark">TP</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Stick it - Tiny Bookshops</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">Tamamori&#x27;s Fantasies Never Stop!</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Tamamori&#x27;s Fantasies Never Stop!</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Ghost Ship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">The Ideal Sponger Life</span><span class="cover-ph-mark">22</span><span class="cover-ph-foot"><span>Vol. 22</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Ideal Sponger Life</a> <span class="rel-vol">Vol. 22</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">The Obsessed Mage and His Beloved Statue Bride: She Cannot Resist His Seductive Voice (Manga)</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Obsessed Mage and His Beloved Statue Bride: She Cannot Resist His Seductive Voice (Manga)</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Steamship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">The Strange House</span><span class="cover-ph-mark">6</span><span class="cover-ph-foot"><span>Vol. 6</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Strange House</a> <span class="rel-vol">Vol. 6</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">The Tale of a Little Alchemist Blessed by the Spirits</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Tale of a Little Alchemist Blessed by the Spirits</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">The Twelve Kingdoms Book 6 - A Thousand Miles of Wind, the Sky at Dawn: Part 2 (Novel)</span><span class="cover-ph-mark">6</span><span class="cover-ph-foot"><span>Vol. 6</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Twelve Kingdoms Book 6 - A Thousand Miles of Wind, the Sky at Dawn: Part 2 (Novel)</a> <span class="rel-vol">Vol. 6</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">The Weakest Tamer Began a Journey to Pick Up Trash</span><span class="cover-ph-mark">8</span><span class="cover-ph-foot"><span>Vol. 8</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Weakest Tamer Began a Journey to Pick Up Trash</a> <span class="rel-vol">Vol. 8</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">The World&#x27;s Fastest Level Up</span><span class="cover-ph-mark">8</span><span class="cover-ph-foot"><span>Vol. 8</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The World&#x27;s Fastest Level Up</a> <span class="rel-vol">Vol. 8</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        </div>
+      </section>
+      <section class="day">
+        <div class="day-marker">
+          <div class="day-dow">Tuesday</div>
+          <div class="day-num">8</div>
+          <div class="day-count">34 releases</div>
+        </div>
+        <div class="day-list">
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/76592e66-e87f-4fe3-a990-df7b7a3e5762" alt="Cover of Medalist Vol. 13" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Medalist</a> <span class="rel-vol">Vol. 13</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn is-ordered" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M2 5.2 8 2.3l6 2.9v5.6L8 13.7 2 10.8z"/><path d="M2 5.2 8 8l6-2.8M8 8v5.7"/></svg>Ordered</button></div>
+        </article>
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/ddcfa9b1-d00e-4a06-92ea-2125da881bf1" alt="Cover of WIND BREAKER Vol. 23" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">WIND BREAKER</a> <span class="rel-vol">Vol. 23</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn is-owned" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg>Owned</button></div>
+        </article>
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Giant Killing</span><span class="cover-ph-mark">58</span><span class="cover-ph-foot"><span>Vol. 58</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Giant Killing</a> <span class="rel-vol">Vol. 58</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.6h8v11l-4-3-4 3z"/></svg>Wanted</button></div>
+        </article>
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">WIND BREAKER</span><span class="cover-ph-mark">26</span><span class="cover-ph-foot"><span>Vol. 26</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">WIND BREAKER</a> <span class="rel-vol">Vol. 26</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/ecbddb31-d276-4010-ae08-64e5a0921ede" alt="Cover of Girlfriend, Girlfriend Omnibus Vol. 5" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Girlfriend, Girlfriend Omnibus</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; hardcover</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/e72606f4-b83b-4b0f-b1c1-2c0eaf75b128" alt="Cover of Go! Go! Loser Ranger! Vol. 18" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Go! Go! Loser Ranger!</a> <span class="rel-vol">Vol. 18</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.6h8v11l-4-3-4 3z"/></svg>Wanted</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/d66c3eaa-ff2f-4a68-b720-b9a80d16b472" alt="Cover of Medaka Kuroiwa is Impervious to My Charms Vol. 16" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Medaka Kuroiwa is Impervious to My Charms</a> <span class="rel-vol">Vol. 16</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/09300ccf-b678-417b-9ebc-f68a03f0b833" alt="Cover of Say Hello to Mr. Wallaby! Vol. 1" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Say Hello to Mr. Wallaby!</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/2b82738b-fa09-43a0-bd53-aa680a2e6d78" alt="Cover of Say Hello to Mr. Wallaby! Vol. 1" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Say Hello to Mr. Wallaby!</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/dd500143-5382-4abe-ac79-bcd6cfd2784d" alt="Cover of The Heroic Legend of Arslan Vol. 23" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Heroic Legend of Arslan</a> <span class="rel-vol">Vol. 23</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/d70d17c5-8170-4d2a-9d52-ddfaa7a79bcc" alt="Cover of Tokyo Tarareba Girls Returns 2 Vol. 6" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Tokyo Tarareba Girls Returns 2</a> <span class="rel-vol">Vol. 6</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">A Ninja and an Assassin Under One Roof</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">A Ninja and an Assassin Under One Roof</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">A-DO</span><span class="cover-ph-mark">10</span><span class="cover-ph-foot"><span>Vol. 10</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">A-DO</a> <span class="rel-vol">Vol. 10</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">A-DO</span><span class="cover-ph-mark">10</span><span class="cover-ph-foot"><span>Vol. 10</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">A-DO</a> <span class="rel-vol">Vol. 10</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Appleseed Deluxe Edition</span><span class="cover-ph-mark">DH</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Appleseed Deluxe Edition</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Dark Horse Manga</a>
+              <span class="chip chip--physical">Physical &middot; hardcover</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Apprentice Nail Artist in a Foreign Land</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Apprentice Nail Artist in a Foreign Land</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Blue Summer Haze</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Blue Summer Haze</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Blue Summer Haze</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Blue Summer Haze</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Chillin’ in Another World with Level 2 Super Cheat Powers</span><span class="cover-ph-mark">13</span><span class="cover-ph-foot"><span>Vol. 13</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Chillin’ in Another World with Level 2 Super Cheat Powers</a> <span class="rel-vol">Vol. 13</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Drugstore in Another World: The Slow Life of a Cheat Pharmacist</span><span class="cover-ph-mark">13</span><span class="cover-ph-foot"><span>Vol. 13</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Drugstore in Another World: The Slow Life of a Cheat Pharmacist</a> <span class="rel-vol">Vol. 13</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">FAIRY TAIL: 100 Years Quest</span><span class="cover-ph-mark">21</span><span class="cover-ph-foot"><span>Vol. 21</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">FAIRY TAIL: 100 Years Quest</a> <span class="rel-vol">Vol. 21</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.6h8v11l-4-3-4 3z"/></svg>Wanted</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">FAIRY TAIL: 100 Years Quest</span><span class="cover-ph-mark">21</span><span class="cover-ph-foot"><span>Vol. 21</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">FAIRY TAIL: 100 Years Quest</a> <span class="rel-vol">Vol. 21</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.6h8v11l-4-3-4 3z"/></svg>Wanted</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">I Quit My Apprenticeship as a Royal Court Wizard</span><span class="cover-ph-mark">6</span><span class="cover-ph-foot"><span>Vol. 6</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I Quit My Apprenticeship as a Royal Court Wizard</a> <span class="rel-vol">Vol. 6</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">I&#x27;ll Never Be Your Crown Princess! - Betrothed</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I&#x27;ll Never Be Your Crown Princess! - Betrothed</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Steamship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">I&#x27;m Running for Crown Princess, but All I Want is a Steady Paycheck!</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I&#x27;m Running for Crown Princess, but All I Want is a Steady Paycheck!</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Lonely Deaths Lie Thick as Snow</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Lonely Deaths Lie Thick as Snow</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Lonely Deaths Lie Thick as Snow</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Lonely Deaths Lie Thick as Snow</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Lost in the Cloud</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Lost in the Cloud</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Makina-san’s a Love Bot?!</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Makina-san’s a Love Bot?!</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Ghost Ship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">Manchuria Opium Squad</span><span class="cover-ph-mark">14</span><span class="cover-ph-foot"><span>Vol. 14</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Manchuria Opium Squad</a> <span class="rel-vol">Vol. 14</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Parasyte Reversi</span><span class="cover-ph-mark">8</span><span class="cover-ph-foot"><span>Vol. 8</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Parasyte Reversi</a> <span class="rel-vol">Vol. 8</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">Re:Monster</span><span class="cover-ph-mark">13</span><span class="cover-ph-foot"><span>Vol. 13</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Re:Monster</a> <span class="rel-vol">Vol. 13</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">Sweet Heat Before Falling in Love</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Sweet Heat Before Falling in Love</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Steamship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Working for God in a Godless World Vol.6</span><span class="cover-ph-mark">6</span><span class="cover-ph-foot"><span>Vol. 6</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Working for God in a Godless World Vol.6</a> <span class="rel-vol">Vol. 6</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        </div>
+      </section>
+      <section class="day">
+        <div class="day-marker">
+          <div class="day-dow">Tuesday</div>
+          <div class="day-num">15</div>
+          <div class="day-count">45 releases</div>
+        </div>
+        <div class="day-list">
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt="Cover of MF Ghost Vol. 7" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">MF Ghost</a> <span class="rel-vol">Vol. 7</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.6h8v11l-4-3-4 3z"/></svg>Wanted</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/be99c01a-80bb-409a-b614-bbe68d6feb9e" alt="Cover of Cells at Work! Picture Book Vol. 1" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Cells at Work! Picture Book</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/f67c0c0c-5a7c-4223-b91b-d27056790b4e" alt="Cover of Cells at Work! Picture Book Vol. 1" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Cells at Work! Picture Book</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/1b6d5e05-e7ea-4ab6-9de9-3c4d49ebe3a8" alt="Cover of How to Treat a Lady Knight Right Vol. 5" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">How to Treat a Lady Knight Right</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/255037cd-dba9-40ef-8b67-8d5e96b992ec" alt="Cover of Love, That&#x27;s an Understatement Vol. 7" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Love, That&#x27;s an Understatement</a> <span class="rel-vol">Vol. 7</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/9d241aa7-4f54-4c9c-a6d7-9f62ce501d9d" alt="Cover of MARS 30th Anniversary Edition Vol. 2" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">MARS 30th Anniversary Edition</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; hardcover</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">A Starlit Darkness</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 02</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">A Starlit Darkness</a> <span class="rel-vol">Vol. 02</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Square Enix Manga</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">A Yuri Love Story That Begins with Getting Dumped in a Dream</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">A Yuri Love Story That Begins with Getting Dumped in a Dream</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">Aoharu Once More</span><span class="cover-ph-mark">TL</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Aoharu Once More</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">TOKYOPOP LoveLove</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">Beneath the Falling Camellia Blooms</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Beneath the Falling Camellia Blooms</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Bleach - Playing Cards</span><span class="cover-ph-mark">TP</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Bleach - Playing Cards</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Cells at Work! Picture Book 1: The Great Bacteria Vs. White Blood Cell Battle!</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Cells at Work! Picture Book 1: The Great Bacteria Vs. White Blood Cell Battle!</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Chainsmoker Cat</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Chainsmoker Cat</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">DEAD ROCK</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">DEAD ROCK</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Exotic Animal Doctor</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Exotic Animal Doctor</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Fluffy Café in Another World</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Fluffy Café in Another World</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">Ghost in the Shell: Arise - Playing Cards</span><span class="cover-ph-mark">TP</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Ghost in the Shell: Arise - Playing Cards</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Gilded Seven</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Gilded Seven</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Holoearth Chronicles Side:E Yamato Phantasia</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 03</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Holoearth Chronicles Side:E Yamato Phantasia</a> <span class="rel-vol">Vol. 03</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Square Enix Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Hope You&#x27;re Happy, Lemon</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Hope You&#x27;re Happy, Lemon</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">I Like Cat Butts</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I Like Cat Butts</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">I’m in Love with the Villainess</span><span class="cover-ph-mark">11</span><span class="cover-ph-foot"><span>Vol. 11</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I’m in Love with the Villainess</a> <span class="rel-vol">Vol. 11</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">Kaijin Fugeki: Kindled Spirits</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Kaijin Fugeki: Kindled Spirits</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Vertical Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Lout of Count&#x27;s Family (Novel)</span><span class="cover-ph-mark">9</span><span class="cover-ph-foot"><span>Vol. 9</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Lout of Count&#x27;s Family (Novel)</a> <span class="rel-vol">Vol. 9</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Monster &amp; Ghost</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Monster &amp; Ghost</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">TOKYOPOP LoveLove</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">My Ex-Boyfriend Loves Boys&#x27; Love</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 01</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">My Ex-Boyfriend Loves Boys&#x27; Love</a> <span class="rel-vol">Vol. 01</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Square Enix Manga</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">My Useless &quot;Cuddle&quot; Skill Awakened, and Now I&#x27;m Building the Ultimate Harem!</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">My Useless &quot;Cuddle&quot; Skill Awakened, and Now I&#x27;m Building the Ultimate Harem!</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Ghost Ship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">Panguan: The Twelfth Gate (Novel)</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Panguan: The Twelfth Gate (Novel)</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a6a1f"><span class="cover-ph-title">Ranma 1/2 - Playing Cards</span><span class="cover-ph-mark">TP</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Ranma 1/2 - Playing Cards</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">Record Journey Vol.2</span><span class="cover-ph-mark">TM</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Record Journey Vol.2</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Seven Deadly Sins - Playing Cards</span><span class="cover-ph-mark">TP</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Seven Deadly Sins - Playing Cards</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Sheltering Eaves</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Sheltering Eaves</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a6a1f"><span class="cover-ph-title">Snow &amp; Ink</span><span class="cover-ph-mark">6</span><span class="cover-ph-foot"><span>Vol. 6</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Snow &amp; Ink</a> <span class="rel-vol">Vol. 6</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Strange Pictures Vol.2</span><span class="cover-ph-mark">TM</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Strange Pictures Vol.2</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">The Assassin Laughs at Twilight Vol.1</span><span class="cover-ph-mark">TM</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Assassin Laughs at Twilight Vol.1</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">The Cursed Sword Master&#x27;s Harem Life: By the Sword, For the Sword</span><span class="cover-ph-mark">7</span><span class="cover-ph-foot"><span>Vol. 7</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Cursed Sword Master&#x27;s Harem Life: By the Sword, For the Sword</a> <span class="rel-vol">Vol. 7</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Ghost Ship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">The Devil&#x27;s in the Lunch Deals</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Devil&#x27;s in the Lunch Deals</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">The Lady and Her Butler</span><span class="cover-ph-mark">6</span><span class="cover-ph-foot"><span>Vol. 6</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Lady and Her Butler</a> <span class="rel-vol">Vol. 6</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">The Strongest Sage With the Weakest Crest</span><span class="cover-ph-mark">32</span><span class="cover-ph-foot"><span>Vol. 32</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Strongest Sage With the Weakest Crest</a> <span class="rel-vol">Vol. 32</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Square Enix Manga</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Time Stop Hero</span><span class="cover-ph-mark">15</span><span class="cover-ph-foot"><span>Vol. 15</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Time Stop Hero</a> <span class="rel-vol">Vol. 15</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a6a1f"><span class="cover-ph-title">Villain Actor Vol.3</span><span class="cover-ph-mark">TM</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Villain Actor Vol.3</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">Virgin Knight</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Virgin Knight</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Ghost Ship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">Wistoria: Wand and Sword</span><span class="cover-ph-mark">13</span><span class="cover-ph-foot"><span>Vol. 13</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Wistoria: Wand and Sword</a> <span class="rel-vol">Vol. 13</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Wolf’s Daughter: A Werewolf’s Tale</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Wolf’s Daughter: A Werewolf’s Tale</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">Ya Boy Kongming!</span><span class="cover-ph-mark">25</span><span class="cover-ph-foot"><span>Vol. 25</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Ya Boy Kongming!</a> <span class="rel-vol">Vol. 25</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        </div>
+      </section>
+      <section class="day">
+        <div class="day-marker">
+          <div class="day-dow">Tuesday</div>
+          <div class="day-num">22</div>
+          <div class="day-count">33 releases</div>
+        </div>
+        <div class="day-list">
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/261b3a6b-66ac-41aa-bc90-a05dcf275657" alt="Cover of Blue Lock Vol. 34" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Blue Lock</a> <span class="rel-vol">Vol. 34</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn is-owned" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8.4 6.2 12 13.4 4.4"/></svg>Owned</button></div>
+        </article>
+        <article class="rel is-followed">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Witch Hat Atelier: Grimoire Edition</a> <span class="rel-vol">Vol. 2</span><span class="star" title="You follow this series" aria-label="Followed series">★</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn is-ordered" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M2 5.2 8 2.3l6 2.9v5.6L8 13.7 2 10.8z"/><path d="M2 5.2 8 8l6-2.8M8 8v5.7"/></svg>Ordered</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/4c2740de-304e-498e-85b7-1788f6f7f26e" alt="Cover of Cells at Work! Lady Vol. 5" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Cells at Work! Lady</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">A Couple of Cuckoos</span><span class="cover-ph-mark">30</span><span class="cover-ph-foot"><span>Vol. 30</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">A Couple of Cuckoos</a> <span class="rel-vol">Vol. 30</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Apprentice Nail Artist in a Foreign Land</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Apprentice Nail Artist in a Foreign Land</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Beacon of Light in the Dark Sea (Novel)</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Beacon of Light in the Dark Sea (Novel)</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">Beneath the Falling Camellia Blooms</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Beneath the Falling Camellia Blooms</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">BLEACH - Bankai Battle (Roll &amp; Clash)</span><span class="cover-ph-mark">TP</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">BLEACH - Bankai Battle (Roll &amp; Clash)</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Boyish Girlfriend</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 01</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Boyish Girlfriend</a> <span class="rel-vol">Vol. 01</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Square Enix Manga</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Cells at Work! Cat</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Cells at Work! Cat</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">DEAR. DOOR (Comic)</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">DEAR. DOOR (Comic)</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Gachiakuta</span><span class="cover-ph-mark">12</span><span class="cover-ph-foot"><span>Vol. 12</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Gachiakuta</a> <span class="rel-vol">Vol. 12</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Give Me a Hug, Mr. Frog!</span><span class="cover-ph-mark">SS</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Give Me a Hug, Mr. Frog!</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Joyful Reunion (Novel)</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Joyful Reunion (Novel)</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Kageki Shojo!!</span><span class="cover-ph-mark">16</span><span class="cover-ph-foot"><span>Vol. 16</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Kageki Shojo!!</a> <span class="rel-vol">Vol. 16</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Let’s Go Nirvana!</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Let’s Go Nirvana!</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Yen Press</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Magical Buffs: The Support Caster is Stronger Than He Realized!</span><span class="cover-ph-mark">7</span><span class="cover-ph-foot"><span>Vol. 7</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Magical Buffs: The Support Caster is Stronger Than He Realized!</a> <span class="rel-vol">Vol. 7</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a6a1f"><span class="cover-ph-title">Medaka Kuroiwa is Impervious to My Charms</span><span class="cover-ph-mark">23</span><span class="cover-ph-foot"><span>Vol. 23</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Medaka Kuroiwa is Impervious to My Charms</a> <span class="rel-vol">Vol. 23</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.6h8v11l-4-3-4 3z"/></svg>Wanted</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">Merry Witches’ Life</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Merry Witches’ Life</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Mushishi Collector&#x27;s Edition</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Mushishi Collector&#x27;s Edition</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">My One-Sided Love</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">My One-Sided Love</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">TOKYOPOP LoveLove</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Roses and Champagne (Comic)</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Roses and Champagne (Comic)</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Servant Beast</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Servant Beast</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Yen Press</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">Silent Reading: Mo Du (Novel)</span><span class="cover-ph-mark">4</span><span class="cover-ph-foot"><span>Vol. 4</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Silent Reading: Mo Du (Novel)</a> <span class="rel-vol">Vol. 4</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">The Delinquent and the Transfer Student</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Delinquent and the Transfer Student</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">The Lion Dances With a Loved One</span><span class="cover-ph-mark">TL</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Lion Dances With a Loved One</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">TOKYOPOP LoveLove</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">The Misdeeds of an Extremely Arrogant Villain Aristocrat (Manga)</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Misdeeds of an Extremely Arrogant Villain Aristocrat (Manga)</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Thus Spoke the Rabbit</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Thus Spoke the Rabbit</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Yen Press</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Uesugi-kun Wants to Quit Being a Girl</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Uesugi-kun Wants to Quit Being a Girl</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">What If I Said, &quot;I Love You&quot;?</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">What If I Said, &quot;I Love You&quot;?</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">What it Means to Be You (Comic)</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">What it Means to Be You (Comic)</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">Yamaguchi-kun Isn&#x27;t So Bad</span><span class="cover-ph-mark">13</span><span class="cover-ph-foot"><span>Vol. 13</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Yamaguchi-kun Isn&#x27;t So Bad</a> <span class="rel-vol">Vol. 13</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a6a1f"><span class="cover-ph-title">Yuri Yuri Panic: A Case of Extreme Cuteness Has Occurred!</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Yuri Yuri Panic: A Case of Extreme Cuteness Has Occurred!</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        </div>
+      </section>
+      <section class="day">
+        <div class="day-marker">
+          <div class="day-dow">Tuesday</div>
+          <div class="day-num">29</div>
+          <div class="day-count">23 releases</div>
+        </div>
+        <div class="day-list">
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><img src="https://intent-curlew-625.convex.cloud/api/storage/c7f88f10-7eed-46d7-8066-24f04a934243" alt="Cover of I Have a Crush at Work Vol. 7" loading="lazy" width="400" height="600"></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I Have a Crush at Work</a> <span class="rel-vol">Vol. 7</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Am I Actually the Strongest? (Manga)</span><span class="cover-ph-mark">19</span><span class="cover-ph-foot"><span>Vol. 19</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Am I Actually the Strongest? (Manga)</a> <span class="rel-vol">Vol. 19</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Can You Kiss Me First?</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Can You Kiss Me First?</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Caught in Your Web</span><span class="cover-ph-mark">TL</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Caught in Your Web</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">TOKYOPOP LoveLove</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Dragon Head Omnibus</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Dragon Head Omnibus</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Dragon Head Omnibus</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Dragon Head Omnibus</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; hardcover</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Eko Eko Azarak Reborn Vol.2</span><span class="cover-ph-mark">TM</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Eko Eko Azarak Reborn Vol.2</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#8a4426"><span class="cover-ph-title">I Left my A-Rank Party to Help My Former Students Reach the Dungeon Depths!</span><span class="cover-ph-mark">11</span><span class="cover-ph-foot"><span>Vol. 11</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I Left my A-Rank Party to Help My Former Students Reach the Dungeon Depths!</a> <span class="rel-vol">Vol. 11</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">I Ship My Rival x Me (The Comic / Manhua)</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">I Ship My Rival x Me (The Comic / Manhua)</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Keep Your Hands Off Eizouken!</span><span class="cover-ph-mark">8</span><span class="cover-ph-foot"><span>Vol. 8</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Keep Your Hands Off Eizouken!</a> <span class="rel-vol">Vol. 8</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Dark Horse Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2b5d5b"><span class="cover-ph-title">Omega Megaera</span><span class="cover-ph-mark">6</span><span class="cover-ph-foot"><span>Vol. 6</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Omega Megaera</a> <span class="rel-vol">Vol. 6</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Omega of the Divine</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Omega of the Divine</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--digital">Digital</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">Omega of the Divine</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Omega of the Divine</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#2f4a6b"><span class="cover-ph-title">Otaku x Gal</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 03</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Otaku x Gal</a> <span class="rel-vol">Vol. 03</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Square Enix Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#455060"><span class="cover-ph-title">Parallel Paradise</span><span class="cover-ph-mark">27</span><span class="cover-ph-foot"><span>Vol. 27</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Parallel Paradise</a> <span class="rel-vol">Vol. 27</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Ghost Ship</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">That&#x27;s Not Love</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">That&#x27;s Not Love</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3f4a26"><span class="cover-ph-title">The Devil&#x27;s in the Lunch Deals</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Devil&#x27;s in the Lunch Deals</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Tokyopop</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">The Lord-Magear&#x27;s Apprentice</span><span class="cover-ph-mark">1</span><span class="cover-ph-foot"><span>Vol. 1</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Lord-Magear&#x27;s Apprentice</a> <span class="rel-vol">Vol. 1</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Seven Seas Entertainment</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">The Raven Dark Hero Vol.3</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">The Raven Dark Hero Vol.3</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#3d5a3a"><span class="cover-ph-title">Welcome to Ghost Mansion Vol.3</span><span class="cover-ph-mark">3</span><span class="cover-ph-foot"><span>Vol. 3</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Welcome to Ghost Mansion Vol.3</a> <span class="rel-vol">Vol. 3</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#6b2f4a"><span class="cover-ph-title">When I Was Reincarnated in Another World, I Was a Heroine and He Was a Hero Vol.1</span><span class="cover-ph-mark">TM</span><span class="cover-ph-foot"><span>Oneshot</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">When I Was Reincarnated in Another World, I Was a Heroine and He Was a Hero Vol.1</a> <span class="rel-vol">Oneshot</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Titan Manga</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#7a2e2a"><span class="cover-ph-title">Whoever You Are, I Love You</span><span class="cover-ph-mark">2</span><span class="cover-ph-foot"><span>Vol. 2</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">Whoever You Are, I Love You</a> <span class="rel-vol">Vol. 2</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Vertical Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        <article class="rel">
+          <a class="rel-cover" href="volume.html" tabindex="-1" aria-hidden="true"><span class="cover"><span class="cover-ph" style="--cloth:#5a3565"><span class="cover-ph-title">You Can’t Bluff the Sharp-Eyed Sister</span><span class="cover-ph-mark">5</span><span class="cover-ph-foot"><span>Vol. 5</span><span></span></span></span></span></a>
+          <div class="rel-main">
+            <h3 class="rel-title"><a href="volume.html">You Can’t Bluff the Sharp-Eyed Sister</a> <span class="rel-vol">Vol. 5</span></h3>
+            <div class="rel-meta">
+              <a href="publisher.html">Kodansha Comics</a>
+              <span class="chip chip--physical">Physical &middot; paperback</span>
+            </div>
+          </div>
+          <div class="rel-side"><button class="state-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Want</button></div>
+        </article>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div>
+      <a class="brand" href="index.html"><svg class="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="4.6" height="14" rx="1.1" fill="currentColor"/><rect x="8.6" y="6" width="4.6" height="11" rx="1.1" fill="currentColor" opacity=".72"/><rect x="14.8" y="4.4" width="4.2" height="12.6" rx="1.1" fill="currentColor" opacity=".46" transform="rotate(8 16.9 10.7)"/><rect x="1" y="18.6" width="24" height="3.1" rx="1.2" fill="currentColor"/></svg> MangaDB</a>
+      <p class="footer-blurb">An open database of English manga volume releases. Every edition, every release date, and the shelf you keep at home.</p>
+    </div>
+    <div class="footer-cols">
+      <div class="footer-col">
+        <h4>Browse</h4>
+        <a href="releases.html">Release agenda</a>
+        <a href="releases-grid.html">Month grid</a>
+        <a href="series.html">Series</a>
+        <a href="publisher.html">Publishers</a>
+      </div>
+      <div class="footer-col">
+        <h4>Contribute</h4>
+        <a href="index.html">Editing guidelines</a>
+        <a href="index.html">Recent revisions</a>
+        <a href="index.html">Report a wrong date</a>
+        <a href="index.html">Source attribution</a>
+      </div>
+      <div class="footer-col">
+        <h4>About</h4>
+        <a href="index.html">What MangaDB tracks</a>
+        <a href="index.html">API</a>
+        <a href="index.html">Privacy</a>
+        <a href="index.html">Terms</a>
+      </div>
+    </div>
+  </div>
+</footer>
+<script>
+  (function () {
+    var root = document.documentElement;
+    var toggle = document.querySelector(".theme-toggle");
+    if (toggle) {
+      toggle.addEventListener("click", function () {
+        var next = root.dataset.theme === "light" ? "dark" : "light";
+        root.dataset.theme = next;
+        try { localStorage.setItem("mangadb-theme", next); } catch (e) {}
+      });
+    }
+    var menu = document.querySelector(".menu-toggle");
+    var drawer = document.getElementById("mobile-nav");
+    if (menu && drawer) {
+      menu.addEventListener("click", function () {
+        var open = drawer.classList.toggle("is-open");
+        menu.setAttribute("aria-expanded", String(open));
+      });
+    }
+    document.querySelectorAll("[data-expand]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var panel = document.getElementById(btn.dataset.expand);
+        if (!panel) return;
+        var open = panel.hasAttribute("hidden");
+        if (open) { panel.removeAttribute("hidden"); } else { panel.setAttribute("hidden", ""); }
+        btn.setAttribute("aria-expanded", String(open));
+      });
+    });
+  })();
+</script>
+</body>
+</html>

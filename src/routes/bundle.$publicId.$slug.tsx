@@ -1,6 +1,12 @@
-import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  notFound,
+  redirect,
+} from "@tanstack/react-router";
 
 import { BundleCollectionControls } from "~/lib/collection";
+import { Cover } from "~/lib/cover";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import {
@@ -55,7 +61,9 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
       ...pageHead({
         title: bundleTitleTag(bundle.name, bundle.publisher?.name ?? null),
         description: `${bundle.name} ${facts.join(", ")}.${
-          bundle.description ? ` ${truncateDescription(bundle.description, 80)}` : ""
+          bundle.description
+            ? ` ${truncateDescription(bundle.description, 80)}`
+            : ""
         }`,
         path,
         image: bundle.coverUrl,
@@ -90,12 +98,6 @@ function BundlePage() {
   const { bundle, members } = Route.useLoaderData();
   const date = formatPartialDate(bundle.pubDate);
   const price = formatPrice(bundle.price);
-  const form =
-    bundle.format === "physical"
-      ? "Physical"
-      : bundle.format === "digital"
-        ? "Digital"
-        : null;
 
   return (
     <main className="bundle-page">
@@ -104,45 +106,119 @@ function BundlePage() {
         <span>Bundle</span>
       </nav>
 
-      <h1>{bundle.name}</h1>
-      <p className="series-facts">
-        {bundle.publisher ? (
-          <span className="fact">Published by {bundle.publisher.name}</span>
-        ) : null}
-        {form ? <span className="fact">{form}</span> : null}
-        {date ? <span className="fact">{date}</span> : null}
-        {bundle.isbn13 ? (
-          <span className="fact release-isbn">ISBN-13 {bundle.isbn13}</span>
-        ) : null}
-        {bundle.isbn10 ? (
-          <span className="fact release-isbn">ISBN-10 {bundle.isbn10}</span>
-        ) : null}
-        {price ? <span className="fact release-price">{price}</span> : null}
-      </p>
-      {bundle.description ? (
-        <p className="release-description">{bundle.description}</p>
-      ) : null}
+      <section className="detail-hero">
+        <div className="detail-cover">
+          <div className="detail-cover-plate">
+            <Cover
+              src={bundle.coverUrl}
+              title={bundle.name}
+              foot={[
+                members.length === 1 ? "1 book" : `${members.length} books`,
+                bundle.publisher?.name,
+              ]}
+              lazy={false}
+            />
+          </div>
+          {/* Collection Entry controls (#27); render nothing signed out.
+              Owning the box set confers Derived Ownership on every member. */}
+          <BundleCollectionControls bundleId={bundle.id} />
+        </div>
 
-      {/* Collection Entry controls (#27); render nothing signed out. Owning
-          the box set confers Derived Ownership on every member below. */}
-      <BundleCollectionControls bundleId={bundle.id} />
+        <div className="detail-body">
+          <h1 className="detail-title">{bundle.name}</h1>
+          <p className="fact-chips">
+            {bundle.publisher ? (
+              <Link
+                className="chip"
+                to="/publisher/$slug"
+                params={{ slug: bundle.publisher.slug }}
+              >
+                {bundle.publisher.name}
+              </Link>
+            ) : null}
+            {bundle.format === "physical" ? (
+              <span className="chip chip--physical">Physical</span>
+            ) : bundle.format === "digital" ? (
+              <span className="chip chip--digital">Digital</span>
+            ) : null}
+            <span className="chip">
+              {members.length === 1
+                ? "1 book inside"
+                : `${members.length} books inside`}
+            </span>
+          </p>
 
-      <section className="bundle-members">
-        <h2>In this bundle</h2>
-        <p className="section-hint">
-          Each book keeps its own release identity — follow it to its edition
-          page.
-        </p>
-        {members.length === 0 ? (
-          <p className="notice">No member releases recorded yet.</p>
-        ) : (
-          <ol className="release-list">
-            {members.map((member) => (
-              <BundleMember key={member.anchor} member={member} />
-            ))}
-          </ol>
-        )}
+          <p className="release-line detail-line">
+            {date ? <span className="release-date">{date}</span> : null}
+            {price ? <span className="release-price">{price}</span> : null}
+          </p>
+          {bundle.isbn13 || bundle.isbn10 ? (
+            <p className="release-ids">
+              {bundle.isbn13 ? (
+                <span className="release-isbn">
+                  <span className="release-isbn-kind">ISBN-13</span>
+                  {bundle.isbn13}
+                </span>
+              ) : null}
+              {bundle.isbn10 ? (
+                <span className="release-isbn">
+                  <span className="release-isbn-kind">ISBN-10</span>
+                  {bundle.isbn10}
+                </span>
+              ) : null}
+            </p>
+          ) : null}
+          {bundle.description ? (
+            <p className="detail-blurb">{bundle.description}</p>
+          ) : null}
+          <p className="detail-note">
+            A box set has its own publication facts. Each book inside keeps its
+            own release identity — and its own place in your collection.
+          </p>
+
+          <div className="section-head detail-section-head">
+            <h2 className="section-title">In this bundle</h2>
+            <p className="section-note">
+              In the order the box set packs them; each opens its edition page.
+            </p>
+          </div>
+          {members.length === 0 ? (
+            <p className="notice">No member releases recorded yet.</p>
+          ) : (
+            <ol className="release-rows">
+              {members.map((member) => (
+                <BundleMember key={member.anchor} member={member} />
+              ))}
+            </ol>
+          )}
+        </div>
       </section>
+
+      {bundle.publisher ? (
+        <>
+          <hr className="rule" />
+          <section className="section">
+            <div className="section-head">
+              <h2 className="section-title">Keep browsing</h2>
+              <p className="section-note">
+                Who made this box set, and what they ship next.
+              </p>
+            </div>
+            <div className="directory">
+              <Link
+                className="directory-row"
+                to="/publisher/$slug"
+                params={{ slug: bundle.publisher.slug }}
+              >
+                <span className="directory-name">{bundle.publisher.name}</span>
+                <span className="directory-meta">
+                  Publisher &middot; profile and upcoming releases
+                </span>
+              </Link>
+            </div>
+          </section>
+        </>
+      ) : null}
 
       {/* Public revision history + the moderator edit entry point (#31). */}
       <RecordHistory type="releaseBundle" publicId={bundle.publicId} />
@@ -156,31 +232,40 @@ function BundleMember({
 }: {
   member: BundlePageData["members"][number];
 }) {
-  const form =
-    member.format === "physical"
-      ? `Physical${member.binding ? ` · ${member.binding}` : ""}`
-      : "Digital";
   const date = formatPartialDate(member.pubDate);
+  const binding = member.format === "physical" ? member.binding : null;
   // Member link: the Edition page anchored at this Release's row (spec §11 —
   // Releases are rows on their Edition page, never standalone).
   const href = `${editionPath(member.edition.publicId, member.edition.title)}#${member.anchor}`;
   return (
-    <li className="release">
-      <div className="release-facts">
-        <span className="release-form">
+    <li className="release-row">
+      <div className="release-main">
+        <h3 className="release-title">
           <a href={href}>{member.edition.title}</a>
-        </span>
-        <span>{form}</span>
-        {date ? <span className="release-date">{date}</span> : null}
+        </h3>
+        <p className="release-line">
+          {member.format === "physical" ? (
+            <span className="chip chip--physical">Physical</span>
+          ) : (
+            <span className="chip chip--digital">Digital</span>
+          )}
+          {binding ? <span className="release-binding">{binding}</span> : null}
+          {date ? <span className="release-date">{date}</span> : null}
+        </p>
         {member.isbn13 ? (
-          <span className="release-isbn">ISBN-13 {member.isbn13}</span>
+          <p className="release-ids">
+            <span className="release-isbn">
+              <span className="release-isbn-kind">ISBN-13</span>
+              {member.isbn13}
+            </span>
+          </p>
+        ) : null}
+        {member.pinnedVariant ? (
+          <p className="release-variants">
+            Packed with the &ldquo;{member.pinnedVariant.name}&rdquo; variant
+          </p>
         ) : null}
       </div>
-      {member.pinnedVariant ? (
-        <p className="release-variants">
-          With the “{member.pinnedVariant.name}” variant
-        </p>
-      ) : null}
     </li>
   );
 }

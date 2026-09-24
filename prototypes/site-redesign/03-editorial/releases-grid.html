@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Month grid, September 2026 — MangaDB</title>
+<meta name="description" content="September 2026 English manga releases, laid out as a calendar month.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,300..700;1,400..600&family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+  /* Dark is the default, always: the hardcoded data-theme="dark" on <html>
+     stands unless a saved choice or ?theme= overrides it. The OS
+     prefers-color-scheme deliberately does not get a vote. */
+  (function () {
+    var q = new URLSearchParams(location.search).get('theme');
+    var t = q || localStorage.getItem('mangadb-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <div class="masthead__in">
+    <a class="wordmark" href="index.html">Manga<em>DB</em></a>
+    <nav class="nav" aria-label="Sections">
+        <a href="index.html">Home</a>
+        <a href="releases.html">Releases</a>
+        <a href="releases-grid.html" aria-current="page">Month grid</a>
+        <a href="series.html">Series</a>
+        <a href="publisher.html">Publishers</a>
+    </nav>
+    <div class="mast-actions">
+      <label class="search">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span class="skip">Search series, volumes and publishers</span>
+        <input type="search" placeholder="Search MangaDB" aria-label="Search series, volumes and publishers">
+      </label>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme">
+        <svg class="i-moon" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 9.6A6 6 0 0 1 6.4 2.5a6 6 0 1 0 7.1 7.1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        <svg class="i-sun" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="3.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 .8v1.8M8 13.4v1.8M.8 8h1.8M13.4 8h1.8M2.9 2.9l1.3 1.3M11.8 11.8l1.3 1.3M13.1 2.9l-1.3 1.3M4.2 11.8l-1.3 1.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      </button>
+        <a class="signin" href="series.html">Sign in</a>
+      <button class="drawer-toggle" type="button" data-drawer-toggle aria-expanded="false" aria-controls="drawer" aria-label="Open menu">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4h13M1.5 8h13M1.5 12h13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="drawer" id="drawer" data-open="false">
+    <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="releases.html">Releases</a></li>
+        <li><a href="releases-grid.html" aria-current="page">Month grid</a></li>
+        <li><a href="series.html">Series</a></li>
+        <li><a href="publisher.html">Publishers</a></li>
+        <li><a href="volume.html">Volume</a></li>
+    </ul>
+    <label class="search">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <input type="search" placeholder="Search MangaDB" aria-label="Search">
+    </label>
+  </div>
+</header>
+
+<main id="main">
+  <div class="pagehead wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="index.html">MangaDB</a><span aria-hidden="true">/</span>
+      <a href="releases.html">Releases</a><span aria-hidden="true">/</span>
+      <span>September 2026, month grid</span>
+    </nav>
+    <div class="pagehead__row">
+      <div>
+        <p class="dept">Month grid</p>
+        <h1>September 2026</h1>
+      </div>
+      <nav class="monthnav" aria-label="Month">
+        <a href="releases.html">&larr; August</a>
+        <span class="this">September 2026</span>
+        <a href="releases.html">October &rarr;</a>
+      </nav>
+    </div>
+    <p class="lede">English manga ships on Tuesdays, so the Tuesday column carries the month.
+    It is given the width to show what is actually landing.</p>
+    <div class="filters">
+      <div class="viewtoggle">
+        <a href="releases.html">Agenda</a>
+        <a href="releases-grid.html" aria-current="page">Month grid</a>
+      </div>
+      <span class="field">
+        <label for="f-format">Format</label>
+        <select id="f-format">
+          <option>Physical and digital</option>
+          <option>Physical only</option>
+          <option>Digital only</option>
+        </select>
+      </span>
+      <span class="field">
+        <label for="f-pub">Publisher</label>
+        <select id="f-pub">
+          <option>All publishers</option>
+          <option>Seven Seas Entertainment</option>
+          <option>Kodansha</option>
+          <option>Tokyopop</option>
+          <option>Kodansha Comics</option>
+          <option>Titan Manga</option>
+          <option>Square Enix Manga</option>
+          <option>TOKYOPOP LoveLove</option>
+          <option>Ghost Ship</option>
+          <option>Steamship</option>
+          <option>Yen Press</option>
+          <option>Dark Horse Manga</option>
+          <option>Vertical Comics</option>
+        </select>
+      </span>
+      <label class="checkfield">
+        <input type="checkbox"> Only series I follow
+      </label>
+      <span class="result-count">171 releases, 5 publication days</span>
+    </div>
+  </div>
+
+  <div class="wrap calendar">
+    <div class="calendar__inner">
+      <div class="calendar__dow">
+        <span>Mon</span><span>Tuesday</span><span>Wed</span><span>Thu</span>
+        <span>Fri</span><span>Sat</span><span>Sun</span>
+      </div>
+      <div class="calendar__grid">
+        <div class="cell cell--empty" aria-hidden="true"></div>
+        <div class="cell cell--busy">
+          <span class="cell__n"><span class="cell__day">1</span><span class="cell__full">Tuesday 1 September</span> <span class="meta">36</span></span>
+          <div class="cell__covers">
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t1"><span class="slip-label">1</span><span class="slip-title">How to Grill Our Love</span><img src="https://intent-curlew-625.convex.cloud/api/storage/3f9c99d5-ea48-43af-b1b5-9c9c11c517fb" alt="Cover of How to Grill Our Love Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">How to Grill Our Love</span>
+                <span class="cellrel__meta">Vol. 1 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t2"><span class="slip-label">11</span><span class="slip-title">Initial D Omnibus</span><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt="Cover of Initial D Omnibus Vol. 11" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Initial D Omnibus</span>
+                <span class="cellrel__meta">Vol. 11 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t3"><span class="slip-label">6</span><span class="slip-title">MF Ghost</span><img src="https://intent-curlew-625.convex.cloud/api/storage/6ba57eb4-6315-41af-9817-17032c5f9cae" alt="Cover of MF Ghost Vol. 6" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">MF Ghost</span>
+                <span class="cellrel__meta">Vol. 6 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t4"><span class="slip-label">17</span><span class="slip-title">Nina the Starry Bride</span><img src="https://intent-curlew-625.convex.cloud/api/storage/532dde5a-86e0-4eee-8da4-e001332635dd" alt="Cover of Nina the Starry Bride Vol. 17" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Nina the Starry Bride</span>
+                <span class="cellrel__meta">Vol. 17 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t5"><span class="slip-label">3</span><span class="slip-title">Shugo Chara! 20th Anniversary Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/a72167ee-2946-41e9-b4eb-2ecd405257a9" alt="Cover of Shugo Chara! 20th Anniversary Edition Vol. 3" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Shugo Chara! 20th Anniversary Edition</span>
+                <span class="cellrel__meta">Vol. 3 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t6"><span class="slip-label">23</span><span class="slip-title">The Heroic Legend of Arslan</span><img src="https://intent-curlew-625.convex.cloud/api/storage/a467f83e-3c80-49f3-b164-e40e838a0781" alt="Cover of The Heroic Legend of Arslan Vol. 23" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">The Heroic Legend of Arslan</span>
+                <span class="cellrel__meta">Vol. 23 &middot; Kodansha</span>
+              </span>
+            </a>
+          </div>
+          <a class="cell__more" href="releases.html">30 more releases</a>
+        </div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">2</span><span class="cell__full">Wednesday 2 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">3</span><span class="cell__full">Thursday 3 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">4</span><span class="cell__full">Friday 4 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">5</span><span class="cell__full">Saturday 5 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">6</span><span class="cell__full">Sunday 6 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">7</span><span class="cell__full">Monday 7 September</span></span></div>
+        <div class="cell cell--busy">
+          <span class="cell__n"><span class="cell__day">8</span><span class="cell__full">Tuesday 8 September</span> <span class="meta">34</span></span>
+          <div class="cell__covers">
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t1"><span class="slip-label">5</span><span class="slip-title">Girlfriend, Girlfriend Omnibus</span><img src="https://intent-curlew-625.convex.cloud/api/storage/ecbddb31-d276-4010-ae08-64e5a0921ede" alt="Cover of Girlfriend, Girlfriend Omnibus Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Girlfriend, Girlfriend Omnibus</span>
+                <span class="cellrel__meta">Vol. 5 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t2"><span class="slip-label">18</span><span class="slip-title">Go! Go! Loser Ranger!</span><img src="https://intent-curlew-625.convex.cloud/api/storage/e72606f4-b83b-4b0f-b1c1-2c0eaf75b128" alt="Cover of Go! Go! Loser Ranger! Vol. 18" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Go! Go! Loser Ranger!</span>
+                <span class="cellrel__meta">Vol. 18 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t3"><span class="slip-label">16</span><span class="slip-title">Medaka Kuroiwa is Impervious to My Charms</span><img src="https://intent-curlew-625.convex.cloud/api/storage/d66c3eaa-ff2f-4a68-b720-b9a80d16b472" alt="Cover of Medaka Kuroiwa is Impervious to My Charms Vol. 16" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Medaka Kuroiwa is Impervious to My Charms</span>
+                <span class="cellrel__meta">Vol. 16 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t4"><span class="slip-label">13</span><span class="slip-title">Medalist</span><img src="https://intent-curlew-625.convex.cloud/api/storage/76592e66-e87f-4fe3-a990-df7b7a3e5762" alt="Cover of Medalist Vol. 13" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Medalist</span>
+                <span class="cellrel__meta">Vol. 13 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t5"><span class="slip-label">1</span><span class="slip-title">Say Hello to Mr. Wallaby!</span><img src="https://intent-curlew-625.convex.cloud/api/storage/2b82738b-fa09-43a0-bd53-aa680a2e6d78" alt="Cover of Say Hello to Mr. Wallaby! Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Say Hello to Mr. Wallaby!</span>
+                <span class="cellrel__meta">Vol. 1 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t6"><span class="slip-label">23</span><span class="slip-title">The Heroic Legend of Arslan</span><img src="https://intent-curlew-625.convex.cloud/api/storage/dd500143-5382-4abe-ac79-bcd6cfd2784d" alt="Cover of The Heroic Legend of Arslan Vol. 23" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">The Heroic Legend of Arslan</span>
+                <span class="cellrel__meta">Vol. 23 &middot; Kodansha</span>
+              </span>
+            </a>
+          </div>
+          <a class="cell__more" href="releases.html">28 more releases</a>
+        </div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">9</span><span class="cell__full">Wednesday 9 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">10</span><span class="cell__full">Thursday 10 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">11</span><span class="cell__full">Friday 11 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">12</span><span class="cell__full">Saturday 12 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">13</span><span class="cell__full">Sunday 13 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">14</span><span class="cell__full">Monday 14 September</span></span></div>
+        <div class="cell cell--busy">
+          <span class="cell__n"><span class="cell__day">15</span><span class="cell__full">Tuesday 15 September</span> <span class="meta">45</span></span>
+          <div class="cell__covers">
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t1"><span class="slip-label">1</span><span class="slip-title">Cells at Work! Picture Book</span><img src="https://intent-curlew-625.convex.cloud/api/storage/be99c01a-80bb-409a-b614-bbe68d6feb9e" alt="Cover of Cells at Work! Picture Book Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Cells at Work! Picture Book</span>
+                <span class="cellrel__meta">Vol. 1 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t2"><span class="slip-label">5</span><span class="slip-title">How to Treat a Lady Knight Right</span><img src="https://intent-curlew-625.convex.cloud/api/storage/1b6d5e05-e7ea-4ab6-9de9-3c4d49ebe3a8" alt="Cover of How to Treat a Lady Knight Right Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">How to Treat a Lady Knight Right</span>
+                <span class="cellrel__meta">Vol. 5 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t3"><span class="slip-label">7</span><span class="slip-title">Love, That&#x27;s an Understatement</span><img src="https://intent-curlew-625.convex.cloud/api/storage/255037cd-dba9-40ef-8b67-8d5e96b992ec" alt="Cover of Love, That&#x27;s an Understatement Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Love, That&#x27;s an Understatement</span>
+                <span class="cellrel__meta">Vol. 7 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t4"><span class="slip-label">2</span><span class="slip-title">MARS 30th Anniversary Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/9d241aa7-4f54-4c9c-a6d7-9f62ce501d9d" alt="Cover of MARS 30th Anniversary Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">MARS 30th Anniversary Edition</span>
+                <span class="cellrel__meta">Vol. 2 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t5"><span class="slip-label">7</span><span class="slip-title">MF Ghost</span><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt="Cover of MF Ghost Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">MF Ghost</span>
+                <span class="cellrel__meta">Vol. 7 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t6"><span class="slip-label">2</span><span class="slip-title">A Starlit Darkness</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">A Starlit Darkness</span>
+                <span class="cellrel__meta">Vol. 02 &middot; Square Enix Manga</span>
+              </span>
+            </a>
+          </div>
+          <a class="cell__more" href="releases.html">39 more releases</a>
+        </div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">16</span><span class="cell__full">Wednesday 16 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">17</span><span class="cell__full">Thursday 17 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">18</span><span class="cell__full">Friday 18 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">19</span><span class="cell__full">Saturday 19 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">20</span><span class="cell__full">Sunday 20 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">21</span><span class="cell__full">Monday 21 September</span></span></div>
+        <div class="cell cell--busy">
+          <span class="cell__n"><span class="cell__day">22</span><span class="cell__full">Tuesday 22 September</span> <span class="meta">33</span></span>
+          <div class="cell__covers">
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t1"><span class="slip-label">34</span><span class="slip-title">Blue Lock</span><img src="https://intent-curlew-625.convex.cloud/api/storage/261b3a6b-66ac-41aa-bc90-a05dcf275657" alt="Cover of Blue Lock Vol. 34" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Blue Lock</span>
+                <span class="cellrel__meta">Vol. 34 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t2"><span class="slip-label">5</span><span class="slip-title">Cells at Work! Lady</span><img src="https://intent-curlew-625.convex.cloud/api/storage/4c2740de-304e-498e-85b7-1788f6f7f26e" alt="Cover of Cells at Work! Lady Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Cells at Work! Lady</span>
+                <span class="cellrel__meta">Vol. 5 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t3"><span class="slip-label">2</span><span class="slip-title">Witch Hat Atelier: Grimoire Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Witch Hat Atelier: Grimoire Edition</span>
+                <span class="cellrel__meta">Vol. 2 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t4"><span class="slip-label">30</span><span class="slip-title">A Couple of Cuckoos</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">A Couple of Cuckoos</span>
+                <span class="cellrel__meta">Vol. 30 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t5"><span class="slip-label">2</span><span class="slip-title">Apprentice Nail Artist in a Foreign Land</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Apprentice Nail Artist in a Foreign Land</span>
+                <span class="cellrel__meta">Vol. 2 &middot; Tokyopop</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t6"><span class="slip-label">2</span><span class="slip-title">Beacon of Light in the Dark Sea (Novel)</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Beacon of Light in the Dark Sea (Novel)</span>
+                <span class="cellrel__meta">Vol. 2 &middot; Seven Seas Entertainment</span>
+              </span>
+            </a>
+          </div>
+          <a class="cell__more" href="releases.html">27 more releases</a>
+        </div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">23</span><span class="cell__full">Wednesday 23 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">24</span><span class="cell__full">Thursday 24 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">25</span><span class="cell__full">Friday 25 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">26</span><span class="cell__full">Saturday 26 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">27</span><span class="cell__full">Sunday 27 September</span></span></div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">28</span><span class="cell__full">Monday 28 September</span></span></div>
+        <div class="cell cell--busy">
+          <span class="cell__n"><span class="cell__day">29</span><span class="cell__full">Tuesday 29 September</span> <span class="meta">23</span></span>
+          <div class="cell__covers">
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t1"><span class="slip-label">7</span><span class="slip-title">I Have a Crush at Work</span><img src="https://intent-curlew-625.convex.cloud/api/storage/c7f88f10-7eed-46d7-8066-24f04a934243" alt="Cover of I Have a Crush at Work Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">I Have a Crush at Work</span>
+                <span class="cellrel__meta">Vol. 7 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t2"><span class="slip-label">19</span><span class="slip-title">Am I Actually the Strongest? (Manga)</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Am I Actually the Strongest? (Manga)</span>
+                <span class="cellrel__meta">Vol. 19 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t3"><span class="slip-label">1</span><span class="slip-title">Can You Kiss Me First?</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Can You Kiss Me First?</span>
+                <span class="cellrel__meta">Vol. 1 &middot; Seven Seas Entertainment</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t4"><span class="slip-label">1</span><span class="slip-title">Caught in Your Web</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Caught in Your Web</span>
+                <span class="cellrel__meta">Oneshot &middot; TOKYOPOP LoveLove</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t5"><span class="slip-label">3</span><span class="slip-title">Dragon Head Omnibus</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Dragon Head Omnibus</span>
+                <span class="cellrel__meta">Vol. 3 &middot; Kodansha</span>
+              </span>
+            </a>
+            <a class="cellrel" href="volume.html">
+              <span class="cover cover--none cover--t6"><span class="slip-label">1</span><span class="slip-title">Eko Eko Azarak Reborn Vol.2</span></span>
+              <span class="cellrel__text">
+                <span class="cellrel__title">Eko Eko Azarak Reborn Vol.2</span>
+                <span class="cellrel__meta">Oneshot &middot; Titan Manga</span>
+              </span>
+            </a>
+          </div>
+          <a class="cell__more" href="releases.html">17 more releases</a>
+        </div>
+        <div class="cell"><span class="cell__n"><span class="cell__day">30</span><span class="cell__full">Wednesday 30 September</span></span></div>
+        <div class="cell cell--empty" aria-hidden="true"></div>
+        <div class="cell cell--empty" aria-hidden="true"></div>
+        <div class="cell cell--empty" aria-hidden="true"></div>
+        <div class="cell cell--empty" aria-hidden="true"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap section section--tight">
+    <div class="linkrow">
+      <a class="btn btn--solid" href="releases.html">Read the day-by-day agenda</a>
+      <a class="btn btn--ghost" href="publisher.html">Filter by publisher</a>
+    </div>
+  </div>
+</main>
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot__grid">
+      <div class="foot__about">
+        <h4>MangaDB</h4>
+        <p>An open database of English manga volume releases: what exists, when each
+        edition arrives, and which copies are on your shelf.</p>
+      </div>
+      <div>
+        <h4>Browse</h4>
+        <ul>
+          <li><a href="releases.html">Release agenda</a></li>
+          <li><a href="releases-grid.html">Month grid</a></li>
+          <li><a href="series.html">Series</a></li>
+          <li><a href="publisher.html">Publishers</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Your shelf</h4>
+        <ul>
+          <li><a href="releases.html">My upcoming releases</a></li>
+          <li><a href="volume.html">Collection</a></li>
+          <li><a href="series.html">Series I follow</a></li>
+          <li><a href="volume.html">Reading history</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>The database</h4>
+        <ul>
+          <li><a href="index.html">Editing guidelines</a></li>
+          <li><a href="index.html">Revision history</a></li>
+          <li><a href="index.html">Source attribution</a></li>
+          <li><a href="index.html">API</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot__legal">
+      <p class="meta">Prototype built from 171 real September 2026 records. Cover art belongs to its publishers.</p>
+      <p class="meta">Every page in this mock-up:
+        <a class="tlink" href="index.html">Home</a>,
+        <a class="tlink" href="releases.html">Agenda</a>,
+        <a class="tlink" href="releases-grid.html">Month grid</a>,
+        <a class="tlink" href="series.html">Series</a>,
+        <a class="tlink" href="volume.html">Volume</a>,
+        <a class="tlink" href="publisher.html">Publisher</a>.</p>
+    </div>
+  </div>
+</footer>
+<script>
+  (function () {
+    var root = document.documentElement;
+    function current() {
+      /* data-theme is always present (hardcoded dark + boot script), so the
+         OS preference never enters the decision. */
+      return root.getAttribute('data-theme') || 'dark';
+    }
+    document.querySelectorAll('[data-theme-toggle]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var next = current() === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        localStorage.setItem('mangadb-theme', next);
+        b.setAttribute('aria-label', next === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+      });
+    });
+    var dt = document.querySelector('[data-drawer-toggle]'), dr = document.getElementById('drawer');
+    if (dt && dr) dt.addEventListener('click', function () {
+      var open = dr.getAttribute('data-open') === 'true';
+      dr.setAttribute('data-open', String(!open));
+      dt.setAttribute('aria-expanded', String(!open));
+    });
+    document.querySelectorAll('[data-toggle-group]').forEach(function (group) {
+      group.addEventListener('click', function (e) {
+        var btn = e.target.closest('button[aria-pressed]');
+        if (!btn) return;
+        var on = btn.getAttribute('aria-pressed') === 'true';
+        if (group.hasAttribute('data-exclusive'))
+          group.querySelectorAll('button[aria-pressed]').forEach(function (b) {
+            b.setAttribute('aria-pressed', 'false');
+          });
+        btn.setAttribute('aria-pressed', String(!on));
+      });
+    });
+  })();
+</script>
+</body>
+</html>

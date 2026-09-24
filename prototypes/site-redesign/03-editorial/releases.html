@@ -1,0 +1,2148 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Release agenda, September 2026 — MangaDB</title>
+<meta name="description" content="Every English manga volume release published in September 2026, by day.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,300..700;1,400..600&family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+  /* Dark is the default, always: the hardcoded data-theme="dark" on <html>
+     stands unless a saved choice or ?theme= overrides it. The OS
+     prefers-color-scheme deliberately does not get a vote. */
+  (function () {
+    var q = new URLSearchParams(location.search).get('theme');
+    var t = q || localStorage.getItem('mangadb-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <div class="masthead__in">
+    <a class="wordmark" href="index.html">Manga<em>DB</em></a>
+    <nav class="nav" aria-label="Sections">
+        <a href="index.html">Home</a>
+        <a href="releases.html" aria-current="page">Releases</a>
+        <a href="releases-grid.html">Month grid</a>
+        <a href="series.html">Series</a>
+        <a href="publisher.html">Publishers</a>
+    </nav>
+    <div class="mast-actions">
+      <label class="search">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span class="skip">Search series, volumes and publishers</span>
+        <input type="search" placeholder="Search MangaDB" aria-label="Search series, volumes and publishers">
+      </label>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme">
+        <svg class="i-moon" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 9.6A6 6 0 0 1 6.4 2.5a6 6 0 1 0 7.1 7.1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        <svg class="i-sun" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="3.2" stroke="currentColor" stroke-width="1.3"/><path d="M8 .8v1.8M8 13.4v1.8M.8 8h1.8M13.4 8h1.8M2.9 2.9l1.3 1.3M11.8 11.8l1.3 1.3M13.1 2.9l-1.3 1.3M4.2 11.8l-1.3 1.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      </button>
+        <a class="signin" href="series.html">Sign in</a>
+      <button class="drawer-toggle" type="button" data-drawer-toggle aria-expanded="false" aria-controls="drawer" aria-label="Open menu">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4h13M1.5 8h13M1.5 12h13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="drawer" id="drawer" data-open="false">
+    <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="releases.html" aria-current="page">Releases</a></li>
+        <li><a href="releases-grid.html">Month grid</a></li>
+        <li><a href="series.html">Series</a></li>
+        <li><a href="publisher.html">Publishers</a></li>
+        <li><a href="volume.html">Volume</a></li>
+    </ul>
+    <label class="search">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <input type="search" placeholder="Search MangaDB" aria-label="Search">
+    </label>
+  </div>
+</header>
+
+<main id="main">
+  <div class="pagehead wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="index.html">MangaDB</a><span aria-hidden="true">/</span>
+      <a href="releases.html">Releases</a><span aria-hidden="true">/</span>
+      <span>September 2026</span>
+    </nav>
+    <div class="pagehead__row">
+      <div>
+        <p class="dept">Release agenda</p>
+        <h1>September 2026</h1>
+      </div>
+      <nav class="monthnav" aria-label="Month">
+        <a href="releases.html">&larr; August</a>
+        <span class="this">September 2026</span>
+        <a href="releases.html">October &rarr;</a>
+      </nav>
+    </div>
+    <p class="lede">Five Tuesdays, twelve publishers, 171 releases. A star marks a series
+    you follow.</p>
+    <div class="filters">
+      <div class="viewtoggle">
+        <a href="releases.html" aria-current="page">Agenda</a>
+        <a href="releases-grid.html">Month grid</a>
+      </div>
+      <span class="field">
+        <label for="f-format">Format</label>
+        <select id="f-format">
+          <option>Physical and digital</option>
+          <option>Physical only</option>
+          <option>Digital only</option>
+        </select>
+      </span>
+      <span class="field">
+        <label for="f-pub">Publisher</label>
+        <select id="f-pub">
+          <option>All publishers</option>
+          <option>Seven Seas Entertainment</option>
+          <option>Kodansha</option>
+          <option>Tokyopop</option>
+          <option>Kodansha Comics</option>
+          <option>Titan Manga</option>
+          <option>Square Enix Manga</option>
+          <option>TOKYOPOP LoveLove</option>
+          <option>Ghost Ship</option>
+          <option>Steamship</option>
+          <option>Yen Press</option>
+          <option>Dark Horse Manga</option>
+          <option>Vertical Comics</option>
+        </select>
+      </span>
+      <label class="checkfield">
+        <input type="checkbox"> Only series I follow
+      </label>
+      <span class="result-count">171 releases, 5 publication days</span>
+    </div>
+  </div>
+
+  <div class="wrap">
+      <section class="day" aria-labelledby="day-1">
+        <div class="day__mark">
+          <span class="num" id="day-1">1</span>
+          <span class="dow">Tuesday</span>
+          <span class="meta">36 releases, 4 from series you follow</span>
+        </div>
+        <div class="releases">
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">10 Things I Want to Do Before I Turn 40 - Part</span></span>
+          <span>
+            <a class="release__title" href="volume.html">10 Things I Want to Do Before I Turn 40 - Part <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-088-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">8</span><span class="slip-title">Always a Catch!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Always a Catch! <span class="vlabel">Vol. 08</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-495-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Square Enix Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">Cheeky Devil Cop!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Cheeky Devil Cop! <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-654-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">1</span><span class="slip-title">Dai Dark Deluxe Edition 1 (Vol. 1-3 Hardcover Omnibus)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Dai Dark Deluxe Edition 1 (Vol. 1-3 Hardcover Omnibus) <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Hardcover · 978-1-9753-5549-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">2</span><span class="slip-title">Dungeon Elf</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Dungeon Elf <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-569-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">1</span><span class="slip-title">How to Grill Our Love</span><img src="https://intent-curlew-625.convex.cloud/api/storage/3f9c99d5-ea48-43af-b1b5-9c9c11c517fb" alt="Cover of How to Grill Our Love Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">How to Grill Our Love <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-975-19701-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">7</span><span class="slip-title">I Got Married to the Girl I Hate Most in Class</span></span>
+          <span>
+            <a class="release__title" href="volume.html">I Got Married to the Girl I Hate Most in Class <span class="vlabel">Vol. 7</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-690-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">11</span><span class="slip-title">Initial D Omnibus</span><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt="Cover of Initial D Omnibus Vol. 11" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>Initial D Omnibus <span class="vlabel">Vol. 11</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-7098-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">11</span><span class="slip-title">Initial D Omnibus</span><img src="https://intent-curlew-625.convex.cloud/api/storage/580bf8e1-f567-4f72-8023-c2653c8e67e6" alt="Cover of Initial D Omnibus Vol. 11" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>Initial D Omnibus <span class="vlabel">Vol. 11</span></a>
+            <span class="release__sub">Digital edition · 978-1-9753-8675-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">11</span><span class="slip-title">Initial D Omnibus 11 (Vol. 21-22)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Initial D Omnibus 11 (Vol. 21-22) <span class="vlabel">Vol. 11</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-463-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">1</span><span class="slip-title">Luna Knight</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Luna Knight <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-142-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Masters of the Universe: Legends of Eternia, Issue #1</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Masters of the Universe: Legends of Eternia, Issue #1 <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Digital edition · 978-1-9753-6710-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">6</span><span class="slip-title">MF Ghost</span><img src="https://intent-curlew-625.convex.cloud/api/storage/6ba57eb4-6315-41af-9817-17032c5f9cae" alt="Cover of MF Ghost Vol. 6" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>MF Ghost <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-246-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">17</span><span class="slip-title">Miss Kobayashi&#x27;s Dragon Maid</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Miss Kobayashi&#x27;s Dragon Maid <span class="vlabel">Vol. 17</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-449-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">11</span><span class="slip-title">Monster Guild: The Dark Lord&#x27;s (No-Good) Comeback!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Monster Guild: The Dark Lord&#x27;s (No-Good) Comeback! <span class="vlabel">Vol. 11</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-638-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">3</span><span class="slip-title">My Contract With the Apothecary Monster</span></span>
+          <span>
+            <a class="release__title" href="volume.html">My Contract With the Apothecary Monster <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Digital edition · 978-1-975-48744-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">TOKYOPOP LoveLove</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">17</span><span class="slip-title">Nina the Starry Bride</span><img src="https://intent-curlew-625.convex.cloud/api/storage/532dde5a-86e0-4eee-8da4-e001332635dd" alt="Cover of Nina the Starry Bride Vol. 17" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>Nina the Starry Bride <span class="vlabel">Vol. 17</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-749-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">13</span><span class="slip-title">Precarious Woman Executive Miss Black General</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Precarious Woman Executive Miss Black General <span class="vlabel">Vol. 13</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-3447-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">1</span><span class="slip-title">Printernia Nippon: My Squishy Bio-Printed Pet</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Printernia Nippon: My Squishy Bio-Printed Pet <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-856-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">7</span><span class="slip-title">Seaside Stranger Vol. 7: Harukaze no Étranger</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Seaside Stranger Vol. 7: Harukaze no Étranger <span class="vlabel">Vol. 7</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-939-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">3</span><span class="slip-title">Shugo Chara! 20th Anniversary Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/a72167ee-2946-41e9-b4eb-2ecd405257a9" alt="Cover of Shugo Chara! 20th Anniversary Edition Vol. 3" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Shugo Chara! 20th Anniversary Edition <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Hardcover · 978-1-63858-464-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">3</span><span class="slip-title">Shugo Chara! 20th Anniversary Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/9e10860e-6451-4432-8cc5-197d35b52aca" alt="Cover of Shugo Chara! 20th Anniversary Edition Vol. 3" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Shugo Chara! 20th Anniversary Edition <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Digital edition · 978-1-63858-768-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Stick it - Cozy Crime Scenes</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Stick it - Cozy Crime Scenes <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-868-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Stick it - Tiny Bookshops</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Stick it - Tiny Bookshops <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-975-03915-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">5</span><span class="slip-title">Tamamori&#x27;s Fantasies Never Stop!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Tamamori&#x27;s Fantasies Never Stop! <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-174-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Ghost Ship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">23</span><span class="slip-title">The Heroic Legend of Arslan</span><img src="https://intent-curlew-625.convex.cloud/api/storage/a467f83e-3c80-49f3-b164-e40e838a0781" alt="Cover of The Heroic Legend of Arslan Vol. 23" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">The Heroic Legend of Arslan <span class="vlabel">Vol. 23</span></a>
+            <span class="release__sub">Digital edition · 978-1-9753-8179-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">22</span><span class="slip-title">The Ideal Sponger Life</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Ideal Sponger Life <span class="vlabel">Vol. 22</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-646-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">1</span><span class="slip-title">The Obsessed Mage and His Beloved Statue Bride: She Cannot Resist His Seductive Voice (Manga)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Obsessed Mage and His Beloved Statue Bride: She Cannot Resist His Seductive Voice (Manga) <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-975-27787-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Steamship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">6</span><span class="slip-title">The Strange House</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Strange House <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-062-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">3</span><span class="slip-title">The Tale of a Little Alchemist Blessed by the Spirits</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Tale of a Little Alchemist Blessed by the Spirits <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-951-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">6</span><span class="slip-title">The Twelve Kingdoms Book 6 - A Thousand Miles of Wind, the Sky at Dawn: Part 2 (Novel)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Twelve Kingdoms Book 6 - A Thousand Miles of Wind, the Sky at Dawn: Part 2 (Novel) <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-034-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">8</span><span class="slip-title">The Weakest Tamer Began a Journey to Pick Up Trash</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Weakest Tamer Began a Journey to Pick Up Trash <span class="vlabel">Vol. 8</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-744-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">4</span><span class="slip-title">The World is Dancing</span><img src="https://intent-curlew-625.convex.cloud/api/storage/eff1efba-6cf8-47b0-a20c-45fbd1752138" alt="Cover of The World is Dancing Vol. 4" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">The World is Dancing <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-975-46255-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">8</span><span class="slip-title">The World&#x27;s Fastest Level Up</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The World&#x27;s Fastest Level Up <span class="vlabel">Vol. 8</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-3323-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">9</span><span class="slip-title">Tune In to the Midnight Heart</span><img src="https://intent-curlew-625.convex.cloud/api/storage/600b8792-e289-45fe-9a7a-b7d2c7b79e26" alt="Cover of Tune In to the Midnight Heart Vol. 9" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Tune In to the Midnight Heart <span class="vlabel">Vol. 9</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-366-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">9</span><span class="slip-title">Tune In to the Midnight Heart</span><img src="https://intent-curlew-625.convex.cloud/api/storage/857d4bfd-0add-4e5a-b870-3e6afdf132cb" alt="Cover of Tune In to the Midnight Heart Vol. 9" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Tune In to the Midnight Heart <span class="vlabel">Vol. 9</span></a>
+            <span class="release__sub">Digital edition · 978-1-64651-496-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        </div>
+      </section>
+      <section class="day" aria-labelledby="day-8">
+        <div class="day__mark">
+          <span class="num" id="day-8">8</span>
+          <span class="dow">Tuesday</span>
+          <span class="meta">34 releases, 5 from series you follow</span>
+        </div>
+        <div class="releases">
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">4</span><span class="slip-title">A Ninja and an Assassin Under One Roof</span></span>
+          <span>
+            <a class="release__title" href="volume.html">A Ninja and an Assassin Under One Roof <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-710-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">10</span><span class="slip-title">A-DO</span></span>
+          <span>
+            <a class="release__title" href="volume.html">A-DO <span class="vlabel">Vol. 10</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-759-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">10</span><span class="slip-title">A-DO</span></span>
+          <span>
+            <a class="release__title" href="volume.html">A-DO <span class="vlabel">Vol. 10</span></a>
+            <span class="release__sub">Digital edition · 978-1-64651-389-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Appleseed Deluxe Edition</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Appleseed Deluxe Edition <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Hardcover · 978-1-63858-014-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Dark Horse Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">2</span><span class="slip-title">Apprentice Nail Artist in a Foreign Land</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Apprentice Nail Artist in a Foreign Land <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Digital edition · 978-1-9753-1885-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">2</span><span class="slip-title">Blue Summer Haze</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Blue Summer Haze <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-207-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">2</span><span class="slip-title">Blue Summer Haze</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Blue Summer Haze <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Digital edition · 978-1-64827-226-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">13</span><span class="slip-title">Chillin’ in Another World with Level 2 Super Cheat Powers</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Chillin’ in Another World with Level 2 Super Cheat Powers <span class="vlabel">Vol. 13</span></a>
+            <span class="release__sub">Paperback · 978-1-975-32945-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">13</span><span class="slip-title">Drugstore in Another World: The Slow Life of a Cheat Pharmacist</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Drugstore in Another World: The Slow Life of a Cheat Pharmacist <span class="vlabel">Vol. 13</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-394-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">21</span><span class="slip-title">FAIRY TAIL: 100 Years Quest</span></span>
+          <span>
+            <a class="release__title" href="volume.html">FAIRY TAIL: 100 Years Quest <span class="vlabel">Vol. 21</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-628-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">21</span><span class="slip-title">FAIRY TAIL: 100 Years Quest</span></span>
+          <span>
+            <a class="release__title" href="volume.html">FAIRY TAIL: 100 Years Quest <span class="vlabel">Vol. 21</span></a>
+            <span class="release__sub">Digital edition · 978-1-64827-146-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">58</span><span class="slip-title">Giant Killing</span></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>Giant Killing <span class="vlabel">Vol. 58</span></a>
+            <span class="release__sub">Digital edition · 978-1-64609-574-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">5</span><span class="slip-title">Girlfriend, Girlfriend Omnibus</span><img src="https://intent-curlew-625.convex.cloud/api/storage/ecbddb31-d276-4010-ae08-64e5a0921ede" alt="Cover of Girlfriend, Girlfriend Omnibus Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Girlfriend, Girlfriend Omnibus <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-531-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">18</span><span class="slip-title">Go! Go! Loser Ranger!</span><img src="https://intent-curlew-625.convex.cloud/api/storage/e72606f4-b83b-4b0f-b1c1-2c0eaf75b128" alt="Cover of Go! Go! Loser Ranger! Vol. 18" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>Go! Go! Loser Ranger! <span class="vlabel">Vol. 18</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-3732-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">6</span><span class="slip-title">I Quit My Apprenticeship as a Royal Court Wizard</span></span>
+          <span>
+            <a class="release__title" href="volume.html">I Quit My Apprenticeship as a Royal Court Wizard <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-6083-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">4</span><span class="slip-title">I&#x27;ll Never Be Your Crown Princess! - Betrothed</span></span>
+          <span>
+            <a class="release__title" href="volume.html">I&#x27;ll Never Be Your Crown Princess! - Betrothed <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-975-49264-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Steamship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">4</span><span class="slip-title">I&#x27;m Running for Crown Princess, but All I Want is a Steady Paycheck!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">I&#x27;m Running for Crown Princess, but All I Want is a Steady Paycheck! <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-7581-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">4</span><span class="slip-title">Lonely Deaths Lie Thick as Snow</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Lonely Deaths Lie Thick as Snow <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-236-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">4</span><span class="slip-title">Lonely Deaths Lie Thick as Snow</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Lonely Deaths Lie Thick as Snow <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Digital edition · 978-1-9753-1797-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">4</span><span class="slip-title">Lost in the Cloud</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Lost in the Cloud <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-456-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">4</span><span class="slip-title">Makina-san’s a Love Bot?!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Makina-san’s a Love Bot?! <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-532-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Ghost Ship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">14</span><span class="slip-title">Manchuria Opium Squad</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Manchuria Opium Squad <span class="vlabel">Vol. 14</span></a>
+            <span class="release__sub">Digital edition · 978-1-63858-906-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">16</span><span class="slip-title">Medaka Kuroiwa is Impervious to My Charms</span><img src="https://intent-curlew-625.convex.cloud/api/storage/d66c3eaa-ff2f-4a68-b720-b9a80d16b472" alt="Cover of Medaka Kuroiwa is Impervious to My Charms Vol. 16" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Medaka Kuroiwa is Impervious to My Charms <span class="vlabel">Vol. 16</span></a>
+            <span class="release__sub">Paperback · 978-1-975-91443-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">13</span><span class="slip-title">Medalist</span><img src="https://intent-curlew-625.convex.cloud/api/storage/76592e66-e87f-4fe3-a990-df7b7a3e5762" alt="Cover of Medalist Vol. 13" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>Medalist <span class="vlabel">Vol. 13</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-2171-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">8</span><span class="slip-title">Parasyte Reversi</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Parasyte Reversi <span class="vlabel">Vol. 8</span></a>
+            <span class="release__sub">Digital edition · 978-1-64609-089-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">13</span><span class="slip-title">Re:Monster</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Re:Monster <span class="vlabel">Vol. 13</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-881-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">Say Hello to Mr. Wallaby!</span><img src="https://intent-curlew-625.convex.cloud/api/storage/2b82738b-fa09-43a0-bd53-aa680a2e6d78" alt="Cover of Say Hello to Mr. Wallaby! Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Say Hello to Mr. Wallaby! <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-975-57328-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">Say Hello to Mr. Wallaby!</span><img src="https://intent-curlew-625.convex.cloud/api/storage/09300ccf-b678-417b-9ebc-f68a03f0b833" alt="Cover of Say Hello to Mr. Wallaby! Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Say Hello to Mr. Wallaby! <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Digital edition · 978-1-64505-198-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">5</span><span class="slip-title">Sweet Heat Before Falling in Love</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Sweet Heat Before Falling in Love <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-9169-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Steamship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">23</span><span class="slip-title">The Heroic Legend of Arslan</span><img src="https://intent-curlew-625.convex.cloud/api/storage/dd500143-5382-4abe-ac79-bcd6cfd2784d" alt="Cover of The Heroic Legend of Arslan Vol. 23" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">The Heroic Legend of Arslan <span class="vlabel">Vol. 23</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-173-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">6</span><span class="slip-title">Tokyo Tarareba Girls Returns 2</span><img src="https://intent-curlew-625.convex.cloud/api/storage/d70d17c5-8170-4d2a-9d52-ddfaa7a79bcc" alt="Cover of Tokyo Tarareba Girls Returns 2 Vol. 6" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Tokyo Tarareba Girls Returns 2 <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-057-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">23</span><span class="slip-title">WIND BREAKER</span><img src="https://intent-curlew-625.convex.cloud/api/storage/ddcfa9b1-d00e-4a06-92ea-2125da881bf1" alt="Cover of WIND BREAKER Vol. 23" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>WIND BREAKER <span class="vlabel">Vol. 23</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-3969-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">26</span><span class="slip-title">WIND BREAKER</span></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>WIND BREAKER <span class="vlabel">Vol. 26</span></a>
+            <span class="release__sub">Digital edition · 978-1-64827-176-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">6</span><span class="slip-title">Working for God in a Godless World Vol.6</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Working for God in a Godless World Vol.6 <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-0745-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        </div>
+      </section>
+      <section class="day" aria-labelledby="day-15">
+        <div class="day__mark">
+          <span class="num" id="day-15">15</span>
+          <span class="dow">Tuesday</span>
+          <span class="meta">45 releases, 1 from series you follow</span>
+        </div>
+        <div class="releases">
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">2</span><span class="slip-title">A Starlit Darkness</span></span>
+          <span>
+            <a class="release__title" href="volume.html">A Starlit Darkness <span class="vlabel">Vol. 02</span></a>
+            <span class="release__sub">Digital edition · 978-1-64505-897-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Square Enix Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">3</span><span class="slip-title">A Yuri Love Story That Begins with Getting Dumped in a Dream</span></span>
+          <span>
+            <a class="release__title" href="volume.html">A Yuri Love Story That Begins with Getting Dumped in a Dream <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-552-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Aoharu Once More</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Aoharu Once More <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Digital edition · 978-1-64609-398-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">TOKYOPOP LoveLove</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">2</span><span class="slip-title">Beneath the Falling Camellia Blooms</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Beneath the Falling Camellia Blooms <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Digital edition · 978-1-64505-377-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Bleach - Playing Cards</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Bleach - Playing Cards <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-975-38333-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">1</span><span class="slip-title">Cells at Work! Picture Book</span><img src="https://intent-curlew-625.convex.cloud/api/storage/f67c0c0c-5a7c-4223-b91b-d27056790b4e" alt="Cover of Cells at Work! Picture Book Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Cells at Work! Picture Book <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-790-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">1</span><span class="slip-title">Cells at Work! Picture Book</span><img src="https://intent-curlew-625.convex.cloud/api/storage/be99c01a-80bb-409a-b614-bbe68d6feb9e" alt="Cover of Cells at Work! Picture Book Vol. 1" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Cells at Work! Picture Book <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Digital edition · 978-1-64609-661-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">1</span><span class="slip-title">Cells at Work! Picture Book 1: The Great Bacteria Vs. White Blood Cell Battle!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Cells at Work! Picture Book 1: The Great Bacteria Vs. White Blood Cell Battle! <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-974-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">4</span><span class="slip-title">Chainsmoker Cat</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Chainsmoker Cat <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-363-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">5</span><span class="slip-title">DEAD ROCK</span></span>
+          <span>
+            <a class="release__title" href="volume.html">DEAD ROCK <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-975-76131-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">2</span><span class="slip-title">Exotic Animal Doctor</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Exotic Animal Doctor <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-728-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">3</span><span class="slip-title">Fluffy Café in Another World</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Fluffy Café in Another World <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Paperback · 978-1-975-46193-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Ghost in the Shell: Arise - Playing Cards</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Ghost in the Shell: Arise - Playing Cards <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-798-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">1</span><span class="slip-title">Gilded Seven</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Gilded Seven <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-545-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">3</span><span class="slip-title">Holoearth Chronicles Side:E Yamato Phantasia</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Holoearth Chronicles Side:E Yamato Phantasia <span class="vlabel">Vol. 03</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-514-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Square Enix Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">4</span><span class="slip-title">Hope You&#x27;re Happy, Lemon</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Hope You&#x27;re Happy, Lemon <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-403-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">5</span><span class="slip-title">How to Treat a Lady Knight Right</span><img src="https://intent-curlew-625.convex.cloud/api/storage/1b6d5e05-e7ea-4ab6-9de9-3c4d49ebe3a8" alt="Cover of How to Treat a Lady Knight Right Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">How to Treat a Lady Knight Right <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-529-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">I Like Cat Butts</span></span>
+          <span>
+            <a class="release__title" href="volume.html">I Like Cat Butts <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-774-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">11</span><span class="slip-title">I’m in Love with the Villainess</span></span>
+          <span>
+            <a class="release__title" href="volume.html">I’m in Love with the Villainess <span class="vlabel">Vol. 11</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-812-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">5</span><span class="slip-title">Kaijin Fugeki: Kindled Spirits</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Kaijin Fugeki: Kindled Spirits <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-530-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Vertical Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">9</span><span class="slip-title">Lout of Count&#x27;s Family (Novel)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Lout of Count&#x27;s Family (Novel) <span class="vlabel">Vol. 9</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-656-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">7</span><span class="slip-title">Love, That&#x27;s an Understatement</span><img src="https://intent-curlew-625.convex.cloud/api/storage/255037cd-dba9-40ef-8b67-8d5e96b992ec" alt="Cover of Love, That&#x27;s an Understatement Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Love, That&#x27;s an Understatement <span class="vlabel">Vol. 7</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-576-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">MARS 30th Anniversary Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/9d241aa7-4f54-4c9c-a6d7-9f62ce501d9d" alt="Cover of MARS 30th Anniversary Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">MARS 30th Anniversary Edition <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Hardcover · 978-1-64609-552-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">7</span><span class="slip-title">MF Ghost</span><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt="Cover of MF Ghost Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>MF Ghost <span class="vlabel">Vol. 7</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-133-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">3</span><span class="slip-title">Monster &amp; Ghost</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Monster &amp; Ghost <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Digital edition · 978-1-9753-5103-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">TOKYOPOP LoveLove</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">1</span><span class="slip-title">My Ex-Boyfriend Loves Boys&#x27; Love</span></span>
+          <span>
+            <a class="release__title" href="volume.html">My Ex-Boyfriend Loves Boys&#x27; Love <span class="vlabel">Vol. 01</span></a>
+            <span class="release__sub">Digital edition · 978-1-64827-405-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Square Enix Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">1</span><span class="slip-title">My Useless &quot;Cuddle&quot; Skill Awakened, and Now I&#x27;m Building the Ultimate Harem!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">My Useless &quot;Cuddle&quot; Skill Awakened, and Now I&#x27;m Building the Ultimate Harem! <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-118-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Ghost Ship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">1</span><span class="slip-title">Panguan: The Twelfth Gate (Novel)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Panguan: The Twelfth Gate (Novel) <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-975-26952-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Ranma 1/2 - Playing Cards</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Ranma 1/2 - Playing Cards <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-794-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Record Journey Vol.2</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Record Journey Vol.2 <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-001-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Seven Deadly Sins - Playing Cards</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Seven Deadly Sins - Playing Cards <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-289-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">5</span><span class="slip-title">Sheltering Eaves</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Sheltering Eaves <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-307-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">6</span><span class="slip-title">Snow &amp; Ink</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Snow &amp; Ink <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-975-86708-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Strange Pictures Vol.2</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Strange Pictures Vol.2 <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-975-04648-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">The Assassin Laughs at Twilight Vol.1</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Assassin Laughs at Twilight Vol.1 <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-737-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">7</span><span class="slip-title">The Cursed Sword Master&#x27;s Harem Life: By the Sword, For the Sword</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Cursed Sword Master&#x27;s Harem Life: By the Sword, For the Sword <span class="vlabel">Vol. 7</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-3034-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Ghost Ship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">The Devil&#x27;s in the Lunch Deals</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Devil&#x27;s in the Lunch Deals <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Digital edition · 978-1-63858-044-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">6</span><span class="slip-title">The Lady and Her Butler</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Lady and Her Butler <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-504-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">32</span><span class="slip-title">The Strongest Sage With the Weakest Crest</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Strongest Sage With the Weakest Crest <span class="vlabel">Vol. 32</span></a>
+            <span class="release__sub">Digital edition · 978-1-63858-528-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Square Enix Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">15</span><span class="slip-title">Time Stop Hero</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Time Stop Hero <span class="vlabel">Vol. 15</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-091-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Villain Actor Vol.3</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Villain Actor Vol.3 <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-745-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">3</span><span class="slip-title">Virgin Knight</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Virgin Knight <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-880-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Ghost Ship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">13</span><span class="slip-title">Wistoria: Wand and Sword</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Wistoria: Wand and Sword <span class="vlabel">Vol. 13</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-088-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">4</span><span class="slip-title">Wolf’s Daughter: A Werewolf’s Tale</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Wolf’s Daughter: A Werewolf’s Tale <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-913-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">25</span><span class="slip-title">Ya Boy Kongming!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Ya Boy Kongming! <span class="vlabel">Vol. 25</span></a>
+            <span class="release__sub">Digital edition · 978-1-64505-111-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        </div>
+      </section>
+      <section class="day" aria-labelledby="day-22">
+        <div class="day__mark">
+          <span class="num" id="day-22">22</span>
+          <span class="dow">Tuesday</span>
+          <span class="meta">33 releases, 2 from series you follow</span>
+        </div>
+        <div class="releases">
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">30</span><span class="slip-title">A Couple of Cuckoos</span></span>
+          <span>
+            <a class="release__title" href="volume.html">A Couple of Cuckoos <span class="vlabel">Vol. 30</span></a>
+            <span class="release__sub">Digital edition · 978-1-64505-770-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">2</span><span class="slip-title">Apprentice Nail Artist in a Foreign Land</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Apprentice Nail Artist in a Foreign Land <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-975-12738-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">2</span><span class="slip-title">Beacon of Light in the Dark Sea (Novel)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Beacon of Light in the Dark Sea (Novel) <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-4029-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">2</span><span class="slip-title">Beneath the Falling Camellia Blooms</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Beneath the Falling Camellia Blooms <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-132-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">BLEACH - Bankai Battle (Roll &amp; Clash)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">BLEACH - Bankai Battle (Roll &amp; Clash) <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-814-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">34</span><span class="slip-title">Blue Lock</span><img src="https://intent-curlew-625.convex.cloud/api/storage/261b3a6b-66ac-41aa-bc90-a05dcf275657" alt="Cover of Blue Lock Vol. 34" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>Blue Lock <span class="vlabel">Vol. 34</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-232-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">1</span><span class="slip-title">Boyish Girlfriend</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Boyish Girlfriend <span class="vlabel">Vol. 01</span></a>
+            <span class="release__sub">Digital edition · 978-1-64609-275-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Square Enix Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">1</span><span class="slip-title">Cells at Work! Cat</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Cells at Work! Cat <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-283-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">5</span><span class="slip-title">Cells at Work! Lady</span><img src="https://intent-curlew-625.convex.cloud/api/storage/4c2740de-304e-498e-85b7-1788f6f7f26e" alt="Cover of Cells at Work! Lady Vol. 5" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">Cells at Work! Lady <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-590-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">4</span><span class="slip-title">DEAR. DOOR (Comic)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">DEAR. DOOR (Comic) <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-335-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">12</span><span class="slip-title">Gachiakuta</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Gachiakuta <span class="vlabel">Vol. 12</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-591-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Give Me a Hug, Mr. Frog!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Give Me a Hug, Mr. Frog! <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-4764-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">5</span><span class="slip-title">Joyful Reunion (Novel)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Joyful Reunion (Novel) <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-9575-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">16</span><span class="slip-title">Kageki Shojo!!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Kageki Shojo!! <span class="vlabel">Vol. 16</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-673-2</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">1</span><span class="slip-title">Let’s Go Nirvana!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Let’s Go Nirvana! <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-975-98134-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Yen Press</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">7</span><span class="slip-title">Magical Buffs: The Support Caster is Stronger Than He Realized!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Magical Buffs: The Support Caster is Stronger Than He Realized! <span class="vlabel">Vol. 7</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-250-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">23</span><span class="slip-title">Medaka Kuroiwa is Impervious to My Charms</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Medaka Kuroiwa is Impervious to My Charms <span class="vlabel">Vol. 23</span></a>
+            <span class="release__sub">Digital edition · 978-1-64827-273-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">4</span><span class="slip-title">Merry Witches’ Life</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Merry Witches’ Life <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Digital edition · 978-1-64505-783-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">3</span><span class="slip-title">Mushishi Collector&#x27;s Edition</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Mushishi Collector&#x27;s Edition <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Hardcover · 978-1-64609-566-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">1</span><span class="slip-title">My One-Sided Love</span></span>
+          <span>
+            <a class="release__title" href="volume.html">My One-Sided Love <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Digital edition · 978-1-64609-403-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">TOKYOPOP LoveLove</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">4</span><span class="slip-title">Roses and Champagne (Comic)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Roses and Champagne (Comic) <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-432-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">Servant Beast</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Servant Beast <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-563-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Yen Press</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">4</span><span class="slip-title">Silent Reading: Mo Du (Novel)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Silent Reading: Mo Du (Novel) <span class="vlabel">Vol. 4</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-183-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">The Delinquent and the Transfer Student</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Delinquent and the Transfer Student <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-975-27440-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">The Lion Dances With a Loved One</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Lion Dances With a Loved One <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Digital edition · 978-1-63858-155-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">TOKYOPOP LoveLove</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">The Misdeeds of an Extremely Arrogant Villain Aristocrat (Manga)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Misdeeds of an Extremely Arrogant Villain Aristocrat (Manga) <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-181-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">1</span><span class="slip-title">Thus Spoke the Rabbit</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Thus Spoke the Rabbit <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-975-69209-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Yen Press</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">Uesugi-kun Wants to Quit Being a Girl</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Uesugi-kun Wants to Quit Being a Girl <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-8962-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">What If I Said, &quot;I Love You&quot;?</span></span>
+          <span>
+            <a class="release__title" href="volume.html">What If I Said, &quot;I Love You&quot;? <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-784-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">5</span><span class="slip-title">What it Means to Be You (Comic)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">What it Means to Be You (Comic) <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-975-81226-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">Witch Hat Atelier: Grimoire Edition</span><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt="Cover of Witch Hat Atelier: Grimoire Edition Vol. 2" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html"><span class="star" title="You follow this series">&#9733;</span>Witch Hat Atelier: Grimoire Edition <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Hardcover · 978-1-64273-862-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">13</span><span class="slip-title">Yamaguchi-kun Isn&#x27;t So Bad</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Yamaguchi-kun Isn&#x27;t So Bad <span class="vlabel">Vol. 13</span></a>
+            <span class="release__sub">Digital edition · 978-1-64827-368-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">1</span><span class="slip-title">Yuri Yuri Panic: A Case of Extreme Cuteness Has Occurred!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Yuri Yuri Panic: A Case of Extreme Cuteness Has Occurred! <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-102-7</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        </div>
+      </section>
+      <section class="day" aria-labelledby="day-29">
+        <div class="day__mark">
+          <span class="num" id="day-29">29</span>
+          <span class="dow">Tuesday</span>
+          <span class="meta">23 releases</span>
+        </div>
+        <div class="releases">
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">19</span><span class="slip-title">Am I Actually the Strongest? (Manga)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Am I Actually the Strongest? (Manga) <span class="vlabel">Vol. 19</span></a>
+            <span class="release__sub">Digital edition · 978-1-64827-294-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">Can You Kiss Me First?</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Can You Kiss Me First? <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-875-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Caught in Your Web</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Caught in Your Web <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-975-46405-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">TOKYOPOP LoveLove</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">3</span><span class="slip-title">Dragon Head Omnibus</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Dragon Head Omnibus <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-7043-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">3</span><span class="slip-title">Dragon Head Omnibus</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Dragon Head Omnibus <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Digital edition · 978-1-9753-2827-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">Eko Eko Azarak Reborn Vol.2</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Eko Eko Azarak Reborn Vol.2 <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64505-845-8</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t2"><span class="slip-label">7</span><span class="slip-title">I Have a Crush at Work</span><img src="https://intent-curlew-625.convex.cloud/api/storage/c7f88f10-7eed-46d7-8066-24f04a934243" alt="Cover of I Have a Crush at Work Vol. 7" loading="lazy" width="400" height="600" onerror="this.remove()"></span>
+          <span>
+            <a class="release__title" href="volume.html">I Have a Crush at Work <span class="vlabel">Vol. 7</span></a>
+            <span class="release__sub">Paperback · 978-1-975-41099-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">11</span><span class="slip-title">I Left my A-Rank Party to Help My Former Students Reach the Dungeon Depths!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">I Left my A-Rank Party to Help My Former Students Reach the Dungeon Depths! <span class="vlabel">Vol. 11</span></a>
+            <span class="release__sub">Digital edition · 978-1-64651-189-1</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">5</span><span class="slip-title">I Ship My Rival x Me (The Comic / Manhua)</span></span>
+          <span>
+            <a class="release__title" href="volume.html">I Ship My Rival x Me (The Comic / Manhua) <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-012-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">8</span><span class="slip-title">Keep Your Hands Off Eizouken!</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Keep Your Hands Off Eizouken! <span class="vlabel">Vol. 8</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-084-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Dark Horse Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">6</span><span class="slip-title">Omega Megaera</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Omega Megaera <span class="vlabel">Vol. 6</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-120-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">Omega of the Divine</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Omega of the Divine <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-64827-219-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">2</span><span class="slip-title">Omega of the Divine</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Omega of the Divine <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Digital edition · 978-1-64273-857-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag tag--digital">Digital</span>
+            <a class="release__pub" href="publisher.html">Kodansha</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">3</span><span class="slip-title">Otaku x Gal</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Otaku x Gal <span class="vlabel">Vol. 03</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-256-0</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Square Enix Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">27</span><span class="slip-title">Parallel Paradise</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Parallel Paradise <span class="vlabel">Vol. 27</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-790-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Ghost Ship</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t5"><span class="slip-label">3</span><span class="slip-title">That&#x27;s Not Love</span></span>
+          <span>
+            <a class="release__title" href="volume.html">That&#x27;s Not Love <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-013-3</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t1"><span class="slip-label">1</span><span class="slip-title">The Devil&#x27;s in the Lunch Deals</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Devil&#x27;s in the Lunch Deals <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64651-212-6</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Tokyopop</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">1</span><span class="slip-title">The Lord-Magear&#x27;s Apprentice</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Lord-Magear&#x27;s Apprentice <span class="vlabel">Vol. 1</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-279-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Seven Seas Entertainment</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">3</span><span class="slip-title">The Raven Dark Hero Vol.3</span></span>
+          <span>
+            <a class="release__title" href="volume.html">The Raven Dark Hero Vol.3 <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-914-5</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t4"><span class="slip-label">3</span><span class="slip-title">Welcome to Ghost Mansion Vol.3</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Welcome to Ghost Mansion Vol.3 <span class="vlabel">Vol. 3</span></a>
+            <span class="release__sub">Paperback · 978-1-9753-2701-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label slip-label--word">Oneshot</span><span class="slip-title">When I Was Reincarnated in Another World, I Was a Heroine and He Was a Hero Vol.1</span></span>
+          <span>
+            <a class="release__title" href="volume.html">When I Was Reincarnated in Another World, I Was a Heroine and He Was a Hero Vol.1 <span class="vlabel">Oneshot</span></a>
+            <span class="release__sub">Paperback · 978-1-64609-880-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Titan Manga</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t6"><span class="slip-label">2</span><span class="slip-title">Whoever You Are, I Love You</span></span>
+          <span>
+            <a class="release__title" href="volume.html">Whoever You Are, I Love You <span class="vlabel">Vol. 2</span></a>
+            <span class="release__sub">Paperback · 978-1-63858-970-9</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Vertical Comics</a>
+          </span>
+        </div>
+        <div class="release">
+          <span class="cover cover--none  cover--t3"><span class="slip-label">5</span><span class="slip-title">You Can’t Bluff the Sharp-Eyed Sister</span></span>
+          <span>
+            <a class="release__title" href="volume.html">You Can’t Bluff the Sharp-Eyed Sister <span class="vlabel">Vol. 5</span></a>
+            <span class="release__sub">Paperback · 978-1-64273-809-4</span>
+          </span>
+          <span class="release__right">
+            <span class="tag">Physical</span>
+            <a class="release__pub" href="publisher.html">Kodansha Comics</a>
+          </span>
+        </div>
+        </div>
+      </section>
+  </div>
+
+  <div class="wrap section--tight section">
+    <hr class="rule">
+    <div class="linkrow">
+      <a class="btn btn--ghost" href="releases-grid.html">Switch to the month grid</a>
+      <a class="btn btn--ghost" href="releases.html">October 2026 &rarr;</a>
+      <span class="sidenote">Filtered views are shareable; the agenda is what you get on a first visit.</span>
+    </div>
+  </div>
+</main>
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot__grid">
+      <div class="foot__about">
+        <h4>MangaDB</h4>
+        <p>An open database of English manga volume releases: what exists, when each
+        edition arrives, and which copies are on your shelf.</p>
+      </div>
+      <div>
+        <h4>Browse</h4>
+        <ul>
+          <li><a href="releases.html">Release agenda</a></li>
+          <li><a href="releases-grid.html">Month grid</a></li>
+          <li><a href="series.html">Series</a></li>
+          <li><a href="publisher.html">Publishers</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Your shelf</h4>
+        <ul>
+          <li><a href="releases.html">My upcoming releases</a></li>
+          <li><a href="volume.html">Collection</a></li>
+          <li><a href="series.html">Series I follow</a></li>
+          <li><a href="volume.html">Reading history</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>The database</h4>
+        <ul>
+          <li><a href="index.html">Editing guidelines</a></li>
+          <li><a href="index.html">Revision history</a></li>
+          <li><a href="index.html">Source attribution</a></li>
+          <li><a href="index.html">API</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot__legal">
+      <p class="meta">Prototype built from 171 real September 2026 records. Cover art belongs to its publishers.</p>
+      <p class="meta">Every page in this mock-up:
+        <a class="tlink" href="index.html">Home</a>,
+        <a class="tlink" href="releases.html">Agenda</a>,
+        <a class="tlink" href="releases-grid.html">Month grid</a>,
+        <a class="tlink" href="series.html">Series</a>,
+        <a class="tlink" href="volume.html">Volume</a>,
+        <a class="tlink" href="publisher.html">Publisher</a>.</p>
+    </div>
+  </div>
+</footer>
+<script>
+  (function () {
+    var root = document.documentElement;
+    function current() {
+      /* data-theme is always present (hardcoded dark + boot script), so the
+         OS preference never enters the decision. */
+      return root.getAttribute('data-theme') || 'dark';
+    }
+    document.querySelectorAll('[data-theme-toggle]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var next = current() === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        localStorage.setItem('mangadb-theme', next);
+        b.setAttribute('aria-label', next === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+      });
+    });
+    var dt = document.querySelector('[data-drawer-toggle]'), dr = document.getElementById('drawer');
+    if (dt && dr) dt.addEventListener('click', function () {
+      var open = dr.getAttribute('data-open') === 'true';
+      dr.setAttribute('data-open', String(!open));
+      dt.setAttribute('aria-expanded', String(!open));
+    });
+    document.querySelectorAll('[data-toggle-group]').forEach(function (group) {
+      group.addEventListener('click', function (e) {
+        var btn = e.target.closest('button[aria-pressed]');
+        if (!btn) return;
+        var on = btn.getAttribute('aria-pressed') === 'true';
+        if (group.hasAttribute('data-exclusive'))
+          group.querySelectorAll('button[aria-pressed]').forEach(function (b) {
+            b.setAttribute('aria-pressed', 'false');
+          });
+        btn.setAttribute('aria-pressed', String(!on));
+      });
+    });
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MF Ghost Vol. 6 — volume — MangaDB</title>
+<meta name="description" content="MF Ghost Volume 6: every edition and release that covers it, with collection controls.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+  // Light is the default; only the toggle overrides it, persisted in localStorage.
+  (function () {
+    var q = new URLSearchParams(location.search).get('theme');
+    var saved = null;
+    try { saved = localStorage.getItem('mangadb-theme'); } catch (e) {}
+    document.documentElement.dataset.theme = q || saved || 'light';
+  })();
+  function toggleTheme() {
+    var el = document.documentElement;
+    var next = el.dataset.theme === 'dark' ? 'light' : 'dark';
+    el.dataset.theme = next;
+    try { localStorage.setItem('mangadb-theme', next); } catch (e) {}
+  }
+  // Under 900px the rail is an off-canvas drawer: hamburger, scrim, Escape.
+  function setNav(open) {
+    var el = document.documentElement;
+    if (open) el.setAttribute('data-nav-open', ''); else el.removeAttribute('data-nav-open');
+    var b = document.querySelector('.navtoggle');
+    if (b) b.setAttribute('aria-expanded', String(open));
+  }
+  function toggleNav() { setNav(!document.documentElement.hasAttribute('data-nav-open')); }
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setNav(false); });
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="app">
+<nav class="rail" id="railnav" aria-label="Main">
+  <a class="brand" href="index.html"><span class="brand-mark">M</span>MangaDB</a>
+  <div class="rail-group"><div class="rail-group-label">Browse</div><ul><li><a class="rail-link" href="releases.html"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3.2" width="12" height="11" rx="1.6"/><path d="M2 6.6h12M5.5 1.8v2.6M10.5 1.8v2.6"/></svg><span>Release agenda</span><span class="count">171</span></a></li><li><a class="rail-link" href="releases-grid.html"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="11" rx="1.4"/><path d="M2 6.2h12M6.4 6.2v7.3M10.4 6.2v7.3"/></svg><span>Month grid</span><span class="count">Sep</span></a></li><li><a class="rail-link" href="series.html"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.6h3.6v10.8H3zM7.4 2.6H11v10.8H7.4z"/><path d="M12.1 3.2l1.9.5-2.4 9.6-1.2-.3"/></svg><span>Series</span><span class="count">4,118</span></a></li><li><a class="rail-link" href="volume.html" aria-current="page"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3.2 2.6h6.3a2 2 0 0 1 2 2v8.8H5.2a2 2 0 0 1-2-2z"/><path d="M3.2 11.4h8.3"/></svg><span>Volumes</span><span class="count">38.4K</span></a></li><li><a class="rail-link" href="publisher.html"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.6 13.6V3.1h7v10.5M9.6 6.4h3.8v7.2M2 13.6h12"/><path d="M4.8 5.4h2.6M4.8 8h2.6M4.8 10.6h2.6"/></svg><span>Publishers</span><span class="count">39</span></a></li></ul></div><div class="rail-group"><div class="rail-group-label">You</div><ul><li><a class="rail-link" href="releases.html"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2.2l1.8 3.7 4.1.6-3 2.9.7 4-3.6-1.9-3.6 1.9.7-4-3-2.9 4.1-.6z"/></svg><span>My upcoming releases</span><span class="count">12</span></a></li><li><a class="rail-link" href="series.html"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.6 8.4l3.4 3.2 7.4-7.6"/></svg><span>Collection</span><span class="count">486</span></a></li><li><a class="rail-link" href="volume.html"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.8"/><path d="M8 4.6V8l2.4 1.6"/></svg><span>Reading</span><span class="count">7</span></a></li><li><a class="rail-link" href="publisher.html"><svg class="ico" viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.9v1.8M8 12.3v1.8M14.1 8h-1.8M3.7 8H1.9M12.3 3.7l-1.3 1.3M5 11l-1.3 1.3M12.3 12.3L11 11M5 5L3.7 3.7"/></svg><span>Settings</span></a></li></ul></div>
+  <div class="rail-foot">
+    <a href="index.html">About</a><a href="index.html">Data sources</a>
+    <a href="index.html">API</a><a href="index.html">Recent changes</a>
+    <a href="index.html">Editing guide</a>
+  </div>
+</nav>
+<div class="nav-scrim" onclick="setNav(false)" aria-hidden="true"></div>
+<div class="main">
+  <header class="topbar">
+    <button class="btn btn-icon navtoggle" type="button" onclick="toggleNav()"
+      aria-label="Open navigation" aria-expanded="false" aria-controls="railnav">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.3 4h11.4M2.3 8h11.4M2.3 12h11.4"/></svg>
+    </button>
+    <a class="brand brand-top" href="index.html"><span class="brand-mark">M</span><span class="brand-word">MangaDB</span></a>
+    <div class="crumbs"><a href="index.html">MangaDB</a><span class="sep">/</span><a href="series.html">Series</a><span class="sep">/</span><a href="series.html">MF Ghost</a><span class="sep">/</span><span class="here">Vol. 6</span></div>
+    <form class="search" role="search" onsubmit="return false">
+      <svg class="ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7.2" cy="7.2" r="4.6"/><path d="M10.6 10.6l3 3"/></svg>
+      <input type="search" placeholder="Search series, volumes, ISBN" aria-label="Search the catalogue">
+      <span class="kbd" aria-hidden="true">/</span>
+    </form>
+    <a class="btn hide-sm" href="releases.html">My releases</a>
+    <button class="btn btn-icon theme-toggle" type="button" onclick="toggleTheme()" aria-label="Switch colour theme" title="Switch colour theme">
+  <svg class="sun" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="3.1"/><path d="M8 1.4v1.7M8 12.9v1.7M14.6 8h-1.7M3.1 8H1.4M12.7 3.3l-1.2 1.2M4.5 11.5l-1.2 1.2M12.7 12.7l-1.2-1.2M4.5 4.5L3.3 3.3"/></svg>
+  <svg class="moon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13.4 9.6A5.8 5.8 0 0 1 6.4 2.6a5.8 5.8 0 1 0 7 7z"/></svg>
+</button>
+    <a class="user-chip" href="series.html" title="Signed in as kouhai_archivist">
+      <span class="avatar" aria-hidden="true">KA</span>
+      <span class="who hide-sm"><b>kouhai_archivist</b>486 owned</span>
+    </a>
+  </header>
+  <main id="main" class="page">
+<div class="entity">
+      <div><img class="entity-cover" src="https://intent-curlew-625.convex.cloud/api/storage/6ba57eb4-6315-41af-9817-17032c5f9cae" alt="Cover of MF Ghost Vol. 6" width="208" height="312"></div>
+      <div>
+        <h1>MF Ghost Vol. 6</h1>
+        <div class="alt">Volume Position 6 in <a href="series.html">MF Ghost</a> &middot; the sixth collected volume</div>
+        <div class="entity-tags">
+          <span class="tag tag-owned">Owned &mdash; physical paperback</span>
+          <span class="tag tag-quiet">Read twice</span>
+          <span class="tag tag-quiet">2 Editions</span>
+          <span class="tag tag-quiet">3 Releases</span>
+        </div>
+        <div class="prose" style="margin-top:10px">
+          <p>Kanata Livington takes the wheel of the Toyota 86 for the Gunma leg of the MFG
+          championship, where the rain turns a straight-line contest into a test of touch.
+          Ogata closes the gap, Ren keeps her distance, and the standings shuffle again
+          before the series heads for the mountain course that made Kanata's father famous.</p>
+        </div>
+        <div class="kv-grid" style="margin-top:14px">
+          <div class="kv"><div class="k">First published</div><div class="v">01 Sep 2026</div></div>
+          <div class="kv"><div class="k">Editions</div><div class="v">2</div></div>
+          <div class="kv"><div class="k">Releases</div><div class="v">3</div></div>
+          <div class="kv"><div class="k">Your read count</div><div class="v">2</div></div>
+          <div class="kv"><div class="k">Pages</div><div class="v">192</div></div>
+          <div class="kv"><div class="k">Publisher</div><div class="v txt"><a href="publisher.html">Kodansha</a></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="actionbar">
+      <span class="lbl">Collection entry</span>
+      <div class="seg-radio">
+        <label><input type="radio" name="coll"> Wanted</label>
+        <label><input type="radio" name="coll"> Ordered</label>
+        <label><input type="radio" name="coll" checked> Owned</label>
+      </div>
+      <span class="lbl">for</span>
+      <select class="select" aria-label="Which release this collection entry is for">
+        <option selected>Physical paperback &mdash; 01 Sep 2026</option>
+        <option>Digital &mdash; 01 Sep 2026</option>
+        <option>Omnibus 2 hardcover &mdash; 16 Feb 2027</option>
+      </select>
+      <button class="btn" type="button">Clear entry</button>
+      <span class="lbl" style="margin-left:auto">Volume progress</span>
+      <button class="btn" type="button">&minus;</button>
+      <span class="num" style="min-width:2ch;text-align:center">2</span>
+      <button class="btn" type="button">+</button>
+      <button class="btn btn-primary" type="button">Log a reread</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Editions covering this volume</h2>
+        <span class="meta">2 Editions &middot; 3 Releases</span>
+      </div>
+      <div style="padding:14px">
+        <div class="edition">
+          <div class="edition-head">
+            <span class="name">MF Ghost Vol. 6</span>
+            <span class="pub"><a href="publisher.html">Kodansha</a></span>
+            <span class="spacer"></span>
+            <span class="tag tag-quiet">Volume 6 &mdash; complete</span>
+          </div>
+          <div class="sub-scroll"><table class="releases-sub">
+            <thead><tr><th scope="col">Published</th><th scope="col">Format</th><th scope="col">Binding</th>
+              <th class="hide-sm" scope="col">ISBN-13</th><th class="hide-sm" scope="col">ISBN-10</th>
+              <th class="num-col hide-xs" scope="col">Price</th><th scope="col">Collection</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">01 Sep 2026</td><td><span class="tag tag-physical">Physical</span></td><td>Paperback</td>
+                  <td class="mono hide-sm">978-1-64651-773-2</td><td class="mono hide-sm">1-64651-773-3</td>
+                  <td class="num-col mono">$12.99</td><td><span class="tag tag-owned">Owned</span></td></tr>
+              <tr class="variant-row"><td class="indent release-note" colspan="7">Release Variant &mdash;
+                  Right Stuf exclusive cover. Same Edition, same content; identify it on your entry if that is the copy you own.</td></tr>
+              <tr><td class="mono">01 Sep 2026</td><td><span class="tag tag-digital">Digital</span></td><td>&mdash;</td>
+                  <td class="mono hide-sm">&mdash;</td><td class="mono hide-sm">&mdash;</td>
+                  <td class="num-col mono">$8.99</td>
+                  <td><button class="btn" type="button">Add to collection</button></td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <div class="edition">
+          <div class="edition-head">
+            <span class="name">MF Ghost Omnibus 2</span>
+            <span class="pub"><a href="publisher.html">Kodansha</a></span>
+            <span class="tag tag-line">Edition Line: MF Ghost Omnibus &middot; position 2</span>
+            <span class="spacer"></span>
+          </div>
+          <div class="coverage">Volume Coverage: <b>Vol. 4</b>, <b>Vol. 5</b> and <b>Vol. 6</b>, each complete.
+            Confirming a read of this Release increments all three Volumes.</div>
+          <div class="sub-scroll"><table class="releases-sub">
+            <thead><tr><th scope="col">Published</th><th scope="col">Format</th><th scope="col">Binding</th>
+              <th class="hide-sm" scope="col">ISBN-13</th><th class="hide-sm" scope="col">ISBN-10</th>
+              <th class="num-col hide-xs" scope="col">Price</th><th scope="col">Collection</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">16 Feb 2027</td><td><span class="tag tag-physical">Physical</span></td><td>Hardcover</td>
+                  <td class="mono hide-sm">978-1-64651-988-0</td><td class="mono hide-sm">1-64651-988-4</td>
+                  <td class="num-col mono">$24.99</td>
+                  <td><button class="btn" type="button">Add to collection</button></td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </div>
+      <div class="panel-foot">
+        <span>A Release keeps its identity through reprints. A change of Format, Binding or language creates another Release.</span>
+      </div>
+    </div>
+
+    <div class="cols-3" style="margin-top:18px">
+      <div class="panel">
+        <div class="panel-head"><h2>Bundles</h2><span class="meta" style="margin-left:auto">2</span></div>
+        <ul class="linklist">
+          <li><a href="series.html"><span>Vol. 1&ndash;5 Box Set<span class="sub"> &middot; excludes Vol. 6</span></span><span class="n">$59.99</span></a></li>
+          <li><a href="series.html"><span>Complete Championship Box<span class="sub"> &middot; 08 Dec 2026 &middot; derived ownership</span></span><span class="n">$99.99</span></a></li>
+        </ul>
+        <div class="panel-foot"><span>Owning a bundle gives you Derived Ownership of its members.</span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Reading path</h2></div>
+        <ul class="linklist">
+          <li><a href="volume.html"><span>Vol. 5<span class="sub"> &middot; 24 Jun 2025</span></span><span class="n">read 1&times;</span></a></li>
+          <li><a href="volume.html"><span>Vol. 6<span class="sub"> &middot; you are here</span></span><span class="n">read 2&times;</span></a></li>
+          <li><a href="volume.html"><span>Vol. 7<span class="sub"> &middot; 15 Sep 2026 &middot; ordered</span></span><span class="n">&#8594;</span></a></li>
+          <li><a href="series.html"><span>All 7 volumes of MF Ghost</span><span class="n">&#8594;</span></a></li>
+        </ul>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Revisions</h2><a class="more" href="index.html" style="margin-left:auto">History &#8594;</a></div>
+        <table class="data compact">
+          <tbody>
+            <tr><td class="mono" style="white-space:nowrap">2 h</td>
+              <td class="title-cell" style="min-width:0">ISBN-13 corrected<div class="line2">moderator</div></td></tr>
+            <tr><td class="mono">6 d</td>
+              <td class="title-cell" style="min-width:0">Volume Synopsis added<div class="line2">sora.k</div></td></tr>
+            <tr><td class="mono">12 d</td>
+              <td class="title-cell" style="min-width:0">Digital Release linked<div class="line2">import: Kodansha</div></td></tr>
+            <tr><td class="mono">1 mo</td>
+              <td class="title-cell" style="min-width:0">Page count set to 192<div class="line2">hana.ed</div></td></tr>
+          </tbody>
+        </table>
+        <div class="panel-foot"><span>Every approved change is public.</span></div>
+      </div>
+    </div>  </main>
+</div>
+</div>
+</body>
+</html>

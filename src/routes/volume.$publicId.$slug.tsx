@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { Cover } from "~/lib/cover";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { VolumeReadCount } from "~/lib/reading";
@@ -79,8 +80,8 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
 
 function VolumeNotFound() {
   return (
-    <main>
-      <h1>Volume not found</h1>
+    <main className="volume-page">
+      <h1 className="volume-title">Volume not found</h1>
       <p className="notice">
         No volume lives at this address. <Link to="/">Browse the catalog</Link>.
       </p>
@@ -88,11 +89,28 @@ function VolumeNotFound() {
   );
 }
 
+type CoveringEditionData = VolumePageData["editions"][number];
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 function VolumePage() {
   const page = Route.useLoaderData();
-  const { volume, series, editions } = page;
+  const { volume, series, editions, coverUrl } = page;
   const complete = editions.filter((e) => e.extentForVolume === "complete");
   const partial = editions.filter((e) => e.extentForVolume === "partial");
+  const releaseCount = editions.reduce((n, e) => n + e.releases.length, 0);
+  // Distinct Publishers issuing the Editions on this page, in first-seen order.
+  const publishers = [
+    ...new Map(
+      editions.flatMap((edition) =>
+        edition.publisher
+          ? [[edition.publisher.slug, edition.publisher.name] as const]
+          : [],
+      ),
+    ),
+  ].map(([slug, name]) => ({ slug, name }));
 
   return (
     <main className="volume-page">
@@ -104,58 +122,132 @@ function VolumePage() {
         >
           {series.title}
         </Link>{" "}
-        <span aria-hidden="true">/</span> <span>Volume</span>
-      </nav>
-
-      <h1>{volume.title}</h1>
-      <p className="series-facts">
-        {/* Canonical numbering (spec §2): Position sorts, Label displays —
-            and neither is ever an Edition Line's own numbering. */}
-        <span className="fact vol-position" title="Position in the canonical reading order">
-          #{volume.position} in {series.title}
-        </span>
-        <span className="fact vol-label">
+        <span aria-hidden="true">/</span>{" "}
+        <span>
           {volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume"}
         </span>
-        {/* Durable, edition-independent read count (#28); signed-in only. */}
-        <VolumeReadCount
-          seriesPublicId={series.publicId}
-          volumePublicId={volume.publicId}
-        />
-      </p>
-      {volume.synopsis ? <p className="vol-synopsis">{volume.synopsis}</p> : null}
+      </nav>
 
-      {/* Volume ownership (#27): displayed purely through the owned Releases
-          covering it — direct or via an Owned Bundle; no stored Volume state. */}
-      <VolumeOwnership volumePublicId={volume.publicId} />
+      <div className="volume-hero">
+        <div className="volume-hero-aside">
+          <div className="volume-cover">
+            {/* The representative cover across this Volume's Releases; a
+                coverless Volume gets its cloth binding with the Label on it. */}
+            <Cover
+              src={coverUrl}
+              title={volume.title}
+              // The Label goes on the cloth; an unlabeled Volume carries its
+              // title instead, since it has no number to print.
+              numbered={
+                volume.label !== null
+                  ? { series: series.title, number: volume.label }
+                  : undefined
+              }
+              lazy={false}
+            />
+          </div>
+          {/* The signed-in tracking card. Both controls render null signed
+              out, leaving the card empty — CSS hides it then. */}
+          <div className="track-card">
+            {/* Volume ownership (#27): displayed purely through the owned
+                Releases covering it — direct or via an Owned Bundle; no
+                stored Volume state. */}
+            <VolumeOwnership volumePublicId={volume.publicId} />
+            {/* Durable, edition-independent read count (#28). */}
+            <VolumeReadCount
+              seriesPublicId={series.publicId}
+              volumePublicId={volume.publicId}
+            />
+          </div>
+        </div>
 
-      {editions.length === 0 ? (
-        <p className="notice">No releases cover this volume yet.</p>
-      ) : null}
+        <div className="volume-hero-body">
+          <h1 className="volume-title">{volume.title}</h1>
+          <div className="chips">
+            <Link
+              className="chip"
+              to="/series/$publicId/$slug"
+              params={slugParams(series.publicId, series.title)}
+            >
+              {series.title}
+            </Link>
+            {/* Canonical numbering (spec §2): Position sorts, Label displays —
+                and neither is ever an Edition Line's own numbering. */}
+            <span
+              className="chip"
+              title="Position in the canonical reading order"
+            >
+              #{volume.position} in the reading path
+            </span>
+            <span className="chip">
+              {volume.label !== null
+                ? `Volume label “${volume.label}”`
+                : "Unnumbered volume"}
+            </span>
+            {publishers.map((publisher) => (
+              <Link
+                key={publisher.slug}
+                className="chip"
+                to="/publisher/$slug"
+                params={{ slug: publisher.slug }}
+              >
+                {publisher.name}
+              </Link>
+            ))}
+          </div>
 
-      {complete.length > 0 ? (
-        <section className="covering-releases">
-          <h2>Complete releases</h2>
-          <p className="section-hint">
-            Editions whose releases contain all of this volume.
-          </p>
+          {volume.synopsis ? (
+            <div className="synopsis">
+              <p>{volume.synopsis}</p>
+              <p className="note">
+                Volume synopsis curated by editors. Each release below carries
+                its publisher's own description.
+              </p>
+            </div>
+          ) : (
+            <div className="synopsis">
+              <p className="note">
+                No volume synopsis yet. The releases below carry their
+                publishers' descriptions.
+              </p>
+            </div>
+          )}
+
+          <div className="section-head volume-editions-head">
+            <h2 className="section-title">Editions covering this volume</h2>
+            <p className="section-note">
+              {editions.length === 0
+                ? "None yet"
+                : `${plural(editions.length, "edition", "editions")} · ${plural(releaseCount, "release", "releases")}`}
+            </p>
+          </div>
+
+          {editions.length === 0 ? (
+            <p className="notice">
+              No release covers this volume yet. Its editions appear here as
+              soon as a publisher announces one.
+            </p>
+          ) : null}
+
           {complete.map((edition) => (
             <CoveringEdition key={edition.publicId} edition={edition} />
           ))}
-        </section>
-      ) : null}
 
-      {partial.length > 0 ? (
-        <section className="covering-releases">
-          <h2>Partial coverage</h2>
-          <p className="section-hint">
-            Editions whose releases contain only part of this volume.
-          </p>
-          {partial.map((edition) => (
-            <CoveringEdition key={edition.publicId} edition={edition} />
-          ))}
-        </section>
-      ) : null}
+          {partial.length > 0 ? (
+            <>
+              <div className="section-head volume-editions-head">
+                <h3 className="section-title">Partial coverage</h3>
+                <p className="section-note">
+                  Editions whose releases contain only part of this volume.
+                </p>
+              </div>
+              {partial.map((edition) => (
+                <CoveringEdition key={edition.publicId} edition={edition} />
+              ))}
+            </>
+          ) : null}
+        </div>
+      </div>
 
       {/* Public revision history + the moderator edit entry point (#31). */}
       <RecordHistory type="volume" publicId={volume.publicId} />
@@ -164,37 +256,38 @@ function VolumePage() {
   );
 }
 
-type CoveringEditionData = VolumePageData["editions"][number];
-
 function CoveringEdition({ edition }: { edition: CoveringEditionData }) {
   return (
-    <article className="edition-card">
-      <header className="edition-header">
-        <span className="edition-name">
+    <article className="vol-edition">
+      <header className="vol-edition-head">
+        <h3 className="vol-edition-name">
           <Link
             to="/edition/$publicId/$slug"
             params={slugParams(edition.publicId, edition.title)}
           >
             {edition.title}
           </Link>
-          {/* Edition Line Position is publisher package numbering — never
-              the canonical volume number (spec §2). */}
-          {edition.lineName && edition.linePosition ? (
-            <span className="line-position" title="Position within the edition line">
-              {" "}
-              · line #{edition.linePosition}
-            </span>
-          ) : null}
-        </span>
+        </h3>
         {edition.publisher ? (
-          <span className="edition-publisher">{edition.publisher.name}</span>
+          <span className="chip">{edition.publisher.name}</span>
         ) : null}
+        {/* Edition Line Position is publisher package numbering — never
+            the canonical volume number (spec §2). */}
+        {edition.lineName ? (
+          <span className="chip chip--line">
+            {edition.lineName}
+            {edition.linePosition ? `, position ${edition.linePosition}` : ""}
+          </span>
+        ) : null}
+        <span className="vol-edition-extent">
+          {edition.extentForVolume === "partial"
+            ? "Covers part of this volume"
+            : "Covers this volume completely"}
+        </span>
       </header>
 
       {edition.extentNote ? (
-        <p className="coverage">
-          <span className="coverage-note">{edition.extentNote}</span>
-        </p>
+        <p className="vol-edition-note">{edition.extentNote}</p>
       ) : null}
       {/* The omnibus case: the full ordered Coverage shows every Volume this
           Edition spans, each linking its own page. */}
@@ -203,7 +296,7 @@ function CoveringEdition({ edition }: { edition: CoveringEditionData }) {
         <CoverageChips coverage={edition.coverage} />
       ) : null}
 
-      <ul className="release-list">
+      <ul className="release-rows">
         {edition.releases.map((release) => (
           <ReleaseRow key={release.id} release={release} />
         ))}

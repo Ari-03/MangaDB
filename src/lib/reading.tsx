@@ -65,27 +65,80 @@ function SeriesReadingControlsInner({
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   if (!tracking) return null;
   return (
-    <div className="reading-status">
-      <label>
-        Reading status{" "}
-        <select
-          value={tracking.readingStatus ?? ""}
-          onChange={(event) => {
-            const value = event.currentTarget.value as ReadingStatus | "";
-            void setStatus({
-              seriesId: tracking.seriesId,
-              status: value === "" ? undefined : value,
-            });
-          }}
-        >
-          <option value="">Not tracked</option>
-          {STATUS_ORDER.map((status) => (
-            <option key={status} value={status}>
-              {STATUS_LABELS[status]}
-            </option>
-          ))}
-        </select>
-      </label>
+    <label className="track-field">
+      <span className="track-label">Reading status</span>
+      <select
+        className="select"
+        value={tracking.readingStatus ?? ""}
+        onChange={(event) => {
+          const value = event.currentTarget.value as ReadingStatus | "";
+          void setStatus({
+            seriesId: tracking.seriesId,
+            status: value === "" ? undefined : value,
+          });
+        }}
+      >
+        <option value="">Not tracked</option>
+        {STATUS_ORDER.map((status) => (
+          <option key={status} value={status}>
+            {STATUS_LABELS[status]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+// ---------- Series reading progress ----------
+
+/**
+ * How far through the Series the viewer has read, counted from the durable
+ * per-Volume read counts the tracking query already returns — never from a
+ * pass or a Collection Entry. Renders nothing signed out, and nothing for a
+ * Series with no Volumes yet.
+ */
+export function SeriesReadingProgress({
+  seriesPublicId,
+  volumeCount,
+}: {
+  seriesPublicId: number;
+  volumeCount: number;
+}) {
+  if (!convexClient || volumeCount === 0) return null;
+  return (
+    <SeriesReadingProgressInner
+      seriesPublicId={seriesPublicId}
+      volumeCount={volumeCount}
+    />
+  );
+}
+
+function SeriesReadingProgressInner({
+  seriesPublicId,
+  volumeCount,
+}: {
+  seriesPublicId: number;
+  volumeCount: number;
+}) {
+  const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
+  if (!tracking) return null;
+  const read = tracking.volumes.filter((volume) => volume.readCount > 0).length;
+  const percent = Math.round((read / volumeCount) * 100);
+  return (
+    <div className="progress">
+      <div className="progress-label">
+        {read} of {volumeCount} {volumeCount === 1 ? "volume" : "volumes"} read
+      </div>
+      <div
+        className="progress-track"
+        role="progressbar"
+        aria-label="Volumes read in this series"
+        aria-valuenow={read}
+        aria-valuemin={0}
+        aria-valuemax={volumeCount}
+      >
+        <div className="progress-fill" style={{ width: `${percent}%` }} />
+      </div>
     </div>
   );
 }

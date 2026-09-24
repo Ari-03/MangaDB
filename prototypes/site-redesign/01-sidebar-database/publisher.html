@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Kodansha · MangaDB</title>
+<meta name="description" content="MangaDB tracks English manga volume releases: what volumes exist, when each edition comes out, and which ones you own, want or have read.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>(function(){var t=null;try{var p=new URLSearchParams(location.search).get('theme');t=p||localStorage.getItem('mdb-theme');}catch(e){}document.documentElement.setAttribute('data-theme',(t==='light'||t==='dark')?t:'dark');})();</script>
+</head>
+<body>
+<a class="vh" href="#main">Skip to content</a>
+<div class="shell">
+<aside class="sidebar" id="sidebar">
+<a class="brand" href="index.html"><span class="seal" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="3.4" height="13" rx="1"/><rect x="9.3" y="4" width="3.4" height="16" rx="1"/><rect x="14.6" y="9.5" width="3.4" height="10.5" rx="1" transform="rotate(9 16.3 14.7)"/></svg></span><span>MangaDB<span class="brand-sub"> · english releases</span></span></a>
+<nav aria-label="Database">
+<div class="nav-group"><p class="nav-title">Database</p><ul>
+<li><a class="nav-link" href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V21h13V9.5"/></svg><span>Home</span></a></li>
+<li><a class="nav-link" href="releases.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.6 6h.01M3.6 12h.01M3.6 18h.01"/></svg><span>Releases</span></a></li>
+<li><a class="nav-link" href="releases-grid.html"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg><span>Calendar</span></a></li>
+<li><a class="nav-link" href="series.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h6a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H4z"/><path d="M20 4.5h-6a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h6z"/></svg><span>Series</span><span class="nav-count">1,204</span></a></li>
+<li><a class="nav-link" href="publisher.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21V5.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1V21"/><path d="M14 10h5a1 1 0 0 1 1 1v10"/><path d="M2.5 21h19"/><path d="M7 8.5h1M7 12h1M7 15.5h1M10.6 8.5h1M10.6 12h1M10.6 15.5h1"/></svg><span>Publishers</span><span class="nav-count">39</span></a></li>
+<li><a class="nav-link" href="index.html#recent-changes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.7-6.2"/><path d="M3.3 4.6V9.2h4.6"/><path d="M12 7.6V12l3 1.9"/></svg><span>Recent changes</span></a></li>
+</ul></div>
+<div class="nav-group"><p class="nav-title">User</p>
+<ul>
+<li><a class="nav-link" href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12v17l-6-4.2-6 4.2z"/></svg><span>My collection</span></a></li>
+<li><a class="nav-link" href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 1 0-12 0c0 5-2 6.5-2 6.5h16S18 14 18 9z"/><path d="M13.7 20a2 2 0 0 1-3.4 0"/></svg><span>My releases</span></a></li>
+<li><a class="nav-link" href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3.5h3.5a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H15"/><path d="M10 16.5 14.5 12 10 7.5"/><path d="M14.5 12H3.5"/></svg><span>Sign in</span></a></li>
+</ul></div></nav>
+<div class="sidebar-foot"><a href="index.html">About</a><a href="index.html">API</a><a href="index.html">Data dumps</a><a href="index.html">Sources</a><a href="index.html">Editing guide</a><a href="index.html">Privacy</a><p>Community-edited. Volume and release data is open; cover art belongs to its publishers.</p></div>
+</aside>
+<div class="main">
+<header class="topbar">
+<button class="menu-btn js-menu" type="button" aria-label="Open navigation" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7h17M3.5 12h17M3.5 17h17"/></svg></button>
+<a class="topbar-brand" href="index.html"><span class="seal" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="3.4" height="13" rx="1"/><rect x="9.3" y="4" width="3.4" height="16" rx="1"/><rect x="14.6" y="9.5" width="3.4" height="10.5" rx="1" transform="rotate(9 16.3 14.7)"/></svg></span>MangaDB</a>
+<form class="search" role="search" action="index.html" onsubmit="return false">
+  <label class="vh" for="q">Search MangaDB</label>
+  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+  <input id="q" type="search" placeholder="Search series, volumes, ISBN…" autocomplete="off">
+  <kbd>/</kbd>
+</form>
+<div class="topbar-right"><button class="icon-btn js-theme" type="button" aria-label="Switch theme"><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8z"/></svg><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.3M12 19.1v2.3M4.4 4.4l1.6 1.6M18 18l1.6 1.6M2.6 12h2.3M19.1 12h2.3M4.4 19.6 6 18M18 6l1.6-1.6"/></svg></button><a class="btn btn--sm" href="index.html">Sign in</a></div>
+</header>
+<main class="page" id="main">
+<div class="crumbs"><a href="index.html">MangaDB</a><span>/</span>
+<a href="publisher.html">Publishers</a><span>/</span>Kodansha</div>
+
+<section class="pub-hero">
+  <div>
+    <div class="pub-top">
+      <span class="pub-mark">K</span>
+      <div>
+        <h1>Kodansha</h1>
+        <p class="native-title">English-language manga · New York and Tokyo</p>
+      </div>
+    </div>
+    <p class="series-blurb">Kodansha's English programme publishes both the
+    Kodansha and Vertical Comics imprints. It prints simultaneously in physical and
+    digital for most ongoing series, and reissues completed ones through its Omnibus
+    and Deluxe edition lines.</p>
+    <div class="chip-row" style="margin-top:14px">
+      <span class="chip">Imprint of Kodansha Ltd.</span>
+      <span class="chip">Publishing in English since 2008</span>
+      <span class="chip">Simultaneous digital</span>
+      <span class="chip chip--accent">52 releases this month</span>
+    </div>
+    <div class="hero-cta" style="margin-top:18px">
+      <a class="btn btn--primary" href="releases.html">See all Kodansha releases <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></a>
+      <a class="btn" href="index.html">kodansha.us</a>
+    </div>
+  </div>
+  <div class="stat-cards">
+    <div><b>214</b><span>Series</span></div>
+    <div><b>2,940</b><span>Volumes</span></div>
+    <div><b>3,612</b><span>Releases</span></div>
+    <div><b>6</b><span>Edition lines</span></div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Upcoming from Kodansha</h2>
+    <a class="link-more" href="releases.html">15, 22 and 29 September &middot; 14 releases</a>
+  <span class="lane-nav"><button type="button" aria-label="Scroll left">&#8249;</button><button type="button" aria-label="Scroll right">&#8250;</button></span></div>
+  <div class="lane-wrap"><div class="lane"><span class="lane-date" aria-hidden="true"><b>15&nbsp;Sep</b></span>
+<a class="tile" href="volume.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/f67c0c0c-5a7c-4223-b91b-d27056790b4e" alt=""><i class="cover-fallback">Cells at Work! Picture Book</i><span class="cover-badge">15 Sep</span></span>
+  <span class="tile-title">Cells at Work! Picture Book</span>
+  <span class="tile-meta">Vol. 1 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover ph4"><img src="https://intent-curlew-625.convex.cloud/api/storage/1b6d5e05-e7ea-4ab6-9de9-3c4d49ebe3a8" alt=""><i class="cover-fallback">How to Treat a Lady Knight Right</i><span class="cover-badge">15 Sep</span></span>
+  <span class="tile-title">How to Treat a Lady Knight Right</span>
+  <span class="tile-meta">Vol. 5 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover ph4"><img src="https://intent-curlew-625.convex.cloud/api/storage/255037cd-dba9-40ef-8b67-8d5e96b992ec" alt=""><i class="cover-fallback">Love, That&#x27;s an Understatement</i><span class="cover-badge">15 Sep</span></span>
+  <span class="tile-title">Love, That&#x27;s an Understatement</span>
+  <span class="tile-meta">Vol. 7 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover ph5"><img src="https://intent-curlew-625.convex.cloud/api/storage/9d241aa7-4f54-4c9c-a6d7-9f62ce501d9d" alt=""><i class="cover-fallback">MARS 30th Anniversary Edition</i><span class="cover-badge">15 Sep</span></span>
+  <span class="tile-title">MARS 30th Anniversary Edition</span>
+  <span class="tile-meta">Vol. 2 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover ph1"><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt=""><i class="cover-fallback">MF Ghost</i><span class="cover-badge">15 Sep</span></span>
+  <span class="tile-title"><span class="star">&#9733;</span> MF Ghost</span>
+  <span class="tile-meta">Vol. 7 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover cover--ph ph3"><span>Ya Boy Kongming!</span><span class="cover-badge">15 Sep</span></span>
+  <span class="tile-title">Ya Boy Kongming!</span>
+  <span class="tile-meta">Vol. 25 &middot; Digital &middot; Kodansha</span>
+</a>
+<span class="lane-date" aria-hidden="true"><b>22&nbsp;Sep</b></span>
+<a class="tile" href="volume.html">
+  <span class="cover ph4"><img src="https://intent-curlew-625.convex.cloud/api/storage/261b3a6b-66ac-41aa-bc90-a05dcf275657" alt=""><i class="cover-fallback">Blue Lock</i><span class="cover-badge">22 Sep</span></span>
+  <span class="tile-title"><span class="star">&#9733;</span> Blue Lock</span>
+  <span class="tile-meta">Vol. 34 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover ph5"><img src="https://intent-curlew-625.convex.cloud/api/storage/4c2740de-304e-498e-85b7-1788f6f7f26e" alt=""><i class="cover-fallback">Cells at Work! Lady</i><span class="cover-badge">22 Sep</span></span>
+  <span class="tile-title">Cells at Work! Lady</span>
+  <span class="tile-meta">Vol. 5 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/055888ea-ea67-4390-9754-2c2df9092ba3" alt=""><i class="cover-fallback">Witch Hat Atelier: Grimoire Edition</i><span class="cover-badge">22 Sep</span></span>
+  <span class="tile-title"><span class="star">&#9733;</span> Witch Hat Atelier: Grimoire Edition</span>
+  <span class="tile-meta">Vol. 2 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover cover--ph ph1"><span>A Couple of Cuckoos</span><span class="cover-badge">22 Sep</span></span>
+  <span class="tile-title">A Couple of Cuckoos</span>
+  <span class="tile-meta">Vol. 30 &middot; Digital &middot; Kodansha</span>
+</a>
+<span class="lane-date" aria-hidden="true"><b>29&nbsp;Sep</b></span>
+<a class="tile" href="volume.html">
+  <span class="cover cover--ph ph3"><span>Dragon Head Omnibus</span><span class="cover-badge">29 Sep</span></span>
+  <span class="tile-title">Dragon Head Omnibus</span>
+  <span class="tile-meta">Vol. 3 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/c7f88f10-7eed-46d7-8066-24f04a934243" alt=""><i class="cover-fallback">I Have a Crush at Work</i><span class="cover-badge">29 Sep</span></span>
+  <span class="tile-title">I Have a Crush at Work</span>
+  <span class="tile-meta">Vol. 7 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover cover--ph ph4"><span>Omega of the Divine</span><span class="cover-badge">29 Sep</span></span>
+  <span class="tile-title">Omega of the Divine</span>
+  <span class="tile-meta">Vol. 2 &middot; Physical &middot; Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover cover--ph ph5"><span>Am I Actually the Strongest? (Manga)</span><span class="cover-badge">29 Sep</span></span>
+  <span class="tile-title">Am I Actually the Strongest? (Manga)</span>
+  <span class="tile-meta">Vol. 19 &middot; Digital &middot; Kodansha</span>
+</a></div></div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Series published by Kodansha</h2>
+    <a class="link-more" href="series.html">214 series in the database</a>
+  <span class="lane-nav"><button type="button" aria-label="Scroll left">&#8249;</button><button type="button" aria-label="Scroll right">&#8250;</button></span></div>
+  <div class="lane-wrap"><div class="lane"><a class="tile" href="series.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/261b3a6b-66ac-41aa-bc90-a05dcf275657" alt=""><i class="cover-fallback">Blue Lock</i></span>
+  <span class="tile-title"><span class="star">★</span> Blue Lock</span>
+  <span class="tile-meta">34 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph5"><img src="https://intent-curlew-625.convex.cloud/api/storage/4c2740de-304e-498e-85b7-1788f6f7f26e" alt=""><i class="cover-fallback">Cells at Work! Lady</i></span>
+  <span class="tile-title">Cells at Work! Lady</span>
+  <span class="tile-meta">5 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/f67c0c0c-5a7c-4223-b91b-d27056790b4e" alt=""><i class="cover-fallback">Cells at Work! Picture Book</i></span>
+  <span class="tile-title">Cells at Work! Picture Book</span>
+  <span class="tile-meta">1 volume · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph4"><img src="https://intent-curlew-625.convex.cloud/api/storage/ecbddb31-d276-4010-ae08-64e5a0921ede" alt=""><i class="cover-fallback">Girlfriend, Girlfriend Omnibus</i></span>
+  <span class="tile-title">Girlfriend, Girlfriend Omnibus</span>
+  <span class="tile-meta">5 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph4"><img src="https://intent-curlew-625.convex.cloud/api/storage/e72606f4-b83b-4b0f-b1c1-2c0eaf75b128" alt=""><i class="cover-fallback">Go! Go! Loser Ranger!</i></span>
+  <span class="tile-title"><span class="star">★</span> Go! Go! Loser Ranger!</span>
+  <span class="tile-meta">18 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/3f9c99d5-ea48-43af-b1b5-9c9c11c517fb" alt=""><i class="cover-fallback">How to Grill Our Love</i></span>
+  <span class="tile-title">How to Grill Our Love</span>
+  <span class="tile-meta">1 volume · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph4"><img src="https://intent-curlew-625.convex.cloud/api/storage/1b6d5e05-e7ea-4ab6-9de9-3c4d49ebe3a8" alt=""><i class="cover-fallback">How to Treat a Lady Knight Right</i></span>
+  <span class="tile-title">How to Treat a Lady Knight Right</span>
+  <span class="tile-meta">5 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/c7f88f10-7eed-46d7-8066-24f04a934243" alt=""><i class="cover-fallback">I Have a Crush at Work</i></span>
+  <span class="tile-title">I Have a Crush at Work</span>
+  <span class="tile-meta">7 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt=""><i class="cover-fallback">Initial D Omnibus</i></span>
+  <span class="tile-title"><span class="star">★</span> Initial D Omnibus</span>
+  <span class="tile-meta">11 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph4"><img src="https://intent-curlew-625.convex.cloud/api/storage/255037cd-dba9-40ef-8b67-8d5e96b992ec" alt=""><i class="cover-fallback">Love, That&#x27;s an Understatement</i></span>
+  <span class="tile-title">Love, That&#x27;s an Understatement</span>
+  <span class="tile-meta">7 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph5"><img src="https://intent-curlew-625.convex.cloud/api/storage/9d241aa7-4f54-4c9c-a6d7-9f62ce501d9d" alt=""><i class="cover-fallback">MARS 30th Anniversary Edition</i></span>
+  <span class="tile-title">MARS 30th Anniversary Edition</span>
+  <span class="tile-meta">2 volumes · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover ph1"><img src="https://intent-curlew-625.convex.cloud/api/storage/6ba57eb4-6315-41af-9817-17032c5f9cae" alt=""><i class="cover-fallback">MF Ghost</i></span>
+  <span class="tile-title"><span class="star">★</span> MF Ghost</span>
+  <span class="tile-meta">6 volumes · Kodansha</span>
+</a></div></div>
+</section>
+
+<div class="section two-col">
+  <section>
+    <div class="section-head"><h2>Edition lines</h2></div>
+    <div class="change-list"><div class="linerow"><span><b>Omnibus</b><span>2-in-1 and 3-in-1 collections of completed series</span></span><span class="who">24 editions</span></div><div class="linerow"><span><b>Deluxe Edition</b><span>Oversized hardcovers with colour pages restored</span></span><span class="who">11 editions</span></div><div class="linerow"><span><b>Grimoire Edition</b><span>Witch Hat Atelier, larger trim, matte jacket</span></span><span class="who">2 editions</span></div><div class="linerow"><span><b>20th Anniversary Edition</b><span>Shugo Chara! reissue with new covers</span></span><span class="who">3 editions</span></div></div>
+    <div class="section-head" style="margin-top:32px"><h2>Imprints</h2></div>
+    <div class="pub-list">
+      <a class="pub-card" href="publisher.html"><span class="pub-mark">KC</span>
+        <span><b>Kodansha Comics</b><span>13 releases in September</span></span></a>
+      <a class="pub-card" href="publisher.html"><span class="pub-mark">VC</span>
+        <span><b>Vertical Comics</b><span>2 releases in September</span></span></a>
+    </div>
+  </section>
+  <aside>
+    <div class="section-head"><h2>Out earlier this month</h2></div>
+    <div class="mini-list"><a class="mini" href="volume.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/3f9c99d5-ea48-43af-b1b5-9c9c11c517fb" alt=""><i class="cover-fallback">How to Grill Our Love</i></span>
+  <span><b>How to Grill Our Love</b>
+  <span>Vol. 1 · Physical</span></span>
+  <time>2026-09-01</time></a><a class="mini" href="series.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt=""><i class="cover-fallback">Initial D Omnibus</i></span>
+  <span><b><span class="star">★</span> Initial D Omnibus</b>
+  <span>Vol. 11 · Physical</span></span>
+  <time>2026-09-01</time></a><a class="mini" href="series.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/580bf8e1-f567-4f72-8023-c2653c8e67e6" alt=""><i class="cover-fallback">Initial D Omnibus</i></span>
+  <span><b><span class="star">★</span> Initial D Omnibus</b>
+  <span>Vol. 11 · Digital</span></span>
+  <time>2026-09-01</time></a><a class="mini" href="series.html#family">
+  <span class="cover ph1"><img src="https://intent-curlew-625.convex.cloud/api/storage/6ba57eb4-6315-41af-9817-17032c5f9cae" alt=""><i class="cover-fallback">MF Ghost</i></span>
+  <span><b><span class="star">★</span> MF Ghost</b>
+  <span>Vol. 6 · Physical</span></span>
+  <time>2026-09-01</time></a><a class="mini" href="volume.html">
+  <span class="cover ph1"><img src="https://intent-curlew-625.convex.cloud/api/storage/532dde5a-86e0-4eee-8da4-e001332635dd" alt=""><i class="cover-fallback">Nina the Starry Bride</i></span>
+  <span><b><span class="star">★</span> Nina the Starry Bride</b>
+  <span>Vol. 17 · Physical</span></span>
+  <time>2026-09-01</time></a><a class="mini" href="volume.html">
+  <span class="cover ph3"><img src="https://intent-curlew-625.convex.cloud/api/storage/a72167ee-2946-41e9-b4eb-2ecd405257a9" alt=""><i class="cover-fallback">Shugo Chara! 20th Anniversary Edition</i></span>
+  <span><b>Shugo Chara! 20th Anniversary Edition</b>
+  <span>Vol. 3 · Physical</span></span>
+  <time>2026-09-01</time></a><a class="mini" href="volume.html">
+  <span class="cover ph3"><img src="https://intent-curlew-625.convex.cloud/api/storage/9e10860e-6451-4432-8cc5-197d35b52aca" alt=""><i class="cover-fallback">Shugo Chara! 20th Anniversary Edition</i></span>
+  <span><b>Shugo Chara! 20th Anniversary Edition</b>
+  <span>Vol. 3 · Digital</span></span>
+  <time>2026-09-01</time></a><a class="mini" href="volume.html">
+  <span class="cover ph3"><img src="https://intent-curlew-625.convex.cloud/api/storage/a467f83e-3c80-49f3-b164-e40e838a0781" alt=""><i class="cover-fallback">The Heroic Legend of Arslan</i></span>
+  <span><b>The Heroic Legend of Arslan</b>
+  <span>Vol. 23 · Digital</span></span>
+  <time>2026-09-01</time></a></div>
+    <p style="margin-top:14px"><a class="btn btn--sm" href="releases.html">Open in the release browser</a></p>
+  </aside>
+</div>
+
+</main>
+</div>
+</div>
+<div class="scrim"></div>
+<script>
+(function(){
+  var root=document.documentElement;
+  var btn=document.querySelector('.js-theme');
+  if(btn){btn.addEventListener('click',function(){
+    var next=root.getAttribute('data-theme')==='light'?'dark':'light';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem('mdb-theme',next);}catch(e){}
+  });}
+  // lane paging: three tiles at a time, and drop the fade once fully scrolled
+  Array.prototype.forEach.call(document.querySelectorAll('.lane-nav'),function(nav){
+    var wrap=nav.closest('section').querySelector('.lane-wrap');
+    if(!wrap) return;
+    var lane=wrap.querySelector('.lane');
+    var b=nav.querySelectorAll('button'), step=(138+18)*3;
+    b[0].addEventListener('click',function(){lane.scrollBy({left:-step,behavior:'smooth'});});
+    b[1].addEventListener('click',function(){lane.scrollBy({left:step,behavior:'smooth'});});
+    function sync(){
+      var end=lane.scrollLeft+lane.clientWidth>=lane.scrollWidth-2;
+      wrap.classList.toggle('is-end',end);
+      b[0].disabled=lane.scrollLeft<=2; b[1].disabled=end;
+    }
+    lane.addEventListener('scroll',sync);
+    window.addEventListener('resize',sync);
+    sync();
+  });
+  var menu=document.querySelector('.js-menu'), scrim=document.querySelector('.scrim');
+  function close(){root.classList.remove('nav-open');}
+  if(menu){menu.addEventListener('click',function(){root.classList.toggle('nav-open');});}
+  if(scrim){scrim.addEventListener('click',close);}
+  document.addEventListener('error',function(e){
+    var img=e.target;
+    if(!img||img.tagName!=='IMG') return;
+    var n=+(img.getAttribute('data-try')||0);
+    if(n>=3){img.parentNode.classList.add('is-failed');return;}
+    img.setAttribute('data-try',n+1);
+    setTimeout(function(){img.src=img.src.split('?')[0]+'?r='+(n+1);},260*(n+1));
+  },true);
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){close();}
+    if(e.key==='/'&&!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)){
+      e.preventDefault();var q=document.getElementById('q');if(q){q.focus();}
+    }
+  });
+})();
+</script>
+</body>
+</html>

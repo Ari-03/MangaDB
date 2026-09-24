@@ -6,7 +6,8 @@ import { clerkEnabled } from "~/providers";
 // Clerk-hosted UI with path routing; the splat also matches bare /sign-in.
 // Google OAuth and email/password are enabled per-instance in the Clerk
 // dashboard (spec §9). New accounts land on /me, which forces the username
-// claim before anything personal renders.
+// claim before anything personal renders. The Clerk card is set on the shelf
+// (styles/account.css) so it belongs to the page it interrupts.
 export const Route = createFileRoute("/sign-in/$")({
   head: () => ({
     meta: [
@@ -31,12 +32,18 @@ function SignInPage() {
   }
   return (
     <main className="auth-page">
-      <SignIn
-        routing="path"
-        path="/sign-in"
-        signUpUrl="/sign-up"
-        fallbackRedirectUrl="/me"
-      />
+      <div className="auth-card">
+        <div className="auth-head">
+          <h1>Welcome back</h1>
+          <p>Sign in to pick up your shelf: what you own, what you are reading, and what is on the way.</p>
+        </div>
+        <SignIn
+          routing="path"
+          path="/sign-in"
+          signUpUrl="/sign-up"
+          fallbackRedirectUrl="/me"
+        />
+      </div>
     </main>
   );
 }

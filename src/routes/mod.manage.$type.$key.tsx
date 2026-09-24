@@ -39,7 +39,7 @@ function ModManagePage() {
 
   if (!convexClient) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">
           Moderation needs a configured Convex deployment (see the README).
         </p>
@@ -48,7 +48,7 @@ function ModManagePage() {
   }
   if (!isRecordType(type)) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Unknown record type</h1>
         <p className="notice">
           Nothing manageable lives at this address. <Link to="/">Go home</Link>.
@@ -70,14 +70,14 @@ function ModManageGate({
   const viewer = useQuery(api.users.viewer, {});
   if (viewer === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Checking your access…</p>
       </main>
     );
   }
   if (!isModerator) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Moderators only</h1>
         <p className="notice">
           Sensitive catalog operations are for Moderators and Administrators.{" "}
@@ -175,9 +175,10 @@ function ActionForm({
           />{" "}
           I reviewed the impact preview and want to proceed.
         </label>
-        <div>
+        <div className="mod-actions">
           <button
             type="submit"
+            className="btn btn-primary"
             disabled={busy || reason.trim() === "" || !confirmed}
           >
             {busy ? "Working…" : buttonLabel}
@@ -235,9 +236,15 @@ function MergeSection({
             onChange={(event) => setKeyInput(event.target.value)}
           />
         </label>
-        <button type="submit" disabled={keyInput.trim() === ""}>
-          Preview survivor
-        </button>
+        <div className="mod-actions">
+          <button
+            type="submit"
+            className="btn btn-sm"
+            disabled={keyInput.trim() === ""}
+          >
+            Preview survivor
+          </button>
+        </div>
       </form>
       {survivorKey === null ? null : survivor === undefined ? (
         <p className="notice">Loading survivor…</p>
@@ -288,14 +295,14 @@ function ModManagePanel({
 
   if (form === undefined) {
     return (
-      <main>
+      <main className="mod-page">
         <p className="notice">Loading…</p>
       </main>
     );
   }
   if (form === null) {
     return (
-      <main>
+      <main className="mod-page">
         <h1>Record not found</h1>
         <p className="notice">
           No {type} matches this address. <Link to="/">Go home</Link>.
@@ -310,7 +317,7 @@ function ModManagePanel({
     };
 
   return (
-    <main className="mod-manage-page">
+    <main className="mod-page mod-manage-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>Manage</span>
@@ -322,14 +329,21 @@ function ModManagePanel({
         confirmation; all of it lands in the record's public history.
       </p>
       <p className="manage-status">
-        Status: <strong>{form.status}</strong>
+        <span
+          className={`chip mod-chip mod-chip--${
+            form.status === "active" ? "ok" : "bad"
+          }`}
+        >
+          {form.status}
+        </span>
         {form.locked ? (
-          <>
-            {" "}
-            · <strong>temporarily locked</strong>
-          </>
+          <span className="chip mod-chip mod-chip--warn">
+            temporarily locked
+          </span>
         ) : null}
-        {form.mergedInto ? <> · merged into "{form.mergedInto.title}"</> : null}
+        {form.mergedInto ? (
+          <span>merged into "{form.mergedInto.title}"</span>
+        ) : null}
       </p>
 
       <ImpactPreview impact={form.impact} title={`"${form.title}"`} />

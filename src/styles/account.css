@@ -1,0 +1,775 @@
+/* Search (#38), auth + account (#26), tracking visibility + public profiles (#30), series follows + my upcoming (#29), about-the-data (#40). Owner: account port.
+   These are the quiet side rooms of the shelf: one display title, a hairline
+   under it, and the shared cover/shelf vocabulary doing the rest. Anything
+   with a Release or a Volume behind it is drawn as a book, never as a link
+   list. Page-local classes are prefixed so they cannot collide with the
+   catalog pages' own sections. */
+
+/* --- Unclassed controls -------------------------------------------------
+   Shared signed-in components (collection, reading, follows, moderation)
+   still render bare <button>s and <input>s. Give them the shell's quiet pill
+   so they never fall back to browser chrome; `.btn`, `.quick-btn` and the
+   rest win on specificity wherever a component opts into a real style. */
+
+:where(button) {
+  padding: 7px 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 130ms ease, border-color 130ms ease, color 130ms ease;
+}
+:where(button:hover) { background: var(--surface-3); border-color: var(--line-strong); }
+:where(button:disabled) { opacity: 0.55; cursor: default; }
+:where(button:disabled:hover) { background: var(--surface-2); }
+
+:where(
+  input[type="text"],
+  input[type="search"],
+  input[type="number"],
+  input[type="url"],
+  input:not([type]),
+  textarea
+) {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  padding: 8px 12px;
+}
+:where(input, textarea)::placeholder { color: var(--text-mute); }
+
+/* --- Shared page furniture ---------------------------------------------- */
+
+.acct-head {
+  padding-block: 10px 22px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.acct-title {
+  font-size: clamp(2rem, 1.5rem + 2vw, 2.9rem);
+  letter-spacing: -0.028em;
+}
+.acct-kicker {
+  margin-top: 8px;
+  color: var(--text-mute);
+  font-size: 0.95rem;
+  max-width: 62ch;
+}
+
+/* the counters under a profile title: quiet, gold, no boxes */
+.acct-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-top: 18px;
+}
+.acct-stat {
+  padding-right: 22px;
+  margin-right: 22px;
+  border-right: 1px solid var(--line);
+}
+.acct-stat:last-child { border-right: 0; margin-right: 0; padding-right: 0; }
+.acct-num {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 60;
+  font-weight: 700;
+  font-size: 1.5rem;
+  line-height: 1.1;
+  color: var(--gold);
+}
+.acct-label { font-size: 0.8rem; color: var(--text-mute); }
+
+/* a settings surface — used where there is nothing to shelve */
+.acct-panel {
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+/* --- /me: my library ----------------------------------------------------- */
+
+.me-page .placeholder {
+  color: var(--text-mute);
+  font-size: 0.92rem;
+}
+.me-page .pass-facts,
+.profile-page .pass-facts {
+  color: var(--text-mute);
+  font-size: 0.85rem;
+}
+
+/* Sections stack under the title; the shelves inside supply the furniture, so
+   the section itself is only a head plus a hairline. Scoped to my two pages:
+   the moderation pages reuse the class name and style it themselves. */
+.me-page .me-section,
+.profile-page .me-section { padding-block: 34px 6px; }
+.me-page .me-section + .me-section,
+.profile-page .me-section + .me-section { border-top: 1px solid var(--line); }
+
+.acct-account-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+}
+.acct-handle {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 36;
+  font-weight: 700;
+  font-size: 1.12rem;
+  color: var(--text);
+}
+.acct-account-row a {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.88rem;
+  border-bottom: 1px solid transparent;
+}
+.acct-account-row a:hover { border-bottom-color: var(--accent); }
+
+/* deletion: the one destructive control on the site, kept behind a confirm */
+.danger-zone {
+  --danger: #e0714f;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+[data-theme="light"] .danger-zone { --danger: #a8371a; }
+.danger-zone p {
+  max-width: 60ch;
+  color: var(--text-dim);
+  font-size: 0.92rem;
+  margin-bottom: 12px;
+}
+.danger-zone button { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.danger-zone button:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); border-color: var(--danger); }
+.danger-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.danger-zone button + button { color: var(--text-dim); border-color: var(--line-strong); }
+.danger-zone button + button:hover { background: var(--surface-3); }
+/* destructive and failure copy: a warm red that holds on both papers */
+.form-error {
+  --danger: #e0714f;
+  margin-top: 10px;
+  color: var(--danger);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+[data-theme="light"] .form-error { --danger: #a8371a; }
+
+/* --- Series follows (#29) ------------------------------------------------
+   The Series-page follow toggle lives with the Series page CSS; what stays
+   here is the marker that rides along on my-upcoming rows. */
+
+/* the followed marker on a row: a glyph, never a section */
+.followed-marker {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* --- My Upcoming (#29): a dated ledger, no covers on file for it --------- */
+
+.my-upcoming .upcoming-preference {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 18px;
+  font-size: 0.88rem;
+  color: var(--text-dim);
+}
+.my-upcoming .upcoming-preference .pass-facts { font-size: 0.82rem; }
+.my-upcoming .upcoming-preference select {
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  padding: 6px 30px 6px 13px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 14px center, right 9px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.my-upcoming .upcoming-preference select:hover { border-color: var(--accent); }
+
+.upcoming-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.upcoming-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: 0.93rem;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+.upcoming-item:hover { background: var(--surface-2); border-color: var(--line-strong); transform: translateX(2px); }
+.upcoming-item:has(.followed-marker) { border-left-color: var(--accent); }
+.upcoming-item a { font-weight: 800; }
+.upcoming-item a:hover { color: var(--accent); }
+.upcoming-date {
+  flex: 0 0 8.5rem;
+  color: var(--text);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.86rem;
+}
+.upcoming-badge {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+/* the marker sits at the right end of the row, unless a state badge is
+   already there — then it rides just after it */
+.upcoming-item .followed-marker:last-child { margin-left: auto; }
+.upcoming-item .upcoming-badge + .followed-marker { margin-left: 0; }
+.upcoming-badge.ordered { border-color: var(--accent); color: var(--accent); background: var(--accent-tint); }
+
+/* --- Tracking visibility (#30): segmented pills -------------------------- */
+
+.sharing-settings { display: grid; gap: 18px; }
+.sharing-lede {
+  color: var(--text-dim);
+  font-size: 0.93rem;
+  line-height: 1.55;
+  max-width: 64ch;
+}
+
+/* label left, the pill right, the explanation under the label */
+.vis-field {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+.vis-legend {
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+.vis-hint {
+  grid-column: 1;
+  color: var(--text-mute);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  max-width: 58ch;
+}
+.seg-pill {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.seg-opt { position: relative; cursor: pointer; }
+.seg-opt input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 1px; height: 1px;
+}
+.seg-opt span {
+  display: block;
+  padding: 6px 15px;
+  border-radius: var(--r-pill);
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  white-space: nowrap;
+  transition: background 130ms ease, color 130ms ease;
+}
+.seg-opt:hover span { color: var(--text); }
+.seg-opt input:checked + span { background: var(--accent); color: var(--accent-ink); }
+.seg-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.sharing-profile-link {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 0.92rem;
+  color: var(--text-dim);
+}
+.sharing-profile-link a {
+  font-weight: 800;
+  color: var(--accent);
+  border-bottom: 1px solid transparent;
+}
+.sharing-profile-link a:hover { border-bottom-color: var(--accent); }
+
+/* per-Series overrides, folded away on the Series page */
+.series-visibility {
+  margin: 14px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  max-width: 44rem;
+}
+.series-visibility summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+.series-visibility summary::marker { color: var(--text-mute); }
+.series-visibility[open] summary { margin-bottom: 12px; }
+.series-visibility .vis-field + .vis-field { margin-top: 10px; }
+.series-visibility .seg-opt span { padding: 5px 12px; font-size: 0.8rem; }
+.series-visibility .vis-field { align-items: center; }
+.series-visibility > .vis-hint { margin-bottom: 14px; }
+
+/* --- /search (#38) ------------------------------------------------------- */
+
+.search-page .acct-head { border-bottom: 0; padding-bottom: 6px; }
+
+/* the query line is the page: a ruled slip, not a boxed widget */
+.search-form {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 2px 10px;
+  border-bottom: 2px solid var(--line-strong);
+  transition: border-color 140ms ease;
+}
+.search-form:focus-within { border-bottom-color: var(--accent); }
+.search-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 4px 0;
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 45, "WONK" 1, "opsz" 48;
+  font-weight: 600;
+  font-size: clamp(1.3rem, 1rem + 1.4vw, 1.85rem);
+  letter-spacing: -0.02em;
+}
+.search-field::placeholder { color: var(--text-mute); opacity: 0.75; }
+.search-field:focus { outline: none; }
+.search-field::-webkit-search-cancel-button { filter: grayscale(1) opacity(0.5); }
+.search-note {
+  margin-top: 12px;
+  color: var(--text-mute);
+  font-size: 0.86rem;
+  max-width: 64ch;
+}
+
+.search-results { padding-block: 30px 4px; }
+.search-results + .search-results { border-top: 1px solid var(--line); }
+
+/* an alternate title is why a result matched — keep it with the caption */
+.result-alt {
+  margin-top: 4px;
+  color: var(--text-mute);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pub-hits {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(228px, 100%), 1fr));
+  gap: 12px;
+}
+.pub-hit {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+.pub-hit:hover { border-color: var(--accent); background: var(--surface-2); transform: translateY(-2px); }
+.pub-mark {
+  flex: none;
+  width: 46px; height: 58px;
+  display: grid;
+  place-items: center;
+  border-radius: 2px 4px 4px 2px;
+  background: linear-gradient(180deg, var(--surface-3), color-mix(in srgb, var(--surface-3) 70%, #000));
+  box-shadow: var(--cover-shadow);
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 30, "WONK" 0, "opsz" 40;
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: var(--gold);
+}
+.pub-hit-name {
+  display: block;
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 30;
+  font-weight: 700;
+  font-size: 1.05rem;
+  line-height: 1.2;
+}
+.pub-hit-meta { display: block; margin-top: 3px; font-size: 0.82rem; color: var(--text-mute); }
+
+/* --- /u/{username}: the public shelf ------------------------------------- */
+
+.notfound-cta { margin-top: 26px; }
+.profile-page .empty-shelf,
+.search-page .empty-shelf { margin-top: 32px; }
+
+/* a box set is its own short shelf under the loose books */
+.boxset { padding-block: 6px 2px; }
+.shelf + .boxset { margin-top: 40px; }
+.boxset + .boxset { margin-top: 32px; }
+.boxset-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.boxset-name {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 30;
+  font-weight: 700;
+  font-size: 1.12rem;
+}
+.boxset-name a:hover { color: var(--accent); }
+.boxset-note { font-size: 0.84rem; color: var(--text-mute); }
+
+.reading-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+.reading-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.reading-cover { display: block; width: 74px; }
+.reading-cover .cover-ph { padding: 10px 7px 8px 13px; }
+.reading-cover .cover-ph::before { width: 7px; }
+.reading-cover .cover-ph-title { font-size: 0.7rem; -webkit-line-clamp: 4; }
+.reading-title {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 32;
+  font-weight: 700;
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+.reading-title a:hover { color: var(--accent); }
+.reading-meta {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--text-mute);
+}
+.reading-bar { margin-top: 12px; max-width: 320px; }
+.reading-track {
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.reading-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--accent), var(--gold));
+}
+.vol-ticks {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.vol-tick {
+  min-width: 26px;
+  padding: 2px 7px;
+  text-align: center;
+  border-radius: var(--r-sm);
+  background: var(--accent-tint);
+  color: var(--accent);
+  font-size: 0.74rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.profile-passes {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  font-size: 0.87rem;
+  color: var(--text-dim);
+}
+.profile-passes a { font-weight: 700; }
+.profile-passes a:hover { color: var(--accent); }
+
+/* --- Auth hosts: a card on its own ledge --------------------------------- */
+
+.auth-page {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  padding-block: 44px 34px;
+}
+.auth-card {
+  position: relative;
+  width: 100%;
+  max-width: 25rem;
+  /* Clerk redefines --accent on its own elements, so the shelf's accent is
+     aliased here and used by every override below. */
+  --shelf-accent: var(--accent);
+  --shelf-gold: var(--gold);
+}
+/* the shelf the card is set down on */
+.auth-card::after {
+  content: "";
+  position: absolute;
+  left: -18px; right: -18px; bottom: -17px;
+  height: 11px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  box-shadow: var(--ledge-shadow);
+  border-radius: 1px;
+}
+.auth-head { text-align: center; margin-bottom: 22px; }
+.auth-head h1 { font-size: clamp(1.7rem, 1.4rem + 1.2vw, 2.2rem); letter-spacing: -0.026em; }
+.auth-head p {
+  margin: 10px auto 0;
+  max-width: 40ch;
+  color: var(--text-mute);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+.auth-panel {
+  padding: 24px 24px 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--cover-shadow);
+}
+
+/* Clerk owns the markup inside its card; these two-class selectors beat the
+   styles it injects at runtime and pull it onto the shelf's palette, without
+   touching its layout. Every value is a token, so it follows the theme. */
+.auth-card .cl-cardBox,
+.auth-card .cl-card {
+  background: var(--surface);
+  border-color: var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--cover-shadow);
+}
+.auth-card .cl-card { box-shadow: none; }
+.auth-card .cl-headerTitle {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 45, "WONK" 1, "opsz" 36;
+  font-weight: 600;
+  font-size: 1.24rem;
+  color: var(--text);
+}
+.auth-card .cl-headerSubtitle,
+.auth-card .cl-dividerText,
+.auth-card .cl-footerActionText,
+.auth-card .cl-formFieldLabel { color: var(--text-dim); }
+.auth-card .cl-dividerLine { background: var(--line); }
+.auth-card .cl-formFieldInput,
+.auth-card .cl-socialButtonsBlockButton {
+  background: var(--bg-deep);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+.auth-card .cl-socialButtonsBlockButton:hover { background: var(--surface-2); }
+/* Clerk's own rule for the primary button is specific and late, so this one
+   has to out-rank it rather than merely follow it. */
+.auth-page .auth-card button.cl-formButtonPrimary {
+  background: var(--shelf-accent);
+  color: var(--accent-ink);
+  border: 0;
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 800;
+}
+.auth-page .auth-card button.cl-formButtonPrimary:hover { background: var(--shelf-gold); }
+.auth-card .cl-footer {
+  background: var(--surface-2);
+  border-top: 1px solid var(--line);
+}
+.auth-card .cl-footerActionLink,
+.auth-card .cl-formResendCodeLink,
+.auth-card .cl-identityPreviewEditButton { color: var(--shelf-accent); }
+
+.username-form { display: grid; gap: 16px; }
+.username-form label {
+  display: grid;
+  gap: 7px;
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: var(--text-dim);
+}
+/* the handle field wears its @ inside the frame, like a borrower's card */
+.at-field {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-deep);
+  transition: border-color 140ms ease;
+}
+.at-field:focus-within { border-color: var(--accent); }
+.at-field span {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--text-mute);
+}
+.at-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 30;
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: -0.01em;
+}
+.at-field input:focus { outline: none; }
+.username-form button[type="submit"] {
+  justify-self: start;
+  padding: 11px 22px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.94rem;
+}
+.username-form button[type="submit"]:hover:not(:disabled) { background: var(--gold); border-color: var(--gold); }
+.username-form button[type="submit"]:disabled:hover { background: var(--accent); }
+.username-hint { font-size: 0.82rem; color: var(--text-mute); font-weight: 400; }
+
+/* --- /about-the-data (#40): one readable column -------------------------- */
+
+/* one measure for every block, so the hairlines under the headings and the
+   text they head end on the same line (a `ch` measure would not: the display
+   face and the body face have different zero-widths). */
+.about-page > * { max-width: 36rem; }
+.about-page h1 {
+  font-size: clamp(2.1rem, 1.6rem + 2vw, 3rem);
+  letter-spacing: -0.028em;
+}
+.about-lede {
+  margin-top: 18px;
+  font-size: 1.1rem;
+  line-height: 1.66;
+  color: var(--text-dim);
+}
+.about-page h2 {
+  margin-top: 46px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 1.35rem;
+}
+.about-page h2 + p { margin-top: 14px; }
+.about-page p {
+  margin-top: 16px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.about-page strong { color: var(--text); font-weight: 700; }
+.about-page a {
+  color: var(--accent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.about-page a:hover { border-bottom-color: var(--accent); }
+
+/* sources read as a bibliography, not a bullet list */
+.about-sources {
+  list-style: none;
+  margin: 22px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.about-sources li {
+  display: grid;
+  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+  gap: 4px 26px;
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.source-name {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 28;
+  font-weight: 700;
+  font-size: 1.02rem;
+  color: var(--text);
+}
+.source-credit {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.85rem;
+  color: var(--text-mute);
+}
+
+/* --- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .acct-head { padding-block: 6px 18px; }
+  .acct-stat { padding-right: 16px; margin-right: 16px; }
+  .acct-num { font-size: 1.3rem; }
+
+  .vis-field { grid-template-columns: minmax(0, 1fr); }
+  .seg-pill { grid-column: 1; grid-row: auto; justify-self: start; }
+  .vis-hint { order: 3; }
+
+  .upcoming-item { gap: 3px 8px; padding: 10px 12px; }
+  .upcoming-date { flex: 0 0 100%; color: var(--accent); }
+  .upcoming-badge { margin-left: 0; }
+
+  .reading-row { grid-template-columns: 58px minmax(0, 1fr); gap: 14px; padding: 14px; }
+  .reading-cover { width: 58px; }
+  .reading-cover .cover-ph-title { font-size: 0.62rem; -webkit-line-clamp: 3; }
+
+  .about-sources li { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .about-page h2 { margin-top: 34px; }
+}

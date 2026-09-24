@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Initial D · MangaDB</title>
+<meta name="description" content="MangaDB tracks English manga volume releases: what volumes exist, when each edition comes out, and which ones you own, want or have read.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>(function(){var t=null;try{var p=new URLSearchParams(location.search).get('theme');t=p||localStorage.getItem('mdb-theme');}catch(e){}document.documentElement.setAttribute('data-theme',(t==='light'||t==='dark')?t:'dark');})();</script>
+</head>
+<body>
+<a class="vh" href="#main">Skip to content</a>
+<div class="shell">
+<aside class="sidebar" id="sidebar">
+<a class="brand" href="index.html"><span class="seal" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="3.4" height="13" rx="1"/><rect x="9.3" y="4" width="3.4" height="16" rx="1"/><rect x="14.6" y="9.5" width="3.4" height="10.5" rx="1" transform="rotate(9 16.3 14.7)"/></svg></span><span>MangaDB<span class="brand-sub"> · english releases</span></span></a>
+<nav aria-label="Database">
+<div class="nav-group"><p class="nav-title">Database</p><ul>
+<li><a class="nav-link" href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V21h13V9.5"/></svg><span>Home</span></a></li>
+<li><a class="nav-link" href="releases.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.6 6h.01M3.6 12h.01M3.6 18h.01"/></svg><span>Releases</span></a></li>
+<li><a class="nav-link" href="releases-grid.html"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg><span>Calendar</span></a></li>
+<li><a class="nav-link" href="series.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h6a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H4z"/><path d="M20 4.5h-6a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h6z"/></svg><span>Series</span><span class="nav-count">1,204</span></a></li>
+<li><a class="nav-link" href="publisher.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21V5.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1V21"/><path d="M14 10h5a1 1 0 0 1 1 1v10"/><path d="M2.5 21h19"/><path d="M7 8.5h1M7 12h1M7 15.5h1M10.6 8.5h1M10.6 12h1M10.6 15.5h1"/></svg><span>Publishers</span><span class="nav-count">39</span></a></li>
+<li><a class="nav-link" href="index.html#recent-changes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.7-6.2"/><path d="M3.3 4.6V9.2h4.6"/><path d="M12 7.6V12l3 1.9"/></svg><span>Recent changes</span></a></li>
+</ul></div>
+<div class="nav-group"><p class="nav-title">User</p>
+<div class="nav-me"><span class="avatar avatar--accent">AD</span><span><b>Aritra</b><span>@aritra</span></span></div>
+<ul>
+<li><a class="nav-link" href="series.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12v17l-6-4.2-6 4.2z"/></svg><span>My collection</span><span class="nav-count">312</span></a></li>
+<li><a class="nav-link" href="releases.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 1 0-12 0c0 5-2 6.5-2 6.5h16S18 14 18 9z"/><path d="M13.7 20a2 2 0 0 1-3.4 0"/></svg><span>My releases</span><span class="nav-count">9</span></a></li>
+<li><a class="nav-link" href="index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3.5h3.5a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H15"/><path d="M10 16.5 14.5 12 10 7.5"/><path d="M14.5 12H3.5"/></svg><span>Settings</span></a></li>
+</ul></div></nav>
+<div class="sidebar-foot"><a href="index.html">About</a><a href="index.html">API</a><a href="index.html">Data dumps</a><a href="index.html">Sources</a><a href="index.html">Editing guide</a><a href="index.html">Privacy</a><p>Community-edited. Volume and release data is open; cover art belongs to its publishers.</p></div>
+</aside>
+<div class="main">
+<header class="topbar">
+<button class="menu-btn js-menu" type="button" aria-label="Open navigation" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7h17M3.5 12h17M3.5 17h17"/></svg></button>
+<a class="topbar-brand" href="index.html"><span class="seal" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="3.4" height="13" rx="1"/><rect x="9.3" y="4" width="3.4" height="16" rx="1"/><rect x="14.6" y="9.5" width="3.4" height="10.5" rx="1" transform="rotate(9 16.3 14.7)"/></svg></span>MangaDB</a>
+<form class="search" role="search" action="index.html" onsubmit="return false">
+  <label class="vh" for="q">Search MangaDB</label>
+  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+  <input id="q" type="search" placeholder="Search series, volumes, ISBN…" autocomplete="off">
+  <kbd>/</kbd>
+</form>
+<div class="topbar-right"><button class="icon-btn js-theme" type="button" aria-label="Switch theme"><svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8z"/></svg><svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.3M12 19.1v2.3M4.4 4.4l1.6 1.6M18 18l1.6 1.6M2.6 12h2.3M19.1 12h2.3M4.4 19.6 6 18M18 6l1.6-1.6"/></svg></button><a class="topbar-user" href="releases.html"><span class="avatar avatar--accent">AD</span><span>My releases</span></a></div>
+</header>
+<main class="page" id="main">
+<div class="crumbs"><a href="index.html">MangaDB</a><span>/</span>
+<a href="series.html">Series</a><span>/</span>Initial D</div>
+
+<section class="series-hero">
+  <div>
+    <span class="cover ph5"><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt=""><i class="cover-fallback">Initial D</i></span>
+    <p class="cover-cap">Cover shown: Omnibus 11, the most recent release on file.</p>
+  </div>
+  <div>
+    <h1>Initial D</h1>
+    <p class="native-title">Inisharu Dī · by Shuichi Shigeno · 1995–2013</p>
+    <div class="series-actions">
+      <button class="btn btn--on" type="button"><span class="star">★</span> Following</button>
+      <label class="field">Reading status
+        <select><option selected>Reading</option><option>Plan to read</option><option>Paused</option><option>Dropped</option><option>Completed</option></select>
+      </label>
+      <label class="field">Visible to
+        <select><option selected>Only me</option><option>People I follow</option><option>Everyone</option></select>
+      </label>
+      <a class="btn" href="volume.html">Jump to Volume 21</a>
+    </div>
+    <p class="series-blurb">Takumi Fujiwara has been delivering tofu down Mount Akina
+    in his father's Toyota AE86 since he was thirteen. He has no idea he has become the
+    fastest downhill driver in the prefecture — and no interest in finding out, until
+    the racing teams of Gunma come looking for him.</p>
+    <dl class="facts">
+      <dt>Source status</dt>
+      <dd><span class="status-dot">Completed — 48 volumes, 1995–2013</span></dd>
+      <dt>Alternative titles</dt>
+      <dd class="dot-list"><span>Inisharu Dī</span><span>Initial D: Fourth Stage tie-in</span><span>Initial D (Tokyopop)</span></dd>
+      <dt>English publishers</dt>
+      <dd><a href="publisher.html">Kodansha</a> (current) · <a href="publisher.html">Tokyopop</a> (2002–2009, out of print)</dd>
+      <dt>Volumes</dt>
+      <dd>48 in the canonical sequence · 41 with an English release</dd>
+      <dt>Editions</dt>
+      <dd>72 across 2 edition lines — <a href="series.html#volume-21">Omnibus</a> (2-in-1, 24 positions) and single volumes</dd>
+      <dt>Formats</dt>
+      <dd>Physical (paperback) · Digital</dd>
+      <dt id="family">Series family</dt>
+      <dd><a href="series.html">MF Ghost</a> — sequel, set in the same world thirty years on</dd>
+      <dt>In your collection</dt>
+      <dd>20 of 24 released omnibuses owned · 1 wanted</dd>
+      <dt>Last revision</dt>
+      <dd>4 days ago by <a href="index.html#recent-changes">@suzu</a> — volume coverage for Omnibus 11</dd>
+    </dl>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Reading path</h2>
+    <span class="hint">The canonical volume sequence. Volume 21 is expanded below; open any volume for its full edition list.</span>
+    <span class="legend"><i aria-hidden="true">&#10003;</i> owned &middot; no mark = not in your collection</span>
+  </div>
+  <div class="path-grid" id="path-grid"><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph6"><em>Initial D</em><span class="vol-pos">#1</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 1</span>
+  <span class="vol-sub">Omnibus 1</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#2</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 2</span>
+  <span class="vol-sub">Omnibus 1</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph2"><em>Initial D</em><span class="vol-pos">#3</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 3</span>
+  <span class="vol-sub">Omnibus 2</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph3"><em>Initial D</em><span class="vol-pos">#4</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 4</span>
+  <span class="vol-sub">Omnibus 2</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph4"><em>Initial D</em><span class="vol-pos">#5</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 5</span>
+  <span class="vol-sub">Omnibus 3</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph5"><em>Initial D</em><span class="vol-pos">#6</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 6</span>
+  <span class="vol-sub">Omnibus 3</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph6"><em>Initial D</em><span class="vol-pos">#7</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 7</span>
+  <span class="vol-sub">Omnibus 4</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#8</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 8</span>
+  <span class="vol-sub">Omnibus 4</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph2"><em>Initial D</em><span class="vol-pos">#9</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 9</span>
+  <span class="vol-sub">Omnibus 5</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph6"><em>Initial D</em><span class="vol-pos">#10</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 10</span>
+  <span class="vol-sub">Omnibus 5</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#11</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 11</span>
+  <span class="vol-sub">Omnibus 6</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph2"><em>Initial D</em><span class="vol-pos">#12</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 12</span>
+  <span class="vol-sub">Omnibus 6</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph3"><em>Initial D</em><span class="vol-pos">#13</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 13</span>
+  <span class="vol-sub">Omnibus 7</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph4"><em>Initial D</em><span class="vol-pos">#14</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 14</span>
+  <span class="vol-sub">Omnibus 7</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph5"><em>Initial D</em><span class="vol-pos">#15</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 15</span>
+  <span class="vol-sub">Omnibus 8</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph6"><em>Initial D</em><span class="vol-pos">#16</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 16</span>
+  <span class="vol-sub">Omnibus 8</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#17</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 17</span>
+  <span class="vol-sub">Omnibus 9</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph2"><em>Initial D</em><span class="vol-pos">#18</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 18</span>
+  <span class="vol-sub">Omnibus 9</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph3"><em>Initial D</em><span class="vol-pos">#19</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 19</span>
+  <span class="vol-sub">Omnibus 10</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#20</span><span class="owned-tick" title="Owned" aria-label="Owned" role="img"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 12.5 5 5 10-11"/></svg></span></span>
+  <span class="vol-name">Volume 20</span>
+  <span class="vol-sub">Omnibus 10</span>
+</a><a class="vol-tile vol-tile--current" href="volume.html#editions" aria-current="true">
+  <span class="cover ph5"><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt=""><i class="cover-fallback">Initial D</i><span class="vol-pos">#21</span></span>
+  <span class="vol-name">Volume 21</span>
+  <span class="vol-sub">Omnibus 11</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover ph5"><img src="https://intent-curlew-625.convex.cloud/api/storage/30718d2b-cff7-48b4-8cd5-899f4d8363c4" alt=""><i class="cover-fallback">Initial D</i><span class="vol-pos">#22</span></span>
+  <span class="vol-name">Volume 22</span>
+  <span class="vol-sub">Omnibus 11</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph4"><em>Initial D</em><span class="vol-pos">#23</span></span>
+  <span class="vol-name">Volume 23</span>
+  <span class="vol-sub">Omnibus 12</span>
+</a><a class="vol-tile" href="volume.html#editions">
+  <span class="cover cover--ph cover--num ph5"><em>Initial D</em><span class="vol-pos">#24</span></span>
+  <span class="vol-name">Volume 24</span>
+  <span class="vol-sub">Omnibus 12</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#25</span></span>
+  <span class="vol-name">Volume 25</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#26</span></span>
+  <span class="vol-name">Volume 26</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#27</span></span>
+  <span class="vol-name">Volume 27</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#28</span></span>
+  <span class="vol-name">Volume 28</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#29</span></span>
+  <span class="vol-name">Volume 29</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#30</span></span>
+  <span class="vol-name">Volume 30</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#31</span></span>
+  <span class="vol-name">Volume 31</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#32</span></span>
+  <span class="vol-name">Volume 32</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#33</span></span>
+  <span class="vol-name">Volume 33</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#34</span></span>
+  <span class="vol-name">Volume 34</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#35</span></span>
+  <span class="vol-name">Volume 35</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#36</span></span>
+  <span class="vol-name">Volume 36</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#37</span></span>
+  <span class="vol-name">Volume 37</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#38</span></span>
+  <span class="vol-name">Volume 38</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#39</span></span>
+  <span class="vol-name">Volume 39</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#40</span></span>
+  <span class="vol-name">Volume 40</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#41</span></span>
+  <span class="vol-name">Volume 41</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#42</span></span>
+  <span class="vol-name">Volume 42</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#43</span></span>
+  <span class="vol-name">Volume 43</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#44</span></span>
+  <span class="vol-name">Volume 44</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#45</span></span>
+  <span class="vol-name">Volume 45</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#46</span></span>
+  <span class="vol-name">Volume 46</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#47</span></span>
+  <span class="vol-name">Volume 47</span>
+  <span class="vol-sub">No English release</span>
+</a><a class="vol-tile" href="volume.html#editions" hidden>
+  <span class="cover cover--ph cover--num ph1"><em>Initial D</em><span class="vol-pos">#48</span></span>
+  <span class="vol-name">Volume 48</span>
+  <span class="vol-sub">No English release</span>
+</a></div>
+  <p class="section-foot">
+    <button class="btn btn--sm js-more" type="button" aria-expanded="false" aria-controls="path-grid">Show volumes 25–48</button>
+    <span>Volumes 25–48 are in the canonical sequence but have no English release yet.</span>
+  </p>
+  <div class="expand" id="volume-21">
+  <div class="expand-head">
+    <h3>Volume 21 — every edition that covers it</h3>
+    <span class="hint">Canonical position #21 · 2 editions · 3 releases</span>
+    <span style="margin-left:auto"><a class="btn btn--sm" href="volume.html">Open the volume page</a></span>
+  </div>
+
+  <div class="edition">
+    <div class="edition-head">
+      <h4><a href="volume.html">Initial D Omnibus 11</a></h4>
+      <span class="chip chip--accent">Edition Line · Omnibus, position 11</span>
+      <span class="cover-note">Covers Volume 21 and Volume 22 completely</span>
+    </div>
+    <table class="rel-table">
+      <thead><tr><th>Published</th><th>Format</th><th>Binding</th><th>ISBN-13</th><th>Publisher</th><th class="right">Price</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="num">2026-09-01</td><td><span class="chip">Physical</span></td>
+          <td>Paperback</td><td class="num">978-1-64651-702-8</td>
+          <td><a href="publisher.html">Kodansha</a></td><td class="right num">$24.99</td>
+        </tr>
+        <tr class="variant-row"><td colspan="6">
+          <span class="variant-note">Release Variant · Barnes &amp; Noble exclusive cover, same contents</span>
+        </td></tr>
+        <tr>
+          <td class="num">2026-09-01</td><td><span class="chip chip--digital">Digital</span></td>
+          <td>—</td><td class="num">978-1-64651-703-5</td>
+          <td><a href="publisher.html">Kodansha</a></td><td class="right num">$14.99</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="edition">
+    <div class="edition-head">
+      <h4>Initial D Volume 21</h4>
+      <span class="chip">Single volume</span>
+      <span class="cover-note">Covers Volume 21 completely · out of print</span>
+    </div>
+    <table class="rel-table">
+      <thead><tr><th>Published</th><th>Format</th><th>Binding</th><th>ISBN-13</th><th>Publisher</th><th class="right">Price</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="num">2005-11-08</td><td><span class="chip">Physical</span></td>
+          <td>Paperback</td><td class="num">978-1-59532-951-4</td>
+          <td><a href="publisher.html">Tokyopop</a></td><td class="right num">$9.99</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Series family</h2>
+    <a class="link-more" href="series.html">Initial D family · 2 series</a>
+  <span class="lane-nav"><button type="button" aria-label="Scroll left">&#8249;</button><button type="button" aria-label="Scroll right">&#8250;</button></span></div>
+  <div class="lane-wrap"><div class="lane"><a class="tile" href="volume.html">
+  <span class="cover ph2"><img src="https://intent-curlew-625.convex.cloud/api/storage/6ba57eb4-6315-41af-9817-17032c5f9cae" alt=""><i class="cover-fallback">MF Ghost Vol. 6</i></span>
+  <span class="tile-title"><span class="star">★</span> MF Ghost</span>
+  <span class="tile-meta">Vol. 6 · 1 Sep · Kodansha</span>
+</a>
+<a class="tile" href="volume.html">
+  <span class="cover ph3"><img src="https://intent-curlew-625.convex.cloud/api/storage/93606069-446a-4384-9675-36cb96355e08" alt=""><i class="cover-fallback">MF Ghost Vol. 7</i></span>
+  <span class="tile-title"><span class="star">★</span> MF Ghost</span>
+  <span class="tile-meta">Vol. 7 · 15 Sep · Kodansha</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover cover--ph ph5"><span>Initial D</span></span>
+  <span class="tile-title">Initial D</span>
+  <span class="tile-meta">48 volumes · Completed 2013</span>
+</a>
+<a class="tile" href="series.html">
+  <span class="cover cover--ph ph4"><span>Initial D Legend</span></span>
+  <span class="tile-title">Initial D Legend</span>
+  <span class="tile-meta">3 volumes · film tie-in</span>
+</a></div></div>
+</section>
+
+</main>
+</div>
+</div>
+<div class="scrim"></div>
+<script>
+(function(){
+  var root=document.documentElement;
+  var btn=document.querySelector('.js-theme');
+  if(btn){btn.addEventListener('click',function(){
+    var next=root.getAttribute('data-theme')==='light'?'dark':'light';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem('mdb-theme',next);}catch(e){}
+  });}
+  // lane paging: three tiles at a time, and drop the fade once fully scrolled
+  Array.prototype.forEach.call(document.querySelectorAll('.lane-nav'),function(nav){
+    var wrap=nav.closest('section').querySelector('.lane-wrap');
+    if(!wrap) return;
+    var lane=wrap.querySelector('.lane');
+    var b=nav.querySelectorAll('button'), step=(138+18)*3;
+    b[0].addEventListener('click',function(){lane.scrollBy({left:-step,behavior:'smooth'});});
+    b[1].addEventListener('click',function(){lane.scrollBy({left:step,behavior:'smooth'});});
+    function sync(){
+      var end=lane.scrollLeft+lane.clientWidth>=lane.scrollWidth-2;
+      wrap.classList.toggle('is-end',end);
+      b[0].disabled=lane.scrollLeft<=2; b[1].disabled=end;
+    }
+    lane.addEventListener('scroll',sync);
+    window.addEventListener('resize',sync);
+    sync();
+  });
+  var more=document.querySelector('.js-more');
+  if(more){more.addEventListener('click',function(){
+    var hidden=document.querySelectorAll('.path-grid .vol-tile[hidden]');
+    if(hidden.length){
+      Array.prototype.forEach.call(hidden,function(t){t.hidden=false;});
+      more.setAttribute('aria-expanded','true');
+      more.textContent='Show the 24 released volumes only';
+    }else{
+      var all=document.querySelectorAll('.path-grid .vol-tile');
+      Array.prototype.forEach.call(all,function(t,i){if(i>23){t.hidden=true;}});
+      more.setAttribute('aria-expanded','false');
+      more.textContent='Show volumes 25\u201348';
+    }
+  });}
+  var menu=document.querySelector('.js-menu'), scrim=document.querySelector('.scrim');
+  function close(){root.classList.remove('nav-open');}
+  if(menu){menu.addEventListener('click',function(){root.classList.toggle('nav-open');});}
+  if(scrim){scrim.addEventListener('click',close);}
+  document.addEventListener('error',function(e){
+    var img=e.target;
+    if(!img||img.tagName!=='IMG') return;
+    var n=+(img.getAttribute('data-try')||0);
+    if(n>=3){img.parentNode.classList.add('is-failed');return;}
+    img.setAttribute('data-try',n+1);
+    setTimeout(function(){img.src=img.src.split('?')[0]+'?r='+(n+1);},260*(n+1));
+  },true);
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){close();}
+    if(e.key==='/'&&!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)){
+      e.preventDefault();var q=document.getElementById('q');if(q){q.focus();}
+    }
+  });
+})();
+</script>
+</body>
+</html>

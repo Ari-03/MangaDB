@@ -18,10 +18,12 @@
     // CLERK_SECRET_KEY go through `wrangler secret put` instead.
     "VITE_CONVEX_URL": "https://intent-curlew-625.convex.cloud",
     "VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cHJlc2VudC1ncmFja2xlLTk1NjQuY2xlcmsuYWNjb3VudHMuZGV2JA"
-  }
-  // When mangadb.org is attached to the Worker, add:
-  // "routes": [
-  //   { "pattern": "mangadb.org", "custom_domain": true },
-  //   { "pattern": "www.mangadb.org", "custom_domain": true }
-  // ]
+  },
+  // mangadb.org is attached to this Worker as Cloudflare custom domains
+  // (apex + www; the www → apex 301 is handled by CANONICAL_HOST above).
+  // Keeping them here means `wrangler deploy` preserves the attachment.
+  "routes": [
+    { "pattern": "mangadb.org", "custom_domain": true },
+    { "pattern": "www.mangadb.org", "custom_domain": true }
+  ]
 }

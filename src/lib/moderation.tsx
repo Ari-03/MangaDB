@@ -47,10 +47,32 @@ const ROLE_LABELS = {
   administrator: "Administrator",
 } as const;
 
+// A Proposal's lifecycle state, with the tone it is drawn in on the queue and
+// the proposal page: pending work is warm, a decision is green or red, and
+// anything inert is grey.
+const PROPOSAL_STATES = {
+  draft: { label: "Draft", tone: "mute" },
+  inReview: { label: "In Review", tone: "warn" },
+  approved: { label: "Approved", tone: "ok" },
+  rejected: { label: "Rejected", tone: "bad" },
+  withdrawn: { label: "Withdrawn", tone: "mute" },
+} as const;
+
+/** A Proposal's state, worn as a status chip. */
+export function ProposalStateChip({ state }: { state: string }) {
+  const known = PROPOSAL_STATES[state as keyof typeof PROPOSAL_STATES];
+  return (
+    <span className={`chip mod-chip mod-chip--${known?.tone ?? "mute"}`}>
+      {known?.label ?? state}
+    </span>
+  );
+}
+
 /**
- * The public revision history section of a record page. Renders nothing
- * until the client has data (history is reactive, not SSR'd) and nothing at
- * all when the record has no history yet.
+ * The public revision history of a record page, as a closed disclosure so it
+ * sits quietly under the catalog content. Renders nothing until the client
+ * has data (history is reactive, not SSR'd) and nothing at all when the
+ * record has no history yet.
  */
 export function RecordHistory(props: {
   type: HistoryTargetType;
@@ -69,9 +91,15 @@ function RecordHistoryInner({
 }) {
   const history = useQuery(api.moderation.recordHistory, { type, publicId });
   if (!history || history.revisions.length === 0) return null;
+  const count = history.revisions.length;
   return (
-    <section className="record-history">
-      <h2>History</h2>
+    <details className="record-history">
+      <summary>
+        History
+        <span className="record-history-count">
+          {count} revision{count === 1 ? "" : "s"}
+        </span>
+      </summary>
       <p className="section-hint">
         Every approved change to this record, newest first.
         {history.overriddenFields.length > 0 ? (
@@ -132,7 +160,7 @@ function RecordHistoryInner({
           </li>
         ))}
       </ol>
-    </section>
+    </details>
   );
 }
 
@@ -176,8 +204,7 @@ function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) 
       <p className="mod-edit-link">
         <Link to="/mod/edit/$type/$key" params={{ type, key: editKey }}>
           Edit this record
-        </Link>{" "}
-        <span aria-hidden="true">·</span>{" "}
+        </Link>
         {/* The sensitive-operations panel (ticket #33): hide/restore,
             merge/split, temporary locks. */}
         <Link to="/mod/manage/$type/$key" params={{ type, key: editKey }}>
@@ -249,17 +276,15 @@ function ModReleaseEditLinksInner({
   if (!isDataTeam || releases.length === 0) return null;
   return (
     <p className="mod-edit-link">
-      {isModerator ? "Edit a release:" : "Propose a change to a release:"}{" "}
-      {releases.map((release, i) => (
-        <span key={release.id}>
-          {i > 0 ? " · " : ""}
-          <Link
-            to={isModerator ? "/mod/edit/$type/$key" : "/mod/propose/$type/$key"}
-            params={{ type: "release", key: release.id }}
-          >
-            {release.anchor}
-          </Link>
-        </span>
+      <span>{isModerator ? "Edit a release:" : "Propose a change to a release:"}</span>
+      {releases.map((release) => (
+        <Link
+          key={release.id}
+          to={isModerator ? "/mod/edit/$type/$key" : "/mod/propose/$type/$key"}
+          params={{ type: "release", key: release.id }}
+        >
+          {release.anchor}
+        </Link>
       ))}
     </p>
   );

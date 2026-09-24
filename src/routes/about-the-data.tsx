@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 
 import { pageHead } from "~/lib/seo";
 
@@ -6,6 +7,9 @@ import { pageHead } from "~/lib/seo";
  * The "about the data" page (ticket #40, spec §7): where the catalog comes
  * from, the honest digital-coverage note, the ANN attribution its license
  * requires, and the cover takedown contact (#13). Static, indexable.
+ *
+ * Set as one readable column (~68ch) — this is the only page on the site that
+ * is read rather than browsed, so it gets no shelves, only the display face.
  */
 export const Route = createFileRoute("/about-the-data")({
   head: () =>
@@ -22,16 +26,58 @@ export const Route = createFileRoute("/about-the-data")({
 // run — see the README's launch section.
 export const DATA_CONTACT_EMAIL = "data@mangadb.org";
 
+type Source = {
+  name: string;
+  body: ReactNode;
+  credit?: ReactNode;
+};
+
+// The four sources behind every record, in the order they carry weight: a
+// publisher on its own books, then the all-publisher backbone, then the
+// bibliographic fill-ins.
+const SOURCES: Source[] = [
+  {
+    name: "Seven Seas Entertainment, Kodansha",
+    body: "Release data from each publisher's own catalog — the authority on its own books.",
+  },
+  {
+    name: "Anime News Network Encyclopedia",
+    body: "The all-publisher series and volume backbone.",
+    credit: (
+      <>
+        Encyclopedia data provided by{" "}
+        <a href="https://www.animenewsnetwork.com/encyclopedia/">
+          Anime News Network
+        </a>
+        .
+      </>
+    ),
+  },
+  {
+    name: "Penguin Random House API",
+    body: "Authoritative release dates, ISBNs, and prices for PRH-distributed publishers.",
+  },
+  {
+    name: "OpenLibrary",
+    body: (
+      <>
+        Bibliographic ISBN data from{" "}
+        <a href="https://openlibrary.org">openlibrary.org</a> (CC0).
+      </>
+    ),
+  },
+];
+
 function AboutTheData() {
   return (
-    <main className="about-data-page">
+    <main className="about-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
         <span>About the data</span>
       </nav>
 
       <h1>About the data</h1>
-      <p>
+      <p className="about-lede">
         MangaDB catalogs English-language manga <strong>volume</strong>{" "}
         releases: which volumes exist, and when each edition of each one comes
         out. The catalog is built from external sources and kept correct by
@@ -42,30 +88,17 @@ function AboutTheData() {
 
       <h2>Sources</h2>
       <ul className="about-sources">
-        <li>
-          <strong>Seven Seas Entertainment</strong> and{" "}
-          <strong>Kodansha</strong> — release data from each publisher's own
-          catalog, the authority on its own books.
-        </li>
-        <li>
-          <strong>Anime News Network Encyclopedia</strong> — the
-          all-publisher series and volume backbone.{" "}
-          <em>
-            Encyclopedia data provided by{" "}
-            <a href="https://www.animenewsnetwork.com/encyclopedia/">
-              Anime News Network
-            </a>
-            .
-          </em>
-        </li>
-        <li>
-          <strong>Penguin Random House API</strong> — authoritative release
-          dates, ISBNs, and prices for PRH-distributed publishers.
-        </li>
-        <li>
-          <strong>OpenLibrary</strong> — bibliographic ISBN data from{" "}
-          <a href="https://openlibrary.org">openlibrary.org</a> (CC0).
-        </li>
+        {SOURCES.map((source) => (
+          <li key={source.name}>
+            <span className="source-name">{source.name}</span>
+            <span>
+              {source.body}
+              {source.credit ? (
+                <em className="source-credit">{source.credit}</em>
+              ) : null}
+            </span>
+          </li>
+        ))}
       </ul>
 
       <h2>What's covered — and what isn't yet</h2>

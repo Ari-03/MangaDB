@@ -1,0 +1,159 @@
+/* Design tokens + base element styles for the Bookshelf look (ported from prototypes/site-redesign/05-bookshelf). Dark is the default; light is opt-in via html[data-theme="light"], set before paint by the boot script in __root.tsx. */
+/* --- 1. Tokens ----------------------------------------------------------- */
+
+/* Dark is the default. Light is opt-in via [data-theme="light"], set from
+   localStorage before paint. prefers-color-scheme is deliberately ignored. */
+:root {
+  color-scheme: dark;
+
+  /* warm near-black shelf room */
+  --bg:            #15110c;
+  --bg-deep:       #0d0a07;
+  --surface:       #1e1810;
+  --surface-2:     #271f15;
+  --surface-3:     #322718;
+  --line:          rgba(246, 236, 218, 0.11);
+  --line-strong:   rgba(246, 236, 218, 0.2);
+
+  --text:          #f6efe3;
+  --text-dim:      #c9b99f;
+  --text-mute:     #9d8c73;
+
+  --accent:        #f2a93b;
+  --accent-soft:   #7a5312;
+  --accent-ink:    #1a1206;
+  --accent-tint:   rgba(242, 169, 59, 0.14);
+  --gold:          #e4c47c;
+
+  /* the shelf ledge itself */
+  --ledge:         linear-gradient(180deg, #7c5b31 0%, #593f21 38%, #2b1e10 100%);
+  --ledge-edge:    rgba(255, 216, 150, 0.22);
+  --ledge-shadow:  0 8px 14px -8px rgba(0, 0, 0, 0.85);
+  --cover-shadow:  0 12px 20px -12px rgba(0, 0, 0, 0.9), 0 2px 3px rgba(0, 0, 0, 0.5);
+  --cover-shadow-hi: 0 20px 34px -14px rgba(0, 0, 0, 0.95), 0 3px 6px rgba(0, 0, 0, 0.55);
+
+  --header-bg:     rgba(21, 17, 12, 0.72);
+  --scrim:         rgba(13, 10, 7, 0.86);
+
+  --ok:            #79c08a;
+  --info:          #8fbce0;
+
+  /* chrome worn ON a cover: it always sits on a dark scrim over artwork, so it
+     keeps its own colours in both themes and never follows the page accent. */
+  --on-cover-accent: #f2a93b;
+  --on-cover-ink:    #f6efe3;
+  --on-cover-ok:     #79c08a;
+  --on-cover-scrim:  rgba(26, 18, 6, 0.72);
+
+  /* opaque underside of the shelf plank; planks are drawn per item and overlap,
+     so the "shadow" has to be opaque or the overlaps would band. */
+  --ledge-shade:   linear-gradient(180deg, #080603 0%, var(--bg) 100%);
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  --container: 1280px;
+  --header-h: 66px;
+  --cover-w: 168px;
+
+  --sans: "Nunito Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: "Fraunces", Georgia, "Times New Roman", serif;
+}
+
+/* light: warm paper and pale beech shelves */
+[data-theme="light"] {
+  color-scheme: light;
+  --bg:          #efe7d9;
+  --bg-deep:     #e3d8c5;
+  --surface:     #fbf6ec;
+  --surface-2:   #f4ebda;
+  --surface-3:   #ece0ca;
+  --line:        rgba(61, 44, 23, 0.14);
+  --line-strong: rgba(61, 44, 23, 0.28);
+  --text:        #2a2017;
+  --text-dim:    #5c4b36;
+  --text-mute:   #6b5a41;
+  --accent:      #8f5207;
+  --accent-soft: #f0d5a8;
+  --accent-ink:  #fffaf0;
+  --accent-tint: rgba(143, 82, 7, 0.12);
+  --gold:        #8a6316;
+  --ledge:       linear-gradient(180deg, #e0c79c 0%, #c8a878 42%, #9c7c4e 100%);
+  --ledge-edge:  rgba(255, 255, 255, 0.6);
+  --ledge-shadow: 0 8px 12px -9px rgba(74, 51, 20, 0.6);
+  --cover-shadow: 0 10px 18px -12px rgba(59, 41, 18, 0.65), 0 1px 2px rgba(59, 41, 18, 0.28);
+  --cover-shadow-hi: 0 18px 30px -14px rgba(59, 41, 18, 0.55), 0 2px 5px rgba(59, 41, 18, 0.3);
+  --header-bg:   rgba(239, 231, 217, 0.78);
+  --scrim:       rgba(227, 216, 197, 0.9);
+  --ok:          #2f7a45;
+  --info:        #2b5f88;
+  --ledge-shade: linear-gradient(180deg, #b7a17c 0%, var(--bg) 100%);
+}
+
+/* --- 2. Base ------------------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+html { background: var(--bg-deep); }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.55;
+  font-variation-settings: "opsz" 10;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* faint room light so the shelves sit in a space, not on a flat field */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(1200px 520px at 50% -160px, rgba(242, 169, 59, 0.09), transparent 70%),
+    radial-gradient(900px 600px at 100% 0, rgba(242, 169, 59, 0.05), transparent 65%);
+}
+
+body > * { position: relative; z-index: 1; }
+
+h1, h2, h3, h4 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-variation-settings: "SOFT" 45, "WONK" 1, "opsz" 72;
+  letter-spacing: -0.012em;
+  line-height: 1.12;
+  margin: 0;
+}
+
+p { margin: 0; }
+
+a { color: inherit; text-decoration: none; }
+
+img { display: block; max-width: 100%; }
+
+button, input, select { font: inherit; color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}

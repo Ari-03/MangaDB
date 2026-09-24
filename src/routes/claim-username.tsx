@@ -72,35 +72,47 @@ function ClaimForm() {
   };
 
   return (
-    <main>
-      <h1>{changing ? "Change your username" : "Choose a username"}</h1>
-      <p className="tagline">
-        {changing ? (
-          <>
-            You are currently <strong>@{viewer.username}</strong>. Your old
-            name is released the moment the new one is claimed.
-          </>
-        ) : (
-          "One last step: your public name on MangaDB. 3–20 characters — letters, digits, underscores."
-        )}
-      </p>
-      <form className="username-form" onSubmit={(e) => void submit(e)}>
-        <label>
-          Username
-          <input
-            name="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="off"
-            autoFocus
-            required
-          />
-        </label>
-        <button type="submit" disabled={busy || username.trim().length === 0}>
-          {busy ? "Claiming…" : changing ? "Change username" : "Claim username"}
-        </button>
-        {error ? <p className="form-error">{error}</p> : null}
-      </form>
+    <main className="auth-page">
+      <div className="auth-card">
+        <div className="auth-head">
+          <h1>{changing ? "Change your username" : "Choose a username"}</h1>
+          <p>
+            {changing ? (
+              <>
+                You are currently <strong>@{viewer.username}</strong>. Your old
+                name is released the moment the new one is claimed.
+              </>
+            ) : (
+              "One last step. This is your name on MangaDB — it is how your public shelf is addressed."
+            )}
+          </p>
+        </div>
+        <div className="auth-panel">
+          <form className="username-form" onSubmit={(e) => void submit(e)}>
+            <label>
+              Username
+              <span className="at-field">
+                <span aria-hidden="true">@</span>
+                <input
+                  name="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="off"
+                  autoFocus
+                  required
+                />
+              </span>
+              <span className="username-hint">
+                3–20 characters: letters, digits and underscores.
+              </span>
+            </label>
+            <button type="submit" disabled={busy || username.trim().length === 0}>
+              {busy ? "Claiming…" : changing ? "Change username" : "Claim username"}
+            </button>
+            {error ? <p className="form-error">{error}</p> : null}
+          </form>
+        </div>
+      </div>
     </main>
   );
 }

@@ -14,6 +14,12 @@ export const Route = createFileRoute("/me/")({
   component: MePage,
 });
 
+/**
+ * /me — the viewer's own shelf. Five sections in the order the shelf is
+ * used: what you have, what you are reading, what is coming, who can see it,
+ * and the account itself. Each section mounts the slice that owns it; this
+ * page only frames them.
+ */
 function MePage() {
   const { viewerState } = Route.useRouteContext();
 
@@ -32,22 +38,38 @@ function MePage() {
 
   const { viewer } = viewerState;
   return (
-    <main>
-      <h1>@{viewer.username}</h1>
-      <p className="tagline">Your library.</p>
+    <main className="me-page">
+      <div className="acct-head">
+        <h1 className="acct-title">Your library</h1>
+        <p className="acct-kicker">
+          Everything @{viewer.username} owns, is reading, and is waiting for.
+          Private until you choose to share it.
+        </p>
+      </div>
 
       <section className="me-section">
-        <h2>Collection</h2>
+        <div className="section-head">
+          <h2 className="section-title">Collection</h2>
+          <p className="section-note">Wanted, ordered and owned</p>
+        </div>
         {/* Personal collection (#27): entries grouped by state. */}
         <MyCollection />
       </section>
+
       <section className="me-section">
-        <h2>Reading</h2>
+        <div className="section-head">
+          <h2 className="section-title">Reading</h2>
+          <p className="section-note">Series statuses and active passes</p>
+        </div>
         {/* Reading tracking (#28): chosen statuses and active passes. */}
         <MyReading />
       </section>
+
       <section className="me-section">
-        <h2>Upcoming</h2>
+        <div className="section-head">
+          <h2 className="section-title">Upcoming</h2>
+          <p className="section-note">Announced releases, nearest first</p>
+        </div>
         {/* My Upcoming Releases (#29): followed Series matching the format
             preference + every future Wanted/Ordered Release and Bundle,
             deduplicated, Owned excluded, computed live. */}
@@ -55,19 +77,28 @@ function MePage() {
       </section>
 
       <section className="me-section">
-        <h2>Sharing</h2>
-        {/* Tracking visibility (#30): separate Ownership/Reading defaults,
-            private until explicitly opened, plus the public-profile link. */}
-        <SharingSettings />
+        <div className="section-head">
+          <h2 className="section-title">Sharing</h2>
+        </div>
+        <div className="acct-panel">
+          {/* Tracking visibility (#30): separate Ownership/Reading defaults,
+              private until explicitly opened, plus the public-profile link. */}
+          <SharingSettings />
+        </div>
       </section>
 
       <section className="me-section">
-        <h2>Account</h2>
-        <p>
-          Username: <strong>@{viewer.username}</strong>{" "}
-          <Link to="/claim-username">Change</Link>
-        </p>
-        <DeleteAccount />
+        <div className="section-head">
+          <h2 className="section-title">Account</h2>
+        </div>
+        <div className="acct-panel">
+          <p className="acct-account-row">
+            Signed in as{" "}
+            <span className="acct-handle">@{viewer.username}</span>
+            <Link to="/claim-username">Change username</Link>
+          </p>
+          <DeleteAccount />
+        </div>
       </section>
     </main>
   );
@@ -109,16 +140,18 @@ function DeleteAccount() {
             This permanently deletes your sign-in and everything MangaDB knows
             about you — collection, reading history, follows. There is no undo.
           </p>
-          <button type="button" disabled={busy} onClick={() => void run()}>
-            {busy ? "Deleting…" : "Yes, delete everything"}
-          </button>{" "}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setConfirming(false)}
-          >
-            Cancel
-          </button>
+          <div className="danger-actions">
+            <button type="button" disabled={busy} onClick={() => void run()}>
+              {busy ? "Deleting…" : "Yes, delete everything"}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setConfirming(false)}
+            >
+              Keep my account
+            </button>
+          </div>
         </>
       ) : (
         <button type="button" onClick={() => setConfirming(true)}>

@@ -23,7 +23,9 @@ export type FollowSuggestion = { seriesId: Id<"series">; title: string };
 /**
  * The explicit Series Follow toggle on the Series page — the one deliberate
  * way to start tracking a Series' future Releases. Renders nothing signed
- * out.
+ * out. It returns the toggle and its hint as bare siblings, so the Series
+ * page's tracking bar lays them out with the other tracking controls (and
+ * stays empty, and hidden, for signed-out viewers).
  */
 export function SeriesFollowControls({
   seriesPublicId,
@@ -43,15 +45,39 @@ function SeriesFollowControlsInner({
   const setFollow = useMutation(api.follows.setSeriesFollow);
   if (!data) return null; // loading, signed out, or username pending
   return (
-    <div className="follow-controls">
+    <>
       <button
         type="button"
         aria-pressed={data.following}
-        className={data.following ? "follow-active" : undefined}
+        className={`follow-btn${data.following ? " is-following" : ""}`}
         onClick={() =>
           void setFollow({ seriesId: data.seriesId, following: !data.following })
         }
       >
+        {data.following ? (
+          <svg
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M2.6 8.4 6.2 12 13.4 4.4" />
+          </svg>
+        ) : (
+          <svg
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            <path d="M8 3v10M3 8h10" />
+          </svg>
+        )}
         {data.following ? "Following" : "Follow series"}
       </button>
       <span className="follow-hint">
@@ -59,7 +85,7 @@ function SeriesFollowControlsInner({
           ? "New releases appear in your Upcoming. Follows are private."
           : "See announced releases in your Upcoming. Follows are private."}
       </span>
-    </div>
+    </>
   );
 }
 

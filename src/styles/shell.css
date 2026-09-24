@@ -1,0 +1,327 @@
+/* Layout primitives, buttons/chips/selects, the sticky site header (+ mobile drawer) and the footer. Shared by every page. */
+/* --- 3. Layout primitives ------------------------------------------------ */
+
+.container {
+  width: 100%;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 0 28px;
+}
+
+.section { padding-block: 54px 8px; }
+.section + .section { padding-block-start: 40px; }
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  margin-bottom: 26px;
+  flex-wrap: wrap;
+}
+
+.section-title {
+  font-size: clamp(1.35rem, 1.05rem + 0.9vw, 1.85rem);
+}
+
+.section-note {
+  color: var(--text-mute);
+  font-size: 0.9rem;
+  margin-right: auto;
+}
+
+.section-link {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 0.9rem;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 1px;
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.section-link:hover { border-bottom-color: var(--accent); }
+
+.rule {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+  margin: 0;
+}
+
+/* --- 4. Buttons, chips, controls ---------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 20px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.94rem;
+  cursor: pointer;
+  transition: transform 130ms ease, background 130ms ease, border-color 130ms ease;
+}
+.btn:hover { background: var(--surface-3); transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.btn-primary:hover { background: var(--gold); border-color: var(--gold); }
+
+.btn-sm { padding: 7px 14px; font-size: 0.84rem; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.chip--physical { border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); }
+.chip--digital  { border-color: color-mix(in srgb, var(--info) 55%, transparent); color: var(--info); }
+.chip--line     { border-style: dashed; color: var(--gold); border-color: color-mix(in srgb, var(--gold) 50%, transparent); }
+
+.select {
+  max-width: 100%;
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  padding: 8px 34px 8px 14px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 16px center, right 11px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.select:hover { border-color: var(--accent); }
+
+/* --- 5. Header ----------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  background: var(--header-bg);
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  border-bottom: 1px solid var(--line);
+}
+
+.header-inner {
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-variation-settings: "SOFT" 50, "WONK" 1, "opsz" 40;
+  font-size: 1.24rem;
+  letter-spacing: -0.02em;
+  flex: none;
+}
+.brand-mark {
+  display: block;
+  width: 26px;
+  height: 26px;
+  color: var(--accent);
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.nav-link {
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: color 130ms ease, background 130ms ease;
+}
+.nav-link:hover { color: var(--text); background: var(--surface-2); }
+.nav-link.is-current {
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.search {
+  position: relative;
+  flex: 1 1 auto;
+  max-width: 340px;
+  margin-left: auto;
+}
+.search svg {
+  position: absolute;
+  left: 12px; top: 50%;
+  transform: translateY(-50%);
+  width: 16px; height: 16px;
+  color: var(--text-mute);
+  pointer-events: none;
+}
+.search-input {
+  width: 100%;
+  padding: 9px 12px 9px 36px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  font-size: 0.9rem;
+}
+.search-input::placeholder { color: var(--text-mute); }
+.search-input:hover { border-color: var(--line-strong); }
+.search-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.icon-btn {
+  width: 38px; height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease;
+}
+.icon-btn:hover { background: var(--surface-3); color: var(--accent); }
+.icon-btn svg { width: 18px; height: 18px; }
+.theme-toggle .moon { display: none; }
+[data-theme="light"] .theme-toggle .moon { display: block; }
+[data-theme="light"] .theme-toggle .sun { display: none; }
+
+.account {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 12px 4px 4px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  font-size: 0.86rem;
+  font-weight: 700;
+  transition: border-color 130ms ease;
+}
+.account:hover { border-color: var(--accent); }
+.avatar {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(150deg, var(--accent), #b4571c);
+  color: #1b1105;
+  font-weight: 800;
+  font-size: 0.8rem;
+  font-family: var(--display);
+}
+
+.menu-toggle { display: none; }
+
+/* mobile drawer */
+.mobile-nav { display: none; }
+
+/* --- 15. Footer ---------------------------------------------------------- */
+
+.site-footer {
+  margin-top: 72px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-deep);
+  padding: 40px 0 52px;
+}
+.footer-inner {
+  display: flex;
+  gap: 40px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.footer-blurb { max-width: 36ch; color: var(--text-mute); font-size: 0.9rem; margin-top: 10px; }
+.footer-cols { display: flex; gap: 56px; flex-wrap: wrap; }
+.footer-col h4 { font-size: 0.92rem; margin-bottom: 10px; }
+.footer-col a { display: block; font-size: 0.88rem; color: var(--text-mute); padding: 3px 0; }
+.footer-col a:hover { color: var(--accent); }
+
+
+/* --- Shell responsive --- */
+@media (max-width: 960px) {
+  .container { padding: 0 20px; }
+  .nav, .search { display: none; }
+  .menu-toggle { display: grid; }
+  .header-inner { gap: 12px; }
+}
+@media (max-width: 720px) {
+  :root { --header-h: 60px; }
+  .header-actions .btn { display: none; }
+  .account span:not(.avatar) { display: none; }
+  .account { padding: 3px; border-color: transparent; }
+  .section { padding-block: 38px 6px; }
+  .footer-cols { gap: 32px; }
+}
+/* mobile drawer, opened by the menu button */
+.mobile-nav {
+  display: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.mobile-nav-inner {
+  display: grid;
+  gap: 4px;
+  padding: 14px 20px 18px;
+}
+.mobile-nav .nav-link { padding: 10px 12px; font-size: 1rem; }
+.mobile-nav .search-input { margin-bottom: 8px; }
+@media (max-width: 960px) {
+  .mobile-nav.is-open { display: block; }
+}
+
+/* --- Page frame --------------------------------------------------------- */
+/* Every route renders a <main>; it gets the container width by default so a
+   page that hasn't adopted its own layout still sits on the shelf properly. */
+main {
+  width: 100%;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 32px 28px 0;
+  min-height: 60vh;
+}
+@media (max-width: 960px) { main { padding: 24px 20px 0; } }
+
+.search--mobile { display: block; max-width: none; margin-left: 0; }
+
+/* A generic notice panel (unconfigured, empty state, sign-in prompt). */
+.notice {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  padding: 14px 18px;
+  color: var(--text-dim);
+}
+.notice code { color: var(--text); }
+.breadcrumbs { color: var(--text-mute); font-size: 0.85rem; margin-bottom: 14px; }
+.breadcrumbs a { color: var(--text-dim); }
+.breadcrumbs a:hover { color: var(--accent); }
