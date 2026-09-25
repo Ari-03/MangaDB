@@ -244,8 +244,13 @@ export const sync = internalAction({
       });
       // The mirror refreshed every line: now place the unlinked ones.
       if (args.releasePages !== false) {
+        const pageRunId = await ctx.runMutation(internal.imports.startFollowOnRun, {
+          afterRunId: runId,
+          sourceKey: SOURCE_KEY,
+        });
         await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
           politeDelayMs: args.politeDelayMs,
+          runId: pageRunId,
         });
       }
       return {

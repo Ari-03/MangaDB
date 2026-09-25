@@ -194,9 +194,9 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
           "animenewsnetwork.com/encyclopedia/manga.php?id=",
         );
       }
+      // The mirror's run, plus the release-page pass it opened and queued.
       const runs = await ctx.db.query("importRuns").collect();
-      expect(runs).toHaveLength(1);
-      expect(runs[0]!.status).toBe("succeeded");
+      expect(runs.map((run) => run.status)).toEqual(["succeeded", "running"]);
     });
   });
 
@@ -757,6 +757,26 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     vi.useRealTimers();
     expect((await obsFor(t, 57439))!.recordRef?.type).toBe("release");
+  });
+
+  it("a mirror forced on the disabled source chains a forced page pass", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "ann", enabled: false });
+    stubAnn([ONE], PAGES);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    await sync(t, { runId });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    // The page pass ran under its own (forced) run and placed the release.
+    expect((await obsFor(t, 57439))!.recordRef?.type).toBe("release");
+    await t.run(async (ctx) => {
+      const runs = await ctx.db.query("importRuns").collect();
+      expect(runs).toHaveLength(2);
+      expect(runs.every((run) => run.status === "succeeded" && run.automatic === undefined)).toBe(true);
+    });
   });
 });
 
