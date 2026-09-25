@@ -34,7 +34,7 @@ import { internalAction, internalMutation, type MutationCtx } from "./_generated
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
 import { candidateSeries, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
-import { upsertObservation } from "./lib/observations";
+import { getObservation, upsertObservation } from "./lib/observations";
 import {
   createCanonicalRecords,
   findPublisherByName,
@@ -273,6 +273,17 @@ type ApplyResult = {
 };
 
 /** The fields this source offers on a linked Release, per its authority row. */
+/**
+ * Why another source that keys its records by ISBN (Yen Press) holds this
+ * book out of scope, or null. PRH drops such titles before observing them,
+ * and Kodansha keys by slug, so Yen Press is the one to ask.
+ */
+async function outOfScopeElsewhere(ctx: MutationCtx, isbn13: string): Promise<string | null> {
+  const yen = await getObservation(ctx, "yenpress", isbn13);
+  const reason = (yen?.snapshot as { outOfScope?: string } | undefined)?.outOfScope;
+  return reason !== undefined ? `Yen Press (${reason})` : null;
+}
+
 function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unknown> {
   const offered: Record<string, unknown> = {};
   if (snapshot.isbn13 !== undefined) offered.isbn13 = snapshot.isbn13;
@@ -422,6 +433,15 @@ export const applyEdition = internalMutation({
         `Volume ${volume.label ?? "(unlabeled)"} already has a ${snapshot.format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
         now,
       );
+      return { status: "recordOnly", changed: false };
+    }
+
+    // A publisher feed that knows this ISBN outranks OpenLibrary's scope
+    // guess: Yen Press records its light novels and audio (by ISBN) as out of
+    // scope, and OpenLibrary titles rarely say "light novel".
+    const scopedOut = snapshot.isbn13 !== undefined ? await outOfScopeElsewhere(ctx, snapshot.isbn13) : null;
+    if (scopedOut) {
+      await recordUnplaced(ctx, observation, `Out of scope per ${scopedOut}.`, now);
       return { status: "recordOnly", changed: false };
     }
 

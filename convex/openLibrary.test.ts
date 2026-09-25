@@ -241,6 +241,27 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     });
   });
 
+  it("creates nothing for an ISBN Yen Press holds out of scope", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: false });
+    // Yen Press recorded this ISBN as a light novel (its own category).
+    await t.run(async (ctx) => {
+      await ctx.db.insert("sourceObservations", {
+        sourceKey: "yenpress",
+        sourceRecordId: "9781974766512",
+        snapshot: { outOfScope: "category light-novels" },
+        lastSeenAt: 1,
+        withdrawn: false,
+      });
+    });
+    stubDump([CHAINSAW_22]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+    });
+  });
+
   it("resolves any listed publisher, reads a volume split into the subtitle, and skips rebinders", async () => {
     const t = makeT();
     await seedRegistry(t);
