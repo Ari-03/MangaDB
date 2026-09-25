@@ -431,6 +431,8 @@ export const backlistSync = internalAction({
                     errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
                   }
                 } catch (e) {
+                  // Retried at the next weekly check, not the 180-day refresh.
+                  if (!recheck.includes(volumeSlug)) recheck.push(volumeSlug);
                   errors.push(`volume ${recordId}: ${errorMessage(e)}`);
                 }
               }
@@ -520,9 +522,10 @@ function offeredReleaseFields(snapshot: KodanshaSnapshot): Record<string, unknow
 }
 
 /**
- * The calendar never carries ISBNs or prices: when a volume page already
- * gave this record its ISBN, a calendar snapshot keeps the page's facts
- * (and title) instead of erasing them, so the two feeds never flip-flop.
+ * The calendar never carries ISBNs or prices, and its date is the calendar
+ * bucket's: when a volume page already gave this record its ISBN, a calendar
+ * snapshot keeps the page's facts (title, ISBN, binding, price, per-format
+ * date) instead of erasing them, so the two feeds never flip-flop.
  */
 async function withPageFacts(
   ctx: MutationCtx,
@@ -540,6 +543,7 @@ async function withPageFacts(
     isbn13: stored.isbn13,
     binding: stored.binding,
     priceCents: stored.priceCents,
+    releaseDate: stored.releaseDate ?? snapshot.releaseDate,
   };
 }
 

@@ -659,6 +659,42 @@ describe("kodansha.backlistSync — the crawl", () => {
     });
   });
 
+  it("keeps the volume page's date when the calendar's bucket date differs", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    const onCalendar = (date: string): FixtureVolume => ({
+      series: "Blue Lock",
+      seriesSlug: "blue-lock",
+      volume: 40,
+      date,
+      formats: ["digital"],
+    });
+    stubSite([onCalendar("2026-11-24")]);
+    await sync(t);
+    vi.unstubAllGlobals();
+    stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
+    await backlist(t);
+    vi.unstubAllGlobals();
+    const pageDate = await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "blue-lock/volume-40#digital",
+      );
+      return (obs?.snapshot as { releaseDate?: unknown }).releaseDate;
+    });
+    expect(pageDate).toBeDefined();
+    // The calendar files the book under another day; the page's date stands.
+    stubSite([onCalendar("2026-11-30")]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "blue-lock/volume-40#digital",
+      );
+      expect((obs?.snapshot as { releaseDate?: unknown }).releaseDate).toEqual(pageDate);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.some((r) => r.pubDate?.sort === 20261130)).toBe(false);
+    });
+  });
+
   it("never copies an ISBN another Release holds onto a calendar duplicate", async () => {
     const t = makeT();
     await seedBacklist(t, true);
