@@ -349,7 +349,10 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       const kept = observations.find((o) => o.sourceRecordId === "manga:1001")!;
       expect(kept.withdrawn).toBe(false);
     });
-  }, 30000); // 510 fixture records across three mirror passes
+    // 510 fixture records across three mirror passes; each new Series costs
+    // two title searches (candidates, then the hidden-Series check), which
+    // convex-test simulates by scanning the table.
+  }, 60000);
 
   it("defaults to ANN's 1 req/s etiquette", async () => {
     const t = makeT();
@@ -739,6 +742,8 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
     expect((await obsFor(t, 57439))!.recordRef).toEqual({ type: "release", id: existing });
     await t.run(async (ctx) => {
       expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      // The page's ISBN fills the linked Release, which had none.
+      expect((await ctx.db.get(existing))?.isbn13).toBe("9781974766703");
     });
   });
 
@@ -752,5 +757,218 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     vi.useRealTimers();
     expect((await obsFor(t, 57439))!.recordRef?.type).toBe("release");
+  });
+});
+
+// Catalog repairs hide and merge records; the next weekly mirror must not
+// undo them (stage 13: hidden Series recreated; Summer Ghost / Qualia the
+// Purple regained an empty unlabeled placeholder after a merge).
+describe("ann — repairs stand across mirrors", () => {
+  const seriesTitled = (t: TestT, title: string) =>
+    t.run(async (ctx) => (await ctx.db.query("series").collect()).filter((s) => s.title === title));
+  const volumesOf = (t: TestT, seriesId: Id<"series">) =>
+    t.run((ctx) =>
+      ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+        .collect(),
+    );
+
+  it("never recreates a linked Series an Editor hid, and keeps its lines on record", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ALPHA]);
+    await sync(t);
+    const [alpha] = await seriesTitled(t, "Alpha Saga");
+    await t.run((ctx) => ctx.db.patch(alpha!._id, { status: "hidden" }));
+
+    await sync(t);
+    const all = await seriesTitled(t, "Alpha Saga");
+    expect(all.map((s) => s.status)).toEqual(["hidden"]);
+    expect(await volumesOf(t, alpha!._id)).toHaveLength(3);
+    expect((await obsFor(t, 9004))?.recordRef).toBeUndefined();
+  });
+
+  it("never creates a Series whose title names a hidden one", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.run((ctx) =>
+      ctx.db.insert("series", {
+        status: "hidden",
+        publicId: 77,
+        title: "Alpha Saga",
+        altTitles: [],
+        searchText: "Alpha Saga",
+      }),
+    );
+    stubAnn([ALPHA]);
+    await sync(t);
+    expect((await seriesTitled(t, "Alpha Saga")).map((s) => s.status)).toEqual(["hidden"]);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("volumes").collect()).toHaveLength(0);
+      const mangaObs = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "ann").eq("sourceRecordId", "manga:100"),
+        )
+        .unique();
+      expect(mangaObs?.recordRef).toBeUndefined();
+      expect(mangaObs?.conflicts?.find((c) => c.field === "placement")?.reason).toContain(
+        "Series 77",
+      );
+    });
+  });
+
+  it("follows a merged Series to its survivor and builds the backbone there", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ALPHA]);
+    await sync(t);
+    const [loser] = await seriesTitled(t, "Alpha Saga");
+    const survivorId = await t.run(async (ctx) => {
+      const survivorId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 88,
+        title: "Alpha Saga: Complete",
+        altTitles: ["Alpha Saga"],
+        searchText: "Alpha Saga: Complete Alpha Saga",
+      });
+      await ctx.db.patch(loser!._id, { status: "merged", mergedIntoId: survivorId });
+      for (const volume of await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", loser!._id))
+        .collect()) {
+        await ctx.db.patch(volume._id, { seriesId: survivorId });
+      }
+      return survivorId;
+    });
+
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("series").collect()).map((s) => s.status).sort()).toEqual([
+        "active",
+        "merged",
+      ]);
+      const mangaObs = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "ann").eq("sourceRecordId", "manga:100"),
+        )
+        .unique();
+      expect(mangaObs?.recordRef?.id).toBe(survivorId);
+    });
+    expect((await volumesOf(t, survivorId)).map((v) => v.label).sort()).toEqual(["1", "2", "3"]);
+  });
+
+  const GHOST: FixtureManga = {
+    id: 27108,
+    title: "Summer Ghost",
+    releases: [{ annId: 54594, date: "2023-06-20", designator: "GN" }],
+  };
+
+  it("adds no unlabeled placeholder next to numbered Volumes or a removed placeholder", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([GHOST]);
+    await sync(t);
+    const [ghost] = await seriesTitled(t, "Summer Ghost");
+    const [placeholder] = await volumesOf(t, ghost!._id);
+    expect(placeholder?.label).toBeUndefined();
+
+    // Stage 8: the empty placeholder was hidden; the manga's real volumes
+    // arrived from a publisher feed.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(placeholder!._id, { status: "hidden" });
+    });
+    await sync(t);
+    expect((await volumesOf(t, ghost!._id)).map((v) => v.status)).toEqual(["hidden"]);
+
+    await t.run(async (ctx) => {
+      for (const label of ["1", "2"]) {
+        await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: Number(label) + 500,
+          seriesId: ghost!._id,
+          position: Number(label),
+          label,
+        });
+      }
+      await ctx.db.delete(placeholder!._id);
+    });
+    await sync(t);
+    expect((await volumesOf(t, ghost!._id)).map((v) => v.label)).toEqual(["1", "2"]);
+  });
+
+  it("never recreates a numbered Volume a repair merged or hid", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ALPHA]);
+    await sync(t);
+    const [alpha] = await seriesTitled(t, "Alpha Saga");
+    await t.run(async (ctx) => {
+      const volumes = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", alpha!._id))
+        .collect();
+      const byLabel = (label: string) => volumes.find((v) => v.label === label)!;
+      await ctx.db.patch(byLabel("3")._id, { status: "hidden" });
+      await ctx.db.patch(byLabel("2")._id, { status: "merged", mergedIntoId: byLabel("1")._id });
+    });
+    await sync(t);
+    expect(
+      (await volumesOf(t, alpha!._id)).map((v) => [v.label, v.status]).sort(),
+    ).toEqual([
+      ["1", "active"],
+      ["2", "merged"],
+      ["3", "hidden"],
+    ]);
+  });
+
+  it("never places a release line whose ISBN is on a Release an Editor hid", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const ONE_LINE: FixtureManga = {
+      id: 1223,
+      title: "One Piece",
+      releases: [{ annId: 57439, date: "2026-11-10", designator: "GN 113", ean: "9781974766703" }],
+    };
+    stubAnn([ONE_LINE], {
+      57439: releasePage({
+        title: "One Piece",
+        volume: "GN 113",
+        distributor: "Viz Media",
+        date: "2026-11-10",
+        isbn13: "9781974766703",
+        mangaId: 1223,
+      }),
+    });
+    await sync(t, { releasePages: false });
+    const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
+    await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const editionId = await ctx.db.insert("editions", {
+        status: "hidden",
+        publicId: 9,
+        publisherId: vizId,
+      });
+      await ctx.db.insert("releases", {
+        status: "hidden",
+        editionId,
+        format: "physical",
+        language: "en",
+        isbn13: "9781974766703",
+        publisherId: vizId,
+        seriesIds: [series._id],
+      });
+    });
+
+    await syncPages(t);
+    const line = (await obsFor(t, 57439))!;
+    expect(line.recordRef).toBeUndefined();
+    expect(line.conflicts?.find((c) => c.field === "placement")?.reason).toContain("hid");
+    await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.status)).toEqual(["hidden"]);
+    });
   });
 });

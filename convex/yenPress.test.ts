@@ -161,6 +161,26 @@ async function seed(t: ReturnType<typeof convexTest>) {
 const sync = (t: ReturnType<typeof convexTest>, args: object = {}) =>
   t.action(internal.yenPress.sync, { politeDelayMs: 0, ...args });
 
+describe("yenPress.booksToFetch", () => {
+  it("fetches a page when a newly listed format has no observation yet", async () => {
+    const t = convexTest(schema);
+    const now = Date.UTC(2026, 8, 25);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("sourceObservations", {
+        sourceKey: "yenpress",
+        sourceRecordId: "9798855438611",
+        snapshot: { onsale: { year: 2020, month: 1, day: 1 } },
+        lastSeenAt: now,
+        withdrawn: false,
+      });
+    });
+    const due = (books: string[][]) => t.query(internal.yenPress.booksToFetch, { books, now });
+    // Print alone is fresh; print + a digital ISBN never seen is due.
+    expect(await due([["9798855438611"]])).toEqual([]);
+    expect(await due([["9798855438611", "9798855438628"]])).toEqual([0]);
+  });
+});
+
 describe("yenPress.sync", () => {
   it("creates in-scope books under Yen's publisher rows, once per page, never novels", async () => {
     const t = convexTest(schema);

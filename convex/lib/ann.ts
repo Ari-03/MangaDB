@@ -123,11 +123,12 @@ export function parseAnnDate(
 
 // Packaging words. In the designator ("Omnibus GN 1-3", "GN box 2") they
 // always mean packaging; in the line's own title ("Berserk Deluxe Edition
-// (GN 1)") only when the entry's name does not itself contain them.
+// (GN 1)", "Summer Ghost: The Complete Manga Collection (GN)") only when
+// the entry's name does not itself contain them.
 const DESIGNATOR_PACKAGING =
   /\b(omnibus|box(?:ed)?(?: set)?|deluxe|collector'?s|hardcover)\b/i;
 const TITLE_PACKAGING =
-  /\b(omnibus|box(?:ed)? set|deluxe|collector['’]?s|perfect edition|\d-in-1)\b/i;
+  /\b(omnibus|box(?:ed)? set|deluxe|collector['’]?s|perfect edition|\d-in-1|complete (?:manga )?collection)\b/i;
 
 /**
  * Split one release line's text: "Frieren: Beyond Journey's End (GN 14)" →

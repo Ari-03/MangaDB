@@ -15,6 +15,7 @@ import {
   createReleaseBundle,
   ensurePublisher,
   findPublisherByName,
+  reconcileLinkedSeries,
   volumePositionFor,
 } from "./pipeline";
 
@@ -412,6 +413,194 @@ describe("createReleaseBundle", () => {
       });
       expect(again).toMatchObject({ created: false, bundleId: first.bundleId });
       expect(await ctx.db.query("releaseBundles").collect()).toHaveLength(1);
+    });
+  });
+});
+
+// Catalog repairs hide and merge records; the next sync must not undo them.
+describe("createCanonicalRecords — repairs stand", () => {
+  /** A Series with one Volume "1" and a Kodansha Edition + Release on it. */
+  async function publishedSeries(ctx: MutationCtx, title: string, publisherId: Id<"publishers">) {
+    const seriesId = await series(ctx, title, ["1"]);
+    const volume = (await ctx.db.query("volumes").collect()).find((v) => v.seriesId === seriesId)!;
+    const editionId = await ctx.db.insert("editions", {
+      status: "hidden",
+      publicId: 3,
+      publisherId,
+    });
+    await ctx.db.insert("volumeCoverages", {
+      editionId,
+      volumeId: volume._id,
+      order: 1,
+      extent: "complete",
+    });
+    return seriesId;
+  }
+
+  const bookArgs = (obs: Awaited<ReturnType<typeof observation>>, slug: string) => ({
+    sourceKey: "prh",
+    observation: obs,
+    citation: CITATION,
+    importComment: "test",
+    seriesId: null,
+    seriesTitle: "Cells at Work! Picture Book",
+    labels: ["5"],
+    release: {
+      format: "physical" as const,
+      isbn13: "9798888778449",
+      publisher: { name: slug, slug },
+    },
+    tagBootstrapUnreviewed: true,
+    now: 1,
+  });
+
+  it("never recreates a Series an Editor hid; the record stays on its observation", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const kodansha = await publisher(ctx, "Kodansha", "kodansha");
+      const hidden = await publishedSeries(ctx, "Cells at Work! Picture Book", kodansha);
+      await ctx.db.patch(hidden, { status: "hidden" });
+      const obs = await observation(ctx, "9798888778449");
+
+      const result = await createCanonicalRecords(ctx, bookArgs(obs, "kodansha"));
+      expect(result).toMatchObject({ seriesId: hidden, changed: false });
+      expect(result.releaseId).toBeUndefined();
+      expect(result.blocked).toContain("an Editor hid");
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+      const after = (await ctx.db.get(obs._id))!;
+      expect(after.conflicts?.find((c) => c.field === "placement")?.reason).toContain(
+        "an Editor hid",
+      );
+    });
+  });
+
+  it("lets another house's namesake of a hidden Series through", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const vertical = await publisher(ctx, "Vertical", "vertical");
+      await publisher(ctx, "Kodansha", "kodansha");
+      const hidden = await publishedSeries(ctx, "Cells at Work! Picture Book", vertical);
+      await ctx.db.patch(hidden, { status: "hidden" });
+
+      const result = await createCanonicalRecords(
+        ctx,
+        bookArgs(await observation(ctx, "9798888778449"), "kodansha"),
+      );
+      expect(result.blocked).toBeUndefined();
+      expect(result.seriesId).not.toBe(hidden);
+      expect(result.releaseId).toBeDefined();
+    });
+  });
+
+  it("follows a merged series link to the survivor instead of creating", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const survivor = await series(ctx, "Summer Ghost", ["1", "2"]);
+      const loser = await series(ctx, "Summer Ghost (old)", []);
+      await ctx.db.patch(loser, { status: "merged", mergedIntoId: survivor });
+      const { observation: link } = await upsertObservation(ctx, {
+        sourceKey: "kodansha",
+        sourceRecordId: "series:summer-ghost",
+        snapshot: { kind: "series", title: "Summer Ghost" },
+        now: 1,
+      });
+      await ctx.db.patch(link._id, { recordRef: { type: "series", id: loser } });
+
+      // The adapter's rung-① read repoints the link.
+      const linked = await reconcileLinkedSeries(ctx, {
+        sourceKey: "kodansha",
+        seriesKey: "summer-ghost",
+        offeredTitle: "Summer Ghost",
+        citation: CITATION,
+        now: 1,
+      });
+      expect(linked.seriesId).toBe(survivor);
+      expect((await ctx.db.get(link._id))!.recordRef?.id).toBe(survivor);
+
+      // The creation path alone (an adapter that skipped rung ①) also lands
+      // on the survivor.
+      await ctx.db.patch(link._id, { recordRef: { type: "series", id: loser } });
+      const result = await createCanonicalRecords(ctx, {
+        sourceKey: "kodansha",
+        observation: await observation(ctx, "9798888431900"),
+        citation: CITATION,
+        importComment: "test",
+        seriesId: null,
+        seriesTitle: "Summer Ghost",
+        seriesKey: "summer-ghost",
+        labels: ["2"],
+        release: {
+          format: "digital",
+          isbn13: "9798888431900",
+          publisher: { name: "Kodansha", slug: "kodansha" },
+        },
+        tagBootstrapUnreviewed: false,
+        now: 1,
+      });
+      expect(result.seriesId).toBe(survivor);
+      expect(await ctx.db.query("series").collect()).toHaveLength(2);
+    });
+  });
+
+  it("covers a merged Volume's survivor and never re-creates removed backbone Volumes", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Qualia the Purple", ["1", "2"]);
+      const volumes = await ctx.db.query("volumes").collect();
+      const one = volumes.find((v) => v.label === "1")!;
+      const two = volumes.find((v) => v.label === "2")!;
+      // Stage 8: the unlabeled placeholder was merged into Volume 1; a
+      // stray Volume 2 was hidden.
+      await ctx.db.insert("volumes", {
+        status: "merged",
+        mergedIntoId: one._id,
+        publicId: 9,
+        seriesId,
+        position: 0.5,
+      });
+      await ctx.db.patch(two._id, { status: "hidden" });
+
+      const book = await createCanonicalRecords(ctx, {
+        sourceKey: "prh",
+        observation: await observation(ctx, "9781638585619"),
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        seriesTitle: "Qualia the Purple",
+        labels: [],
+        release: {
+          format: "physical",
+          isbn13: "9781638585619",
+          publisher: { name: "Kodansha", slug: "kodansha" },
+        },
+        tagBootstrapUnreviewed: false,
+        now: 1,
+      });
+      expect(book.volumeIds).toEqual([one._id]);
+
+      const backbone = await createCanonicalRecords(ctx, {
+        sourceKey: "ann",
+        observation: await observation(ctx, "manga:25348"),
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        seriesTitle: "Qualia the Purple",
+        labels: ["2", "3"],
+        tagBootstrapUnreviewed: false,
+        now: 1,
+      });
+      const after = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+        .collect();
+      expect(after.filter((v) => v.status === "active").map((v) => v.label).sort()).toEqual([
+        "1",
+        "3",
+      ]);
+      expect(backbone.volumeIds).toHaveLength(1);
     });
   });
 });

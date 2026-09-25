@@ -206,7 +206,8 @@ export function isDue(
 
 // The code half of the registry: which adapter action serves each source
 // key. A registry row without an adapter is inert data until its adapter
-// ships. All five v1 sources (tickets #34/#36) and Yen Press have adapters;
+// ships. All five v1 sources (tickets #34/#36), Yen Press, and the Kodansha
+// backlist crawl have adapters;
 // adapters take only optional tuning args, so dispatching with {} is valid.
 const ADAPTERS: Record<
   string,
@@ -218,6 +219,7 @@ const ADAPTERS: Record<
   prh: internal.prh.sync,
   openlibrary: internal.openLibrary.sync,
   yenpress: internal.yenPress.sync,
+  "kodansha-backlist": internal.kodansha.backlistSync,
 };
 
 export const enabledSources = internalQuery({

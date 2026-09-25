@@ -30,8 +30,8 @@ const fieldAuthority = v.record(v.string(), authorityLevel);
 // The v1 authority table from spec §6, as seed data. `seedRegistry` only
 // inserts missing keys — it never overwrites a row an Administrator edited
 // (existing deployments flip sources on via `upsert` or the dashboard).
-// Every adapter exists (v1's five, tickets #34/#36, plus Yen Press), so
-// every row seeds enabled;
+// Every adapter exists (v1's five, tickets #34/#36, plus Yen Press and the
+// Kodansha backlist crawl), so every row seeds enabled;
 // PRH and OpenLibrary additionally need environment configuration (API
 // key/imprints, filtered-dump URL — see README) and skip gracefully as
 // "unconfigured" until it is set. The `price` column extends the spec table
@@ -97,6 +97,8 @@ export const V1_SOURCE_DEFAULTS = [
       titles: "standard",
       creators: "standard",
       format: "standard",
+      // Fills a Release's blank ISBN from its ANN line; never overrides.
+      isbn: "weak",
     },
     cadence: "weekly",
     attribution: "Encyclopedia data provided by Anime News Network.",
@@ -134,6 +136,27 @@ export const V1_SOURCE_DEFAULTS = [
     },
     cadence: "daily",
     attribution: "Publication data courtesy of Yen Press (yenpress.com).",
+  },
+  // The Kodansha back catalog (2026-09): a weekly crawl of kodansha.us'
+  // series and volume pages (kodansha.backlistSync). This row carries the
+  // crawl's cadence, runs, health, and per-series crawl state; the volumes
+  // it reads are observed and reconciled under the "kodansha" row, so that
+  // row's authority map (mirrored here) is the one that applies.
+  {
+    key: "kodansha-backlist",
+    name: "Kodansha USA (backlist)",
+    enabled: true,
+    scope: "Kodansha's full comic catalog (series + volume pages, print and digital ISBNs)",
+    fieldAuthority: {
+      date: "authoritative",
+      isbn: "authoritative",
+      titles: "authoritative",
+      creators: "authoritative",
+      format: "authoritative",
+      price: "authoritative",
+    },
+    cadence: "weekly",
+    attribution: "Publication data courtesy of Kodansha (kodansha.us).",
   },
 ] as const;
 
@@ -315,6 +338,30 @@ export const setBootstrapMode = mutation({
   handler: async (ctx, { on }) => {
     await requireRole(ctx, ["administrator"]);
     await writeBootstrapMode(ctx, on);
+  },
+});
+
+/**
+ * Give an existing registry row authority over a field category it has none
+ * for yet (seedRegistry only inserts missing rows). Never changes a category
+ * that is already set, so an Administrator's edit stands.
+ *   npx convex run importSources:addFieldAuthorityInternal '{"key":"ann","category":"isbn","level":"weak"}'
+ */
+export const addFieldAuthorityInternal = internalMutation({
+  args: {
+    key: v.string(),
+    category: v.string(),
+    level: v.union(v.literal("authoritative"), v.literal("standard"), v.literal("weak")),
+  },
+  handler: async (ctx, { key, category, level }) => {
+    const source = await getSourceByKey(ctx, key.trim().toLowerCase());
+    if (!source) throw new Error(`No source with key "${key}".`);
+    const current: Record<string, string | undefined> = source.fieldAuthority;
+    if (current[category] !== undefined) return { changed: false };
+    await ctx.db.patch(source._id, {
+      fieldAuthority: { ...source.fieldAuthority, [category]: level },
+    });
+    return { changed: true };
   },
 });
 

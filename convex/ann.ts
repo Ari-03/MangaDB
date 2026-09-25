@@ -26,6 +26,11 @@
 //   under the linked Series; from then on ANN's dates reconcile in at
 //   standard authority (how VIZ dates keep fresh). Ambiguity is left
 //   unlinked for the record — the importer never guesses.
+// - repairs stand: a link to a merged Series follows it to the survivor; an
+//   entry whose Series (linked, or same-titled) an Editor hid only records
+//   its lines; the backbone never recreates a Volume a repair hid or merged
+//   away, and unlabeled lines add a placeholder Volume only to a Series with
+//   no Volume at all; a hidden Release's ISBN is never placed again
 //
 // The release-page pass (`syncReleasePages`): the API has no publisher, so
 // for every still-unlinked line it fetches the line's Encyclopedia page
@@ -60,7 +65,7 @@ import {
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
 import { canonicalLabel } from "./lib/bookTitle";
-import { candidateSeries, labelsEqual } from "./lib/matching";
+import { candidateSeries, labelsEqual, survivorOf } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
@@ -68,6 +73,7 @@ import {
   findPublisherByName,
   queueCreationProposal,
   recordUnplaced,
+  removedSeriesFor,
   toPartialDate,
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
@@ -318,15 +324,30 @@ export type AnnReleaseSnapshot = AnnMangaSnapshot["releases"][number] & {
   page?: PageState;
 };
 
-async function activeReleaseByIsbn(
+/**
+ * The Release carrying this ISBN, merged rows answered by their survivor:
+ * `active` to link, else `hidden` when an Editor hid that book — which the
+ * importer must never create again.
+ */
+async function releaseByIsbn(
   ctx: MutationCtx,
   isbn13: string,
-): Promise<Doc<"releases"> | null> {
+): Promise<{ active: Doc<"releases"> | null; hidden: boolean }> {
   const hits = await ctx.db
     .query("releases")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
     .collect();
-  return hits.find((release) => release.status === "active") ?? null;
+  const resolved = await Promise.all(hits.map((hit) => survivorOf<"releases">(ctx, hit)));
+  return {
+    active: resolved.find((release) => release?.status === "active") ?? null,
+    hidden: resolved.some((release) => release?.status === "hidden"),
+  };
+}
+
+/** Whether any Release, active or hidden, already carries this ISBN. */
+async function isbnTaken(ctx: MutationCtx, isbn13: string): Promise<boolean> {
+  const { active, hidden } = await releaseByIsbn(ctx, isbn13);
+  return active !== null || hidden;
 }
 
 // ---------- applying one manga entry ----------
@@ -446,6 +467,46 @@ async function matchReleaseInSeries(
 }
 
 /**
+ * Upsert one release line's observation (`release:NNN`), carrying over the
+ * release-page pass's stored fetch state — or every mirror would forget the
+ * pages it fetched.
+ */
+async function upsertLine(
+  ctx: MutationCtx,
+  snapshot: AnnMangaSnapshot,
+  release: AnnLine,
+  now: number,
+): Promise<{ observation: Doc<"sourceObservations">; url: string }> {
+  const url = /^\d+$/.test(release.annId) ? releaseUrl(release.annId) : snapshot.url;
+  const sourceRecordId = `release:${release.annId}`;
+  const prior = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
+  const page = (prior?.snapshot as AnnReleaseSnapshot | undefined)?.page;
+  const lineSnapshot: AnnReleaseSnapshot = {
+    kind: "annRelease",
+    mangaId: snapshot.id,
+    ...release,
+    url,
+    ...(page !== undefined ? { page } : {}),
+  };
+  const { observation } = await upsertObservation(ctx, {
+    sourceKey: SOURCE_KEY,
+    sourceRecordId,
+    snapshot: lineSnapshot,
+    now,
+  });
+  return { observation, url };
+}
+
+/** Whether the Series has any Volume row at all — active, hidden, or merged. */
+async function hasAnyVolume(ctx: MutationCtx, seriesId: Id<"series">): Promise<boolean> {
+  const volume = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .first();
+  return volume !== null;
+}
+
+/**
  * Reconcile one manga entry: series link/creation, the Volume backbone, and
  * per-release observations with date reconciliation. One atomic mutation
  * per manga entry (its records must change together).
@@ -470,9 +531,22 @@ export const applyManga = internalMutation({
     // ----- the Series: rung ① stored link, else resolve/create -----
     let seriesId: Id<"series"> | null = null;
     if (observation.recordRef?.type === "series") {
-      const series = await ctx.db.get(observation.recordRef.id);
+      // Repairs stand: a merged Series is followed to its survivor (and the
+      // link repointed); a hidden one keeps its lines on record only.
+      const linkedId = observation.recordRef.id;
+      const series = await survivorOf<"series">(ctx, await ctx.db.get(linkedId));
+      if (series?.status === "hidden") {
+        for (const release of snapshot.releases) await upsertLine(ctx, snapshot, release, now);
+        return { status: "recordOnly", changed, releasesLinked: 0 };
+      }
       if (series && series.status === "active") {
         seriesId = series._id;
+        if (series._id !== linkedId) {
+          await ctx.db.patch(observation._id, {
+            recordRef: { type: "series", id: series._id },
+          });
+          changed = true;
+        }
         if (!series.locked) {
           const result = await reconcileFields(ctx, {
             sourceKey: SOURCE_KEY,
@@ -510,6 +584,18 @@ export const applyManga = internalMutation({
         if (await alreadyHandled(ctx, observation)) {
           return { status: "alreadyQueued", changed, releasesLinked: 0 };
         }
+        // An Editor hid this very work: never queue it back. (Bootstrap's
+        // creation path below makes the same check itself.)
+        const removed = await removedSeriesFor(ctx, {
+          sourceKey: SOURCE_KEY,
+          observation,
+          seriesTitle: snapshot.title,
+          publisherId: null,
+        });
+        if (removed?.kind === "hidden") {
+          await recordUnplaced(ctx, observation, removed.reason, now);
+          return { status: "recordOnly", changed: true, releasesLinked: 0 };
+        }
         await queueCreationProposal(ctx, {
           sourceKey: SOURCE_KEY,
           observation,
@@ -537,6 +623,9 @@ export const applyManga = internalMutation({
         tagBootstrapUnreviewed: true,
         now,
       });
+      if (creation.blocked !== undefined) {
+        return { status: "recordOnly", changed: true, releasesLinked: 0 };
+      }
       seriesId = creation.seriesId;
       await ctx.db.patch(observation._id, {
         recordRef: { type: "series", id: seriesId },
@@ -544,45 +633,32 @@ export const applyManga = internalMutation({
       changed = true;
     } else if (labels.length > 0) {
       // The Volume backbone under a linked Series — within the spec §6
-      // auto-create boundary; a no-op when every Volume already exists.
-      const creation = await createCanonicalRecords(ctx, {
-        sourceKey: SOURCE_KEY,
-        observation,
-        citation,
-        importComment: IMPORT_COMMENT,
-        seriesId,
-        seriesTitle: snapshot.title,
-        labels: labels.filter((l): l is string => l !== undefined),
-        tagBootstrapUnreviewed: false,
-        now,
-      });
-      changed = changed || creation.changed;
+      // auto-create boundary; a no-op when every Volume already exists, and
+      // never recreating a Volume a repair hid or merged away. Unlabeled
+      // lines alone evidence one placeholder Volume only while the Series
+      // has no Volume row at all: next to numbered Volumes (or a removed
+      // placeholder) it would be a stray empty Volume.
+      const numbered = labels.filter((l): l is string => l !== undefined);
+      if (numbered.length > 0 || !(await hasAnyVolume(ctx, seriesId))) {
+        const creation = await createCanonicalRecords(ctx, {
+          sourceKey: SOURCE_KEY,
+          observation,
+          citation,
+          importComment: IMPORT_COMMENT,
+          seriesId,
+          seriesTitle: snapshot.title,
+          labels: numbered,
+          tagBootstrapUnreviewed: false,
+          now,
+        });
+        changed = changed || creation.changed;
+      }
     }
 
     // ----- release lines: observations + linking + date reconciliation -----
     let releasesLinked = 0;
     for (const release of snapshot.releases) {
-      const url = /^\d+$/.test(release.annId)
-        ? releaseUrl(release.annId)
-        : snapshot.url;
-      const sourceRecordId = `release:${release.annId}`;
-      // The release-page pass's fetch state rides on the line's snapshot:
-      // carry it over, or every mirror would forget the pages it fetched.
-      const prior = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
-      const page = (prior?.snapshot as AnnReleaseSnapshot | undefined)?.page;
-      const lineSnapshot: AnnReleaseSnapshot = {
-        kind: "annRelease",
-        mangaId: snapshot.id,
-        ...release,
-        url,
-        ...(page !== undefined ? { page } : {}),
-      };
-      const { observation: releaseObs } = await upsertObservation(ctx, {
-        sourceKey: SOURCE_KEY,
-        sourceRecordId,
-        snapshot: lineSnapshot,
-        now,
-      });
+      const { observation: releaseObs, url } = await upsertLine(ctx, snapshot, release, now);
 
       let canonical: Doc<"releases"> | null = null;
       if (releaseObs.recordRef?.type === "release") {
@@ -595,7 +671,7 @@ export const applyManga = internalMutation({
         // but only onto a Release of this Series (elsewhere it is a
         // duplicate-Series question for a human, not a link).
         const byIsbn =
-          release.isbn13 !== undefined ? await activeReleaseByIsbn(ctx, release.isbn13) : null;
+          release.isbn13 !== undefined ? (await releaseByIsbn(ctx, release.isbn13)).active : null;
         const match = byIsbn
           ? byIsbn.seriesIds.includes(seriesId) && !byIsbn.locked
             ? ({ kind: "one", release: byIsbn } as const)
@@ -613,12 +689,20 @@ export const applyManga = internalMutation({
         }
       }
 
-      if (canonical && release.date) {
+      // The line's date, and its ISBN when the linked Release has none yet
+      // (a volume+format link made before ANN lines carried ISBNs) and no
+      // other Release already holds that ISBN.
+      const offered: Record<string, unknown> = {};
+      if (release.date) offered.pubDate = toPartialDate(release.date);
+      if (canonical && canonical.isbn13 === undefined && release.isbn13 !== undefined) {
+        if (!(await isbnTaken(ctx, release.isbn13))) offered.isbn13 = release.isbn13;
+      }
+      if (canonical && Object.keys(offered).length > 0) {
         const result = await reconcileFields(ctx, {
           sourceKey: SOURCE_KEY,
           ref: { type: "release", id: canonical._id },
           doc: canonical,
-          offered: { pubDate: toPartialDate(release.date) },
+          offered,
           observation: releaseObs,
           citation: { sourceName, url },
           now,
@@ -905,14 +989,20 @@ export const applyReleasePage = internalMutation({
     const isbn13 = page.isbn13 ?? line.isbn13;
     if (isbn13 === undefined) return await hold("ANN lists no ISBN for this release.");
 
-    // The Series: the manga entry's rung-① link.
+    // The Series: the manga entry's rung-① link, through any repair merge.
     const mangaObs = await getObservation(ctx, SOURCE_KEY, `manga:${line.mangaId}`);
     const seriesRef = mangaObs?.recordRef;
     const series =
-      seriesRef?.type === "series" ? await ctx.db.get(seriesRef.id) : null;
+      seriesRef?.type === "series"
+        ? await survivorOf<"series">(ctx, await ctx.db.get(seriesRef.id))
+        : null;
 
-    // An existing Release with the ISBN: link it (same Series only).
-    const byIsbn = await activeReleaseByIsbn(ctx, isbn13);
+    // An existing Release with the ISBN: link it (same Series only). One an
+    // Editor hid is never recreated.
+    const { active: byIsbn, hidden: isbnHidden } = await releaseByIsbn(ctx, isbn13);
+    if (!byIsbn && isbnHidden) {
+      return await hold(`ISBN ${isbn13} is on a Release an Editor hid — not recreated.`);
+    }
     if (byIsbn) {
       if (!series || !byIsbn.seriesIds.includes(series._id)) {
         return await hold(
@@ -1010,12 +1100,18 @@ export const applyReleasePage = internalMutation({
         recordRef: { type: "release", id: release._id },
       });
       const date = page!.date ?? line.date;
-      if (date && !release.locked) {
+      const offered: Record<string, unknown> = {};
+      if (date) offered.pubDate = toPartialDate(date);
+      // The page's ISBN fills a linked Release that has none (never another's).
+      if (release.isbn13 === undefined && isbn13 !== undefined && !(await isbnTaken(ctx, isbn13))) {
+        offered.isbn13 = isbn13;
+      }
+      if (Object.keys(offered).length > 0 && !release.locked) {
         await reconcileFields(ctx, {
           sourceKey: SOURCE_KEY,
           ref: { type: "release", id: release._id },
           doc: release,
-          offered: { pubDate: toPartialDate(date) },
+          offered,
           observation: observation!,
           citation,
           now,

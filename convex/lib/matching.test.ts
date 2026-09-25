@@ -9,6 +9,7 @@ import type { Id } from "../_generated/dataModel";
 import schema from "../schema";
 import {
   candidateSeries,
+  hiddenSeriesTitled,
   labelsEqual,
   matchRelease,
   normalizeTitle,
@@ -182,6 +183,23 @@ describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
     expect(outcome).toMatchObject({ kind: "match", rung: 2 });
   });
 
+  it("reviews an ISBN an Editor hid, and follows a merged Release to its survivor", async () => {
+    const t = makeT();
+    const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
+    await t.run((ctx) => ctx.db.patch(catalog.releaseId, { status: "hidden" }));
+    expect(
+      await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" })),
+    ).toMatchObject({ kind: "review", rung: 2, reason: expect.stringContaining("hid") });
+
+    const other = await buildCatalog(t, { isbn13: "9781999000110" });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(catalog.releaseId, { status: "merged", mergedIntoId: other.releaseId });
+    });
+    const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }));
+    expect(outcome).toMatchObject({ kind: "match", rung: 2 });
+    expect(outcome.kind === "match" && outcome.release._id).toBe(other.releaseId);
+  });
+
   it("flags an ISBN hit with a dissimilar title for review — never merges", async () => {
     const t = makeT();
     const catalog = await buildCatalog(t, {
@@ -352,6 +370,36 @@ describe("candidateSeries", () => {
     expect((await t.run((ctx) => candidateSeries(ctx, "Tenken"))).map((s) => s._id)).toEqual([
       tenken,
     ]);
+  });
+
+  it("answers a merged Series' title with its survivor, and reports hidden namesakes apart", async () => {
+    const t = makeT();
+    const survivor = await insertSeries(t, "Summer Ghost: Complete");
+    const loser = await insertSeries(t, "Summer Ghost");
+    await t.run((ctx) => ctx.db.patch(loser, { status: "merged", mergedIntoId: survivor }));
+    expect(
+      (await t.run((ctx) => candidateSeries(ctx, "Summer Ghost"))).map((s) => s._id),
+    ).toEqual([survivor]);
+
+    const hidden = await insertSeries(t, "Emma & Capucine");
+    await t.run((ctx) => ctx.db.patch(hidden, { status: "hidden" }));
+    expect(await t.run((ctx) => candidateSeries(ctx, "Emma and Capucine"))).toEqual([]);
+    expect(
+      (await t.run((ctx) => hiddenSeriesTitled(ctx, "Emma and Capucine"))).map((s) => s._id),
+    ).toEqual([hidden]);
+
+    // A hidden namesake never shadows an active Series' alt title, and a
+    // hidden Series' alt title never counts.
+    const paradise = await insertSeries(t, "Paradise");
+    await t.run((ctx) => ctx.db.patch(paradise, { status: "hidden" }));
+    const kept = await insertSeries(t, "Paradise Residence", ["Paradise"]);
+    expect((await t.run((ctx) => candidateSeries(ctx, "Paradise"))).map((s) => s._id)).toEqual([
+      kept,
+    ]);
+    await insertSeries(t, "Mo Dao Zu Shi (Novel)", ["Grandmaster"]).then((id) =>
+      t.run((ctx) => ctx.db.patch(id, { status: "hidden" })),
+    );
+    expect(await t.run((ctx) => hiddenSeriesTitled(ctx, "Grandmaster"))).toEqual([]);
   });
 
   it("never offers a manga Series for a novel title", async () => {

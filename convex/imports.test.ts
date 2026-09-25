@@ -25,12 +25,13 @@ async function setup(t: ReturnType<typeof convexTest>) {
 }
 
 describe("importSources.seedRegistry", () => {
-  it("seeds the five v1 sources plus Yen Press per the spec authority table", async () => {
+  it("seeds the five v1 sources plus Yen Press and the Kodansha backlist per the spec authority table", async () => {
     const t = convexTest(schema);
     const { inserted } = await t.mutation(internal.importSources.seedRegistry, {});
     expect(inserted.sort()).toEqual([
       "ann",
       "kodansha",
+      "kodansha-backlist",
       "openlibrary",
       "prh",
       "sevenseas",
@@ -48,7 +49,7 @@ describe("importSources.seedRegistry", () => {
     // ANN has no ISBN authority at all (spec §6 table).
     const ann = sources.find((s) => s.key === "ann")!;
     expect(ann.fieldAuthority.isbn).toBeUndefined();
-    // Every adapter exists (#34/#36 + Yen Press), so every row seeds enabled.
+    // Every adapter exists (#34/#36 + Yen Press + Kodansha backlist), so every row seeds enabled.
     expect(sources.every((s) => s.enabled)).toBe(true);
   });
 
@@ -219,6 +220,7 @@ describe("cadence", () => {
     expect(before.map((s) => s.key).sort()).toEqual([
       "ann",
       "kodansha",
+      "kodansha-backlist",
       "openlibrary",
       "prh",
       "sevenseas",

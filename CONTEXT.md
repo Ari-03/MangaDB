@@ -2,6 +2,8 @@
 
 A public database of manga volume releases, English-first: what volumes exist, when each edition comes out, and which ones you own or want.
 
+"Manga" is judged by look, not origin: a book is in the catalog when it looks like manga rather than a Western comic. Manhua, manhwa, French manga-style books, and English-language (OEL/global) manga are in; US comic-book pamphlets, European album-format bandes dessinées, and graphic-novel biographies are out, as are prose and light novels, picture books, and merchandise.
+
 ## Language
 
 **Series**:

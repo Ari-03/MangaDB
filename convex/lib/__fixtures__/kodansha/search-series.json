@@ -1,0 +1,299 @@
+{
+ "success": true,
+ "data": [
+  {
+   "uuid": "bcf5ad35-4f4e-47e5-af43-76eb2aad5b65",
+   "slug": "10-dance",
+   "type": "comic",
+   "color": "Pink",
+   "name": "10 DANCE",
+   "short_description": "Dip into your new obsession in this steamy gay ballroom romance! The beautifully-detailed, lithe bodies of the two “kings of the ballroom” fly across the dance floor as rivals build a volatile bond in this red-hot romance!",
+   "last_updated_at": "2026-04-08T03:42:28+00:00",
+   "is_ltr": false,
+   "is_vertical": false,
+   "publisher_uuid": "94e2e686-1aec-4c0e-9131-77466302639a",
+   "is_complete": false,
+   "age_rating": {
+    "rating": 16,
+    "label": "Teen"
+   },
+   "image": {
+    "uuid": "f2be5e07-c558-43a7-9b82-b4249593f06a",
+    "aspect_ratio_decimal": 0.8,
+    "max_width": 1200,
+    "webp": [
+     {
+      "url": "https://production.image.azuki.co/f2be5e07-c558-43a7-9b82-b4249593f06a/200_2-3.webp",
+      "width": 200,
+      "height": 300
+     },
+     {
+      "url": "https://production.image.azuki.co/f2be5e07-c558-43a7-9b82-b4249593f06a/400_2-3.webp",
+      "width": 400,
+      "height": 600
+     },
+     {
+      "url": "https://production.image.azuki.co/f2be5e07-c558-43a7-9b82-b4249593f06a/600_2-3.webp",
+      "width": 600,
+      "height": 900
+     },
+     {
+      "url": "https://production.image.azuki.co/f2be5e07-c558-43a7-9b82-b4249593f06a/800_2-3.webp",
+      "width": 800,
+      "height": 1200
+     }
+    ],
+    "jpg": [
+     {
+      "url": "https://production.image.azuki.co/f2be5e07-c558-43a7-9b82-b4249593f06a/200_2-3.jpg",
+      "width": 200,
+      "height": 300
+     },
+     {
+      "url": "https://production.image.azuki.co/f2be5e07-c558-43a7-9b82-b4249593f06a/400_2-3.jpg",
+      "width": 400,
+      "height": 600
+     },
+     {
+      "url": "https://production.image.azuki.co/f2be5e07-c558-43a7-9b82-b4249593f06a/600_2-3.jpg",
+      "width": 600,
+      "height": 900
+     },
+     {
+      "url": "https://production.image.azuki.co/f2be5e07-c558-43a7-9b82-b4249593f06a/800_2-3.jpg",
+      "width": 800,
+      "height": 1200
+     }
+    ]
+   },
+   "is_pass_eligible": true,
+   "total_passes": 10000,
+   "pass_recharge_hours": 24,
+   "pass_unlock_hours": 72,
+   "free_available_chapters": 0,
+   "alc_available_chapters": 0,
+   "total_available_chapters": 0
+  },
+  {
+   "uuid": "ee70a905-c573-4855-9920-af3ebcef16e2",
+   "slug": "13-secrets-for-speaking-fluent-japanese",
+   "type": "novel",
+   "color": null,
+   "name": "13 Secrets for Speaking Fluent Japanese",
+   "short_description": null,
+   "last_updated_at": "2025-09-06T12:24:33+00:00",
+   "is_ltr": false,
+   "is_vertical": false,
+   "publisher_uuid": "94e2e686-1aec-4c0e-9131-77466302639a",
+   "is_complete": false,
+   "age_rating": {
+    "rating": 0,
+    "label": "None"
+   },
+   "image": {
+    "uuid": "826c405d-8199-4d55-a67d-920a71b6bc00",
+    "aspect_ratio_decimal": 1.4793,
+    "max_width": 1400,
+    "webp": [
+     {
+      "url": "https://production.image.azuki.co/826c405d-8199-4d55-a67d-920a71b6bc00/200_2-3.webp",
+      "width": 200,
+      "height": 300
+     },
+     {
+      "url": "https://production.image.azuki.co/826c405d-8199-4d55-a67d-920a71b6bc00/400_2-3.webp",
+      "width": 400,
+      "height": 600
+     },
+     {
+      "url": "https://production.image.azuki.co/826c405d-8199-4d55-a67d-920a71b6bc00/600_2-3.webp",
+      "width": 600,
+      "height": 900
+     },
+     {
+      "url": "https://production.image.azuki.co/826c405d-8199-4d55-a67d-920a71b6bc00/800_2-3.webp",
+      "width": 800,
+      "height": 1200
+     }
+    ],
+    "jpg": [
+     {
+      "url": "https://production.image.azuki.co/826c405d-8199-4d55-a67d-920a71b6bc00/200_2-3.jpg",
+      "width": 200,
+      "height": 300
+     },
+     {
+      "url": "https://production.image.azuki.co/826c405d-8199-4d55-a67d-920a71b6bc00/400_2-3.jpg",
+      "width": 400,
+      "height": 600
+     },
+     {
+      "url": "https://production.image.azuki.co/826c405d-8199-4d55-a67d-920a71b6bc00/600_2-3.jpg",
+      "width": 600,
+      "height": 900
+     },
+     {
+      "url": "https://production.image.azuki.co/826c405d-8199-4d55-a67d-920a71b6bc00/800_2-3.jpg",
+      "width": 800,
+      "height": 1200
+     }
+    ]
+   },
+   "is_pass_eligible": false,
+   "total_passes": 0,
+   "pass_recharge_hours": 0,
+   "pass_unlock_hours": 0,
+   "free_available_chapters": 0,
+   "alc_available_chapters": 0,
+   "total_available_chapters": 0
+  },
+  {
+   "uuid": "91ec5baa-7cb0-4a6d-acfc-77063bcdf4e6",
+   "slug": "5-centimeters-per-second-collectors-edition",
+   "type": "comic",
+   "color": "Navy",
+   "name": "5 Centimeters per Second (Collector's Edition)",
+   "short_description": "Based on the award winning film by Makoto Shinkai, 5 Centimeters per Second is now compiled into a beautiful hardcover collector’s edition! Love can move at the speed of terminal velocity, but as award-winning director Makoto Shinkai reveals in his latest comic, it can only be shared and embraced by those who refuse to see it stop.",
+   "last_updated_at": "2026-02-06T09:53:10+00:00",
+   "is_ltr": false,
+   "is_vertical": false,
+   "publisher_uuid": "94e2e686-1aec-4c0e-9131-77466302639a",
+   "is_complete": true,
+   "age_rating": {
+    "rating": 13,
+    "label": "Early Teen"
+   },
+   "image": {
+    "uuid": "1e2bf347-4290-4f68-bc37-ff06fed05c7b",
+    "aspect_ratio_decimal": 0.8,
+    "max_width": 1200,
+    "webp": [
+     {
+      "url": "https://production.image.azuki.co/1e2bf347-4290-4f68-bc37-ff06fed05c7b/200_2-3.webp",
+      "width": 200,
+      "height": 300
+     },
+     {
+      "url": "https://production.image.azuki.co/1e2bf347-4290-4f68-bc37-ff06fed05c7b/400_2-3.webp",
+      "width": 400,
+      "height": 600
+     },
+     {
+      "url": "https://production.image.azuki.co/1e2bf347-4290-4f68-bc37-ff06fed05c7b/600_2-3.webp",
+      "width": 600,
+      "height": 900
+     },
+     {
+      "url": "https://production.image.azuki.co/1e2bf347-4290-4f68-bc37-ff06fed05c7b/800_2-3.webp",
+      "width": 800,
+      "height": 1200
+     }
+    ],
+    "jpg": [
+     {
+      "url": "https://production.image.azuki.co/1e2bf347-4290-4f68-bc37-ff06fed05c7b/200_2-3.jpg",
+      "width": 200,
+      "height": 300
+     },
+     {
+      "url": "https://production.image.azuki.co/1e2bf347-4290-4f68-bc37-ff06fed05c7b/400_2-3.jpg",
+      "width": 400,
+      "height": 600
+     },
+     {
+      "url": "https://production.image.azuki.co/1e2bf347-4290-4f68-bc37-ff06fed05c7b/600_2-3.jpg",
+      "width": 600,
+      "height": 900
+     },
+     {
+      "url": "https://production.image.azuki.co/1e2bf347-4290-4f68-bc37-ff06fed05c7b/800_2-3.jpg",
+      "width": 800,
+      "height": 1200
+     }
+    ]
+   },
+   "is_pass_eligible": true,
+   "total_passes": 10000,
+   "pass_recharge_hours": 24,
+   "pass_unlock_hours": 72,
+   "free_available_chapters": 0,
+   "alc_available_chapters": 0,
+   "total_available_chapters": 0
+  },
+  {
+   "uuid": "1a8e7894-c827-4ab7-a62a-2f54d29bc208",
+   "slug": "7-billion-needles",
+   "type": "comic",
+   "color": "Green",
+   "name": "7 Billion Needles",
+   "short_description": "Hikaru Takabe may not be the most social of teens. Always sporting her headphones, she gives off an aloof aura that rubs her classmates the wrong way. But her not being part of the crowd takes on a different dimension when she becomes involved in an intergalactic game of cat and mouse. Inspired by Needle, the Golden Age hard sci-fi classic by the late Hal Clement, Nobuaki Tadano’s debut work brings a unique take on alien invasion up to date and into the maelstrom that is the Japanese high school girl. 7 Billion Needles is emotionally intelligent science fiction in a compact four volumes.",
+   "last_updated_at": "2026-02-06T09:53:11+00:00",
+   "is_ltr": false,
+   "is_vertical": false,
+   "publisher_uuid": "94e2e686-1aec-4c0e-9131-77466302639a",
+   "is_complete": true,
+   "age_rating": {
+    "rating": 13,
+    "label": "Early Teen"
+   },
+   "image": {
+    "uuid": "86abec2c-3ab5-418a-806c-d5c59c37c843",
+    "aspect_ratio_decimal": 0.8,
+    "max_width": 1200,
+    "webp": [
+     {
+      "url": "https://production.image.azuki.co/86abec2c-3ab5-418a-806c-d5c59c37c843/200_2-3.webp",
+      "width": 200,
+      "height": 300
+     },
+     {
+      "url": "https://production.image.azuki.co/86abec2c-3ab5-418a-806c-d5c59c37c843/400_2-3.webp",
+      "width": 400,
+      "height": 600
+     },
+     {
+      "url": "https://production.image.azuki.co/86abec2c-3ab5-418a-806c-d5c59c37c843/600_2-3.webp",
+      "width": 600,
+      "height": 900
+     },
+     {
+      "url": "https://production.image.azuki.co/86abec2c-3ab5-418a-806c-d5c59c37c843/800_2-3.webp",
+      "width": 800,
+      "height": 1200
+     }
+    ],
+    "jpg": [
+     {
+      "url": "https://production.image.azuki.co/86abec2c-3ab5-418a-806c-d5c59c37c843/200_2-3.jpg",
+      "width": 200,
+      "height": 300
+     },
+     {
+      "url": "https://production.image.azuki.co/86abec2c-3ab5-418a-806c-d5c59c37c843/400_2-3.jpg",
+      "width": 400,
+      "height": 600
+     },
+     {
+      "url": "https://production.image.azuki.co/86abec2c-3ab5-418a-806c-d5c59c37c843/600_2-3.jpg",
+      "width": 600,
+      "height": 900
+     },
+     {
+      "url": "https://production.image.azuki.co/86abec2c-3ab5-418a-806c-d5c59c37c843/800_2-3.jpg",
+      "width": 800,
+      "height": 1200
+     }
+    ]
+   },
+   "is_pass_eligible": true,
+   "total_passes": 10000,
+   "pass_recharge_hours": 24,
+   "pass_unlock_hours": 72,
+   "free_available_chapters": 0,
+   "alc_available_chapters": 0,
+   "total_available_chapters": 0
+  }
+ ],
+ "count": 4,
+ "total_count": 1170
+}

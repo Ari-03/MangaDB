@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { imprintPublisher } from "./catalogTitle";
-import { parseOnsale, parseTitle, parseTitleList } from "./prh";
+import { parseOnsale, parseTitle, parseTitleList, prhScopeReason } from "./prh";
 
 const TITLE = {
   isbn: 9781646094356,
@@ -96,6 +96,52 @@ describe("parseTitle — scope gates", () => {
       "La Bendición Del Oficial Del Cielo, Volumen 1 (Manhua) – Versión en Español",
     ]) {
       expect(parseTitle({ isbn: "9781646094356", title, imprint: "Seven Seas" }), title).toBeNull();
+    }
+  });
+
+  // Live classification fields (imprint listings fetched 2026-09-25).
+  const subjects = (...codes: string[]) => codes.map((code) => ({ code, description: code }));
+
+  it("drops what PRH itself classifies as prose or, at TOKYOPOP, as a non-manga graphic novel", () => {
+    const entry = { isbn: "9781506709390", imprint: { code: "KN", description: "Dark Horse Manga" } };
+    expect(
+      prhScopeReason({ ...entry, graphicCategory: "Light Novel" }, "Dark Horse Manga"),
+    ).toBe("novel");
+    expect(
+      parseTitle({ ...entry, title: "Berserk: The Flame Dragon Knight", graphicCategory: "Light Novel" }),
+    ).toBeNull();
+    expect(
+      prhScopeReason({ subjects: subjects("FIC015000", "FIC108000") }, "TOKYOPOP"),
+    ).toBe("prose");
+    for (const title of ["Ballad of The Broken Heart, Volume 1", "ALIEN STAGE: The Art Book"]) {
+      expect(
+        parseTitle({ isbn: "9781427884800", title, imprint: "TOKYOPOP", graphicCategory: "Graphic Novel" }),
+        title,
+      ).toBeNull();
+    }
+  });
+
+  it("keeps manga whatever its origin or audience, and Graphic Novel outside TOKYOPOP", () => {
+    // Titan Manga and Vertical Comics file real manga as "Graphic Novel".
+    expect(
+      parseTitle({ isbn: "9781787744424", title: "Yan Vol.1", imprint: "Titan Manga", graphicCategory: "Graphic Novel" }),
+    ).not.toBeNull();
+    // Juvenile-only subjects are kids' manga, not a scope signal.
+    expect(
+      parseTitle({
+        isbn: "9781427866783",
+        title: "The Fox & Little Tanuki, Volume 1",
+        imprint: "TOKYOPOP",
+        graphicCategory: "Manga",
+        subjects: subjects("JUV008050", "JUV008080"),
+      }),
+    ).not.toBeNull();
+    // Manga-styled originals are manga (owner's scope rule): no origin gate.
+    for (const title of ["Masters of the Universe: Legends of Eternia, Issue #2", "Emma & Capucine, Volume 3"]) {
+      expect(
+        parseTitle({ isbn: "9781427892331", title, imprint: "TOKYOPOP", graphicCategory: "Manga" }),
+        title,
+      ).not.toBeNull();
     }
   });
 });

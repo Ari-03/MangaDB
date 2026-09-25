@@ -24,6 +24,7 @@ import {
   findPublisherByName,
   queueCreationProposal,
   recordUnplaced,
+  removedSeriesFor,
   toPartialDate,
 } from "./pipeline";
 import { canonicalPublisherFor, type CanonicalPublisher } from "./publishers";
@@ -322,6 +323,21 @@ export async function applyCatalogTitle(
     editionLineHint: editionLine !== undefined,
   });
   if (gates.length > 0 && !bootstrap) {
+    if (seriesId === null) {
+      // A brand-new Series for a work an Editor hid would undo the repair:
+      // the book stays on its observation instead of the queue. (The
+      // creation path below makes the same check itself.)
+      const removed = await removedSeriesFor(ctx, {
+        sourceKey: opts.sourceKey,
+        observation,
+        seriesTitle,
+        publisherId: publisher?._id ?? null,
+      });
+      if (removed?.kind === "hidden") {
+        await recordUnplaced(ctx, observation, removed.reason, now);
+        return { status: "recordOnly", changed: false, reason: "hidden series" };
+      }
+    }
     return await queue(
       `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.${editionLine ? ` Edition Line: ${editionLine.name}.` : ""}`,
     );
@@ -340,6 +356,9 @@ export async function applyCatalogTitle(
     tagBootstrapUnreviewed: bootstrap && gates.length > 0,
     now,
   });
+  if (creation.blocked !== undefined) {
+    return { status: "recordOnly", changed: false, reason: "hidden series" };
+  }
   return { status: "created", changed: true, releaseId: creation.releaseId };
 }
 

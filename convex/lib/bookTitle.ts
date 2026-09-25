@@ -567,7 +567,7 @@ export function isNovelTitle(title: string): boolean {
 
 // ---------- scope ----------
 
-export type ScopeReason = "novel" | "merchandise" | "sampler" | "nonEnglish";
+export type ScopeReason = "novel" | "merchandise" | "sampler" | "nonEnglish" | "childrensBook";
 
 const MERCHANDISE =
   /\b(?:playing cards|scratch cards|card game|roll & clash|advent calendar|stick it|activity book|colou?ring book|color the classics|papertoy|paper toy|fan notebook|sudoku|number place|origami|kirigami|papercrafts?|sticker book|postcard book|poster book|tarot deck|board game)\b|\b(?:\d{4}\s+)?(?:wall\s+)?calendar$/i;
@@ -575,19 +575,25 @@ const MERCHANDISE =
 const SAMPLER =
   /\b(?:manga showcase|free sample|fcbd|free comic book day|convention exclusive|manga magazine|sampler)\b/i;
 
+// Children's illustrated books a manga publisher also sells ("Cells at
+// Work! Picture Book 1") — prose-and-pictures, never manga Volumes.
+// "Adults' Picture Book" (Otona no Zukan) is a manga title, not one.
+const CHILDRENS_BOOK = /(?<!\badults?'?\s)\b(?:picture|board)\s+books?\b/i;
+
 const NON_ENGLISH =
   /versi[oó]n en espa[nñ]ol|edici[oó]n en espa[nñ]ol|\bvolumen\s+\d|[([](?:spanish|french|german|italian|portuguese|japanese)(?:\s+edition)?[)\]]|[ée]dition fran[cç]aise/i;
 
 /**
  * Why a title is outside the English manga catalog (spec §1), or null when
  * it is in scope: prose/light novels, merchandise and activity books, promo
- * samplers, and non-English editions.
+ * samplers, children's picture books, and non-English editions.
  */
 export function outOfScopeReason(title: string): ScopeReason | null {
   const text = decodeEntities(title);
   if (NON_ENGLISH.test(text)) return "nonEnglish";
   if (MERCHANDISE.test(text)) return "merchandise";
   if (SAMPLER.test(text)) return "sampler";
+  if (CHILDRENS_BOOK.test(text)) return "childrensBook";
   if (parseBookTitle(text).isNovel) return "novel";
   return null;
 }

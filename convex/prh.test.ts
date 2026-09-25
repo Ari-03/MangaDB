@@ -547,3 +547,48 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     });
   });
 });
+
+// Stage 13 hid Series whose next book the TOKYOPOP feed still lists: a
+// sync must neither recreate nor re-queue them.
+describe("prh.sync — hidden Series stay hidden", () => {
+  const EMMA_3 = {
+    isbn: "9781427880666",
+    title: "Emma & Capucine, Volume 3",
+    seriesNumber: 3,
+    onsale: "2026-10-06",
+    imprint: "TOKYOPOP",
+  };
+
+  async function hideEmma(t: TestT) {
+    await t.run((ctx) =>
+      ctx.db.insert("series", {
+        status: "hidden",
+        publicId: 15853,
+        title: "Emma & Capucine",
+        altTitles: [],
+        searchText: "Emma & Capucine",
+      }),
+    );
+  }
+
+  for (const bootstrap of [true, false]) {
+    it(`records the book on its observation only (${bootstrap ? "Bootstrap Mode" : "steady state"})`, async () => {
+      const t = makeT();
+      await seedRegistry(t, bootstrap);
+      await hideEmma(t);
+      stubApi([EMMA_3]);
+      await sync(t);
+      await t.run(async (ctx) => {
+        const series = await ctx.db.query("series").collect();
+        expect(series.map((s) => s.status)).toEqual(["hidden"]);
+        expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+        expect(await ctx.db.query("proposals").collect()).toHaveLength(0);
+        const [obs] = await ctx.db.query("sourceObservations").collect();
+        expect(obs?.recordRef).toBeUndefined();
+        expect(obs?.conflicts?.find((c) => c.field === "placement")?.reason).toContain(
+          "Series 15853",
+        );
+      });
+    });
+  }
+});

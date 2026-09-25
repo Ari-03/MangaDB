@@ -696,15 +696,58 @@ publisher+title+label key but differing **only in Format** is a sibling
 Release of the same Edition (spec §2), so it takes the creation path and
 attaches to the sibling's Edition instead of queueing a review.
 
-**Kodansha** (`convex/kodansha.ts`, parsers `convex/lib/kodansha.ts`;
-daily). First-party JSON only — `wp-json/kodansha/v1/release-calendar`
-(~8 weekly buckets keyed by Tuesday) + `/new-releases` (this week, exact
-ISO dates, `series_type` scoping to comics). One catalog item announcing
-`["digital","print"]` yields one observation and one Release **per
-format**, sharing a single Edition. The endpoints expose no ISBNs or
-prices; the PRH overlay supplies those later (Kodansha is
-PRH-distributed). A rolling window is not a catalog sweep, so this adapter
-never withdraws. `npx convex run kodansha:sync '{}'`
+**Kodansha** (`convex/kodansha.ts`, parsers `convex/lib/kodansha.ts`).
+Two feeds share one observation per (volume, format) —
+`{series-slug}/{volume-slug}#{format}` — and one apply path. One volume
+announcing print and digital yields one Release **per format**, sharing a
+single Edition. Both feeds share one scope gate
+(`outOfScopeReason`, `convex/lib/bookTitle.ts`): novels, children's
+picture books ("Cells at Work! Picture Book"), and other non-manga
+Kodansha USA products are observed with `outOfScope` set. They never
+create a Series or Release, and never reconcile onto a record an earlier
+run linked. Neither feed withdraws: the calendar is a rolling window, and
+the crawl skips fresh series.
+
+- **Daily window** (`kodansha:sync`, registry row `kodansha`, daily).
+  First-party JSON: `wp-json/kodansha/v1/release-calendar` (~8 weekly
+  buckets keyed by Tuesday) + `/new-releases` (this week, exact ISO dates,
+  `series_type` scoping to comics). No ISBNs or prices. Covers are stored.
+  `npx convex run kodansha:sync '{}'`
+- **Backlist crawl** (`kodansha:backlistSync`, registry row
+  `kodansha-backlist`, weekly). Before it, only the window's ~100 items a
+  run reached the catalog, so Kodansha had 3,508 print Releases (via PRH)
+  but 139 digital. The crawl pages `wp-json/kodansha/v1/search-series`
+  (100 per request, ~860 comic series; novels are skipped), then each
+  series page (`/series/{slug}/`: JSON-LD `hasPart` plus the page's own
+  volume links) and each volume page (`/series/{slug}/volume-N/`). A
+  volume page's JSON-LD `Book` has one `workExample` per format with its
+  **ISBN**, `datePublished`, and USD price. It fetches at **1 req/s** with
+  the project User-Agent. The ISBN runs the ladder first, so the crawl
+  links PRH/ANN Releases (and fills Kodansha's dates and prices on them)
+  and puts ISBNs on calendar-created Releases. Later calendar runs keep
+  those ISBNs. A calendar Release that duplicates one already holding the
+  ISBN never gets the ISBN copied: the observation records the pair for
+  an Editor. Other volumes follow the standard creation boundaries, under
+  Kodansha or, for a Series whose Editions are all Vertical's, Vertical.
+  Packaging series pages (Omnibus, Box Set, Collector's Edition, and the
+  Kodansha-only "… Complete") map onto the base Series. They link by ISBN
+  or stay on the observation for an Editor. They never become a Volume or
+  a Series. The crawl stores no covers: an ISBN is enough for the site's
+  cover lookup.
+
+  **Incremental and resumable.** Each series' crawl state is an
+  observation under `kodansha-backlist` keyed by slug. It holds the
+  listing's `last_updated_at` stamp, the volume pages seen, and the pages
+  to re-check: upcoming, recent (≤60 days), or undated volumes, and failed
+  fetches. A series is crawled whole when new, when its stamp changes
+  (~20 series a month), or after 180 days. Otherwise, a week on, only its
+  re-check and new volume pages are fetched, and a series with nothing
+  moving is skipped. Each action spends 200 page fetches, finishes the
+  series in progress, and chains itself under one Import Run with the
+  last series slug as its cursor. Disabling the row stops the chain at
+  its next link. The first run is ~6.2k requests (~2 h). Later runs read
+  the 12 listing pages plus a few dozen pages.
+  `npx convex run kodansha:backlistSync '{}'`
 
 **ANN Encyclopedia** (`convex/ann.ts`, parsers `convex/lib/ann.ts`;
 weekly). The full mirror that builds the all-publisher, series-structured
@@ -841,12 +884,14 @@ books. Re-run it after deploying.
 `sevenSeas:sync` + `kodansha:sync` until settled → ② `ann:sync` (the
 backbone; hours at 1 req/s) → ③ `prh:sync '{"mode":"full"}'` → ④
 `openLibrary:sync` → quality gates → Bootstrap Mode off, permanently.
-`ann:sync` chains its release-page pass; `yenPress:sync` runs on its own
-daily cadence once `seedRegistry` has added its row.
+`ann:sync` chains its release-page pass; `yenPress:sync` (daily) and
+`kodansha:backlistSync` (weekly) run on their own cadences once
+`seedRegistry` has added their rows.
 
 Tests: `convex/lib/{kodansha,ann,prh,openLibrary}.test.ts` (parsers against
 captured live payloads / documented shapes — ANN release pages and Yen
-title pages are trimmed live copies) and
+title pages are trimmed live copies, as are the Kodansha series/volume
+pages in `convex/lib/__fixtures__/kodansha/`) and
 `convex/{kodansha,ann,prh,openLibrary,yenPress}.test.ts` (each adapter end to end
 against a stubbed source: creation, per-format Edition sharing, backbone
 building, linking + authority reconciliation, overlay fills + conflicts,
@@ -862,7 +907,7 @@ Administrator health emails, and the Data Team dashboard.
 hourly cron tick reads the Approved Source registry and starts every
 enabled source that is due per its cadence string — Seven Seas & Kodansha
 `daily`, PRH `daily` (future-dated, widening to the full sweep on UTC
-Sundays), ANN `weekly`, OpenLibrary `monthly`. Cadence edits are plain
+Sundays), ANN and the Kodansha backlist `weekly`, OpenLibrary `monthly`. Cadence edits are plain
 registry writes and take effect on the next tick; a still-running run
 defers its source. Transient fetch failures retry with exponential backoff
 inside a run (`convex/lib/http.ts`); a failed run simply resumes at the

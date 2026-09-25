@@ -18,6 +18,9 @@
 //   number; packaging covers the base Series' real Volumes, never its own
 // - the steady-state review queue: an In-Review Proposal pre-filled with
 //   the parsed guess (temp-ID create ops the approval registry applies)
+// - repairs stand: series links and same-label Volumes follow merges to
+//   their survivors, and the creation path never recreates a Series an
+//   Editor hid (removedSeriesFor) — the record stays on its observation
 //
 // `release` is optional on both paths: a series-structured source (ANN)
 // creates or queues the Series/Volume backbone without any Release.
@@ -25,7 +28,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { canonicalLabel } from "./bookTitle";
-import { labelsEqual } from "./matching";
+import { hiddenSeriesTitled, labelsEqual, survivorOf } from "./matching";
 import { getObservation, upsertObservation } from "./observations";
 import { allocatePublicId } from "./publicIds";
 import {
@@ -265,9 +268,14 @@ export async function reconcileLinkedSeries(
   if (seriesObs?.recordRef?.type !== "series") {
     return { seriesId: null, changed: false };
   }
-  const series = await ctx.db.get(seriesObs.recordRef.id);
+  // A repair merged the linked Series: the link follows it to the survivor.
+  const linked = await ctx.db.get(seriesObs.recordRef.id);
+  const series = await survivorOf<"series">(ctx, linked);
   if (!series || series.status !== "active") {
     return { seriesId: null, changed: false };
+  }
+  if (series._id !== linked?._id) {
+    await ctx.db.patch(seriesObs._id, { recordRef: { type: "series", id: series._id } });
   }
   if (series.locked) return { seriesId: series._id, changed: false };
   const result = await reconcileFields(ctx, {
@@ -301,6 +309,103 @@ export function creationGates(args: {
       ? ["an Edition Line (deluxe/omnibus/box-set packaging)"]
       : []),
   ];
+}
+
+// ---------- removed Series (repairs the importers respect) ----------
+
+/** What a brand-new Series for a record would recreate (removedSeriesFor). */
+export type RemovedSeries =
+  | { kind: "merged"; survivor: Doc<"series"> }
+  | { kind: "hidden"; series: Doc<"series">; reason: string };
+
+/** A publisher row and its parent: an imprint and its company are one house. */
+async function publisherHouse(
+  ctx: MutationCtx,
+  publisherId: Id<"publishers">,
+): Promise<Id<"publishers">[]> {
+  const row = await ctx.db.get(publisherId);
+  return row?.parentPublisherId !== undefined ? [row._id, row.parentPublisherId] : [publisherId];
+}
+
+/** Every publisher house the Series' Editions (any status) were published by. */
+async function seriesPublishers(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+): Promise<Set<Id<"publishers">>> {
+  const houses = new Set<Id<"publishers">>();
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
+  for (const volume of volumes) {
+    const coverages = await ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
+      .collect();
+    for (const coverage of coverages) {
+      const edition = await ctx.db.get(coverage.editionId);
+      if (!edition) continue;
+      for (const id of await publisherHouse(ctx, edition.publisherId)) houses.add(id);
+    }
+  }
+  return houses;
+}
+
+/**
+ * The repair a brand-new Series for this record would undo, or null when
+ * creating one is fine. In order:
+ *
+ * 1. The record's own Series link — the observation's `recordRef` (ANN's
+ *    manga entry) or the source's `series:{key}` link observation —
+ *    pointing at a merged Series (→ its survivor) or a hidden one.
+ * 2. A hidden Series with the same normalized title, unless both sides
+ *    name publishers and they differ: a namesake from another house (a
+ *    manga "Ring" against Vertical's hidden prose "Ring") is a new work.
+ *
+ * Merged-by-title never reaches here: candidateSeries already answers a
+ * merged Series' title with its survivor.
+ */
+export async function removedSeriesFor(
+  ctx: MutationCtx,
+  args: {
+    sourceKey: string;
+    observation: Doc<"sourceObservations">;
+    seriesKey?: string;
+    seriesTitle: string;
+    /** The incoming record's publisher, when the source names one. */
+    publisherId: Id<"publishers"> | null;
+  },
+): Promise<RemovedSeries | null> {
+  const hidden = (series: Doc<"series">): RemovedSeries => ({
+    kind: "hidden",
+    series,
+    reason: `"${args.seriesTitle}" is Series ${series.publicId} ("${series.title}"), which an Editor hid — not recreated by an import.`,
+  });
+
+  const linkObs =
+    args.observation.recordRef?.type === "series"
+      ? args.observation
+      : args.seriesKey !== undefined
+        ? await getObservation(ctx, args.sourceKey, `series:${args.seriesKey}`)
+        : null;
+  if (linkObs?.recordRef?.type === "series") {
+    const linked = await survivorOf<"series">(ctx, await ctx.db.get(linkObs.recordRef.id));
+    if (linked?.status === "hidden") return hidden(linked);
+    if (linked?.status === "active" && linked._id !== linkObs.recordRef.id) {
+      return { kind: "merged", survivor: linked };
+    }
+  }
+
+  const incoming =
+    args.publisherId !== null ? new Set(await publisherHouse(ctx, args.publisherId)) : null;
+  for (const series of await hiddenSeriesTitled(ctx, args.seriesTitle)) {
+    if (incoming !== null) {
+      const houses = await seriesPublishers(ctx, series._id);
+      if (houses.size > 0 && ![...houses].some((id) => incoming.has(id))) continue;
+    }
+    return hidden(series);
+  }
+  return null;
 }
 
 // ---------- the creation path ----------
@@ -369,11 +474,17 @@ type CreatedRecord = {
 };
 
 export type CreationResult = {
+  /** The Series the records went under — the hidden one when `blocked`. */
   seriesId: Id<"series">;
   volumeIds: Id<"volumes">[];
   releaseId?: Id<"releases">;
   /** False when everything already existed and nothing was written. */
   changed: boolean;
+  /**
+   * Set when the record belongs to a Series an Editor hid: nothing was
+   * created and the reason sits on the observation as a placement note.
+   */
+  blocked?: string;
 };
 
 /**
@@ -408,6 +519,11 @@ export function volumePositionFor(
  * (a second packaging of the same content must not duplicate the Volume).
  * Labels are stored canonically ("05" → "5"); positions follow
  * volumePositionFor; Volumes created earlier in this call count too.
+ *
+ * Repairs stand: a same-label Volume a repair merged answers as its
+ * survivor under this Series. For `backboneOnly` calls (no Release to
+ * cover it — ANN's Volume backbone) a same-label Volume that was hidden or
+ * merged away is never recreated; the label is skipped.
  */
 async function ensureVolumes(
   ctx: MutationCtx,
@@ -415,23 +531,34 @@ async function ensureVolumes(
   labels: Array<string | undefined>,
   tag: { bootstrapUnreviewed?: boolean },
   created: CreatedRecord[],
+  backboneOnly: boolean,
 ): Promise<Id<"volumes">[]> {
-  const existingVolumes: Array<Pick<Doc<"volumes">, "_id" | "status" | "label" | "position">> =
-    await ctx.db
-      .query("volumes")
-      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-      .collect();
+  const existingVolumes: Array<
+    Pick<Doc<"volumes">, "_id" | "status" | "label" | "position" | "mergedIntoId">
+  > = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
   const taken = new Set(existingVolumes.map((vol) => vol.position));
   const volumeIds: Id<"volumes">[] = [];
   for (const raw of labels) {
     const label = raw !== undefined ? canonicalLabel(raw) : undefined;
-    const existing = existingVolumes.find(
-      (vol) => vol.status === "active" && labelsEqual(vol.label, label ?? null),
-    );
+    const sameLabel = existingVolumes.filter((vol) => labelsEqual(vol.label, label ?? null));
+    const existing = sameLabel.find((vol) => vol.status === "active");
     if (existing) {
       volumeIds.push(existing._id);
       continue;
     }
+    const merged = sameLabel.find((vol) => vol.mergedIntoId !== undefined);
+    const survivor =
+      merged?.mergedIntoId !== undefined
+        ? await survivorOf<"volumes">(ctx, await ctx.db.get(merged.mergedIntoId))
+        : null;
+    if (survivor?.status === "active" && survivor.seriesId === seriesId) {
+      volumeIds.push(survivor._id);
+      continue;
+    }
+    if (backboneOnly && sameLabel.length > 0) continue;
     const position = volumePositionFor(label, taken);
     taken.add(position);
     const publicId = await allocatePublicId(ctx, "volume");
@@ -612,6 +739,24 @@ export async function createCanonicalRecords(
 
   let seriesId = args.seriesId;
   if (seriesId === null) {
+    // Never undo a repair: a merged Series' records go to its survivor, and
+    // a hidden work is not brought back as a fresh Series.
+    const publisher =
+      args.release !== undefined ? await publisherBySlug(ctx, args.release.publisher.slug) : null;
+    const removed = await removedSeriesFor(ctx, {
+      sourceKey: args.sourceKey,
+      observation: args.observation,
+      seriesKey: args.seriesKey,
+      seriesTitle: args.seriesTitle,
+      publisherId: publisher?._id ?? null,
+    });
+    if (removed?.kind === "hidden") {
+      await recordUnplaced(ctx, args.observation, removed.reason, now);
+      return { seriesId: removed.series._id, volumeIds: [], changed: false, blocked: removed.reason };
+    }
+    if (removed?.kind === "merged") seriesId = removed.survivor._id;
+  }
+  if (seriesId === null) {
     const publicId = await allocatePublicId(ctx, "series");
     const altTitles = args.seriesAltTitles ?? [];
     const fields = { title: args.seriesTitle, altTitles };
@@ -639,7 +784,14 @@ export async function createCanonicalRecords(
 
   const volumeLabels: Array<string | undefined> =
     args.labels.length > 0 ? args.labels : args.seriesOnly ? [] : [undefined];
-  const volumeIds = await ensureVolumes(ctx, seriesId, volumeLabels, tag, created);
+  const volumeIds = await ensureVolumes(
+    ctx,
+    seriesId,
+    volumeLabels,
+    tag,
+    created,
+    args.release === undefined,
+  );
 
   let releaseId: Id<"releases"> | undefined;
   if (args.release !== undefined) {

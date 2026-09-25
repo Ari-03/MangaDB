@@ -590,6 +590,10 @@ describe("outOfScopeReason", () => {
       "merchandise",
     );
     expect(outOfScopeReason("TOKYOPOP Manga Showcase 2024")).toBe("sampler");
+    expect(outOfScopeReason("Cells at Work! Picture Book 5")).toBe("childrensBook");
+    expect(outOfScopeReason("Chi's Sweet Home Board Book")).toBe("childrensBook");
+    expect(outOfScopeReason("The Picture of Dorian Gray, Book 1")).toBeNull();
+    expect(outOfScopeReason("Adults' Picture Book")).toBeNull();
     expect(outOfScopeReason("Star Collector, Chapter 1, FREE SAMPLE")).toBe(
       "sampler",
     );

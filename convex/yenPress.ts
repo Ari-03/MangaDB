@@ -69,23 +69,23 @@ function isDue(snapshot: YenTitleSnapshot, lastSeenAt: number, now: number): boo
 }
 
 /**
- * Which of these books (ISBN groups, one per slug) need a page fetch: a
- * book none of whose ISBNs is observed, or whose observation is due.
+ * Which of these books (ISBN groups, one per slug) need a page fetch: a book
+ * any of whose ISBNs is unobserved or due. Print and digital share a page, so
+ * a format listed after the other was observed is fetched straight away
+ * rather than waiting for the older observation to expire.
  */
 export const booksToFetch = internalQuery({
   args: { books: v.array(v.array(v.string())), now: v.number() },
   handler: async (ctx, { books, now }) => {
     const due: number[] = [];
     for (const [i, isbns] of books.entries()) {
-      let fresh = false;
       for (const isbn of isbns) {
         const obs = await getObservation(ctx, SOURCE_KEY, isbn);
-        if (obs && !isDue(obs.snapshot as YenTitleSnapshot, obs.lastSeenAt, now)) {
-          fresh = true;
+        if (!obs || isDue(obs.snapshot as YenTitleSnapshot, obs.lastSeenAt, now)) {
+          due.push(i);
           break;
         }
       }
-      if (!fresh) due.push(i);
     }
     return due;
   },

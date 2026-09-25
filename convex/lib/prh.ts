@@ -19,7 +19,14 @@
 // other languages, so titles are gated here — PRH's prose "Vertical"
 // imprint and Seven Seas' coloring-book "Waves of Color" imprint are denied
 // outright (only "Vertical Comics" is manga), and novels, merchandise,
-// samplers, and non-English editions are dropped by title.
+// samplers, and non-English editions are dropped by title. PRH's own
+// classification adds what titles miss (prhScopeReason): `graphicCategory`
+// "Light Novel", prose-only BISAC `subjects`, and the general TOKYOPOP
+// imprint's "Graphic Novel" category (its art books, card decks, album-style
+// GNs). Scope is "does it look like manga", not origin: OEL/global manga,
+// manhwa, manhua and manga-styled originals stay in. A non-manga-looking
+// comic PRH still files as "Manga" (e.g. a US-style issue) has no PRH
+// signal and is left to Editors.
 
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
@@ -94,6 +101,50 @@ const AUDIO = /audio/i;
 // arrives as "Vertical Comics") and Seven Seas' coloring books.
 const DENIED_IMPRINTS = /^(?:vertical|waves of color)$/i;
 
+// PRH classification signals, calibrated on live imprint listings
+// (2026-09-25: 209, 210, 206, 140, KN, KM, V4, XO, XP, 123, 334):
+// - graphicCategory "Light Novel" is prose everywhere ("Berserk: The Flame
+//   Dragon Knight" carries no novel word in its title).
+// - Every BISAC subject a FIC (fiction) code: prose ("Six: Paths of Horror").
+//   Juvenile-only (JUV) subjects are NOT a signal — real kids' manga ("The
+//   Fox & Little Tanuki", Tokyopop's "Agent Boo") carry only those.
+// - "Graphic Novel" is not a signal in general (Titan Manga and Vertical
+//   Comics file real manga under it), but in the general TOKYOPOP imprint
+//   it marks only non-manga: art books, card decks, advent calendars,
+//   sticker books, the album-style "Ballad of The Broken Heart".
+const PROSE_CATEGORY = /^light novel$/i;
+const NON_MANGA_GN_IMPRINT = /^tokyopop$/i;
+
+/**
+ * Why PRH's own classification puts a title outside the manga catalog, or
+ * null when it does not: see the signals above. `imprint` is the parsed
+ * imprint description.
+ */
+export function prhScopeReason(
+  entry: Record<string, unknown>,
+  imprint: string | undefined,
+): "novel" | "prose" | "notManga" | null {
+  const category = typeof entry.graphicCategory === "string" ? entry.graphicCategory.trim() : "";
+  if (PROSE_CATEGORY.test(category)) return "novel";
+  const codes = Array.isArray(entry.subjects)
+    ? entry.subjects.flatMap((subject) =>
+        typeof subject === "object" && subject !== null && "code" in subject &&
+        typeof subject.code === "string"
+          ? [subject.code]
+          : [],
+      )
+    : [];
+  if (codes.length > 0 && codes.every((code) => code.startsWith("FIC"))) return "prose";
+  if (
+    imprint !== undefined &&
+    NON_MANGA_GN_IMPRINT.test(imprint) &&
+    /^graphic novel$/i.test(category)
+  ) {
+    return "notManga";
+  }
+  return null;
+}
+
 /** One title entry → a snapshot, or null when malformed / out of scope. */
 export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -108,6 +159,7 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   const imprint = described(entry.imprint) ?? described(entry.publisher);
   if (imprint !== undefined && DENIED_IMPRINTS.test(imprint)) return null;
   if (outOfScopeReason(title) !== null) return null;
+  if (prhScopeReason(entry, imprint) !== null) return null;
   const language = described(entry.language);
   if (language !== undefined && !/^(?:e|en|eng|english)$/i.test(language)) return null;
 

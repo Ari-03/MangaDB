@@ -159,6 +159,13 @@ describe("release lines — ISBNs, chapters, packaging in the title", () => {
       label: "1",
       editionLineHint: true,
     });
+    // A complete collection packages the whole series, numbered or not.
+    expect(
+      splitReleaseTitle("Summer Ghost: The Complete Manga Collection (GN)", "Summer Ghost"),
+    ).toMatchObject({ label: undefined, editionLineHint: true });
+    expect(
+      splitReleaseTitle("orange: The Complete Collection 2 (GN 2)", "Orange"),
+    ).toMatchObject({ label: "2", editionLineHint: true });
     // The series' own name carries the word: not packaging.
     expect(
       splitReleaseTitle("The Omnibus Club (GN 2)", "The Omnibus Club"),

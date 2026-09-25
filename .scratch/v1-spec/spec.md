@@ -16,6 +16,7 @@ From the charting session and [catalog scope](https://github.com/Ari-03/MangaDB/
 - **English-first:** every Release carries a language from day one; v1 populates and surfaces English only.
 - **Formats:** physical + digital releases. Physical-complete, digital-partial at launch, honestly labeled (see §7).
 - **Volumes, not chapters:** chapter-level tracking is AniList/MangaUpdates territory.
+- **Manga by look, not origin** (owner decision, 2026-09-25): the test is "does it look like a manga or a comic?" Chinese manhua, Korean manhwa, French manga-style books, and English-language (OEL/global) manga such as Tokyopop originals are in. Books that look like Western comics (US comic-book/superhero pamphlets, European album-format bandes dessinées, graphic-novel biographies) are out, as are prose and light novels, picture books, and merchandise.
 
 **Out of scope for v1** (recorded on the map): notifications/release alerts; purchase links & retailer prices; audio releases; populating non-English data (schema supports it); chapter-level tracking; Publication Wishes for unannounced editions and demand voting; user-created custom lists; chronological/social activity feeds.
 
@@ -29,11 +30,13 @@ Source-content identity is stable; publisher packaging is modeled separately:
 
 - **Series** — a separately named work with one canonical Volume sequence. A sequel/reboot/spinoff with its own numbering is another Series; republishing or renumbering the same work is not. Carries **Source Status** (ongoing | completed | hiatus | cancelled — describes the source work, imported like any fact).
 - **Series Family** — optional, non-nestable umbrella shown only when ≥2 Series belong together; typed **Series Relationships** (`sequel | prequel | spinoff | reboot | sideStory | other`, note required for `other`; stored once per edge as "from is a {type} of to", reverse rendered).
-- **Volume** — stable source collected-content unit. Hidden consecutive **Volume Position** (identity/sort) + public **Volume Label** ("7.5", "Side Story"). Oneshots are Series with one unnumbered Volume. Optional editor-curated **Volume Synopsis**.
+- **Volume** — stable source collected-content unit. **Volume Position** (sort) is the volume number itself for numbered Volumes — so a gap shows a missing Volume; fractional numbers sort in place — and unnumbered Volumes sort after the last numbered one before them; public **Volume Label** ("7.5", "Side Story") is what displays. Oneshots are Series with one unnumbered Volume. Optional editor-curated **Volume Synopsis**.
 - **Edition** — first-class stored entity with its own public ID: a publisher's packaging of specific content — one Publisher, one ordered **Volume Coverage** (complete/partial per Volume), one **Edition Line** membership or none, with **Edition Line Position** ("Omnibus 1") independent of the covered Volumes. Realized by Releases that differ only in Format and Binding. The book detail page is per Edition.
 - **Release** — a specific purchasable publication of an Edition: Format (`physical | digital`), Binding where applicable (open vocabulary: paperback, hardcover…), one language, optional ISBN-10/13. Unchanged reprints and the same digital publication at other retailers keep their identity; a change to those characteristics creates another Release. Carries the publisher-provided **Release Description**.
 - **Release Variant** — a visually distinct form (alternate/box-set-exclusive cover) with otherwise unchanged characteristics; browsed beneath its Release, referenceable by collection entries and bundle memberships.
 - **Release Bundle** — purchasable, non-nestable package (box set) of existing Releases, optionally pinning a member's Variant; has its own publication facts and box-set ISBN.
+- **Packaging is never structure** — omnibus, deluxe, collector's, n-in-1, and box-set books belong to the base Series: a single book collecting Volumes is an Edition in an Edition Line with Coverage of the real Volumes; a box set is a Release Bundle. Neither is ever a Series or a Volume of its own.
+- **Publisher** — one row per company; duplicate strings for the same company ("Kodansha Comics") resolve to it, while an imprint ("Ghost Ship") is a Publisher of its own naming its parent company, one level deep.
 
 **Edge cases verified against the schema draft** ([schema resolution](https://github.com/Ari-03/MangaDB/issues/11)): box sets, oneshots, omnibus/deluxe lines, split/merged/reordered English editions (ordered coverage with `partial` extent + note), relaunches (same Series), spinoffs (new Series + relationship edge), bundle-exclusive covers.
 
@@ -74,7 +77,7 @@ Decided in [editor proposal and moderation workflow](https://github.com/Ari-03/M
 
 Decided in [import reconciliation, provenance, and confidence rules](https://github.com/Ari-03/MangaDB/issues/13), on the source landscape from [data-sources research](https://github.com/Ari-03/MangaDB/issues/2).
 
-**Approved-source registry — data, not code.** Each source carries scope, per-field authority levels, cadence; editable without schema/code change. **v1 sources:** ANN Encyclopedia + OpenLibrary + PRH API (backbone) + Seven Seas + Kodansha (first-party JSON APIs). VIZ and Square Enix sites are never scraped (ToS ban) — their data arrives via ANN/OpenLibrary/PRH. Post-v1 candidates (Yen Press, Dark Horse, BookWalker) slot into the registry.
+**Approved-source registry — data, not code.** Each source carries scope, per-field authority levels, cadence; editable without schema/code change. **v1 sources:** ANN Encyclopedia + OpenLibrary + PRH API (backbone) + Seven Seas + Kodansha (first-party JSON APIs). VIZ and Square Enix sites are never scraped (ToS ban) — their data arrives via ANN/OpenLibrary/PRH. **Yen Press** (Hachette-distributed, so PRH never carried it) joined post-v1 from its public sitemap + title pages (2026-09). **Kodansha's back catalog** joined the same month: a weekly crawl of its `search-series` JSON, series pages, and volume-page JSON-LD (print + digital ISBNs, per-format dates, prices) at 1 req/s, feeding the same Kodansha observations and authority row as its daily calendar. Other post-v1 candidates (Dark Horse, BookWalker) slot into the registry.
 
 **Authority table** (authoritative > standard > weak, scope-limited):
 
@@ -85,6 +88,7 @@ Decided in [import reconciliation, provenance, and confidence rules](https://git
 | PRH API | PRH-distributed | auth | auth | std | std | std |
 | ANN | all English | std | — | std | std | std |
 | OpenLibrary | all English | weak | std | weak | weak | std |
+| Yen Press | own catalog | auth | auth | auth | auth | auth |
 
 **Conflict rules:** auto-update only from strictly higher authority; equal-authority disagreement queues a Proposal; lower-authority disagreement is recorded on the observation only. A more precise consistent date auto-refines at equal-or-higher authority; less precise never replaces more precise.
 
@@ -92,7 +96,9 @@ Decided in [import reconciliation, provenance, and confidence rules](https://git
 
 **Creation boundaries (steady-state):** auto-create single-Volume Releases (and their Volume) under an already-linked Series; always review brand-new Series and anything needing multi-Volume Coverage or an Edition Line — pre-filled so a correct guess is one-click.
 
-**Cadence** (Convex scheduled jobs): Seven Seas & Kodansha daily; PRH daily future-dated + weekly full sweep; ANN weekly full mirror (1 req/s); OpenLibrary monthly bulk dump.
+**ANN and OpenLibrary create leaves only** (owner decision, 2026-09-25 — ANN previously never created Releases): a Release (+ its Edition) under a Series, Volume, and Publisher that all already exist, never structure, never a publisher, never packaging (omnibus/box-set lines link by ISBN only), and at most one Release per (Volume, Publisher, Format) from that source — a second ISBN there is a reprint or variant and stays on the observation. ANN's publisher comes from each release's Encyclopedia page (Distributor), fetched once per still-unlinked release line at 1 req/s; its ISBN from the API line itself (`ean`). The authority table is unchanged: what ANN creates carries its ISBN and date at creation, and PRH/publisher feeds overwrite them at higher authority.
+
+**Cadence** (Convex scheduled jobs): Seven Seas, Kodansha & Yen Press daily; Kodansha backlist crawl weekly (incremental: only new, re-stamped, or still-moving series, each re-crawled whole every 180 days); PRH daily future-dated + weekly full sweep; ANN weekly full mirror (1 req/s), each completed mirror chaining its release-page pass over still-unlinked lines; OpenLibrary monthly bulk dump.
 
 **Observations:** identity = (source, source-record-id); latest normalized snapshot read by reconciliation, prior snapshots retained append-only; disappearance marks **withdrawn** (retained; queues review only if the linked Release is future-dated — possible cancellation). Absence is never evidence; source downtime never expires data. Indefinite retention in v1.
 
