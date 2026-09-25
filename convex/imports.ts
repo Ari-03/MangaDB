@@ -47,26 +47,6 @@ export const startRun = internalMutation({
 });
 
 /**
- * Open the run a finished run chains into (ANN's release-page pass after its
- * mirror), inheriting whether it was automatic: a forced mirror chains a
- * forced page pass, a scheduled one a scheduled pass.
- */
-export const startFollowOnRun = internalMutation({
-  args: { afterRunId: v.id("importRuns"), sourceKey: v.string() },
-  handler: async (ctx, { afterRunId, sourceKey }) => {
-    const previous = await ctx.db.get(afterRunId);
-    return await ctx.db.insert("importRuns", {
-      sourceKey,
-      status: "running",
-      recordsSeen: 0,
-      recordsChanged: 0,
-      errors: [],
-      ...(previous?.automatic ? { automatic: true } : {}),
-    });
-  },
-});
-
-/**
  * A continuation link found its source disabled: close an automatic run with
  * what it has done so far and report that it stopped; an operator's run is
  * left running. Returns whether the run is over.

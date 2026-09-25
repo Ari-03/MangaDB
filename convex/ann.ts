@@ -64,7 +64,7 @@ import {
   type AnnReleasePage,
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
-import { runToContinue } from "./lib/importRuns";
+import { openFollowOnRun, runToContinue } from "./lib/importRuns";
 import { canonicalLabel } from "./lib/bookTitle";
 import { candidateSeries, labelsEqual, survivorOf } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
@@ -244,13 +244,9 @@ export const sync = internalAction({
       });
       // The mirror refreshed every line: now place the unlinked ones.
       if (args.releasePages !== false) {
-        const pageRunId = await ctx.runMutation(internal.imports.startFollowOnRun, {
+        await ctx.runMutation(internal.ann.chainReleasePages, {
           afterRunId: runId,
-          sourceKey: SOURCE_KEY,
-        });
-        await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
           politeDelayMs: args.politeDelayMs,
-          runId: pageRunId,
         });
       }
       return {
@@ -784,6 +780,19 @@ type PageSyncResult =
       errorCount: number;
       failed?: boolean;
     };
+
+/**
+ * Open the release-page pass's run and schedule its first link in one
+ * transaction: if scheduling fails, no run is left "running" (which would
+ * make the dispatcher skip ANN until someone repaired it).
+ */
+export const chainReleasePages = internalMutation({
+  args: { afterRunId: v.id("importRuns"), politeDelayMs: v.optional(v.number()) },
+  handler: async (ctx, { afterRunId, politeDelayMs }) => {
+    const runId = await openFollowOnRun(ctx, afterRunId, SOURCE_KEY);
+    await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, { politeDelayMs, runId });
+  },
+});
 
 /**
  * The release-page pass: walks every unlinked release line, fetches its

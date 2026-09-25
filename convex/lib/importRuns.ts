@@ -5,7 +5,7 @@
 
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { ActionCtx } from "../_generated/server";
+import type { ActionCtx, MutationCtx } from "../_generated/server";
 
 /**
  * The run this link should work on, or null to stop. A fresh call on a
@@ -30,4 +30,27 @@ export async function runToContinue(
     errors: args.errors ?? [],
   });
   return stopped ? null : args.runId;
+}
+
+/**
+ * Open the run a finished run chains into (ANN's release-page pass after its
+ * mirror), inheriting whether it was automatic: a forced mirror chains a
+ * forced page pass, a scheduled one a scheduled pass. Call it in the same
+ * mutation that schedules the follow-on, so a run is never left "running"
+ * with nothing scheduled to finish it.
+ */
+export async function openFollowOnRun(
+  ctx: MutationCtx,
+  afterRunId: Id<"importRuns">,
+  sourceKey: string,
+): Promise<Id<"importRuns">> {
+  const previous = await ctx.db.get(afterRunId);
+  return await ctx.db.insert("importRuns", {
+    sourceKey,
+    status: "running",
+    recordsSeen: 0,
+    recordsChanged: 0,
+    errors: [],
+    ...(previous?.automatic ? { automatic: true } : {}),
+  });
 }
