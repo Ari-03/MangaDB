@@ -42,9 +42,10 @@ uses. The five mock-ups the look was chosen from live on the
 Nothing image-shaped lives in Convex for most of the catalog. `/covers/{isbn13}.jpg`
 (`src/server/covers.ts`) serves jacket art for any Release with an ISBN-13:
 edge cache → the `mangadb-covers` R2 bucket → the distribution CDN Penguin
-Random House runs for the publishers it carries (most English manga). Known
-"no image" and "coming soon" stand-ins are rejected by size and hash, so those
-books stay cloth. `<Cover isbn13>` derives the URL and falls back to cloth on a
+Random House runs for the publishers it carries (most English manga) → the
+OpenLibrary Covers API for what PRH lacks (VIZ and other non-PRH publishers,
+most ebook ISBNs). Known "no image" and "coming soon" stand-ins are rejected by
+size and hash, so those books stay cloth. `<Cover isbn13>` derives the URL and falls back to cloth on a
 404. The few stored covers (Kodansha imports) still win where they exist, and
 `convex/lib/covers.ts` hides the blank SVG some importers stored.
 

@@ -260,7 +260,6 @@
 .edition-card.is-selected .edition-card-name { color: var(--accent); }
 .edition-card-meta { font-size: 0.82rem; color: var(--text-dim); }
 
-.reading-path { scroll-margin-top: calc(var(--header-h) + 16px); }
 .shelf-item--missing .cover { opacity: 0.38; filter: saturate(0.4); }
 .shelf-item--missing .caption-meta { font-style: italic; }
 

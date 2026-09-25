@@ -1,7 +1,7 @@
 /* Series library (/series). Composes the Releases browser's masthead and
    toolbar (.page-head, .toolbar, .filter, .seg, .result-count in
    releases.css) and the shared shelf (covers.css); owns only the letter
-   index, the search field, the caption's sort line, and "Show more". */
+   index, the search field, the caption's sort line, and the scroll-to-load status. */
 
 .library-page > .notice { margin-top: 24px; }
 .library-page > .notice a {
@@ -102,7 +102,7 @@
 }
 .caption-sub .chip { padding: 1px 9px; font-size: 0.72rem; }
 
-/* --- Show more ----------------------------------------------------------- */
+/* --- Loading more as the reader scrolls -------------------------------- */
 
 .library-more {
   display: grid;
@@ -113,6 +113,8 @@
 .library-more .btn { min-width: 180px; justify-content: center; }
 .library-more .btn:disabled { opacity: 0.6; cursor: progress; transform: none; }
 .library-more-error { font-size: 0.86rem; color: var(--text-mute); }
+/* the scroll sentinel's status line: empty while idle, so it takes no room */
+.library-more-status { min-height: 1.4em; font-size: 0.86rem; color: var(--text-mute); }
 
 /* --- Responsive ---------------------------------------------------------- */
 

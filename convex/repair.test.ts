@@ -306,6 +306,26 @@ describe("field repairs and scope", () => {
     expect((await run(t, [entry(null)]))[0]?.status).toBe("alreadyApplied");
   });
 
+  it("turns a print-labelled ebook digital and drops its binding", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    await t.run(async (ctx) => ctx.db.patch(s.r1.releaseId, { binding: "paperback" }));
+    const entry: RepairEntry = {
+      kind: "updateFields",
+      key: "f",
+      reason: "ebook recorded as print",
+      table: "releases",
+      id: s.r1.releaseId,
+      changes: [{ field: "format", before: "physical", after: "digital" }],
+      evidenceObservationId: null,
+    };
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    const release = await t.run(async (ctx) => ctx.db.get(s.r1.releaseId));
+    expect(release?.format).toBe("digital");
+    expect(release?.binding).toBeUndefined();
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
   it("hides a series with its cascade and unlinks an observation", async () => {
     const t = makeT();
     const s = await seed(t);

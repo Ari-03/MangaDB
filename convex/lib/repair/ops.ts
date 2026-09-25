@@ -890,6 +890,11 @@ async function updateFields(
       case "coverImage":
         patch.coverImage = undefined;
         break;
+      case "format":
+        patch.format = change.after;
+        // Binding describes physical construction only (glossary: Binding).
+        if (change.after === "digital" && release.binding !== undefined) patch.binding = undefined;
+        break;
       default:
         patch[change.field] = stored(change.after);
     }

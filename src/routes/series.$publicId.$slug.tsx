@@ -416,7 +416,7 @@ function SeriesPage() {
       ) : null}
 
       {selected ? (
-        <section className="section reading-path" id="reading-path">
+        <section className="section reading-path">
           <div className="section-head">
             <h2 className="section-title">
               {editionGroups.length > 1 ? selected.name : "Reading path"}
@@ -516,7 +516,7 @@ function EditionPicker({
             to="/series/$publicId/$slug"
             params={seriesLinkParams(series.publicId, series.title)}
             search={{ edition: group.key }}
-            hash="reading-path"
+            // Switching editions keeps the reader where they are.
             resetScroll={false}
             aria-current={isSelected ? "true" : undefined}
           >

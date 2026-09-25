@@ -500,6 +500,16 @@ export const browse = query({
     if (!cursor && args.sort === "upcoming" && order === "asc") {
       cursor = { v: 0, id: Number.MAX_SAFE_INTEGER };
     }
+    // A letter under the title sort is a contiguous stretch of the title
+    // index: start the range at it and stop once past it, rather than
+    // scanning from "a" and running out of budget before "m" is reached.
+    const letterRange =
+      args.sort === "title" && filters.letter && filters.letter !== "#"
+        ? { from: filters.letter, to: String.fromCharCode(filters.letter.charCodeAt(0) + 1) }
+        : null;
+    if (!cursor && letterRange) {
+      cursor = order === "asc" ? { v: letterRange.from, id: -1 } : { v: letterRange.to, id: -1 };
+    }
     // Collect one row past the page: finding it is how we know there is a
     // next page without guessing at the end of the index.
     const target = pageSize + 1;
@@ -523,6 +533,10 @@ export const browse = query({
       }
       const last = chunk[chunk.length - 1];
       if (last) cursor = { v: last[SORT_INDEX[args.sort].field], id: last.publicId };
+      if (last && letterRange) {
+        const past = order === "asc" ? last.titleSort >= letterRange.to : last.titleSort < letterRange.from;
+        if (past) exhausted = true;
+      }
     }
     const page = items.slice(0, pageSize);
     const edge = page[page.length - 1];

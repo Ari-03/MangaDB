@@ -186,6 +186,8 @@ const seriesChange = v.union(
   }),
 );
 
+const releaseFormat = v.union(v.literal("physical"), v.literal("digital"));
+
 const releaseChange = v.union(
   v.object({
     field: v.union(v.literal("isbn13"), v.literal("isbn10"), v.literal("binding")),
@@ -201,6 +203,12 @@ const releaseChange = v.union(
     field: v.literal("coverImage"),
     before: v.union(cover, v.null()),
     after: v.null(),
+  }),
+  // An ebook recorded as print (or the reverse); going digital drops Binding.
+  v.object({
+    field: v.literal("format"),
+    before: releaseFormat,
+    after: releaseFormat,
   }),
 );
 
