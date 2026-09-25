@@ -42,6 +42,7 @@ import {
 } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { errorMessage, politeFetch } from "./lib/http";
+import { runToContinue } from "./lib/importRuns";
 import {
   crawlMode,
   kodanshaSnapshotValidator,
@@ -329,10 +330,10 @@ export const backlistSync = internalAction({
         'The approved-source registry has no "kodansha-backlist" row. Run: npx convex run importSources:seedRegistry \'{}\'',
       );
     }
-    if (!source.enabled && args.runId === undefined) return { skipped: "disabled" as const };
-
-    const runId: Id<"importRuns"> =
-      args.runId ?? (await ctx.runMutation(internal.imports.startRun, { sourceKey: BACKLIST_KEY }));
+    // The shared gate: disabling the row stops a scheduled crawl at its next
+    // link (the run closes as "stopped"); an operator-forced run finishes.
+    const runId = await runToContinue(ctx, source, args);
+    if (runId === null) return { skipped: "disabled" as const };
     const delay = args.politeDelayMs ?? BACKLIST_DELAY_MS;
     const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
     const errors = [...(args.errors ?? [])];
@@ -364,12 +365,6 @@ export const backlistSync = internalAction({
     };
 
     try {
-      // Kill switch: disabling the row stops an in-flight chain at its next link.
-      if (!source.enabled) {
-        errors.push("stopped: the kodansha-backlist source was disabled mid-run");
-        return await finish("succeeded");
-      }
-
       const listing = (await fetchListing(delay)).filter(
         (entry) => args.afterSlug === undefined || entry.slug > args.afterSlug,
       );

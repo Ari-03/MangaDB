@@ -914,7 +914,9 @@ inside a run (`convex/lib/http.ts`); a failed run simply resumes at the
 next cadence; every record applies in its own atomic mutation, so a
 mid-run crash never leaves a half-applied record.
 
-**Disabling a source** stops its scheduled run at the next link: runs a sync
+**Disabling a source** stops its scheduled run at the next link (ANN, Yen
+Press, OpenLibrary and the Kodansha backlist share one gate,
+`convex/lib/importRuns.ts`): runs a sync
 opens itself are marked `automatic`, and a continuation that finds its source
 disabled closes the run as `stopped` (an incomplete sweep, not a success). A
 run an operator forces on a disabled source — `imports:startRun`, then the

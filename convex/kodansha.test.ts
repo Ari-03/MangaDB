@@ -971,6 +971,41 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     expect(requested).toHaveLength(0);
   });
 
+  it("disabling the row stops a scheduled crawl as \"stopped\"; a forced one finishes", async () => {
+    const drain = async (t: TestT) => {
+      vi.useFakeTimers();
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      vi.useRealTimers();
+    };
+    const off = (t: TestT) =>
+      t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha-backlist", enabled: false });
+
+    // Scheduled: the first link crawls one series, then the row is disabled.
+    const scheduled = makeT();
+    await seedBacklist(scheduled, true);
+    stubBacklist([BLUE_LOCK, NEEDLES], BACKLIST_PAGES);
+    expect(await backlist(scheduled, { maxFetches: 1 })).toMatchObject({ continued: true });
+    await off(scheduled);
+    await drain(scheduled);
+    await scheduled.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+    });
+    vi.unstubAllGlobals();
+
+    // Forced by an operator on the disabled row: runs to the end.
+    const forced = makeT();
+    await seedBacklist(forced, true);
+    await off(forced);
+    stubBacklist([BLUE_LOCK, NEEDLES], BACKLIST_PAGES);
+    const runId = await forced.mutation(internal.imports.startRun, { sourceKey: "kodansha-backlist" });
+    await backlist(forced, { runId, maxFetches: 1 });
+    await drain(forced);
+    await forced.run(async (ctx) => {
+      expect((await ctx.db.get(runId))?.status).toBe("succeeded");
+    });
+  });
+
   it("runs on its own row: a disabled daily window does not stop the crawl", async () => {
     const t = makeT();
     await seedBacklist(t, true);
