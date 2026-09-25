@@ -62,8 +62,9 @@ export const stopIfAutomatic = internalMutation({
     const run = await ctx.db.get(args.runId);
     if (!run || run.status !== "running") return true;
     if (!run.automatic) return false;
+    // Its own status, not "succeeded": the sweep is incomplete.
     await ctx.db.patch(args.runId, {
-      status: "succeeded",
+      status: "stopped",
       finishedAt: Date.now(),
       recordsSeen: args.recordsSeen,
       recordsChanged: args.recordsChanged,

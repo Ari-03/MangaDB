@@ -197,7 +197,7 @@ describe("yenPress.sync — disabling a source", () => {
     await drain(t);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();
-      expect(run).toMatchObject({ status: "succeeded", automatic: true });
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
       expect(run!.errors.at(-1)).toMatch(/disabled mid-run/);
     });
     // Only the first link's page was fetched.

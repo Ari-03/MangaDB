@@ -914,6 +914,14 @@ inside a run (`convex/lib/http.ts`); a failed run simply resumes at the
 next cadence; every record applies in its own atomic mutation, so a
 mid-run crash never leaves a half-applied record.
 
+**Disabling a source** stops its scheduled run at the next link: runs a sync
+opens itself are marked `automatic`, and a continuation that finds its source
+disabled closes the run as `stopped` (an incomplete sweep, not a success). A
+run an operator forces on a disabled source — `imports:startRun`, then the
+sync with that run id — finishes regardless; that is how imports run by hand.
+Runs started before `automatic` existed carry on like forced ones, so before
+deploying importer changes, disable the sources and let running imports finish.
+
 **Retraction** (`imports.markWithdrawn`). A record that disappears from a
 complete listing sweep marks its observation **withdrawn** — retained,
 never deleted, and never touching a canonical field (absence is not
