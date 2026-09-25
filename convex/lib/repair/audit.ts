@@ -191,26 +191,27 @@ export async function settlePositions(
 }
 
 /**
- * The Series' active Volume with this label, creating it (Volume Position =
- * its number) when absent. Created Volumes are bootstrap-unreviewed.
+ * The Series' active Volume with this label (null = the unlabeled one),
+ * creating it (Volume Position = its number, else after the last) when
+ * absent. Created Volumes are bootstrap-unreviewed.
  */
 export async function ensureVolume(
   ctx: MutationCtx,
   audit: Audit,
   seriesId: Id<"series">,
-  label: string,
+  label: string | null,
 ): Promise<Doc<"volumes">> {
   const existing = (await activeVolumes(ctx, seriesId)).filter((vol) => sameLabel(vol.label, label));
-  if (existing.length > 1) skip(`series has ${existing.length} volumes labelled "${label}"`);
+  if (existing.length > 1) skip(`series has ${existing.length} volumes labelled "${label ?? "(none)"}"`);
   if (existing[0]) return existing[0];
   await audit.meta();
-  const canonical = canonicalLabel(label) ?? label;
+  const canonical = canonicalLabel(label);
   const last = (await activeVolumes(ctx, seriesId)).reduce((max, vol) => Math.max(max, vol.position), 0);
   const fields = {
     status: "active" as const,
     publicId: await allocatePublicId(ctx, "volume"),
     seriesId,
-    label: canonical,
+    ...(canonical === null ? {} : { label: canonical }),
     position: labelNumber(canonical) ?? last + 1,
     bootstrapUnreviewed: true,
   };

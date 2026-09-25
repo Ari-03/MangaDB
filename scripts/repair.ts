@@ -7,7 +7,7 @@
 //   node scripts/repair.ts run --stage 3 [--step 3a] [--apply] [--actor ari]
 //   node scripts/repair.ts rebuild            # seriesBrowse:rebuild
 //
-// Options: --plan <repair-plan.json>  --out <dir for run reports>
+// Options: --plan <repair-plan.json>  --out <dir for run reports; default runs/ next to the plan>
 //          --deployment <name|prod>   passed to `convex run`; anything other
 //                                     than the local deployment needs --yes
 //          --force                    run stage 4 without complete research
@@ -17,7 +17,7 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 type Entry = { key: string; reason: string } & Record<string, unknown>;
 type Step = { step: string; title: string; kind: string; batchSize: number; entries: Entry[] };
@@ -34,7 +34,7 @@ const option = (name: string, fallback: string) => {
 };
 
 const planPath = option("plan", "/tmp/mangadb-audit/plan/repair-plan.json");
-const outDir = option("out", "/tmp/mangadb-audit/plan/runs");
+const outDir = option("out", join(dirname(planPath), "runs"));
 const deployment = option("deployment", "");
 const actor = option("actor", "ari");
 const apply = flag("apply");

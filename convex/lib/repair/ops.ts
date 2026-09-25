@@ -2,7 +2,7 @@
 // validates that the rows still look the way the plan expected (skipping
 // with a reason on drift instead of clobbering), is idempotent (a re-run
 // reports alreadyApplied), and writes through the stock sensitive-op apply
-// functions where they fit: Hide, and Merge for volumes, editions, releases,
+// functions where they fit: Hide, Restore, and Merge for volumes, editions, releases,
 // and — once its Volumes are placed — Series. The stock Series merge appends
 // loser Volumes after the survivor's, so Volumes are placed by label first.
 
@@ -14,7 +14,7 @@ import {
   IMPRINT_PARENTS,
   canonicalPublisherFor,
 } from "../publishers";
-import { applyHide, applyMerge } from "../sensitiveOps";
+import { applyHide, applyMerge, applyRestore } from "../sensitiveOps";
 import { sameValue } from "../values";
 import {
   activeEditionsCovering,
@@ -55,6 +55,8 @@ export async function applyEntry(ctx: MutationCtx, audit: Audit, entry: RepairEn
       return await hideSeries(ctx, audit, entry);
     case "hideRelease":
       return await hideRelease(ctx, audit, entry);
+    case "restoreRecord":
+      return await restoreRecord(ctx, audit, entry);
     case "unlinkObservation":
       return await unlinkObservation(ctx, audit, entry);
     case "mergeSeries":
@@ -69,6 +71,16 @@ export async function applyEntry(ctx: MutationCtx, audit: Audit, entry: RepairEn
       return await normalizeVolumes(ctx, audit, entry);
     case "withdrawProposal":
       return await withdrawProposal(ctx, entry);
+    case "splitSeries":
+      return await splitSeries(ctx, audit, entry);
+    case "hideEditionLine":
+      return await hideEditionLine(ctx, audit, entry);
+    case "createRelease":
+      return await createRelease(ctx, audit, entry);
+    case "releaseBundle":
+      return await releaseBundle(ctx, audit, entry);
+    case "setCoverage":
+      return await setCoverage(ctx, audit, entry);
   }
 }
 
@@ -109,6 +121,15 @@ async function hide(ctx: MutationCtx, audit: Audit, ref: Ref, doc: { status: str
   if (doc.locked) skip(`${ref.type} ${ref.id} is locked`);
   audit.op({ kind: "hide", ref });
   await applyHide(ctx, ref, await audit.meta());
+  return true;
+}
+
+/** Restore a record through the stock Restore unless it already is active. */
+async function restore(ctx: MutationCtx, audit: Audit, ref: Ref, doc: { status: string; locked?: boolean }) {
+  if (doc.status === "active") return false;
+  if (doc.locked) skip(`${ref.type} ${ref.id} is locked`);
+  audit.op({ kind: "restore", ref });
+  await applyRestore(ctx, ref, await audit.meta());
   return true;
 }
 
@@ -350,6 +371,70 @@ async function hideRelease(
       audit.note(`volume ${volume.publicId} kept: still covered by an active edition`);
     }
   }
+  return changed ? applied : already;
+}
+
+/**
+ * Undo a scope hide: the target plus the cascade the hide took down come
+ * back top-down (Series, Volumes, Editions, Releases). Rows the importers or
+ * a Moderator changed since (merged, missing, locked, moved under a record
+ * that stays hidden) are drift; an already-active row is a no-op, so a
+ * re-run reports alreadyApplied.
+ */
+async function restoreRecord(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"restoreRecord">,
+): Promise<Result> {
+  const { target } = entry;
+  const unique = <T>(list: T[]) => [...new Set(list)];
+  const seriesIds = target.type === "series" ? [target.id] : [];
+  const volumeIds = unique(target.type === "volume" ? [target.id, ...entry.volumeIds] : entry.volumeIds);
+  const editionIds = unique(target.type === "edition" ? [target.id, ...entry.editionIds] : entry.editionIds);
+  const releaseIds = unique(target.type === "release" ? [target.id, ...entry.releaseIds] : entry.releaseIds);
+
+  const usable = <D extends { status: string }>(label: string, doc: D | null): D => {
+    if (!doc) return skip(`${label} missing`);
+    if (doc.status === "merged") skip(`${label} was merged`);
+    if (doc.status !== "hidden" && doc.status !== "active") skip(`${label} is ${doc.status}`);
+    return doc;
+  };
+  const series = [];
+  for (const id of seriesIds) series.push(usable(`series ${id}`, await ctx.db.get(id)));
+  const volumes = [];
+  for (const id of volumeIds) volumes.push(usable(`volume ${id}`, await ctx.db.get(id)));
+  const editions = [];
+  for (const id of editionIds) editions.push(usable(`edition ${id}`, await ctx.db.get(id)));
+  const releases = [];
+  for (const id of releaseIds) releases.push(usable(`release ${id}`, await ctx.db.get(id)));
+
+  // Every restored row's parent must be active afterwards: restored by this
+  // entry, or active already. Anything else means the row moved since.
+  const restoring = new Set<string>([...seriesIds, ...volumeIds, ...editionIds, ...releaseIds]);
+  const liveAfter = async (id: Id<"series"> | Id<"volumes"> | Id<"editions">) =>
+    restoring.has(id) || (await ctx.db.get(id))?.status === "active";
+  for (const volume of volumes) {
+    if (target.type === "series" && volume.seriesId !== target.id) skip(`volume ${volume.publicId} left the series`);
+    if (!(await liveAfter(volume.seriesId))) skip(`volume ${volume.publicId}'s series stays hidden`);
+  }
+  for (const edition of editions) {
+    const coverage = await coverageOf(ctx, edition._id);
+    if (coverage.length === 0) skip(`edition ${edition.publicId} covers no volume`);
+    for (const cover of coverage) {
+      if (!(await liveAfter(cover.volumeId))) skip(`edition ${edition.publicId} covers a volume that stays hidden`);
+      const volume = await ctx.db.get(cover.volumeId);
+      if (volume && !(await liveAfter(volume.seriesId))) skip(`edition ${edition.publicId}'s series stays hidden`);
+    }
+  }
+  for (const release of releases) {
+    if (!(await liveAfter(release.editionId))) skip(`release ${release._id} sits on an edition that stays hidden`);
+  }
+
+  let changed = false;
+  for (const doc of series) changed = (await restore(ctx, audit, { type: "series", id: doc._id }, doc)) || changed;
+  for (const doc of volumes) changed = (await restore(ctx, audit, { type: "volume", id: doc._id }, doc)) || changed;
+  for (const doc of editions) changed = (await restore(ctx, audit, { type: "edition", id: doc._id }, doc)) || changed;
+  for (const doc of releases) changed = (await restore(ctx, audit, { type: "release", id: doc._id }, doc)) || changed;
   return changed ? applied : already;
 }
 
@@ -953,14 +1038,18 @@ async function normalizeVolumes(
   const series = await ctx.db.get(entry.seriesId);
   if (!series || series.status !== "active") return skip("series not active");
 
-  for (const { volumeId, intoVolumeId } of entry.merges) {
+  for (const { volumeId, intoVolumeId, label } of entry.merges) {
     const volume = await ctx.db.get(volumeId);
     const into = await liveVolume(ctx, intoVolumeId);
     if (!volume || !into) skip("duplicate volume pair missing");
     if (volume!.status === "merged") continue;
     if (volume!.status !== "active") continue;
     if (volume!.seriesId !== series._id || into!.seriesId !== series._id) skip("duplicate volume left the series");
-    if (!sameLabel(volume!.label, into!.label)) skip("duplicate volumes no longer share a label");
+    if (label !== undefined) {
+      if (!sameLabel(volume!.label, label)) skip(`duplicate volume ${volume!.publicId} label drifted`);
+    } else if (!sameLabel(volume!.label, into!.label)) {
+      skip("duplicate volumes no longer share a label");
+    }
     await merge(ctx, audit, { type: "volume", id: into!._id }, { type: "volume", id: volume!._id });
   }
 
@@ -994,3 +1083,497 @@ async function normalizeVolumes(
   return audit.wrote ? applied : already;
 }
 
+
+// ---------- stage 12: series splits ----------
+
+/** Creation-Revision field naming the plan entry that split a Series off. */
+const SPLIT_KEY_FIELD = "repairKey";
+
+/**
+ * The Series an earlier run of this split created, or null. Every row the
+ * split moves points at it once applied (one entry = one transaction), and
+ * its creation Revision records the entry key; that key is the proof.
+ */
+async function splitTarget(ctx: MutationCtx, entry: EntryOf<"splitSeries">) {
+  const candidates = new Set<Id<"series">>();
+  for (const id of entry.observationIds) {
+    const ref = (await ctx.db.get(id))?.recordRef;
+    if (ref?.type === "series") candidates.add(ref.id);
+  }
+  for (const row of entry.volumes) {
+    const volume = await ctx.db.get(row.volumeId);
+    if (volume) candidates.add(volume.seriesId);
+  }
+  for (const row of entry.editions) {
+    for (const cover of await coverageOf(ctx, row.editionId)) {
+      const volume = await ctx.db.get(cover.volumeId);
+      if (volume) candidates.add(volume.seriesId);
+    }
+  }
+  candidates.delete(entry.sourceSeriesId);
+  for (const id of candidates) {
+    const created = await ctx.db
+      .query("revisions")
+      .withIndex("by_record", (q) => q.eq("ref.type", "series").eq("ref.id", id))
+      .first();
+    if (created?.changes.some((c) => c.field === SPLIT_KEY_FIELD && c.after === entry.key)) {
+      return await ctx.db.get(id);
+    }
+  }
+  return null;
+}
+
+/** Create the split-off Series, recording where it came from and the entry key. */
+async function createSplitSeries(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"splitSeries">,
+  source: Doc<"series">,
+) {
+  await audit.meta();
+  const fields = {
+    status: "active" as const,
+    publicId: await allocatePublicId(ctx, "series"),
+    title: entry.title,
+    altTitles: entry.altTitles,
+    searchText: [entry.title, ...entry.altTitles].join(" "),
+  };
+  const id = await ctx.db.insert("series", fields);
+  audit.op({ kind: "create", table: "series", tempId: id, fields });
+  audit.op({
+    kind: "split",
+    ref: { type: "series", id: source._id },
+    details: {
+      into: id,
+      volumeIds: entry.volumes.map((row) => row.volumeId),
+      editionIds: entry.editions.map((row) => row.editionId),
+      observationIds: entry.observationIds,
+    },
+  });
+  await audit.revise({ type: "series", id }, [
+    ...Object.entries(fields)
+      .filter(([field]) => field !== "searchText")
+      .map(([field, after]) => ({ field, after })),
+    { field: "splitFrom", after: `#${source.publicId} ${source.title}` },
+    { field: SPLIT_KEY_FIELD, after: entry.key },
+  ]);
+  await audit.revise({ type: "series", id: source._id }, [
+    { field: "splitOut", after: `#${fields.publicId} ${entry.title}` },
+  ]);
+  const created = await ctx.db.get(id);
+  return created ?? skip("created series vanished");
+}
+
+const idSet = (ids: string[]) => [...new Set(ids)].sort();
+
+/**
+ * An Edition Line of the source Series follows its Editions to the new one,
+ * but only when every active Edition in it moves: a line spanning both
+ * works is a plan error.
+ */
+async function followLine(
+  ctx: MutationCtx,
+  audit: Audit,
+  edition: Doc<"editions">,
+  sourceId: Id<"series">,
+  targetId: Id<"series">,
+  moving: Set<string>,
+) {
+  if (!edition.editionLineId) return;
+  const line = await ctx.db.get(edition.editionLineId);
+  if (!line || line.seriesId !== sourceId) return;
+  const members = await ctx.db
+    .query("editions")
+    .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+    .collect();
+  const staying = members.find((m) => m.status === "active" && !moving.has(m._id));
+  if (staying) skip(`edition line "${line.name}" also holds edition ${staying.publicId}, which stays`);
+  await audit.meta();
+  await ctx.db.patch(line._id, { seriesId: targetId });
+  const ref = { type: "editionLine" as const, id: line._id };
+  const changes = [{ field: "seriesId", before: sourceId, after: targetId }];
+  audit.op({ kind: "update", ref, changes });
+  await audit.revise(ref, changes);
+}
+
+async function splitSeries(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"splitSeries">,
+): Promise<Result> {
+  const source = await ctx.db.get(entry.sourceSeriesId);
+  if (!source || source.status !== "active") return skip("source series not active");
+  if (source.locked) return skip("source series locked");
+  if (entry.volumes.length + entry.editions.length + entry.observationIds.length === 0) {
+    return skip("the split moves no volume, edition, or observation");
+  }
+
+  let target = await splitTarget(ctx, entry);
+  if (target && target.status !== "active") skip(`split-off series ${target.publicId} is ${target.status}`);
+  if (!target) {
+    if (source.title !== entry.sourceTitle) skip(`source title drifted: ${JSON.stringify(source.title)}`);
+    target = await createSplitSeries(ctx, audit, entry, source);
+  }
+  const targetId = target!._id;
+  const moving = new Set<string>([
+    ...entry.volumes.flatMap((row) => row.editionIds),
+    ...entry.editions.map((row) => row.editionId),
+  ]);
+
+  // Whole Volumes: re-parented with the moved work's own label. Anything
+  // the importers attached since planning (another Edition) is drift.
+  for (const row of entry.volumes) {
+    const volume = await ctx.db.get(row.volumeId);
+    if (!volume) return skip(`volume ${row.volumeId} missing`);
+    if (volume.seriesId === targetId) continue;
+    if (volume.status !== "active") skip(`volume ${volume.publicId} is ${volume.status}`);
+    if (volume.seriesId !== source._id) skip(`volume ${volume.publicId} left the source series`);
+    if (volume.locked) skip(`volume ${volume.publicId} is locked`);
+    if (!sameLabel(volume.label, row.label)) skip(`volume ${volume.publicId} label drifted: ${JSON.stringify(volume.label ?? null)}`);
+    const editions = await activeEditionsCovering(ctx, volume._id);
+    if (!sameValue(idSet(editions.map((e) => e._id)), idSet(row.editionIds))) {
+      skip(`volume ${volume.publicId} editions drifted: now ${editions.map((e) => e.publicId).join(", ") || "none"}`);
+    }
+    const targetVolumes = await activeVolumes(ctx, targetId);
+    if (targetVolumes.some((v) => sameLabel(v.label, row.newLabel))) {
+      skip(`split-off series already has a volume labelled ${JSON.stringify(row.newLabel)}`);
+    }
+    const label = canonicalLabel(row.newLabel);
+    const last = targetVolumes.reduce((max, v) => Math.max(max, v.position), 0);
+    await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {
+      seriesId: targetId,
+      label: label ?? undefined,
+      position: labelNumber(label) ?? last + 1,
+    });
+    for (const edition of editions) {
+      await followLine(ctx, audit, edition, source._id, targetId, moving);
+      await refreshReleaseDenorms(ctx, edition._id);
+    }
+  }
+
+  // Editions on a Volume label both works share: the staying work keeps
+  // the Volume; the Edition's coverage moves to the new Series' Volume.
+  for (const row of entry.editions) {
+    const edition = await ctx.db.get(row.editionId);
+    if (!edition || edition.status !== "active") return skip(`edition ${row.editionId} not active`);
+    if (row.labels.length !== row.fromVolumeIds.length) skip("plan error: one label per coverage row");
+    const coverage = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
+    const covered = [];
+    for (const cover of coverage) covered.push(await ctx.db.get(cover.volumeId));
+    const done = covered.length === row.labels.length && covered.every((vol, i) => vol?.seriesId === targetId && sameLabel(vol.label, row.labels[i]));
+    if (done) continue;
+    if (!sameValue(coverage.map((c) => c.volumeId), row.fromVolumeIds)) {
+      skip(`edition ${edition.publicId} coverage drifted`);
+    }
+    const releases = (await releasesOf(ctx, edition._id)).filter((r) => r.status === "active");
+    if (!sameValue(idSet(releases.map((r) => r._id)), idSet(row.releaseIds))) {
+      skip(`edition ${edition.publicId} releases drifted: now ${releases.map((r) => r.isbn13 ?? r._id).join(", ")}`);
+    }
+    if (edition.locked) skip(`edition ${edition.publicId} is locked`);
+    const rows = [];
+    for (const [i, label] of row.labels.entries()) {
+      rows.push({ volumeId: (await ensureVolume(ctx, audit, targetId, label))._id, extent: coverage[i]!.extent });
+    }
+    await followLine(ctx, audit, edition, source._id, targetId, moving);
+    await replaceCoverage(ctx, audit, edition._id, rows);
+  }
+
+  // The moved work's backbone Volumes that have no Release yet.
+  for (const label of entry.placeholderLabels) await ensureVolume(ctx, audit, targetId, label);
+
+  // Series-level observations: importers resolve the work's Series through
+  // these, so its future Releases land on the new Series.
+  for (const id of entry.observationIds) {
+    const observation = await ctx.db.get(id);
+    if (!observation) return skip(`observation ${id} missing`);
+    const ref = observation.recordRef;
+    if (ref?.type === "series" && ref.id === targetId) continue;
+    const record = `${observation.sourceKey} ${observation.sourceRecordId}`;
+    if (ref?.type !== "series" || ref.id !== source._id) {
+      skip(`${record} now links ${ref ? `${ref.type} ${ref.id}` : "nothing"}`);
+    }
+    await audit.meta();
+    await ctx.db.patch(observation._id, { recordRef: { type: "series", id: targetId } });
+    const from = { type: "series" as const, id: source._id };
+    const to = { type: "series" as const, id: targetId };
+    audit.op({ kind: "update", ref: from, changes: [{ field: "sourceObservation", before: record }] });
+    audit.op({ kind: "update", ref: to, changes: [{ field: "sourceObservation", after: record }] });
+    await audit.revise(from, [{ field: "sourceObservation", before: record }]);
+    await audit.revise(to, [{ field: "sourceObservation", after: record }]);
+  }
+
+  await settlePositions(ctx, audit, source._id);
+  await settlePositions(ctx, audit, targetId);
+  await lockTitleIfContested(ctx, audit, targetId);
+  return audit.wrote ? applied : already;
+}
+
+// ---------- stage 19: lines, researched Releases, cross-Series books ----------
+
+/** Whether a record's creation Revision names this plan entry (how a re-run finds its own row). */
+async function createdByEntry(ctx: MutationCtx, ref: Ref, key: string) {
+  const created = await ctx.db
+    .query("revisions")
+    .withIndex("by_record", (q) => q.eq("ref.type", ref.type).eq("ref.id", ref.id))
+    .first();
+  return created?.changes.some((c) => c.field === SPLIT_KEY_FIELD && c.after === key) ?? false;
+}
+
+/** Hide an Edition Line nothing active sits in any more. */
+async function hideEditionLine(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"hideEditionLine">,
+): Promise<Result> {
+  const line = await ctx.db.get(entry.lineId);
+  if (!line) return skip("edition line missing");
+  if (line.seriesId !== entry.seriesId) skip("edition line moved to another series");
+  if (line.name !== entry.name) skip(`edition line renamed: ${JSON.stringify(line.name)}`);
+  if (line.status === "hidden") return already;
+  if (line.status !== "active") skip(`edition line is ${line.status}`);
+  const members = await ctx.db
+    .query("editions")
+    .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+    .collect();
+  const live = members.find((edition) => edition.status === "active");
+  if (live) skip(`edition line still holds edition ${live.publicId}`);
+  await hide(ctx, audit, { type: "editionLine", id: line._id }, line);
+  return applied;
+}
+
+/**
+ * Create a researched Release on a new Edition covering existing Volumes.
+ * The ISBN must be new everywhere (Releases and Release Bundles), except
+ * for the Release an earlier run of this very entry created.
+ */
+async function createRelease(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"createRelease">,
+): Promise<Result> {
+  const clashes = await ctx.db
+    .query("releases")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
+    .collect();
+  const own = clashes.length === 1 && (await createdByEntry(ctx, { type: "release", id: clashes[0]!._id }, entry.key));
+  if (own) return already;
+  if (clashes.length > 0) return skip(`ISBN ${entry.isbn13} already exists`);
+  const isbn10 = entry.isbn10;
+  if (isbn10 !== null) {
+    const clash10 = await ctx.db
+      .query("releases")
+      .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10))
+      .first();
+    if (clash10) skip(`ISBN-10 ${isbn10} already exists`);
+  }
+  const bundle = await ctx.db
+    .query("releaseBundles")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
+    .first();
+  if (bundle) skip(`ISBN ${entry.isbn13} is Release Bundle ${bundle.publicId}`);
+  if (entry.format === "digital" && entry.binding !== null) skip("plan error: binding on a digital release");
+  const publisher = await ctx.db.get(entry.publisherId);
+  if (!publisher || publisher.status !== "active") skip("publisher not active");
+
+  const volumes: Doc<"volumes">[] = [];
+  for (const row of entry.coverage) {
+    const volume = await ctx.db.get(row.volumeId);
+    if (!volume || volume.status !== "active") return skip(`volume ${row.volumeId} not active`);
+    volumes.push(volume);
+  }
+  const first = volumes[0];
+  if (!first) return skip("plan error: no coverage");
+  const series = await ctx.db.get(first.seriesId);
+  if (!series || series.status !== "active") return skip("series not active");
+
+  const line = entry.line;
+  const editionId = await createEdition(ctx, audit, {
+    status: "active",
+    publisherId: entry.publisherId,
+    bootstrapUnreviewed: true,
+    ...(line
+      ? {
+          editionLineId: await findOrCreateLine(ctx, audit, series._id, entry.publisherId, line.name),
+          ...(line.position === null ? {} : { linePosition: line.position }),
+        }
+      : {}),
+  });
+  await replaceCoverage(ctx, audit, editionId, entry.coverage);
+
+  const fields = {
+    status: "active" as const,
+    editionId,
+    format: entry.format,
+    language: "en",
+    isbn13: entry.isbn13,
+    ...(isbn10 === null ? {} : { isbn10 }),
+    ...(entry.binding === null ? {} : { binding: entry.binding }),
+    ...(entry.pubDate === null ? {} : { pubDate: entry.pubDate }),
+    ...(entry.price === null ? {} : { price: entry.price }),
+    publisherId: entry.publisherId,
+    seriesIds: [...new Set(volumes.map((v) => v.seriesId))],
+    bootstrapUnreviewed: true,
+  };
+  const id = await ctx.db.insert("releases", fields);
+  audit.op({ kind: "create", table: "releases", tempId: id, fields });
+  await audit.revise({ type: "release", id }, [
+    ...Object.entries(fields).map(([field, after]) => ({ field, after })),
+    { field: SPLIT_KEY_FIELD, after: entry.key },
+  ]);
+  await refreshReleaseDenorms(ctx, editionId);
+  return applied;
+}
+
+/**
+ * A Release Bundle whose members may sit in several Series: extend one, or
+ * turn a box-set Release into one. Members keep the plan's order; a member
+ * already in the bundle at another order is drift.
+ */
+async function releaseBundle(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"releaseBundle">,
+): Promise<Result> {
+  let bundle: Doc<"releaseBundles"> | null = null;
+  let box: Doc<"releases"> | null = null;
+  if (entry.bundleId !== null && entry.box === null) {
+    bundle = await ctx.db.get(entry.bundleId);
+  } else if (entry.box !== null && entry.bundleId === null) {
+    box = await ctx.db.get(entry.box.releaseId);
+    if (!box) return skip("box-set release missing");
+    const isbn13 = box.isbn13;
+    if (isbn13 === undefined) return skip("box-set release has no ISBN");
+    bundle = await ctx.db
+      .query("releaseBundles")
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .first();
+    if (!bundle) {
+      if (box.status !== "active") return skip(`box-set release is ${box.status}`);
+      if (box.locked) skip("box-set release is locked");
+      const edition = await ctx.db.get(box.editionId);
+      if (!edition) return skip("box-set edition missing");
+      await audit.meta();
+      const fields = {
+        status: "active" as const,
+        publicId: await allocatePublicId(ctx, "bundle"),
+        name: entry.box.name,
+        publisherId: edition.publisherId,
+        format: box.format,
+        isbn13,
+        isbn10: box.isbn10,
+        pubDate: box.pubDate,
+        price: box.price,
+        description: box.description,
+        coverImage: box.coverImage,
+        bootstrapUnreviewed: true,
+      };
+      const id = await ctx.db.insert("releaseBundles", fields);
+      audit.op({ kind: "create", table: "releaseBundles", tempId: id, fields });
+      await audit.revise(
+        { type: "releaseBundle", id },
+        Object.entries(fields)
+          .filter(([, after]) => after !== undefined)
+          .map(([field, after]) => ({ field, after })),
+      );
+      bundle = await ctx.db.get(id);
+    }
+  } else {
+    return skip("plan error: name either a bundle or a box set");
+  }
+  if (!bundle || bundle.status !== "active") return skip("bundle not active");
+  const bundleRef = { type: "releaseBundle" as const, id: bundle._id };
+
+  const memberships = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+    .collect();
+  let firstVolume: Id<"volumes"> | null = null;
+  for (const planned of entry.members) {
+    const hits = (
+      await ctx.db
+        .query("releases")
+        .withIndex("by_isbn13", (q) => q.eq("isbn13", planned.isbn13))
+        .collect()
+    ).filter((r) => r.status === "active");
+    const member = hits[0];
+    if (!member || hits.length > 1) return skip(`member ${planned.isbn13}: ${hits.length} active releases`);
+    if (box && member._id === box._id) skip("plan error: the box set is its own member");
+    firstVolume ??= (await coverageOf(ctx, member.editionId)).sort((a, b) => a.order - b.order)[0]?.volumeId ?? null;
+    const row = memberships.find((m) => m.releaseId === member._id);
+    if (row) {
+      if (row.order !== planned.order) skip(`member ${planned.isbn13} sits at order ${row.order}`);
+      continue;
+    }
+    if (memberships.some((m) => m.order === planned.order)) skip(`order ${planned.order} is taken by another member`);
+    await audit.meta();
+    const id = await ctx.db.insert("bundleMemberships", { bundleId: bundle._id, releaseId: member._id, order: planned.order });
+    const inserted = await ctx.db.get(id);
+    if (inserted) memberships.push(inserted);
+    const change = { field: "member", after: `release ${planned.isbn13} (order ${planned.order})` };
+    audit.op({ kind: "update", ref: bundleRef, changes: [change] });
+    await audit.revise(bundleRef, [change]);
+  }
+
+  if (box) {
+    if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
+      await audit.revise({ type: "release", id: box._id }, [
+        { field: "convertedToBundle", after: `#${bundle.publicId} ${bundle.name}` },
+      ]);
+    }
+    const edition = await ctx.db.get(box.editionId);
+    const live = (await releasesOf(ctx, box.editionId)).filter((r) => r.status === "active");
+    if (edition && live.length === 0) await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
+  }
+  await retireVolumes(ctx, audit, entry.retireVolumeIds, firstVolume);
+  return audit.wrote ? applied : already;
+}
+
+/**
+ * Point an Edition's coverage at Volumes of any Series (an omnibus or an
+ * anthology spanning works), optionally place it in a line, and retire the
+ * Volumes its old coverage leaves empty.
+ */
+async function setCoverage(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: EntryOf<"setCoverage">,
+): Promise<Result> {
+  const edition = await ctx.db.get(entry.editionId);
+  if (!edition || edition.status !== "active") return skip("edition not active");
+  if (edition.locked) skip("edition locked");
+  const rows: Array<{ volumeId: Id<"volumes">; extent: "complete" | "partial" }> = [];
+  for (const row of entry.coverage) {
+    const matches = (await activeVolumes(ctx, row.seriesId)).filter((v) => sameLabel(v.label, row.label));
+    const volume = matches[0];
+    if (!volume || matches.length > 1) {
+      return skip(`series ${row.seriesId} has ${matches.length} active volumes labelled ${JSON.stringify(row.label)}`);
+    }
+    rows.push({ volumeId: volume._id, extent: row.extent });
+  }
+  if (rows.length === 0) return skip("plan error: empty coverage");
+
+  const current = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
+  const done =
+    current.length === rows.length &&
+    current.every((c, i) => c.volumeId === rows[i]?.volumeId && c.extent === rows[i]?.extent);
+  if (!done && !sameValue(current.map((c) => c.volumeId), entry.before)) {
+    skip(`edition ${edition.publicId} coverage drifted`);
+  }
+  await replaceCoverage(ctx, audit, edition._id, rows);
+
+  if (entry.line) {
+    const { seriesId, name, position } = entry.line;
+    let covers = false;
+    for (const row of rows) covers ||= (await ctx.db.get(row.volumeId))?.seriesId === seriesId;
+    if (!covers) skip("plan error: the line's series is not covered");
+    const lineId = await findOrCreateLine(ctx, audit, seriesId, edition.publisherId, name);
+    const fresh = await ctx.db.get(edition._id);
+    if (!fresh) return skip("edition vanished");
+    await updateRecord(ctx, audit, { type: "edition", id: fresh._id }, fresh, {
+      editionLineId: lineId,
+      linePosition: position ?? undefined,
+    });
+  }
+  await retireVolumes(ctx, audit, entry.retireVolumeIds, rows[0]!.volumeId);
+  return audit.wrote ? applied : already;
+}

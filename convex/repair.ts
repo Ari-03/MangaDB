@@ -32,11 +32,14 @@ function evidenceFor(entry: RepairEntry) {
     case "unlinkObservation":
       return [{ kind: "observation" as const, observationId: entry.observationId }, note];
     case "editionPublisher":
+    case "splitSeries":
       return [...entry.observationIds.map((observationId) => ({ kind: "observation" as const, observationId })), note];
     case "updateFields":
       return entry.evidenceObservationId
         ? [{ kind: "observation" as const, observationId: entry.evidenceObservationId }, note]
         : [note];
+    case "createRelease":
+      return [...entry.sources.map((url) => ({ kind: "url" as const, url })), note];
     default:
       return [note];
   }
