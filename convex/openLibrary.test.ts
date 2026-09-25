@@ -245,9 +245,21 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     const t = makeT();
     await seedRegistry(t);
     await buildSkeleton(t, { withRelease: true });
+    // English editions that match nothing (an unrelated ISBN'd book each).
+    const english = { languages: [{ key: "/languages/eng" }] };
     stubDump([
-      { key: "/books/OL1M", title: "Nothing Interesting 1" },
-      { key: "/books/OL2M", title: "Nothing Interesting 2" },
+      {
+        key: "/books/OL1M",
+        title: "Nothing Interesting 1",
+        isbn_13: ["9780000000002"],
+        ...english,
+      },
+      {
+        key: "/books/OL2M",
+        title: "Nothing Interesting 2",
+        isbn_13: ["9780000000019"],
+        ...english,
+      },
       CHAINSAW_22,
     ]);
     const first = await sync(t, { maxLines: 2 });

@@ -18,7 +18,7 @@
 // other sources created, keyed through its own stable release ids.
 
 import { v, type Infer } from "convex/values";
-import { decodeEntities } from "./text";
+import { cleanTitleText, decodeEntities } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -67,7 +67,7 @@ export function parseReport(xml: string): AnnReportItem[] {
     const name = /<name>([\s\S]*?)<\/name>/.exec(body)?.[1];
     if (id === undefined || name === undefined) continue;
     if (type !== undefined && type !== "manga") continue;
-    items.push({ id, name: decodeEntities(name).trim() });
+    items.push({ id, name: cleanTitleText(name) });
   }
   return items;
 }
@@ -89,7 +89,15 @@ export type AnnRelease = {
   editionLineHint: boolean;
 };
 
-/** "2026-02-10" | "2024-11-00" | "2024-00-00" → a partial-precision date. */
+// Before 2010 ANN recorded month-only dates as the 1st (day 1 is a third of
+// its 2000-04 dates against ~3% elsewhere): such a day is a placeholder.
+const MONTH_PLACEHOLDER_BEFORE = 2010;
+
+/**
+ * "2026-02-10" | "2024-11-00" | "2024-00-00" → a partial-precision date.
+ * A pre-2010 "day 01" reads as month precision, so a real day from another
+ * source can refine it (spec §6) instead of losing to false precision.
+ */
 export function parseAnnDate(
   text: string,
 ): { year: number; month?: number; day?: number } | undefined {
@@ -101,6 +109,7 @@ export function parseAnnDate(
   const day = Number(m[3] ?? 0);
   if (month < 1 || month > 12) return { year };
   if (day < 1 || day > 31) return { year, month };
+  if (day === 1 && year < MONTH_PLACEHOLDER_BEFORE) return { year, month };
   return { year, month, day };
 }
 
@@ -201,7 +210,7 @@ export function parseApiResponse(xml: string): AnnManga[] {
       body,
     )?.[1];
     const nameAttr = /\bname="([^"]*)"/.exec(attrs)?.[1];
-    const title = decodeEntities(mainTitle ?? nameAttr ?? "").trim();
+    const title = cleanTitleText(mainTitle ?? nameAttr ?? "");
     if (title === "") continue;
 
     const altTitles: string[] = [];
@@ -209,7 +218,7 @@ export function parseApiResponse(xml: string): AnnManga[] {
       /<info[^>]*type="Alternative title"[^>]*lang="([^"]*)"[^>]*>([\s\S]*?)<\/info>/g,
     )) {
       if (!ALT_TITLE_LANGS.test(alt[1]!)) continue;
-      const value = decodeEntities(alt[2]!).trim();
+      const value = cleanTitleText(alt[2]!);
       if (value !== "" && value !== title && !altTitles.includes(value)) {
         altTitles.push(value);
       }
@@ -218,7 +227,7 @@ export function parseApiResponse(xml: string): AnnManga[] {
 
     const staff: string[] = [];
     for (const person of body.matchAll(/<person[^>]*>([\s\S]*?)<\/person>/g)) {
-      const name = decodeEntities(person[1]!).trim();
+      const name = cleanTitleText(person[1]!);
       if (name !== "" && !staff.includes(name)) staff.push(name);
     }
 

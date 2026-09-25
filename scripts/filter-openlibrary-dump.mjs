@@ -11,16 +11,71 @@
 //   curl -sL https://openlibrary.org/data/ol_dump_editions_latest.txt.gz \
 //     | node scripts/filter-openlibrary-dump.mjs > filtered.txt
 //
-// The publisher list errs broad — the importer's matching ladder and
-// authority rules do the precise work; this pass only cuts ~50M lines down
-// to the plausible ones.
+// The publisher allowlist is anchored per publisher name (a "publishers"
+// array entry must START with a manga brand, on a word boundary — "Kuma"
+// never matches "Kumar", and a title mentioning "dark horse" never counts),
+// and a kept edition must carry an ISBN outside the Japanese group 978-4:
+// OpenLibrary's role is ISBN fill, so a record without one cannot do its job.
+// The importer's matching ladder and authority rules do the precise work;
+// this pass only cuts ~50M lines down to the plausible ones.
 
 import { createReadStream } from "node:fs";
 import { createGunzip } from "node:zlib";
 import { createInterface } from "node:readline";
 
-const MANGA_PUBLISHERS =
-  /viz media|viz communications|viz, llc|kodansha|seven seas|yen press|ize press|dark horse|square enix|vertical|denpa|tokyopop|del rey manga|udon entertainment|one peace books|kaiten books|j-novel|drawn (?:&|and) quarterly|fantagraphics|seven seas entertainment|shonen jump|titan manga|ablaze|mixx|cmx|delcourt|glacier bay|star fruit books|fakku|irodori|manga classics|comicsone|digital manga|dmp|netcomics|823 press|kuma|last gasp/i;
+const MANGA_PUBLISHERS = [
+  /^viz\b/i,
+  /^kodansha\b/i,
+  /^(?:brand:\s*)?seven seas\b/i,
+  /^yen press\b/i,
+  /^ize press\b/i,
+  /^dark horse\b/i,
+  /^square enix\b/i,
+  /^vertical\b/i,
+  /^denpa\b/i,
+  /^tokyopop\b/i,
+  /^del rey manga\b/i,
+  /^udon entertainment\b/i,
+  /^one peace books\b/i,
+  /^kaiten books\b/i,
+  /^j-novel\b/i,
+  /^drawn (?:&|and) quarterly\b/i,
+  /^fantagraphics\b/i,
+  /^shonen jump\b/i,
+  /^titan manga\b/i,
+  /^ablaze\b/i,
+  /^mixx\b/i,
+  /^cmx\b/i,
+  /^glacier bay\b/i,
+  /^star fruit books\b/i,
+  /^fakku\b/i,
+  /^irodori\b/i,
+  /^manga classics\b/i,
+  /^comicsone\b/i,
+  /^digital manga\b/i,
+  /^dmp\b/i,
+  /^netcomics\b/i,
+  /^823 press\b/i,
+  /^kuma\b/i,
+  /^last gasp\b/i,
+];
+
+/** Does one parsed edition name a manga publisher and carry a usable ISBN? */
+function keep(edition) {
+  const publishers = Array.isArray(edition.publishers) ? edition.publishers : [];
+  const named = publishers.some(
+    (name) =>
+      typeof name === "string" &&
+      MANGA_PUBLISHERS.some((brand) => brand.test(name.trim())),
+  );
+  if (!named) return false;
+  const isbns = [
+    ...(Array.isArray(edition.isbn_13) ? edition.isbn_13 : []),
+    ...(Array.isArray(edition.isbn_10) ? edition.isbn_10 : []),
+  ].map((isbn) => String(isbn).replace(/[^0-9Xx]/g, ""));
+  // 978-4 / ISBN-10 group 4 is Japan: never an English edition.
+  return isbns.some((isbn) => isbn !== "" && !/^(?:9784|4\d{9}$)/.test(isbn));
+}
 
 const input = process.argv[2];
 const raw = input ? createReadStream(input) : process.stdin;
@@ -43,11 +98,16 @@ let total = 0;
 for await (const line of lines) {
   total++;
   if (!line.startsWith("/type/edition\t")) continue;
-  // Cheap substring test on the raw JSON column before any parsing.
-  const publishersAt = line.indexOf('"publishers"');
-  if (publishersAt < 0) continue;
-  const slice = line.slice(publishersAt, publishersAt + 400);
-  if (!MANGA_PUBLISHERS.test(slice)) continue;
+  // Cheap substring tests on the raw line before parsing any JSON.
+  if (!line.includes('"publishers"') || !line.includes('"isbn_1')) continue;
+  const json = line.split("\t").slice(4).join("\t");
+  let edition;
+  try {
+    edition = JSON.parse(json);
+  } catch {
+    continue;
+  }
+  if (!keep(edition)) continue;
   process.stdout.write(line + "\n");
   kept++;
 }

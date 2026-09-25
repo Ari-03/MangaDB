@@ -299,10 +299,13 @@ export const applyEdition = internalMutation({
       snapshot.publishers[0] !== undefined
         ? await findPublisherByName(ctx, snapshot.publishers[0])
         : null;
+    // Packaging (omnibus, deluxe, box sets) matches by ISBN only — an
+    // Omnibus 4 is never Volume 4.
+    const packaged = snapshot.multiVolume || snapshot.packaging !== undefined;
     const fact: ReleaseFact = {
       seriesTitle: snapshot.seriesTitle,
-      volumeLabel: snapshot.multiVolume ? null : (snapshot.volumeLabel ?? null),
-      multiVolume: snapshot.multiVolume,
+      volumeLabel: packaged ? null : (snapshot.volumeLabel ?? null),
+      multiVolume: packaged,
       format: snapshot.format,
       isbn13: snapshot.isbn13,
       publisherId: publisher?._id ?? null,
@@ -346,11 +349,7 @@ export const applyEdition = internalMutation({
     // Series (unique title match), Volume (exact label), and Publisher all
     // already exist, with no Edition-Line shape. Anything else would define
     // structure, which OpenLibrary never does.
-    if (
-      publisher === null ||
-      snapshot.multiVolume ||
-      needsEditionLine(snapshot.title)
-    ) {
+    if (publisher === null || packaged || needsEditionLine(snapshot.title)) {
       return { status: "recordOnly", changed: false };
     }
     const candidates = await candidateSeries(ctx, snapshot.seriesTitle);

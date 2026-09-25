@@ -4,10 +4,12 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  isbn10To13,
+  isbnPair,
+  isEnglishEdition,
   parseDumpLine,
   parseEditionJson,
   parseOlDate,
-  splitOlTitle,
 } from "./openLibrary";
 
 const EDITION = {
@@ -36,27 +38,93 @@ describe("parseOlDate — precision preserved", () => {
   });
 });
 
-describe("splitOlTitle", () => {
+// Title splitting is the shared parser (lib/bookTitle.ts); these pin the
+// OpenLibrary shapes it sees, including the separate subtitle field.
+const titled = (title: string, subtitle?: string) =>
+  parseEditionJson({ ...EDITION, title, subtitle });
+
+describe("parseEditionJson — title splitting", () => {
   it("handles the common OL title styles", () => {
-    expect(splitOlTitle("Chainsaw Man, Vol. 22")).toMatchObject({
+    expect(titled("Chainsaw Man, Vol. 22")).toMatchObject({
       seriesTitle: "Chainsaw Man",
       volumeLabel: "22",
     });
-    expect(splitOlTitle("Berserk Volume 41")).toMatchObject({
+    expect(titled("Berserk Volume 41")).toMatchObject({
       seriesTitle: "Berserk",
       volumeLabel: "41",
     });
-    expect(splitOlTitle("One Piece #3")).toMatchObject({
+    expect(titled("One Piece #3")).toMatchObject({
       seriesTitle: "One Piece",
       volumeLabel: "3",
     });
-    expect(splitOlTitle("Frieren", "Vol. 5")).toMatchObject({
+    expect(titled("Frieren", "Vol. 5")).toMatchObject({
       seriesTitle: "Frieren",
       volumeLabel: "5",
     });
+    expect(titled("Rising of the Shield Hero Volume 08")).toMatchObject({
+      seriesTitle: "Rising of the Shield Hero",
+      volumeLabel: "8",
+    });
     // Bare trailing numbers are NOT labels for OL ("1984" is a title).
-    expect(splitOlTitle("1984")).toEqual({ seriesTitle: "1984", multiVolume: false });
-    expect(splitOlTitle("Naruto, Vol. 1-3")).toMatchObject({ multiVolume: true });
+    expect(titled("1984")).toMatchObject({ seriesTitle: "1984", multiVolume: false });
+    expect(titled("Naruto, Vol. 1-3")).toMatchObject({ multiVolume: true });
+  });
+
+  it("maps packaging onto the base series, never onto a volume", () => {
+    expect(titled("Fullmetal Alchemist: 3-in-1 Edition, Vol. 4")).toMatchObject({
+      seriesTitle: "Fullmetal Alchemist",
+      volumeLabel: undefined,
+      packaging: { lineName: "3-in-1 Edition", linePosition: "4" },
+    });
+    expect(titled("Berserk Deluxe Volume 1")).toMatchObject({
+      seriesTitle: "Berserk",
+      volumeLabel: undefined,
+    });
+  });
+});
+
+describe("OpenLibrary scope", () => {
+  it("rejects Japanese ISBNs, undeclared non-English-market ISBNs, and Spanish", () => {
+    // Real OL records: a Kodansha JP tankōbon and a declared-Japanese edition.
+    expect(
+      parseEditionJson({ ...EDITION, languages: undefined, isbn_13: ["9784065116173"], isbn_10: [] }),
+    ).toBeNull();
+    expect(
+      parseEditionJson({ ...EDITION, isbn_13: ["9784065116173"], isbn_10: [] }),
+    ).toBeNull();
+    expect(
+      parseEditionJson({ ...EDITION, languages: undefined, isbn_13: [], isbn_10: [] }),
+    ).toBeNull();
+    expect(parseEditionJson({ ...EDITION, languages: undefined })).toMatchObject({
+      isbn13: "9781974766512",
+    });
+    expect(isEnglishEdition(undefined, "9798888772584")).toBe(true);
+    expect(isEnglishEdition(undefined, "9788419412287")).toBe(false);
+  });
+
+  it("drops light novels and merchandise", () => {
+    expect(titled("Accel World, Vol. 18 (light Novel)")).toBeNull();
+    expect(titled("Street Fighter : The Novel")).toBeNull();
+    expect(titled("Hansel and Gretel: A Grimm Fable Coloring Book")).toBeNull();
+  });
+});
+
+describe("isbnPair", () => {
+  it("keeps an ISBN-10 only when it is the same book as the ISBN-13", () => {
+    expect(isbnPair(["9781974766512"], ["1974766519"])).toEqual({
+      isbn13: "9781974766512",
+      isbn10: "1974766519",
+    });
+    // Rurouni Kenshin v2: the 2017 3-in-1 ISBN-13 next to the 2003 single's ISBN-10.
+    expect(isbnPair(["9781421592466"], ["1591162491"])).toEqual({
+      isbn13: "9781421592466",
+    });
+    expect(isbnPair([], ["1591162491"])).toEqual({
+      isbn13: isbn10To13("1591162491"),
+      isbn10: "1591162491",
+    });
+    // A bad check digit is no ISBN at all.
+    expect(isbnPair(["9781637867317"], [])).toEqual({});
   });
 });
 

@@ -148,33 +148,24 @@ describe("catalog.seriesPage over the seed", () => {
       }),
     ]);
 
-    // The omnibus covers Volumes 1-3 and appears under each of them with its
-    // Edition Line name and line position.
-    const vol1 = page.volumes[0];
-    const omnibus = vol1?.editions.find((e) => e.lineName === "Monster Edition");
-    expect(omnibus).toBeDefined();
+    // Two reading paths: the standard run leads, the "Monster Edition"
+    // omnibus line follows with its coverage of Volumes 1-3.
+    expect(page.editionGroups.map((g) => [g.kind, g.name])).toEqual([
+      ["standard", "Standard edition"],
+      ["line", "Monster Edition"],
+    ]);
+    const omnibus = page.editionGroups[1]?.books[0];
     expect(omnibus?.linePosition).toBe("1");
     expect(omnibus?.coverage.map((c) => c.position)).toEqual([1, 2, 3]);
-    for (const position of [2, 3]) {
-      const vol = page.volumes.find((v) => v.position === position);
-      expect(
-        vol?.editions.some((e) => e.lineName === "Monster Edition"),
-      ).toBe(true);
-    }
 
-    // The split digital edition covers Volume 3.5 partially.
-    const vol35 = page.volumes[3];
-    const split = vol35?.editions.find((e) => e.extentForVolume === "partial");
-    expect(split).toBeDefined();
-    expect(split?.coverage[0]?.note).toMatch(/side-story/i);
-
-    // Variant beneath its Release; bundle cross-linked from members.
-    const standardVol1 = vol1?.editions.find((e) => e.lineName === null && e.extentForVolume === "complete");
-    const physical = standardVol1?.releases.find((r) => r.format === "physical");
-    expect(physical?.variants).toEqual([{ name: "Box-set exclusive cover" }]);
-    expect(physical?.bundles).toEqual([
-      expect.objectContaining({ name: "Tokyo Ghoul Complete Box Set" }),
-    ]);
+    // The split digital edition sits in the standard path, covering Volume
+    // 3.5 partially.
+    const split = page.editionGroups[0]?.books.find((b) =>
+      b.coverage.some((c) => c.extent === "partial"),
+    );
+    expect(split?.coverage.map((c) => c.position)).toEqual([4]);
+    // The first standard book fronts the Series.
+    expect(page.editionGroups[0]?.books[0]?.coverage[0]?.position).toBe(1);
   });
 
   it("keeps a simple Series free of family, line, variant, and bundle concepts", async () => {
@@ -185,15 +176,11 @@ describe("catalog.seriesPage over the seed", () => {
     expect(page).not.toBeNull();
     if (!page) return;
     expect(page.family).toBeNull();
-    for (const volume of page.volumes) {
-      for (const edition of volume.editions) {
-        expect(edition.lineName).toBeNull();
-        expect(edition.linePosition).toBeNull();
-        for (const release of edition.releases) {
-          expect(release.variants).toEqual([]);
-          expect(release.bundles).toEqual([]);
-        }
-      }
+    // One standard path, no Edition Line.
+    expect(page.editionGroups.map((g) => g.kind)).toEqual(["standard"]);
+    for (const book of page.editionGroups[0]?.books ?? []) {
+      expect(book.lineName).toBeNull();
+      expect(book.linePosition).toBeNull();
     }
   });
 

@@ -18,9 +18,15 @@
 // gets its own observation identity.
 
 import { v, type Infer } from "convex/values";
+import { canonicalLabel, packagingValidator, parseBookTitle } from "./bookTitle";
 
 // ---------- the normalized snapshot ----------
 
+// Kodansha publishes its packaging lines as series pages of their own
+// ("Blue Lock Omnibus", "Gachiakuta Dumpster Manga Box Set", "MARS 30th
+// Anniversary Edition"). The snapshot's seriesTitle is always the BASE
+// series (lib/bookTitle.ts); such a line's "Volume N" is its Edition Line
+// Position, carried in `packaging`, never a Volume label.
 export const kodanshaSnapshotValidator = v.object({
   kind: v.literal("kodanshaVolume"),
   url: v.string(),
@@ -29,6 +35,8 @@ export const kodanshaSnapshotValidator = v.object({
   seriesSlug: v.string(),
   seriesUrl: v.string(),
   volumeLabel: v.optional(v.string()),
+  /** The Edition Line shape when Kodansha's series page is a packaging line. */
+  packaging: v.optional(packagingValidator),
   format: v.union(v.literal("physical"), v.literal("digital")),
   creators: v.array(v.string()),
   releaseDate: v.optional(
@@ -41,11 +49,15 @@ export type KodanshaSnapshot = Infer<typeof kodanshaSnapshotValidator>;
 
 /** One catalog item before the per-format split. */
 export type KodanshaItem = {
+  /** Kodansha's own series name, verbatim. */
+  seriesName: string;
+  /** The base series (packaging stripped). */
   seriesTitle: string;
   seriesSlug: string;
   volumeSlug: string;
   url: string;
   volumeLabel?: string;
+  packaging?: Infer<typeof packagingValidator>;
   creators: string[];
   formats: Array<"physical" | "digital">;
   releaseDate?: { year: number; month: number; day: number };
@@ -63,12 +75,15 @@ export function parseVolumeUrl(
   return { seriesSlug: m[1]!, volumeSlug: m[2]! };
 }
 
-/** "Volume 21" (incl. the API's non-breaking space) → "21"; else no label. */
-export function parseVolumeLabel(title: string): string | undefined {
-  const m = /volume\s+([0-9]+(?:\.[0-9]+)?)\s*$/i.exec(
-    title.replace(/ /g, " "),
-  );
-  return m ? m[1] : undefined;
+/**
+ * "Volume 21" (incl. the API's non-breaking space) → "21"; failing that, the
+ * volume slug ("volume-3" → "3"); else no label.
+ */
+export function parseVolumeLabel(title: string, volumeSlug = ""): string | undefined {
+  const m =
+    /volume\s+([0-9]+(?:\.[0-9]+)?)\s*$/i.exec(title.replace(/\u00a0/g, " ")) ??
+    /^volume-([0-9]+)$/i.exec(volumeSlug);
+  return m ? canonicalLabel(m[1]!) : undefined;
 }
 
 /** "By Osamu Nishi, Masashi Asaki" → the creator names. */
@@ -115,14 +130,22 @@ function itemFrom(args: {
   if (args.formats.length === 0) return null;
   const volumeTitle =
     typeof args.volumeTitle === "string"
-      ? args.volumeTitle.replace(/ /g, " ").trim()
+      ? args.volumeTitle.replace(/\u00a0/g, " ").trim()
       : "";
+  const seriesName = args.seriesTitle.trim();
+  const series = parseBookTitle(seriesName);
+  // Novels are out of catalog scope (spec §1); the calendar carries no type.
+  if (series.isNovel) return null;
+  const label = parseVolumeLabel(volumeTitle, slugs.volumeSlug);
   return {
-    seriesTitle: args.seriesTitle.trim(),
+    seriesName,
+    seriesTitle: series.seriesTitle,
     seriesSlug: slugs.seriesSlug,
     volumeSlug: slugs.volumeSlug,
     url: args.url,
-    volumeLabel: parseVolumeLabel(volumeTitle),
+    ...(series.packaging
+      ? { packaging: { ...series.packaging, linePosition: label ?? null } }
+      : { volumeLabel: label }),
     creators: parseCreators(args.creators),
     formats: args.formats,
     releaseDate: args.releaseDate,
@@ -216,11 +239,18 @@ export function toSnapshots(item: KodanshaItem): KodanshaSnapshot[] {
   return item.formats.map((format) => ({
     kind: "kodanshaVolume" as const,
     url: item.url,
-    title: `${item.seriesTitle} ${item.volumeLabel !== undefined ? `Volume ${item.volumeLabel}` : item.volumeSlug}`,
+    title: `${item.seriesName} ${
+      item.volumeLabel !== undefined
+        ? `Volume ${item.volumeLabel}`
+        : item.packaging?.linePosition != null
+          ? `Volume ${item.packaging.linePosition}`
+          : item.volumeSlug
+    }`,
     seriesTitle: item.seriesTitle,
     seriesSlug: item.seriesSlug,
     seriesUrl: `https://kodansha.us/series/${item.seriesSlug}/`,
     volumeLabel: item.volumeLabel,
+    packaging: item.packaging,
     format,
     creators: item.creators,
     releaseDate: item.releaseDate,

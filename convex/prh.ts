@@ -1,10 +1,14 @@
 // The PRH API adapter (ticket #36, spec §6/§7): overlays authoritative
 // onsale dates and ISBNs on PRH-distributed records — Kodansha, Seven Seas,
-// Dark Horse, Square Enix, Denpa, Vertical, and the rest of PRH Publisher
-// Services (VIZ is not PRH-distributed). Scope enforcement is inherent: the
-// API only ever returns titles PRH distributes, so PRH values can only land
-// on PRH-distributed records; per the authority table its dates, ISBNs, and
-// prices apply at authoritative rank, titles/creators/format at standard.
+// Dark Horse, Square Enix, Denpa, Vertical Comics, and the rest of PRH
+// Publisher Services (VIZ is not PRH-distributed). The API only returns
+// titles PRH distributes, so PRH values can only land on PRH-distributed
+// records — but a distributed imprint can still publish prose or
+// merchandise, so the parser gates scope per title (lib/prh.ts). Per the
+// authority table its dates, ISBNs, and prices apply at authoritative rank,
+// titles/creators/format at standard. Titles resolve to their base Series
+// through the shared parser: omnibus/deluxe books become Edition Line
+// members covering real Volumes, box sets Release Bundles.
 //
 // Cadence (spec §6): daily future-dated + weekly full sweep. The registry
 // row ticks daily; the adapter widens to a full sweep on UTC Sundays (or
@@ -24,17 +28,18 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { errorMessage, politeFetch } from "./lib/http";
+import { rangeLabels } from "./lib/bookTitle";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
 import { upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
+  createReleaseBundle,
   creationGates,
-  coveredLabels,
   ensurePublisher,
   findPublisherByName,
-  needsEditionLine,
   queueCreationProposal,
+  recordUnplaced,
   toPartialDate,
 } from "./lib/pipeline";
 import { imprintPublisher, parseTitleList, prhTitleValidator, type PrhTitleSnapshot } from "./lib/prh";
@@ -287,17 +292,96 @@ export const applyTitle = internalMutation({
       };
     }
 
-    // Rungs ②–⑤ via the shared ladder. The publisher key is the imprint,
-    // resolved against existing rows (the overlay's usual case: the row
-    // already exists from the publisher source or a prior PRH creation).
+    // A box set already placed as a Release Bundle has nothing to reconcile.
+    if (observation.recordRef?.type === "releaseBundle") {
+      return { status: changed ? "recordOnly" : "unchanged", changed: false };
+    }
+
+    // Series first: every placement below hangs off the base Series. An
+    // unmarked trailing number may belong to the name ("Omega 6"): when only
+    // the whole title names an existing Series, the book is that Series'.
+    let seriesTitle = snapshot.seriesTitle;
+    let volumeLabel = snapshot.volumeLabel ?? null;
+    let candidates = await candidateSeries(ctx, seriesTitle);
+    if (candidates.length === 0 && snapshot.bareNumber) {
+      const whole = await candidateSeries(ctx, snapshot.title);
+      if (whole.length > 0) {
+        candidates = whole;
+        seriesTitle = whole[0]!.title;
+        volumeLabel = null;
+      }
+    }
+    const seriesId = candidates.length === 1 ? candidates[0]!._id : null;
+
+    // Packaging maps onto the base Series' real Volumes — never a Volume or
+    // Series of its own. Without a stated coverage it links by ISBN or not
+    // at all.
+    const packaging = snapshot.packaging ?? null;
+    const labels = packaging
+      ? packaging.coverRange
+        ? rangeLabels(packaging.coverRange)
+        : []
+      : volumeLabel !== null
+        ? [volumeLabel]
+        : [];
+
+    // The publisher key is the imprint, resolved against existing rows (a
+    // duplicate string like "Kodansha Comics" resolves to its company; an
+    // imprint like "Ghost Ship" to its own row).
     const publisher =
       snapshot.imprint !== undefined
         ? await findPublisherByName(ctx, snapshot.imprint)
         : null;
+    const publisherRow =
+      snapshot.imprint !== undefined ? imprintPublisher(snapshot.imprint) : undefined;
+    const releasePayload = {
+      format: snapshot.format,
+      binding: snapshot.binding,
+      isbn13: snapshot.isbn13,
+      isbn10: snapshot.isbn10,
+      pubDate: snapshot.onsale ? toPartialDate(snapshot.onsale) : undefined,
+      price:
+        snapshot.priceCents !== undefined
+          ? { amountCents: snapshot.priceCents, currency: "USD" }
+          : undefined,
+    };
+    const bootstrap = await getBootstrapMode(ctx);
+
+    // Box sets are Release Bundles of the base Series' existing Releases.
+    if (snapshot.isBox) {
+      if (seriesId === null || publisherRow === undefined || !bootstrap) {
+        await recordUnplaced(
+          ctx,
+          observation,
+          seriesId === null
+            ? `Box set "${snapshot.title}" has no unique base Series.`
+            : `Box set "${snapshot.title}" is a Release Bundle — steady state leaves bundles to review.`,
+          now,
+        );
+        return { status: "recordOnly", changed: false, reason: "box set" };
+      }
+      const bundle = await createReleaseBundle(ctx, {
+        sourceKey: SOURCE_KEY,
+        observation,
+        citation,
+        importComment: IMPORT_COMMENT,
+        seriesId,
+        name: snapshot.title,
+        labels,
+        publisher: publisherRow,
+        release: releasePayload,
+        tagBootstrapUnreviewed: true,
+        now,
+      });
+      return { status: bundle.created ? "created" : "linked", changed: true };
+    }
+
+    // Rungs ②–⑤ via the shared ladder. Packaging only ever matches by ISBN
+    // (multiVolume skips rungs ③/④): an Omnibus 7 is never Volume 7.
     const fact: ReleaseFact = {
-      seriesTitle: snapshot.seriesTitle,
-      volumeLabel: snapshot.multiVolume ? null : (snapshot.volumeLabel ?? null),
-      multiVolume: snapshot.multiVolume,
+      seriesTitle,
+      volumeLabel: packaging ? null : volumeLabel,
+      multiVolume: packaging !== null,
       format: snapshot.format,
       isbn13: snapshot.isbn13,
       publisherId: publisher?._id ?? null,
@@ -321,50 +405,51 @@ export const applyTitle = internalMutation({
       return { status: "linked", changed: true, releaseId: release._id };
     }
 
-    // Creation needs a publisher; PRH's imprint description provides one.
-    const publisherRow =
-      snapshot.imprint !== undefined
-        ? imprintPublisher(snapshot.imprint)
-        : undefined;
-    const labels = snapshot.multiVolume
-      ? coveredLabels(snapshot.volumeLabel)
-      : snapshot.volumeLabel !== undefined
-        ? [snapshot.volumeLabel]
-        : [];
-    const releasePayload = {
-      format: snapshot.format,
-      binding: snapshot.binding,
-      isbn13: snapshot.isbn13,
-      isbn10: snapshot.isbn10,
-      pubDate: snapshot.onsale ? toPartialDate(snapshot.onsale) : undefined,
-      price:
-        snapshot.priceCents !== undefined
-          ? { amountCents: snapshot.priceCents, currency: "USD" }
-          : undefined,
-    };
+    if (packaging && labels.length === 0) {
+      await recordUnplaced(
+        ctx,
+        observation,
+        `"${snapshot.title}" is packaging (${packaging.lineName ?? "multi-volume"}) whose covered Volumes the title does not state — an Editor maps it.`,
+        now,
+      );
+      return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
+    }
 
-    if (match.kind === "review") {
+    const editionLine =
+      packaging?.lineName != null
+        ? { name: packaging.lineName, position: packaging.linePosition }
+        : undefined;
+    const linePosition = packaging?.linePosition ?? undefined;
+    const queue = async (comment: string, reason?: string): Promise<ApplyResult> => {
       if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false, reason: match.reason };
+        return { status: "alreadyQueued", changed: false, reason };
       }
       if (publisherRow === undefined) {
         // No imprint on the record: nothing reviewable to pre-fill.
-        return { status: "needsReview", changed: false, reason: match.reason };
+        return { status: "needsReview", changed: false, reason };
       }
       // The creation registry resolves publisherSlug at approval; ensure the
       // imprint's row exists so the queued guess stays one-click appliable.
-      await ensurePublisher(ctx, publisherRow);
+      const row = await ensurePublisher(ctx, publisherRow);
       await queueCreationProposal(ctx, {
         sourceKey: SOURCE_KEY,
         observation,
-        seriesId: null,
-        seriesTitle: snapshot.seriesTitle,
+        seriesId,
+        seriesTitle,
         labels,
-        release: { ...releasePayload, publisherSlug: publisherRow.slug },
+        linePosition,
+        release: { ...releasePayload, publisherSlug: row.slug },
         now,
-        comment: `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`,
+        comment,
       });
-      return { status: "needsReview", changed: true, reason: match.reason };
+      return { status: reason ? "needsReview" : "queued", changed: true, reason };
+    };
+
+    if (match.kind === "review") {
+      return await queue(
+        `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`,
+        match.reason,
+      );
     }
 
     if (publisherRow === undefined) {
@@ -372,57 +457,23 @@ export const applyTitle = internalMutation({
       return { status: "recordOnly", changed: false };
     }
 
-    const bootstrap = await getBootstrapMode(ctx);
-    const gates = creationGates({
-      // PRH keys series by bare title, never a stored link: a brand-new
-      // Series is any title with no matching canonical Series.
-      seriesId: null,
-      multiVolume: snapshot.multiVolume,
-      editionLineHint: needsEditionLine(snapshot.title),
-    });
-    // The brand-new-Series gate only applies when the Series truly does not
-    // exist yet; an existing unique title match lifts it.
-    const candidates = await candidateSeries(ctx, snapshot.seriesTitle);
-    const seriesId = candidates.length === 1 ? candidates[0]!._id : null;
-    const effectiveGates =
-      seriesId !== null && candidates.length === 1
-        ? gates.filter((gate) => gate !== "a brand-new Series")
-        : gates;
     if (candidates.length > 1) {
       // Two same-titled Series: creating under either is a guess.
-      if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false };
-      }
-      await ensurePublisher(ctx, publisherRow);
-      await queueCreationProposal(ctx, {
-        sourceKey: SOURCE_KEY,
-        observation,
-        seriesId: null,
-        seriesTitle: snapshot.seriesTitle,
-        labels,
-        release: { ...releasePayload, publisherSlug: publisherRow.slug },
-        now,
-        comment: `"${snapshot.title}" matches ${candidates.length} same-titled Series — the importer never guesses.`,
-      });
-      return { status: "needsReview", changed: true };
+      return await queue(
+        `"${snapshot.title}" matches ${candidates.length} same-titled Series — the importer never guesses.`,
+        "ambiguous series",
+      );
     }
 
-    if (effectiveGates.length > 0 && !bootstrap) {
-      if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false };
-      }
-      await ensurePublisher(ctx, publisherRow);
-      await queueCreationProposal(ctx, {
-        sourceKey: SOURCE_KEY,
-        observation,
-        seriesId,
-        seriesTitle: snapshot.seriesTitle,
-        labels,
-        release: { ...releasePayload, publisherSlug: publisherRow.slug },
-        now,
-        comment: `"${snapshot.title}" observed at ${sourceName} needs ${effectiveGates.join(" and ")} — steady-state creation gate.`,
-      });
-      return { status: "queued", changed: true };
+    const gates = creationGates({
+      seriesId,
+      multiVolume: labels.length > 1,
+      editionLineHint: editionLine !== undefined,
+    });
+    if (gates.length > 0 && !bootstrap) {
+      return await queue(
+        `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.${editionLine ? ` Edition Line: ${editionLine.name}.` : ""}`,
+      );
     }
 
     const creation = await createCanonicalRecords(ctx, {
@@ -431,10 +482,11 @@ export const applyTitle = internalMutation({
       citation,
       importComment: IMPORT_COMMENT,
       seriesId,
-      seriesTitle: snapshot.seriesTitle,
+      seriesTitle,
       labels,
+      editionLine,
       release: { ...releasePayload, publisher: publisherRow },
-      tagBootstrapUnreviewed: bootstrap && effectiveGates.length > 0,
+      tagBootstrapUnreviewed: bootstrap && gates.length > 0,
       now,
     });
     return { status: "created", changed: true, releaseId: creation.releaseId };

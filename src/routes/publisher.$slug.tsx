@@ -39,7 +39,8 @@ const LANE_HORIZON_MONTHS = 3;
  *
  * Publishers are the slug-only URL exception (spec §8): a renamed Publisher's
  * old slug 301s here via publisherSlugRedirects, and a merged Publisher's
- * slug 301s to its survivor's.
+ * slug 301s to its survivor's. An imprint links up to its parent company,
+ * and a parent lists its imprints.
  */
 export const Route = createFileRoute("/publisher/$slug")({
   loader: async ({ params }) => {
@@ -133,8 +134,14 @@ function groupLaneByMonth(upcoming: PublisherPageData["upcoming"]) {
 }
 
 function PublisherPage() {
-  const { publisher, upcoming, upcomingCapped, editionCount } =
-    Route.useLoaderData();
+  const {
+    publisher,
+    parent,
+    imprints,
+    upcoming,
+    upcomingCapped,
+    editionCount,
+  } = Route.useLoaderData();
   const groups = groupLaneByMonth(upcoming);
 
   return (
@@ -150,8 +157,29 @@ function PublisherPage() {
         </span>
         <div className="pub-body">
           <h1 className="pub-title">{publisher.name}</h1>
+          {parent ? (
+            <p className="pub-parent">
+              An imprint of{" "}
+              <Link to="/publisher/$slug" params={{ slug: parent.slug }}>
+                {parent.name}
+              </Link>
+            </p>
+          ) : null}
           {publisher.description ? (
             <p className="pub-blurb">{publisher.description}</p>
+          ) : null}
+          {imprints.length > 0 ? (
+            <p className="pub-imprints">
+              Imprints:{" "}
+              {imprints.map((imprint, i) => (
+                <span key={imprint.slug}>
+                  {i > 0 ? ", " : null}
+                  <Link to="/publisher/$slug" params={{ slug: imprint.slug }}>
+                    {imprint.name}
+                  </Link>
+                </span>
+              ))}
+            </p>
           ) : null}
           {editionCount.count > 0 ? (
             <p className="fact-chips">

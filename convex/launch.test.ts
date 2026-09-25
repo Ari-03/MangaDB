@@ -433,3 +433,34 @@ describe("launchChecklist (spec §7: gates, and only the gates)", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("seedPublishers (the canonical publisher list)", () => {
+  it("seeds one row per company and imprint, imprints naming their parent", async () => {
+    const t = convexTest(schema);
+    // A pre-existing imprint row without a parent (as the PRH importer made them).
+    await t.run((ctx) =>
+      ctx.db.insert("publishers", { status: "active", name: "Ghost Ship", slug: "ghost-ship" }),
+    );
+    const first = await t.mutation(internal.launch.seedPublishers, {});
+    expect(first.created).not.toContain("ghost-ship");
+    expect(first.parented).toEqual(["ghost-ship"]);
+    const again = await t.mutation(internal.launch.seedPublishers, {});
+    expect(again).toMatchObject({ created: [], parented: [] });
+
+    await t.run(async (ctx) => {
+      const bySlug = async (slug: string) =>
+        await ctx.db
+          .query("publishers")
+          .withIndex("by_slug", (q) => q.eq("slug", slug))
+          .unique();
+      const kodansha = await bySlug("kodansha");
+      const sevenSeas = await bySlug("seven-seas");
+      expect((await bySlug("vertical"))?.parentPublisherId).toBe(kodansha!._id);
+      expect((await bySlug("ghost-ship"))?.parentPublisherId).toBe(sevenSeas!._id);
+      expect((await bySlug("tokyopop-lovelove"))?.parentPublisherId).toBeDefined();
+      // Duplicate strings are not rows of their own.
+      expect(await bySlug("kodansha-comics")).toBeNull();
+      expect(kodansha?.parentPublisherId).toBeUndefined();
+    });
+  });
+});

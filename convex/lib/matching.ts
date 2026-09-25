@@ -14,36 +14,57 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { isNovelTitle } from "./bookTitle";
+import { decodeEntities } from "./text";
 
 // ---------- pure text rules ----------
 
+// Appended to a novel's key: no title text can produce it (punctuation
+// folds to spaces), so a prose novel never keys equal to its manga.
+const NOVEL_KEY = " #novel";
+
+/** Entities decoded, accents and apostrophes folded, "&" read as "and", lowercased. */
+function foldTitle(title: string): string {
+  return decodeEntities(title)
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/['’‘`´]/g, "")
+    .replace(/&/g, " and ");
+}
+
 /**
- * Normalized series-title key for rungs ③/④: lowercased, publisher
- * discriminators like "(Manga)" stripped, punctuation collapsed. Equality
- * on this key is the "normalized series title" of the ladder.
+ * Normalized series-title key for rungs ③/④ and every by-title Series
+ * lookup: entities decoded, accents/apostrophes folded, "&" ≡ "and", a
+ * leading "The" dropped, bracketed discriminators like "(Manga)" stripped,
+ * punctuation collapsed. A novel marker ("(Light Novel)", ": The Novel")
+ * stays in the key, so a novel never matches its manga. Equality on this
+ * key is the "normalized series title" of the ladder.
  */
 export function normalizeTitle(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/\(.*?\)/g, " ")
+  const key = foldTitle(title)
+    .replace(/[([][^()[\]]*[)\]]/g, " ")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .replace(/^the /, "");
+  return isNovelTitle(title) ? `${key}${NOVEL_KEY}` : key;
 }
 
 /**
  * Loose title-similarity sanity check for the ISBN rung (spec §6): at least
- * half of the shorter title's tokens must appear in the other.
+ * half of the shorter title's tokens must appear in the other, on the same
+ * folding as normalizeTitle. A novel is never similar to a manga.
  */
 export function titlesSimilar(a: string, b: string): boolean {
+  if (isNovelTitle(a) !== isNovelTitle(b)) return false;
   const tokens = (s: string) =>
     new Set(
-      s
-        .toLowerCase()
-        .replace(/\(.*?\)/g, " ")
-        .replace(/[^a-z0-9 ]/g, " ")
+      foldTitle(s)
+        .replace(/[([][^()[\]]*[)\]]/g, " ")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
         .split(/\s+/)
-        .filter((w) => w.length > 1),
+        .filter((w) => w.length > 1 && w !== "the"),
     );
   const ta = tokens(a);
   const tb = tokens(b);
@@ -85,10 +106,18 @@ export type MatchOutcome =
   | { kind: "review"; rung: 2 | 3 | 4; reason: string }
   | { kind: "create"; rung: 5 };
 
+// Full-text hits scanned per query. Generous on purpose: relevance ranking
+// can bury the one real Series under many near-namesakes ("Otherside Picnic
+// 01…16 (Manga)" shards), and a Series with no Releases yet (an ANN
+// backbone entry) must still be found.
+const SEARCH_SCAN = 100;
+
 /**
- * Active Series whose title (or an alt title) normalizes to the given one.
- * Exported for the series-structured sources (ANN) and the fill-only source
- * (OpenLibrary), whose series resolution starts from a bare title.
+ * Active Series whose title normalizes to the given one; alt-title matches
+ * count only when no primary title matches (ANN lists sequels and spinoffs —
+ * "Citrus Plus", "Dragon Ball Z" — as alt titles). Searched under both the
+ * raw and the folded spelling, so "Candy & Cigarettes" finds "CANDY AND
+ * CIGARETTES". Exported for every by-title series resolution.
  */
 export async function candidateSeries(
   ctx: QueryCtx | MutationCtx,
@@ -96,15 +125,22 @@ export async function candidateSeries(
 ): Promise<Doc<"series">[]> {
   const wanted = normalizeTitle(seriesTitle);
   if (wanted === "") return [];
-  const hits = await ctx.db
-    .query("series")
-    .withSearchIndex("search_title", (q) => q.search("searchText", seriesTitle))
-    .take(20);
-  return hits.filter(
-    (series) =>
-      series.status === "active" &&
-      (normalizeTitle(series.title) === wanted ||
-        series.altTitles.some((alt) => normalizeTitle(alt) === wanted)),
+  const queries = new Set([decodeEntities(seriesTitle), wanted.replace(NOVEL_KEY, "")]);
+  const seen = new Map<Id<"series">, Doc<"series">>();
+  for (const text of queries) {
+    const hits = await ctx.db
+      .query("series")
+      .withSearchIndex("search_title", (q) => q.search("searchText", text))
+      .take(SEARCH_SCAN);
+    for (const hit of hits) {
+      if (hit.status === "active") seen.set(hit._id, hit);
+    }
+  }
+  const all = [...seen.values()];
+  const primary = all.filter((series) => normalizeTitle(series.title) === wanted);
+  if (primary.length > 0) return primary;
+  return all.filter((series) =>
+    series.altTitles.some((alt) => normalizeTitle(alt) === wanted),
   );
 }
 
@@ -181,6 +217,15 @@ export async function matchRelease(
           .collect();
         for (const release of releases) {
           if (release.status !== "active") continue;
+          // A different ISBN-13 is a different Release by definition
+          // (CONTEXT.md): never this record, and not ambiguity either.
+          if (
+            fact.isbn13 !== undefined &&
+            release.isbn13 !== undefined &&
+            release.isbn13 !== fact.isbn13
+          ) {
+            continue;
+          }
           const sameEdition =
             coversOnlyThisVolume &&
             fact.publisherId !== null &&

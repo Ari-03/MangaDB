@@ -14,6 +14,8 @@ import schema from "./schema";
 type FixtureTitle = {
   isbn: string;
   title: string;
+  /** PRH's own volume number for the book, as the live API carries it. */
+  seriesNumber?: number;
   onsale?: string;
   format?: string;
   imprint?: string;
@@ -33,6 +35,7 @@ function stubApi(titles: FixtureTitle[]) {
       const page = titles.slice(start, start + 200).map((t) => ({
         isbn: t.isbn,
         title: t.title,
+        seriesNumber: t.seriesNumber,
         onsale: t.onsale,
         format: { code: "TR", description: t.format ?? "Trade Paperback" },
         imprint: { code: "IMPR", description: t.imprint ?? "Kodansha Comics" },
@@ -173,6 +176,7 @@ describe("prh.sync — the authoritative overlay", () => {
       {
         isbn: "9781646094356",
         title: "Witch Hat Atelier 15",
+        seriesNumber: 15,
         onsale: "2026-12-08", // disagrees with Kodansha's equally-auth date
         imprint: "Kodansha Comics", // resolves to the "Kodansha" row
         priceUsd: 12.99,
@@ -251,13 +255,14 @@ describe("prh.sync — the authoritative overlay", () => {
 });
 
 describe("prh.sync — steady state", () => {
-  it("queues a pre-filled proposal for a brand-new series, ensuring the imprint's publisher row", async () => {
+  it("queues a pre-filled proposal for a brand-new series, ensuring the company's publisher row", async () => {
     const t = makeT();
     await seedRegistry(t, false);
     stubApi([
       {
         isbn: "9781646094356",
         title: "Witch Hat Atelier 15",
+        seriesNumber: 15,
         onsale: "2026-12-08",
         imprint: "Kodansha Comics",
       },
@@ -275,10 +280,227 @@ describe("prh.sync — steady state", () => {
       expect(
         (editionOp as { fields: { publisherSlug: string } }).fields
           .publisherSlug,
-      ).toBe("kodansha-comics");
-      // The row exists, so approving the guess is one click.
+      ).toBe("kodansha");
+      // "Kodansha Comics" is Kodansha under another string: one company row,
+      // which exists, so approving the guess is one click.
       const publishers = await ctx.db.query("publishers").collect();
-      expect(publishers.map((p) => p.slug)).toEqual(["kodansha-comics"]);
+      expect(publishers.map((p) => p.slug)).toEqual(["kodansha"]);
+    });
+  });
+});
+
+// Real PRH titles that used to become one Series per book (series-titles
+// and volume-numbering audits); the ANN backbone Series has no Releases yet.
+describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
+  async function backbone(t: TestT, title: string, labels: string[]) {
+    return await t.run(async (ctx) => {
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title,
+        altTitles: [],
+        searchText: title,
+      });
+      for (const label of labels) {
+        await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: Number(label),
+          seriesId,
+          position: Number(label),
+          label,
+        });
+      }
+      return seriesId;
+    });
+  }
+
+  it("files an omnibus under the base Series as an Edition Line member covering its Volumes", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const seriesId = await backbone(t, "Noragami: Stray God", ["19", "20"]);
+    await t.run((ctx) =>
+      ctx.db.patch(seriesId, { altTitles: ["Noragami"], searchText: "Noragami: Stray God Noragami" }),
+    );
+    stubApi([
+      { isbn: "9781646519026", title: "Noragami Omnibus 7 (Vol. 19-21)", seriesNumber: 7 },
+      {
+        isbn: "9781646519033",
+        title: "Noragami Omnibus 7 (Vol. 19-21)",
+        seriesNumber: 7,
+        format: "Ebook",
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes.map((v) => v.label).sort()).toEqual(["19", "20", "21"]);
+      const [line] = await ctx.db.query("editionLines").collect();
+      expect(line).toMatchObject({ seriesId, name: "Omnibus" });
+      const editions = await ctx.db.query("editions").collect();
+      expect(editions).toHaveLength(1);
+      expect(editions[0]).toMatchObject({ editionLineId: line!._id, linePosition: "7" });
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.format).sort()).toEqual(["digital", "physical"]);
+    });
+  });
+
+  it("never turns an omnibus number into a Volume when coverage is unknown", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await backbone(t, "Negima!", ["4"]);
+    stubApi([{ isbn: "9781612620015", title: "Negima! Omnibus 4", seriesNumber: 4 }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+      expect(await ctx.db.query("editions").collect()).toHaveLength(0);
+      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
+      expect(obs.recordRef).toBeUndefined();
+      expect(obs.conflicts?.[0]).toMatchObject({ field: "placement" });
+    });
+  });
+
+  it("gives a multi-volume title range coverage, never an unlabeled placeholder", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      {
+        isbn: "9781645058472",
+        title: "Tokyo Revengers (Omnibus) Vol. 11-12",
+        imprint: "Seven Seas",
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      expect(series.map((s) => s.title)).toEqual(["Tokyo Revengers"]);
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes.map((v) => [v.label, v.position])).toEqual([
+        ["11", 11],
+        ["12", 12],
+      ]);
+    });
+  });
+
+  it("splits Vol.N and (Manga) titles onto the existing backbone Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const alpi = await backbone(t, "Alpi the Soul Sender", ["5"]);
+    const picnic = await backbone(t, "Otherside Picnic", ["5"]);
+    stubApi([
+      {
+        isbn: "9781787741348",
+        title: "Alpi the Soul Sender Vol.5",
+        seriesNumber: 5,
+        imprint: "Titan Manga",
+      },
+      {
+        isbn: "9781646091300",
+        title: "Otherside Picnic 05 (Manga)",
+        seriesNumber: 5,
+        imprint: "Square Enix Manga",
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("series").collect()).toHaveLength(2);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.seriesIds[0]).sort()).toEqual([alpi, picnic].sort());
+      // "Square Enix Manga" is Square Enix under another string.
+      const publishers = await ctx.db.query("publishers").collect();
+      expect(publishers.map((p) => p.slug).sort()).toEqual(["square-enix", "titan-manga"]);
+    });
+  });
+
+  it("keeps a trailing number that belongs to an existing Series' name", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const omega = await backbone(t, "Omega 6", []);
+    stubApi([
+      {
+        isbn: "9781506731780",
+        title: "Omega 6",
+        seriesNumber: 6,
+        imprint: "Dark Horse Manga",
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("series").collect()).map((s) => s._id)).toEqual([omega]);
+    });
+  });
+
+  it("makes a box set a Release Bundle of the base Series' Releases", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await backbone(t, "Fire Force", []);
+    stubApi([
+      { isbn: "9781632364425", title: "Fire Force 1", seriesNumber: 1 },
+      { isbn: "9798888772584", title: "Fire Force Manga Box Set 1 (Vol. 1-6)", seriesNumber: 1 },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const bundles = await ctx.db.query("releaseBundles").collect();
+      expect(bundles).toMatchObject([
+        { isbn13: "9798888772584", name: "Fire Force Manga Box Set 1 (Vol. 1-6)" },
+      ]);
+      expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(1);
+      // The box is not a Release, and it made no Volume.
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.isbn13)).toEqual(["9781632364425"]);
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label)).toEqual(["1"]);
+    });
+  });
+
+  it("creates an imprint's own row under its parent company", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.run((ctx) =>
+      ctx.db.insert("publishers", {
+        status: "active",
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+      }),
+    );
+    stubApi([
+      {
+        isbn: "9798891600836",
+        title: "ENNEAD Vol. 4 [Mature Hardcover]",
+        seriesNumber: 4,
+        imprint: "Ghost Ship",
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const ghostShip = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "ghost-ship"))
+        .unique();
+      const sevenSeas = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "seven-seas"))
+        .unique();
+      expect(ghostShip?.parentPublisherId).toBe(sevenSeas!._id);
+      expect((await ctx.db.query("series").collect()).map((s) => s.title)).toEqual(["ENNEAD"]);
+    });
+  });
+
+  it("never stores out-of-scope titles", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      { isbn: "9781945054853", title: "The Seven Deadly Sins (Novel)", imprint: "Kodansha Comics" },
+      { isbn: "9781935654100", title: "Number Place: Blue", imprint: "Vertical" },
+      {
+        isbn: "9781427880024",
+        title: "Her Royal Highness Seems to Be Angry, Volume 1 (Light Novel)",
+        imprint: "TOKYOPOP",
+      },
+    ]);
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsSeen: 0 });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("sourceObservations").collect()).toHaveLength(0);
     });
   });
 });

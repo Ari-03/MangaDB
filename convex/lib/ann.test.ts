@@ -46,6 +46,27 @@ describe("parseAnnDate — ANN's month-precision convention", () => {
     expect(parseAnnDate("2027")).toEqual({ year: 2027 });
     expect(parseAnnDate("soon")).toBeUndefined();
   });
+
+  it("reads a pre-2010 day 01 as the month placeholder it is", () => {
+    expect(parseAnnDate("2004-06-01")).toEqual({ year: 2004, month: 6 });
+    expect(parseAnnDate("2009-12-01")).toEqual({ year: 2009, month: 12 });
+    // Modern day-1 dates are real (159/178 agree with PRH).
+    expect(parseAnnDate("2024-10-01")).toEqual({ year: 2024, month: 10, day: 1 });
+  });
+});
+
+describe("parseApiResponse — title hygiene", () => {
+  it("decodes double-escaped entities and drops ruby and whitespace noise", () => {
+    const [manga] = parseApiResponse(`<ann><manga id="36878" name="x">
+<info gid="1" type="Main title" lang="EN">Marrying the Dark Knight &amp;#40;For Her Money&amp;#41;</info>
+<info gid="2" type="Alternative title" lang="JA">&lt;ruby&gt;&lt;rb&gt;騎士&lt;/rb&gt;&lt;rt&gt;きし&lt;/rt&gt;&lt;/ruby&gt;</info>
+<info gid="3" type="Alternative title" lang="EN">A  Century   of Temptation</info>
+</manga></ann>`);
+    expect(manga).toMatchObject({
+      title: "Marrying the Dark Knight (For Her Money)",
+      altTitles: ["騎士", "A Century of Temptation"],
+    });
+  });
 });
 
 describe("splitReleaseTitle", () => {

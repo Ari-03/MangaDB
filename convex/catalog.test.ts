@@ -167,7 +167,7 @@ describe("catalog.search", () => {
 });
 
 describe("catalog.seriesPage", () => {
-  it("orders volumes by hidden Position, never by the display Label", async () => {
+  it("orders volumes by Position, never by the display Label", async () => {
     const t = convexTest(schema);
     const publicId = 1;
     await t.run(async (ctx) => {
@@ -327,8 +327,8 @@ describe("catalog.seriesPage", () => {
       });
     });
     const page = await t.query(api.catalog.seriesPage, { publicId: 1 });
-    expect(page?.volumes[0]?.editions).toHaveLength(1);
-    expect(page?.volumes[0]?.editions[0]?.publicId).toBe(2);
-    expect(page?.volumes[0]?.editions[0]?.releases).toEqual([]);
+    expect(page?.editionGroups).toHaveLength(1);
+    expect(page?.editionGroups[0]?.books.map((b) => b.publicId)).toEqual([2]);
+    expect(page?.editionGroups[0]?.books[0]?.releases).toEqual([]);
   });
 });

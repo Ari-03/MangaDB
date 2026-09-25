@@ -50,16 +50,19 @@ function decide(overrides: Partial<Parameters<typeof decideField>[0]> = {}) {
     offered: { year: 2026, month: 2, day: 3, sort: 20260203 },
     overridden: false,
     incomingSourceKey: "sevenseas",
+    incomingObservationId: "obs-incoming",
     incomingRank: 3,
-    incumbent: { kind: "source", sourceKey: "ann", rank: 2 },
+    incumbent: { kind: "source", sourceKey: "ann", rank: 2, observationIds: ["obs-ann"] },
     ...overrides,
   });
 }
 
-const src = (sourceKey: string, rank: number): Incumbent => ({
+// An incumbent imported by some other record of the source.
+const src = (sourceKey: string, rank: number, observationIds = ["obs-other"]): Incumbent => ({
   kind: "source",
   sourceKey,
   rank,
+  observationIds,
 });
 
 describe("decideField — the conflict table", () => {
@@ -87,9 +90,24 @@ describe("decideField — the conflict table", () => {
     );
   });
 
-  it("lets a source update its own fact, whatever the ranks say", () => {
+  it("lets a source record update its own fact, whatever the ranks say", () => {
     expect(
-      decide({ incomingRank: 3, incumbent: src("sevenseas", 3) }).action,
+      decide({ incomingRank: 3, incumbent: src("sevenseas", 3, ["obs-incoming"]) }).action,
+    ).toBe("auto");
+  });
+
+  it("treats another record of the same source as an equal-authority conflict", () => {
+    // Two ANN printings (or two OpenLibrary editions) linked to one Release
+    // must not overwrite each other on every run.
+    expect(
+      decide({ incomingSourceKey: "ann", incomingRank: 2, incumbent: src("ann", 2) }).action,
+    ).toBe("queue");
+    expect(
+      decide({
+        incomingSourceKey: "ann",
+        incomingRank: 2,
+        incumbent: src("ann", 2, ["obs-incoming", "obs-series"]),
+      }).action,
     ).toBe("auto");
   });
 

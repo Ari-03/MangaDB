@@ -13,6 +13,7 @@
 // (standard) — plus the title/publisher keys matching needs.
 
 import { v, type Infer } from "convex/values";
+import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
 
 // ---------- the normalized snapshot ----------
 
@@ -22,9 +23,13 @@ export const olEditionValidator = v.object({
   key: v.string(),
   url: v.string(),
   title: v.string(),
+  /** The base Series title (lib/bookTitle.ts), never the book title. */
   seriesTitle: v.string(),
+  /** The single covered Volume; absent for oneshots and all packaging. */
   volumeLabel: v.optional(v.string()),
   multiVolume: v.boolean(),
+  /** Omnibus / deluxe / box-set / range shape, when the title has one. */
+  packaging: v.optional(packagingValidator),
   publishers: v.array(v.string()),
   publishDate: v.optional(
     v.object({
@@ -80,60 +85,71 @@ export function parseOlDate(
   return undefined;
 }
 
-// ---------- titles ----------
-
-/**
- * Split an OpenLibrary edition title into series title + volume label:
- * "Chainsaw Man, Vol. 22", "Berserk Volume 41", "One Piece #3", with the
- * volume number sometimes in the subtitle. No trailing-bare-number rule —
- * OL titles are too messy for it ("1984", "Akira 2019 art book").
- */
-export function splitOlTitle(
-  title: string,
-  subtitle?: string,
-): { seriesTitle: string; volumeLabel?: string; multiVolume: boolean } {
-  const text = title.trim();
-  const range =
-    /^(.*?)[,:]?\s+(?:Vols?\.?|Volumes?)\s+(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*$/i.exec(
-      text,
-    );
-  if (range) return { seriesTitle: range[1]!.trim(), multiVolume: true };
-  const marked =
-    /^(.*?)[,:]?\s+(?:Vols?\.?|Volumes?|#)\s*(\d+(?:\.\d+)?)\s*$/i.exec(text);
-  if (marked) {
-    return {
-      seriesTitle: marked[1]!.trim(),
-      volumeLabel: marked[2],
-      multiVolume: false,
-    };
-  }
-  if (subtitle !== undefined) {
-    const sub = /^(?:Vols?\.?|Volumes?)\s*(\d+(?:\.\d+)?)$/i.exec(subtitle.trim());
-    if (sub) {
-      return { seriesTitle: text, volumeLabel: sub[1], multiVolume: false };
-    }
-  }
-  return { seriesTitle: text, multiVolume: false };
-}
-
 // ---------- edition records ----------
 
-function firstIsbn13(raw: unknown): string | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  for (const value of raw) {
-    const digits = String(value).replace(/[^0-9]/g, "");
-    if (/^\d{13}$/.test(digits)) return digits;
-  }
-  return undefined;
+function isbn13s(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((value) => String(value).replace(/[^0-9]/g, ""))
+    .filter((digits) => /^\d{13}$/.test(digits) && isbn13CheckOk(digits));
 }
 
-function firstIsbn10(raw: unknown): string | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  for (const value of raw) {
-    const chars = String(value).replace(/[^0-9Xx]/g, "").toUpperCase();
-    if (/^\d{9}[\dX]$/.test(chars)) return chars;
-  }
-  return undefined;
+function isbn10s(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((value) => String(value).replace(/[^0-9Xx]/g, "").toUpperCase())
+    .filter((chars) => /^\d{9}[\dX]$/.test(chars));
+}
+
+function isbn13CheckOk(isbn13: string): boolean {
+  const sum = [...isbn13].reduce((acc, d, i) => acc + Number(d) * (i % 2 === 0 ? 1 : 3), 0);
+  return sum % 10 === 0;
+}
+
+/** ISBN-10 → its ISBN-13 (978 prefix, recomputed check digit). */
+export function isbn10To13(isbn10: string): string {
+  const core = `978${isbn10.slice(0, 9)}`;
+  const sum = [...core].reduce((acc, d, i) => acc + Number(d) * (i % 2 === 0 ? 1 : 3), 0);
+  return `${core}${(10 - (sum % 10)) % 10}`;
+}
+
+/**
+ * The record's ISBN pair, naming ONE book: the first valid ISBN-13 (or one
+ * derived from an ISBN-10), plus an ISBN-10 only when it is that same book —
+ * OpenLibrary arrays can mix printings, and a 979 ISBN has no ISBN-10.
+ */
+export function isbnPair(
+  raw13: unknown,
+  raw10: unknown,
+): { isbn13?: string; isbn10?: string } {
+  const tens = isbn10s(raw10);
+  const isbn13 = isbn13s(raw13)[0] ?? (tens[0] !== undefined ? isbn10To13(tens[0]) : undefined);
+  if (isbn13 === undefined) return {};
+  const isbn10 = tens.find((ten) => isbn10To13(ten) === isbn13);
+  return isbn10 !== undefined ? { isbn13, isbn10 } : { isbn13 };
+}
+
+// ISBN registration groups of the English-language market, and groups that
+// are never English editions (Japan, France, Germany, Spain, Italy, Korea,
+// Taiwan). An edition declaring no language must carry an English-market
+// ISBN; a non-English group is out of scope whatever the record declares.
+const ENGLISH_ISBN = /^(?:9780|9781|9798)/;
+const NON_ENGLISH_ISBN = /^(?:9784|9782|9783|97884|97888|97889|978957|978986|97910|97911|97912)/;
+
+/** Is this an English-language edition, by declared language and ISBN group? */
+export function isEnglishEdition(languages: unknown, isbn13: string | undefined): boolean {
+  if (isbn13 !== undefined && NON_ENGLISH_ISBN.test(isbn13)) return false;
+  const declared = Array.isArray(languages)
+    ? languages.flatMap((lang) => {
+        const key =
+          typeof lang === "object" && lang !== null
+            ? (lang as Record<string, unknown>).key
+            : undefined;
+        return typeof key === "string" ? [key] : [];
+      })
+    : [];
+  if (declared.length > 0) return declared.includes("/languages/eng");
+  return isbn13 !== undefined && ENGLISH_ISBN.test(isbn13);
 }
 
 const DIGITAL_FORMAT = /e-?book|electronic|kindle|digital/i;
@@ -146,17 +162,15 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   if (typeof key !== "string" || !key.startsWith("/books/")) return null;
   const title = typeof edition.title === "string" ? edition.title.trim() : "";
   if (title === "") return null;
+  const subtitle =
+    typeof edition.subtitle === "string" ? edition.subtitle : undefined;
 
-  // English-only scope (spec §1): skip editions declaring other languages.
-  if (Array.isArray(edition.languages) && edition.languages.length > 0) {
-    const eng = edition.languages.some(
-      (lang) =>
-        typeof lang === "object" &&
-        lang !== null &&
-        (lang as Record<string, unknown>).key === "/languages/eng",
-    );
-    if (!eng) return null;
-  }
+  // English-only scope (spec §1): a declared non-English language, a
+  // non-English ISBN group, or no language and no English-market ISBN.
+  const isbns = isbnPair(edition.isbn_13, edition.isbn_10);
+  if (!isEnglishEdition(edition.languages, isbns.isbn13)) return null;
+  // Manga-only scope: novels, merchandise, samplers, other-language editions.
+  if (outOfScopeReason(`${title}${subtitle ? ` (${subtitle})` : ""}`) !== null) return null;
 
   const physicalFormat =
     typeof edition.physical_format === "string"
@@ -171,9 +185,8 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
         : undefined
     : undefined;
 
-  const subtitle =
-    typeof edition.subtitle === "string" ? edition.subtitle : undefined;
-  const split = splitOlTitle(title, subtitle);
+  const parsed = parseBookTitle(title, { subtitle });
+  const coverRange = parsed.packaging?.coverRange ?? null;
   const publishers = Array.isArray(edition.publishers)
     ? edition.publishers.filter((p): p is string => typeof p === "string")
     : [];
@@ -183,16 +196,16 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     key,
     url: `https://openlibrary.org${key}`,
     title,
-    seriesTitle: split.seriesTitle,
-    volumeLabel: split.volumeLabel,
-    multiVolume: split.multiVolume,
+    seriesTitle: parsed.seriesTitle,
+    volumeLabel: parsed.volumeLabel ?? undefined,
+    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
+    packaging: parsed.packaging ?? undefined,
     publishers,
     publishDate:
       typeof edition.publish_date === "string"
         ? parseOlDate(edition.publish_date)
         : undefined,
-    isbn13: firstIsbn13(edition.isbn_13),
-    isbn10: firstIsbn10(edition.isbn_10),
+    ...isbns,
     format: digital ? "digital" : "physical",
     binding,
   };

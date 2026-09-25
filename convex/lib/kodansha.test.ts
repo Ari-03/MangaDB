@@ -89,6 +89,10 @@ describe("small parsers", () => {
     expect(parseVolumeLabel("Volume 21")).toBe("21");
     expect(parseVolumeLabel("Volume 7.5")).toBe("7.5");
     expect(parseVolumeLabel("Box Set")).toBeUndefined();
+    // The slug stands in when the title carries no "Volume N" (Comeback
+    // After Fate v1, Honey Bee & Lemon Balm v3).
+    expect(parseVolumeLabel("Comeback After Fate", "volume-1")).toBe("1");
+    expect(parseVolumeLabel("Volume 05")).toBe("5");
   });
 
   it("splits creator bylines", () => {
@@ -154,5 +158,52 @@ describe("per-format snapshots", () => {
     expect(snapshots[0]!.title).toBe(
       "Welcome to Demon School! Iruma-kun Volume 21",
     );
+  });
+});
+
+describe("series pages that are packaging lines", () => {
+  const item = (seriesName: string, slug: string, title = "Volume 4") =>
+    parseCalendar({
+      data: [
+        {
+          tue_key: "2026-08-04",
+          items: [
+            {
+              title,
+              series_name: seriesName,
+              creators: "By Muneyuki Kaneshiro",
+              volume_url: `https://kodansha.us/series/${slug}/volume-4/`,
+              formats: ["print"],
+            },
+          ],
+        },
+      ],
+    })[0];
+
+  it("keeps the base series and turns the volume into a line position", () => {
+    const omnibus = item("Blue Lock Omnibus", "blue-lock-omnibus");
+    expect(omnibus?.volumeLabel).toBeUndefined();
+    expect(omnibus).toMatchObject({
+      seriesName: "Blue Lock Omnibus",
+      seriesTitle: "Blue Lock",
+      packaging: { lineName: "Omnibus", linePosition: "4", coverRange: null },
+    });
+    expect(item("MARS 30th Anniversary Edition", "mars-30th")?.seriesTitle).toBe("MARS");
+    const snapshot = toSnapshots(item("Blue Lock Omnibus", "blue-lock-omnibus")!)[0]!;
+    expect(snapshot).toMatchObject({
+      title: "Blue Lock Omnibus Volume 4",
+      seriesTitle: "Blue Lock",
+      packaging: { linePosition: "4" },
+    });
+  });
+
+  it("drops the (Manga) discriminator and skips novels", () => {
+    expect(item("Am I Actually the Strongest? (Manga)", "am-i")?.seriesTitle).toBe(
+      "Am I Actually the Strongest?",
+    );
+    expect(item("Witch Hat Atelier: Grimoire Edition", "grimoire")?.seriesTitle).toBe(
+      "Witch Hat Atelier: Grimoire Edition",
+    );
+    expect(item("The Seven Deadly Sins (Novel)", "sds-novel")).toBeUndefined();
   });
 });

@@ -145,6 +145,28 @@ export async function reconcileFields(
   const history = await revisionsOf(ctx, ref);
   const overridden = new Set(doc.overriddenFields ?? []);
 
+  // The observations a Revision's value came from: its Proposal's evidence.
+  const evidenceCache = new Map<string, string[]>();
+  const evidenceOf = async (revision: Doc<"revisions">): Promise<string[]> => {
+    if (!revision.proposalId) return [];
+    const cached = evidenceCache.get(revision.proposalId);
+    if (cached) return cached;
+    const proposal = await ctx.db.get(revision.proposalId);
+    const version = proposal
+      ? await ctx.db
+          .query("proposalVersions")
+          .withIndex("by_proposal", (q) =>
+            q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
+          )
+          .unique()
+      : null;
+    const ids = (version?.evidence ?? []).flatMap((row) =>
+      row.kind === "observation" ? [row.observationId as string] : [],
+    );
+    evidenceCache.set(revision.proposalId, ids);
+    return ids;
+  };
+
   // Bucket every offered field by its authority decision.
   const auto: Array<FieldChange & { decision: FieldDecision }> = [];
   const queue: Array<FieldChange & { decision: FieldDecision }> = [];
@@ -165,6 +187,7 @@ export async function reconcileFields(
         kind: "source",
         sourceKey: key,
         rank: authorityRank((await registryRow(key))?.fieldAuthority, field),
+        observationIds: await evidenceOf(latestTouch),
       };
     }
     const decision = decideField({
@@ -173,6 +196,7 @@ export async function reconcileFields(
       offered: offeredValue,
       overridden: overridden.has(field),
       incomingSourceKey: args.sourceKey,
+      incomingObservationId: observation._id,
       incomingRank: authorityRank(incoming?.fieldAuthority, field),
       incumbent,
     });

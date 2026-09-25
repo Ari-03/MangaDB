@@ -11,8 +11,16 @@
 // The parser is deliberately tolerant of shape drift (nested vs flat
 // imprint/format fields, string vs number ISBNs) — the exact live shape
 // can only be re-verified once a key is activated.
+//
+// Scope: a distributed imprint can still publish prose, merchandise, or
+// other languages, so titles are gated here — PRH's prose "Vertical"
+// imprint and Seven Seas' coloring-book "Waves of Color" imprint are denied
+// outright (only "Vertical Comics" is manga), and novels, merchandise,
+// samplers, and non-English editions are dropped by title.
 
 import { v, type Infer } from "convex/values";
+import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
+import { canonicalPublisherFor, type CanonicalPublisher } from "./publishers";
 
 // ---------- the normalized snapshot ----------
 
@@ -22,9 +30,18 @@ export const prhTitleValidator = v.object({
   isbn13: v.string(),
   isbn10: v.optional(v.string()),
   title: v.string(),
+  /** The base Series title (lib/bookTitle.ts), never the book title. */
   seriesTitle: v.string(),
+  /** The single covered Volume; absent for oneshots and all packaging. */
   volumeLabel: v.optional(v.string()),
+  /** Packaging covering more than one Volume. */
   multiVolume: v.boolean(),
+  /** Omnibus / deluxe / box-set / range shape, when the title has one. */
+  packaging: v.optional(packagingValidator),
+  /** A box set: a Release Bundle, never a Release. */
+  isBox: v.optional(v.boolean()),
+  /** The label came from an unmarked trailing number ("Omega 6" may be a title). */
+  bareNumber: v.optional(v.boolean()),
   author: v.optional(v.string()),
   onsale: v.optional(
     v.object({ year: v.number(), month: v.number(), day: v.number() }),
@@ -37,53 +54,6 @@ export const prhTitleValidator = v.object({
 });
 
 export type PrhTitleSnapshot = Infer<typeof prhTitleValidator>;
-
-// ---------- title splitting ----------
-
-/**
- * Split a PRH title into series title + volume label. PRH styles vary by
- * publisher: "Witch Hat Atelier 15", "Chainsaw Man, Vol. 22", "Berserk
- * Volume 41", "The Way of the Househusband, Vol. 1-3 (Omnibus)". A supplied
- * seriesNumber (a PRH title field) wins over text parsing.
- */
-export function splitPrhTitle(
-  title: string,
-  seriesNumber?: number | string,
-): { seriesTitle: string; volumeLabel?: string; multiVolume: boolean } {
-  const trimmed = title.trim();
-  const range =
-    /^(.*?)(?:[,:]?\s+(?:Vols?\.?|Volumes?)\s+)(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:\(.*\))?$/i.exec(
-      trimmed,
-    );
-  if (range) {
-    return { seriesTitle: range[1]!.trim(), multiVolume: true };
-  }
-  const marked =
-    /^(.*?)(?:[,:]?\s+(?:Vols?\.?|Volumes?)\s+)(\d+(?:\.\d+)?)\s*(?:\(.*\))?$/i.exec(
-      trimmed,
-    );
-  if (marked) {
-    return {
-      seriesTitle: marked[1]!.trim(),
-      volumeLabel: marked[2],
-      multiVolume: false,
-    };
-  }
-  // Kodansha-style bare trailing number: "Witch Hat Atelier 15".
-  const bare = /^(.*[^\d\s])\s+(\d{1,3}(?:\.\d+)?)$/.exec(trimmed);
-  if (bare) {
-    return {
-      seriesTitle: bare[1]!.trim(),
-      volumeLabel: bare[2],
-      multiVolume: false,
-    };
-  }
-  const numbered =
-    seriesNumber !== undefined && seriesNumber !== null && `${seriesNumber}` !== ""
-      ? `${seriesNumber}`
-      : undefined;
-  return { seriesTitle: trimmed, volumeLabel: numbered, multiVolume: false };
-}
 
 // ---------- field plumbing ----------
 
@@ -141,6 +111,10 @@ function priceCents(entry: Record<string, unknown>): number | undefined {
 const DIGITAL = /\be-?book\b|\bdigital\b|\bDN\b/i;
 const AUDIO = /audio/i;
 
+// Imprints that are never manga: Vertical Inc.'s prose line (its manga
+// arrives as "Vertical Comics") and Seven Seas' coloring books.
+const DENIED_IMPRINTS = /^(?:vertical|waves of color)$/i;
+
 /** One title entry → a snapshot, or null when malformed / out of scope. */
 export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -149,6 +123,14 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   if (isbn13 === undefined) return null;
   const title = typeof entry.title === "string" ? entry.title.trim() : "";
   if (title === "") return null;
+
+  // Scope (spec §1): prose imprints, novels, merchandise, samplers, and
+  // non-English editions never enter the catalog.
+  const imprint = described(entry.imprint) ?? described(entry.publisher);
+  if (imprint !== undefined && DENIED_IMPRINTS.test(imprint)) return null;
+  if (outOfScopeReason(title) !== null) return null;
+  const language = described(entry.language);
+  if (language !== undefined && !/^(?:e|en|eng|english)$/i.test(language)) return null;
 
   // Format family: audio is out of catalog scope entirely (spec §1).
   const formatText =
@@ -163,8 +145,12 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
         : undefined
     : undefined;
 
-  const seriesNumber = entry.seriesNumber as number | string | undefined;
-  const split = splitPrhTitle(title, seriesNumber);
+  const seriesNumber =
+    typeof entry.seriesNumber === "number" || typeof entry.seriesNumber === "string"
+      ? entry.seriesNumber
+      : undefined;
+  const parsed = parseBookTitle(title, { seriesNumber });
+  const coverRange = parsed.packaging?.coverRange ?? null;
 
   const seo = entry.seoFriendlyUrl;
   const url =
@@ -178,14 +164,17 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
     isbn13,
     isbn10: asIsbn10(entry.isbn10),
     title,
-    seriesTitle: split.seriesTitle,
-    volumeLabel: split.volumeLabel,
-    multiVolume: split.multiVolume,
+    seriesTitle: parsed.seriesTitle,
+    volumeLabel: parsed.volumeLabel ?? undefined,
+    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
+    packaging: parsed.packaging ?? undefined,
+    isBox: parsed.isBox || undefined,
+    bareNumber: parsed.bareNumber || undefined,
     author: typeof entry.author === "string" ? entry.author.trim() : undefined,
     onsale: parseOnsale(entry.onsale ?? entry.onSaleDate),
     format: digital ? "digital" : "physical",
     binding,
-    imprint: described(entry.imprint) ?? described(entry.publisher),
+    imprint,
     priceCents: priceCents(entry),
   };
 }
@@ -212,8 +201,14 @@ export function parseTitleList(raw: unknown): {
   };
 }
 
-/** "Kodansha Comics" → the publisher row shape {name, slug}. */
-export function imprintPublisher(imprint: string): { name: string; slug: string } {
+/**
+ * An imprint string → the publisher row it belongs on: the canonical row
+ * for a known name ("Kodansha Comics" → Kodansha, "Ghost Ship" → the Ghost
+ * Ship imprint under Seven Seas), else a row slugified from the name.
+ */
+export function imprintPublisher(imprint: string): CanonicalPublisher {
+  const known = canonicalPublisherFor(imprint);
+  if (known) return known;
   const name = imprint.trim();
   const slug = name
     .toLowerCase()

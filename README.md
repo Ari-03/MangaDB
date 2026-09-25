@@ -91,7 +91,7 @@ npx convex run seed:run '{"wipe":true}' # wipe catalog tables and reseed
 ```
 
 It creates a Series Family (Tokyo Ghoul → Tokyo Ghoul:re, typed sequel edge),
-Volumes whose hidden Position and public Label diverge (position 4 is labeled
+Volumes whose Position and public Label diverge (position 4 is labeled
 "3.5"), the "Monster Edition" Edition Line with an omnibus Edition covering
 Volumes 1–3, a split digital Edition with partial Coverage, physical + digital
 Releases, a box-set-exclusive Release Variant, a Release Bundle that pins that
@@ -135,13 +135,18 @@ followed-Series filter arrives with Series Follows (ticket #29).
 
 ## Series pages
 
-`/series/{id}/{slug}` (spec §11) server-renders the **Reading Path** hierarchy
-validated by prototype #16: the canonical Volume sequence leads (ordered by
-hidden Volume Position — the publisher-facing Label is display-only, never the
-sort key), and each Volume reveals every covering Edition with its Edition
-Line membership, ordered Volume Coverage (complete/partial), Releases,
-Variants, and Bundle cross-links. Simple Series show none of the empty
-concepts.
+`/series/{id}/{slug}` (spec §11) server-renders the Series grouped into
+**editions**: the standard run per publisher (a licence transfer gives each
+publisher's run its own path), then each Edition Line — Omnibus, Deluxe, box
+sets and the like (`convex/lib/editionGroups.ts`, shared by the query and the
+page). With more than one edition the page opens on a picker showing each
+edition's first book; `?edition={key}` opens that edition's **reading path**
+as a shelf of its books — standard runs in canonical Volume order with gaps
+marked "not on file", lines in the publisher's own numbering. A Series with
+one edition shows its path directly. The standard run's first book fronts the
+Series (hero cover and social card), and a Series synopsis shows under the
+title when one is on file. Each book links its Edition page, where the
+Releases and the collection controls live.
 
 The `{id}` is the per-entity sequential public ID; the slug is cosmetic and
 computed from the current title at request time, never stored
@@ -159,7 +164,7 @@ queries in `convex/catalogPages.ts` through `src/server/catalogPages.ts`:
   grouped under its Edition and split into **Complete releases** vs
   **Partial coverage** by the Edition's extent for *this* Volume. The
   omnibus case shows the Edition's full ordered Coverage (chips linking each
-  covered Volume), and canonical Volume numbering (hidden Position + public
+  covered Volume), and canonical Volume numbering (Position + public
   Label) stays visibly separate from Edition Line numbering throughout.
 - **`/edition/{id}/{slug}`** is the book detail page: Release rows differing
   only in Format/Binding, each with ISBN-13/10, date, price, Release
@@ -705,15 +710,25 @@ PRH distributes. Daily runs fetch future-dated titles (`onsaleFrom`
 today); UTC-Sunday runs (or `{"mode":"full"}`) sweep each configured
 imprint's catalog, and only a complete full sweep withdraws. Unmatched
 titles follow the standard creation boundaries under the imprint's
-publisher (e.g. "Kodansha Comics", "Denpa"). Setup (no live key exists in
-this repo):
+publisher row: a duplicate string resolves to its company ("Kodansha
+Comics" → Kodansha, "Square Enix Manga" → Square Enix), and an imprint
+("Ghost Ship", "TOKYOPOP LoveLove") to its own row, which names its parent
+company (`convex/lib/publishers.ts`). Book titles go through the shared
+parser (`convex/lib/bookTitle.ts`): omnibus/deluxe books become Edition
+Line members of the base Series covering the real Volumes, box sets become
+Release Bundles, and packaging whose coverage the title never states stays
+on its observation for an Editor. Scope is enforced per title: prose
+novels, merchandise, samplers, and non-English editions are dropped, and
+the prose "Vertical" and coloring-book "Waves of Color" imprints are denied
+outright. Setup (no live key exists in this repo):
 
 ```sh
 # 1. Request a key at developer.penguinrandomhouse.com (manual activation).
 # 2. Once active, list imprint codes:
 #    curl "https://api.penguinrandomhouse.com/resources/v2/title/domains/PRH.US/imprints?api_key=KEY"
-#    and pick the manga imprints (Kodansha, Seven Seas, Dark Horse Manga,
-#    Square Enix Manga, Denpa, Vertical, …).
+#    and pick the manga imprints (Kodansha Comics, Seven Seas, Ghost Ship,
+#    Dark Horse Manga, Square Enix Manga, Denpa, Vertical Comics, …).
+#    Never the plain "Vertical" imprint: that is Vertical's prose line.
 npx convex env set PRH_API_KEY <key>
 npx convex env set PRH_IMPRINT_CODES CODE1,CODE2,CODE3
 npx convex run prh:sync '{"mode":"full"}'
@@ -727,8 +742,12 @@ binding (standard); an unmatched record may create at most a **leaf**
 Release under a Series, Volume, and Publisher that all already exist (how
 VIZ physical releases materialize under the ANN backbone), and it never
 creates Series/Volumes/Publishers, never queues review proposals, and
-never withdraws. The raw editions dump is ~10 GB, so filter it offline and
-host the result anywhere fetchable:
+never withdraws. Only English editions enter: a declared non-English
+language, a non-English ISBN group (978-4 Japanese and the like), or no
+declared language without an English-market ISBN (978-0/978-1/979-8) is
+skipped, as are novels. The raw editions dump is ~10 GB, so filter it
+offline (anchored publisher allowlist, ISBN required) and host the result
+anywhere fetchable:
 
 ```sh
 curl -sL https://openlibrary.org/data/ol_dump_editions_latest.txt.gz \

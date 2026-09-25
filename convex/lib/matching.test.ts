@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { Id } from "../_generated/dataModel";
 import schema from "../schema";
 import {
+  candidateSeries,
   labelsEqual,
   matchRelease,
   normalizeTitle,
@@ -20,7 +21,34 @@ describe("normalizeTitle", () => {
     expect(normalizeTitle("Alpha Adventures (Manga)")).toBe("alpha adventures");
     expect(normalizeTitle("ALPHA — Adventures!")).toBe("alpha adventures");
     expect(normalizeTitle("  Alpha   Adventures ")).toBe("alpha adventures");
-    expect(normalizeTitle("Björk & Ödipus, Vol")).toBe("björk ödipus vol");
+    expect(normalizeTitle("Björk & Ödipus, Vol")).toBe("bjork and odipus vol");
+  });
+
+  // Real clean-title twins from the catalog audit.
+  it("folds &/and, accents, apostrophes, a leading The, and entities", () => {
+    const same = (a: string, b: string) => expect(normalizeTitle(a)).toBe(normalizeTitle(b));
+    same("CANDY AND CIGARETTES", "Candy & Cigarettes");
+    same("Pompo: The Cinephile", "Pompo: The Cinéphile");
+    same("Saint Seiya: Saintia Sho", "Saint Seiya: Saintia Shō");
+    same("The Skull Dragon's Precious Daughter", "Skull Dragon’s Precious Daughter");
+    same("The Daily Lives of High School Boys", "Daily Lives of High School Boys");
+    same("Marrying the Dark Knight &amp;#40;For Her Money&amp;#41;", "Marrying the Dark Knight (For Her Money)");
+    same(
+      "Let's Run an Inn on Dungeon Island! &lpar;In a World Ruled by Women&rpar;",
+      "Let's Run an Inn on Dungeon Island!",
+    );
+  });
+
+  it("keeps a novel distinct from its manga", () => {
+    expect(normalizeTitle("Seraph of the End (Novel)")).not.toBe(
+      normalizeTitle("Seraph of the End"),
+    );
+    expect(normalizeTitle("Her Royal Highness Seems to Be Angry (Light Novel)")).not.toBe(
+      normalizeTitle("Her Royal Highness Seems to Be Angry (Manga)"),
+    );
+    expect(normalizeTitle("Bizenghast: The Novel")).not.toBe(normalizeTitle("Bizenghast"));
+    // "Graphic novel" is a comics format, not prose.
+    expect(normalizeTitle("Afro Samurai (Graphic Novel)")).toBe(normalizeTitle("Afro Samurai"));
   });
 });
 
@@ -28,6 +56,13 @@ describe("titlesSimilar", () => {
   it("accepts titles sharing most tokens, rejects disjoint ones", () => {
     expect(titlesSimilar("Alpha Adventures", "Alpha Adventures (Manga)")).toBe(true);
     expect(titlesSimilar("Alpha Adventures", "Completely Different Zeta")).toBe(false);
+    expect(titlesSimilar("Candy & Cigarettes", "CANDY AND CIGARETTES")).toBe(true);
+  });
+
+  it("never finds a novel similar to its manga", () => {
+    expect(
+      titlesSimilar("The Seven Deadly Sins", "The Seven Deadly Sins (Novel)"),
+    ).toBe(false);
   });
 });
 
@@ -188,6 +223,23 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
     expect(outcome).toMatchObject({ kind: "review", rung: 3 });
   });
 
+  it("never accepts a candidate that already carries a different ISBN-13", async () => {
+    // Citrus v4 vs Citrus Plus v4: a different ISBN is a different Release,
+    // so the full key alone must not link — nor overwrite — the other book.
+    const t = makeT();
+    const catalog = await buildCatalog(t, { isbn13: "9781626922174" });
+    const outcome = await match(
+      t,
+      fact(catalog.publisherId, { isbn13: "9781638585268" }),
+    );
+    expect(outcome).toMatchObject({ kind: "create", rung: 5 });
+    // Without an ISBN on the fact, the full key still links.
+    expect(await match(t, fact(catalog.publisherId))).toMatchObject({
+      kind: "match",
+      rung: 3,
+    });
+  });
+
   it("a single candidate under an override or lock still reviews", async () => {
     const t = makeT();
     const overridden = await buildCatalog(t, { overriddenFields: ["pubDate"] });
@@ -251,5 +303,62 @@ describe("matchRelease — rungs ④ and ⑤", () => {
       fact(catalog.publisherId, { volumeLabel: null, multiVolume: true }),
     );
     expect(outcome).toMatchObject({ kind: "create", rung: 5 });
+  });
+});
+
+describe("candidateSeries", () => {
+  async function insertSeries(
+    t: TestT,
+    title: string,
+    altTitles: string[] = [],
+  ): Promise<Id<"series">> {
+    return await t.run((ctx) =>
+      ctx.db.insert("series", {
+        status: "active",
+        publicId: Math.floor(Math.random() * 1e9),
+        title,
+        altTitles,
+        searchText: [title, ...altTitles].join(" "),
+      }),
+    );
+  }
+
+  it("finds a release-less backbone Series buried under many near-namesakes", async () => {
+    const t = makeT();
+    // The polluted shards the old PRH splitter created, crowding the search.
+    for (let n = 1; n <= 30; n++) {
+      await insertSeries(t, `Otherside Picnic ${String(n).padStart(2, "0")} (Manga)`);
+    }
+    const ann = await insertSeries(t, "Otherside Picnic");
+    const hits = await t.run((ctx) => candidateSeries(ctx, "Otherside Picnic"));
+    expect(hits.map((s) => s._id)).toEqual([ann]);
+  });
+
+  it("folds &/and and accents, and prefers primary titles over alt titles", async () => {
+    const t = makeT();
+    const candy = await insertSeries(t, "Candy & Cigarettes");
+    expect(
+      (await t.run((ctx) => candidateSeries(ctx, "CANDY AND CIGARETTES"))).map((s) => s._id),
+    ).toEqual([candy]);
+
+    // ANN lists "Citrus Plus" as an alt title of Citrus: the real Citrus
+    // Plus Series wins, and the alt title counts only as a fallback.
+    await insertSeries(t, "Citrus", ["Citrus Plus"]);
+    const plus = await insertSeries(t, "Citrus Plus");
+    expect(
+      (await t.run((ctx) => candidateSeries(ctx, "Citrus Plus"))).map((s) => s._id),
+    ).toEqual([plus]);
+    const tenken = await insertSeries(t, "Reincarnated as a Sword", ["Tenken"]);
+    expect((await t.run((ctx) => candidateSeries(ctx, "Tenken"))).map((s) => s._id)).toEqual([
+      tenken,
+    ]);
+  });
+
+  it("never offers a manga Series for a novel title", async () => {
+    const t = makeT();
+    await insertSeries(t, "The Seven Deadly Sins");
+    expect(await t.run((ctx) => candidateSeries(ctx, "The Seven Deadly Sins (Novel)"))).toEqual(
+      [],
+    );
   });
 });

@@ -221,3 +221,157 @@ describe("kodansha.sync — steady state", () => {
     });
   });
 });
+
+// The Kodansha-created duplicates of the audit: an unlinked slug resolves
+// the base Series by title before ever creating one, packaging series pages
+// map onto their base Series, and Vertical's books stay Vertical's.
+describe("kodansha.sync — series resolution and publishers", () => {
+  async function backbone(
+    t: TestT,
+    title: string,
+    labels: string[],
+    publisher?: { name: string; slug: string },
+  ) {
+    return await t.run(async (ctx) => {
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title,
+        altTitles: [],
+        searchText: title,
+      });
+      const publisherId = publisher
+        ? await ctx.db.insert("publishers", { status: "active", ...publisher })
+        : null;
+      for (const label of labels) {
+        const volumeId = await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: Number(label),
+          seriesId,
+          position: Number(label),
+          label,
+        });
+        if (publisherId === null) continue;
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: Number(label),
+          publisherId,
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId,
+          order: 1,
+          extent: "complete",
+        });
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format: "physical",
+          language: "en",
+          publisherId,
+          seriesIds: [seriesId],
+        });
+      }
+      return seriesId;
+    });
+  }
+
+  it("adds a volume to the existing same-titled Series instead of creating one", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const spaceBrothers = await backbone(t, "Space Brothers", ["1", "28"]);
+    stubSite([
+      {
+        series: "Space Brothers",
+        seriesSlug: "space-brothers",
+        volume: 46,
+        date: "2026-08-04",
+        formats: ["print"],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("series").collect()).map((s) => s._id)).toEqual([spaceBrothers]);
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes.find((v) => v.label === "46")).toMatchObject({ position: 46 });
+    });
+  });
+
+  it("strips the (Manga) discriminator before resolving the Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const strongest = await backbone(t, "Am I Actually the Strongest?", ["1"]);
+    stubSite([
+      {
+        series: "Am I Actually the Strongest? (Manga)",
+        seriesSlug: "am-i-actually-the-strongest-manga",
+        volume: 19,
+        date: "2026-08-04",
+        formats: ["print"],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("series").collect()).map((s) => s._id)).toEqual([strongest]);
+    });
+  });
+
+  it("maps a packaging series page onto its base Series, never a Volume", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const blueLock = await backbone(t, "Blue Lock", ["4"]);
+    stubSite([
+      {
+        series: "Blue Lock Omnibus",
+        seriesSlug: "blue-lock-omnibus",
+        volume: 4,
+        date: "2026-08-04",
+        formats: ["print"],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("series").collect()).map((s) => s._id)).toEqual([blueLock]);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "blue-lock-omnibus/volume-4#physical",
+      );
+      expect(obs?.conflicts?.[0]).toMatchObject({ field: "placement" });
+      // The packaging slug now links to the base Series for future runs.
+      const link = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "series:blue-lock-omnibus",
+      );
+      expect(link?.recordRef).toEqual({ type: "series", id: blueLock });
+    });
+  });
+
+  it("files a Vertical Series' new volume under Vertical, not Kodansha", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await backbone(t, "Kirio Fan Club", ["1", "2"], { name: "Vertical", slug: "vertical" });
+    stubSite([
+      {
+        series: "Kirio Fan Club",
+        seriesSlug: "kirio-fan-club",
+        volume: 3,
+        date: "2026-08-04",
+        formats: ["print"],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const vertical = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "vertical"))
+        .unique();
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases).toHaveLength(3);
+      expect(releases.every((r) => r.publisherId === vertical!._id)).toBe(true);
+      const kodansha = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "kodansha"))
+        .unique();
+      expect(kodansha).toBeNull();
+    });
+  });
+});

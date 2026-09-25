@@ -23,7 +23,7 @@ A stable collected-content unit within a Series, normally defined by the work's 
 _Avoid_: book, tankobon
 
 **Volume Position**:
-The stable ordinal placement of a Volume within its Series' single canonical reading sequence. It determines sequence independently of the Volume Label.
+The placement of a Volume within its Series' single canonical reading sequence. For a numbered Volume it is the volume number itself, so a gap in the sequence shows a missing Volume; an unnumbered Volume sorts after the last numbered one before it. It determines sequence independently of the Volume Label.
 
 **Volume Label**:
 The publisher-facing designation shown for a Volume, such as "7.5," "Side Story," or "Spring Log." It is not the Volume's identity or sort order.
@@ -52,7 +52,7 @@ How a Release is published — physical or digital in v1.
 The physical construction of a Release, such as paperback or hardcover. Binding applies only to physical Releases.
 
 **Edition Line**:
-A publisher-named family of Releases, such as "Deluxe Edition" or "3-in-1," with consistent branding, content mapping, and numbering. An Edition Line may span physical and digital Formats; format alone does not define a different line, and ordinary Releases need not belong to any line.
+A publisher-named family of Releases, such as "Deluxe Edition" or "3-in-1," with consistent branding, content mapping, and numbering. An Edition Line belongs to the base Series whose Volumes it collects: an omnibus or deluxe book is never a Series or a Volume of its own. An Edition Line may span physical and digital Formats; format alone does not define a different line, and ordinary Releases need not belong to any line.
 
 **Edition Line Position**:
 An Edition's sequence label within its Edition Line, independent of the identities and numbers of the Volumes it covers.
@@ -94,7 +94,8 @@ A user's view of Upcoming Releases that either belong to a followed Series and m
 A user's private-by-default sharing policy for Ownership and Reading, with separate defaults for each and per-Series overrides. Visibility is not configured separately for individual Volumes or Releases.
 
 **Publisher**:
-The company issuing a Release (e.g. VIZ Media, Seven Seas).
+The company issuing a Release (e.g. VIZ Media, Seven Seas). One company is one Publisher, whatever strings sources use for it ("Kodansha Comics" is Kodansha). An imprint (e.g. Ghost Ship) is a Publisher of its own that names its parent company; imprints nest one level only.
+_Avoid_: brand
 
 **Bootstrap Mode**:
 A pre-launch import state in which Approved Sources may create Canonical Records directly, including new Series, without queued review; quality is checked by sampling instead. It is switched off permanently before public launch, after which steady-state review rules apply.

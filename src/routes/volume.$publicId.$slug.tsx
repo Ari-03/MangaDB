@@ -20,7 +20,7 @@ import { fetchVolumePage, type VolumePageData } from "~/server/catalogPages";
  * Convex. It reveals every Release covering this Volume, grouped under its
  * Edition, with complete and partial coverage listed distinctly — including
  * the omnibus case, whose full ordered Coverage shows what else it spans.
- * Canonical Volume numbering (hidden Position + public Label, spec §2) stays
+ * Canonical Volume numbering (Position + public Label, spec §2) stays
  * visibly separate from any Edition Line numbering, and Release rows link
  * their containing Bundles.
  *

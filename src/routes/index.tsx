@@ -81,8 +81,13 @@ function Home() {
   const { home, month, todaySort, releases } = Route.useLoaderData();
   const stats = home?.stats ?? null;
   const series = home?.series ?? [];
-  const monthReleases = releases?.releases ?? [];
-  const heroCovers = monthReleases.slice(0, HERO_ROWS * HERO_COLS);
+  // A book's physical and digital Releases are one cover on a shelf, and the
+  // hero wall shows each Series once.
+  const monthBooks = oneCoverPer(releases?.releases ?? [], (r) => r.edition.publicId);
+  const heroCovers = oneCoverPer(monthBooks, (r) => r.series[0]?.publicId ?? r.edition.publicId).slice(
+    0,
+    HERO_ROWS * HERO_COLS,
+  );
 
   return (
     <main className="home">
@@ -129,7 +134,7 @@ function Home() {
       <ReleaseShelves
         month={month}
         todaySort={todaySort}
-        releases={monthReleases}
+        releases={monthBooks}
       />
 
       {series.length > 0 ? (
@@ -474,7 +479,31 @@ function releaseTitle(release: BrowseRelease): string {
 }
 
 function countLabel(count: number): string {
-  return `${count} ${count === 1 ? "release" : "releases"}`;
+  return `${count} ${count === 1 ? "book" : "books"}`;
+}
+
+/**
+ * Keep the first Release per key (date order is preserved), trading it for a
+ * later sibling that has jacket art when the first has none — so a shelf never
+ * shows one book twice, and prefers the copy that shows a cover.
+ */
+function oneCoverPer(
+  releases: Array<BrowseRelease>,
+  keyOf: (release: BrowseRelease) => number,
+): Array<BrowseRelease> {
+  const kept = new Map<number, BrowseRelease>();
+  for (const release of releases) {
+    const key = keyOf(release);
+    const current = kept.get(key);
+    if (!current) kept.set(key, release);
+    else if (!hasArt(current) && hasArt(release)) kept.set(key, release);
+  }
+  // Map keeps first-insertion order, so a swapped-in sibling keeps its slot.
+  return [...kept.values()];
+}
+
+function hasArt(release: BrowseRelease): boolean {
+  return release.coverUrl !== null || release.coverIsbn !== null;
 }
 
 /** Thousands separators without a locale, so SSR and hydration agree. */

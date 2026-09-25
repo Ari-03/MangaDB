@@ -1,18 +1,15 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
-import type { CSSProperties } from "react";
 
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
-import { ReleaseCollectionControls } from "~/lib/collection";
-import { Cover, clothColor, firstIsbn } from "~/lib/cover";
+import { Cover, firstIsbn } from "~/lib/cover";
 import { SeriesFollowControls } from "~/lib/follows";
-import { formatPartialDate, formatPrice } from "~/lib/format";
+import { formatPartialDate } from "~/lib/format";
 import {
   ModEditLink,
   ProposeNewRecordsLink,
   RecordHistory,
 } from "~/lib/moderation";
 import {
-  ReleasePassControls,
   SeriesReadingControls,
   SeriesReadingProgress,
   VolumeReadCount,
@@ -31,10 +28,11 @@ import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
 /**
  * The Series page (ticket #22): `/series/{id}/{slug}`, server-rendered from
- * Convex in the Reading Path hierarchy validated by prototype #16 (spec §10).
- * The canonical Volume sequence leads — as a wall of covers on a shelf —
- * and publisher packaging (Editions, Edition Lines, Releases, Variants,
- * Bundles) is inspected beneath it, one expandable panel per Volume.
+ * Convex. The Series' Editions are grouped into reading paths — the standard
+ * run per publisher, then each Edition Line (Omnibus, Deluxe, …); the picker
+ * shows each path's first book and `?edition=` opens that path as a shelf of
+ * its books, with gaps in a standard run marked. Releases, Variants and
+ * Bundles live on each book's Edition page.
  *
  * The public ID is identity; the slug is cosmetic and computed from the
  * current title (spec §8/§11). A stale or wrong slug — including the old ID
@@ -42,6 +40,10 @@ import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
  * URL.
  */
 export const Route = createFileRoute("/series/$publicId/$slug")({
+  // `?edition=` picks the reading path; the loader ignores it, so switching
+  // paths never refetches the page.
+  validateSearch: (search: Record<string, unknown>): { edition?: string } =>
+    typeof search.edition === "string" ? { edition: search.edition } : {},
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
@@ -117,53 +119,43 @@ const RELATIONSHIP_LABELS = {
 } as const;
 
 type Volume = SeriesPageData["volumes"][number];
-type Edition = Volume["editions"][number];
-type Release = Edition["releases"][number];
+type EditionGroup = SeriesPageData["editionGroups"][number];
+type Book = EditionGroup["books"][number];
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-/**
- * The packaging facts the hero states, rolled up from the Volume sequence:
- * how many distinct Editions cover this Series, how many Releases realize
- * them, which Publishers issue them, and which Edition Lines they belong to.
- * Everything is counted from the page's own data — nothing is fetched or
- * guessed.
- */
-function packagingFacts(volumes: Volume[]) {
-  const editions = new Set<number>();
-  const publishers = new Map<string, string>();
-  const lines = new Set<string>();
-  let releases = 0;
-  // The span of dated Releases, at whatever precision each date is known to.
-  let first: Release["pubDate"] = null;
-  let last: Release["pubDate"] = null;
-  for (const volume of volumes) {
-    for (const edition of volume.editions) {
-      if (editions.has(edition.publicId)) continue;
-      editions.add(edition.publicId);
-      releases += edition.releases.length;
-      if (edition.publisher) {
-        publishers.set(edition.publisher.slug, edition.publisher.name);
-      }
-      if (edition.lineName) lines.add(edition.lineName);
-      for (const release of edition.releases) {
-        const date = release.pubDate;
-        if (!date) continue;
-        if (!first || date.sort < first.sort) first = date;
-        if (!last || date.sort > last.sort) last = date;
-      }
-    }
+/** First and last known publication dates across some books, as a span. */
+function dateSpan(books: ReadonlyArray<Book>): string | null {
+  let first: Book["releases"][number]["pubDate"] = null;
+  let last: Book["releases"][number]["pubDate"] = null;
+  for (const release of books.flatMap((book) => book.releases)) {
+    const date = release.pubDate;
+    if (!date) continue;
+    if (!first || date.sort < first.sort) first = date;
+    if (!last || date.sort > last.sort) last = date;
   }
   const from = formatPartialDate(first);
   const to = formatPartialDate(last);
+  return from === null ? null : from === to ? from : `${from} – ${to}`;
+}
+
+/**
+ * The packaging facts the hero states, rolled up from the reading paths:
+ * how many books and Releases, which Publishers, and the dated span.
+ */
+function packagingFacts(groups: ReadonlyArray<EditionGroup>) {
+  const books = groups.flatMap((group) => group.books);
+  const publishers = new Map<string, string>();
+  for (const book of books) {
+    if (book.publisher) publishers.set(book.publisher.slug, book.publisher.name);
+  }
   return {
-    editionCount: editions.size,
-    releaseCount: releases,
+    editionCount: books.length,
+    releaseCount: books.reduce((n, book) => n + book.releases.length, 0),
     publishers: [...publishers].map(([slug, name]) => ({ slug, name })),
-    lines: [...lines],
-    dateSpan: from === null ? null : from === to ? from : `${from} – ${to}`,
+    dateSpan: dateSpan(books),
   };
 }
 
@@ -173,33 +165,116 @@ function seriesLinkParams(publicId: number, title: string) {
   return { publicId: String(publicId), slug };
 }
 
+/** "Vol. 3", "Vol. 1–3", or null for a book with no mapped Volumes. */
+function coveredText(book: Book): string | null {
+  const first = book.coverage[0];
+  const last = book.coverage[book.coverage.length - 1];
+  if (!first || !last) return null;
+  const name = (cov: Book["coverage"][number]) => cov.label ?? `#${cov.position}`;
+  const partial = book.coverage.some((cov) => cov.extent === "partial") ? " (part)" : "";
+  return first === last
+    ? `Vol. ${name(first)}${partial}`
+    : `Vol. ${name(first)}–${name(last)}${partial}`;
+}
+
+/** What a book is called within its path: its line number, else its Volumes. */
+function bookLabel(book: Book): string {
+  if (book.lineName !== null) {
+    return book.linePosition !== null
+      ? `${book.lineName} ${book.linePosition}`
+      : book.lineName;
+  }
+  return coveredText(book) ?? "Unnumbered";
+}
+
+function bookTitle(seriesTitle: string, book: Book): string {
+  return editionTitle({
+    seriesTitle,
+    lineName: book.lineName,
+    linePosition: book.linePosition,
+    covered: book.coverage,
+  });
+}
+
+/**
+ * One slot of a reading path: a book, or — in a standard path — a canonical
+ * Volume this run has no book for (not on file, or never published by this
+ * publisher), so gaps read as gaps instead of silently closing up.
+ */
+type Slot =
+  | { kind: "book"; book: Book }
+  | { kind: "missing"; volume: Volume };
+
+/**
+ * A standard path walks the canonical sequence up to its last covered
+ * Volume, placing each book at its first Volume and a gap marker wherever no
+ * book covers one. Line paths are simply their books in line order.
+ */
+function pathSlots(group: EditionGroup, volumes: ReadonlyArray<Volume>): Slot[] {
+  if (group.kind === "line") {
+    return group.books.map((book) => ({ kind: "book", book }));
+  }
+  const byFirstVolume = new Map<number, Book[]>();
+  const covered = new Set<number>();
+  const unplaced: Book[] = [];
+  for (const book of group.books) {
+    const first = book.coverage[0];
+    if (!first) {
+      unplaced.push(book);
+      continue;
+    }
+    byFirstVolume.set(first.volumePublicId, [
+      ...(byFirstVolume.get(first.volumePublicId) ?? []),
+      book,
+    ]);
+    for (const cov of book.coverage) covered.add(cov.volumePublicId);
+  }
+  const lastPosition = Math.max(
+    -Infinity,
+    ...group.books.flatMap((book) => book.coverage.map((cov) => cov.position)),
+  );
+  const slots: Slot[] = [];
+  for (const volume of volumes) {
+    if (volume.position > lastPosition) break;
+    const books = byFirstVolume.get(volume.publicId);
+    if (books) for (const book of books) slots.push({ kind: "book", book });
+    else if (!covered.has(volume.publicId)) slots.push({ kind: "missing", volume });
+  }
+  return [...slots, ...unplaced.map((book): Slot => ({ kind: "book", book }))];
+}
+
 function SeriesPage() {
   const page = Route.useLoaderData();
-  const { series, family, volumes, coverUrl } = page;
-  const facts = packagingFacts(volumes);
-  const heroIsbn = firstIsbn(volumes.flatMap((volume) => volume.editions));
+  const { edition: editionKey } = Route.useSearch();
+  const { series, family, volumes, editionGroups, coverUrl } = page;
+  const facts = packagingFacts(editionGroups);
+  // The first path's first book fronts the Series — the standard run leads,
+  // so this is its Volume 1 whenever one is on file.
+  const frontBook = editionGroups[0]?.books[0] ?? null;
+  const heroIsbn = frontBook ? firstIsbn([frontBook]) : null;
+  // One path needs no picker; with several, the reader picks one.
+  const selected =
+    editionGroups.length === 1
+      ? editionGroups[0]
+      : editionGroups.find((group) => group.key === editionKey);
 
   return (
     <main className="series-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Series</span>
+        <Link to="/series">Series</Link>
       </nav>
 
       <section className="series-hero">
         <div className="series-hero-aside">
           <div className="series-cover">
-            {/* The representative cover the query picked: the first Release
-                with art in reading order. Coverless Series get the cloth
+            {/* The front book's jacket; coverless Series get the cloth
                 binding rather than a broken image. */}
             <Cover src={coverUrl} isbn13={heroIsbn} title={series.title} lazy={false} />
           </div>
           {facts.dateSpan ? (
             <p className="note">English releases on file: {facts.dateSpan}.</p>
           ) : null}
-          {coverUrl || heroIsbn ? null : (
-            <p className="note">No cover art on file yet.</p>
-          )}
         </div>
 
         <div className="series-hero-body">
@@ -213,12 +288,16 @@ function SeriesPage() {
             <span className="chip">
               {plural(volumes.length, "volume", "volumes")}
             </span>
-            {facts.lines.map((line) => (
-              <span key={line} className="chip chip--line">
-                {line}
+            {editionGroups.length > 1 ? (
+              <span className="chip">
+                {plural(editionGroups.length, "edition", "editions")}
               </span>
-            ))}
+            ) : null}
           </div>
+
+          {series.synopsis ? (
+            <p className="series-synopsis">{series.synopsis}</p>
+          ) : null}
 
           <dl className="facts">
             {series.sourceStatus ? (
@@ -239,7 +318,7 @@ function SeriesPage() {
               <div>
                 <dt className="fact-term">English packaging</dt>
                 <dd className="fact-def">
-                  {plural(facts.editionCount, "edition", "editions")},{" "}
+                  {plural(facts.editionCount, "book", "books")},{" "}
                   {plural(facts.releaseCount, "release", "releases")}
                 </dd>
               </div>
@@ -319,55 +398,80 @@ function SeriesPage() {
         </div>
       </section>
 
-      <section className="section reading-path">
-        <div className="section-head">
-          <h2 className="section-title">Reading path</h2>
-          <p className="section-note">
-            The canonical volume sequence. Open a volume for its own page, or
-            its shelf below for every edition and release that covers it.
-          </p>
-        </div>
-        {volumes.length === 0 ? (
-          <p className="notice">
-            No volumes are recorded for this series yet.
-          </p>
-        ) : (
-          <div className="shelf">
-            {volumes.map((volume) => (
-              <VolumeShelfItem
-                key={volume.publicId}
-                volume={volume}
-                seriesTitle={series.title}
-                seriesPublicId={series.publicId}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
-      {volumes.length > 0 ? (
+      {editionGroups.length > 1 ? (
         <section className="section">
           <div className="section-head">
-            <h2 className="section-title">Editions, volume by volume</h2>
+            <h2 className="section-title">Editions</h2>
             <p className="section-note">
-              Each volume opens onto the editions that collect it. Edition line
-              numbering is the publisher's own and never the canonical
-              sequence.
+              Each edition is its own run of books. Pick one to see its
+              reading path.
             </p>
           </div>
-          <div className="vol-panels">
-            {volumes.map((volume, i) => (
-              <VolumePanel
-                key={volume.publicId}
-                volume={volume}
-                seriesTitle={series.title}
-                // The first volume opens by default: one worked example of
-                // the edition/release structure, without unrolling the
-                // whole series.
-                open={i === 0}
-              />
-            ))}
+          <EditionPicker
+            groups={editionGroups}
+            selectedKey={selected?.key ?? null}
+            series={series}
+          />
+        </section>
+      ) : null}
+
+      {selected ? (
+        <section className="section reading-path" id="reading-path">
+          <div className="section-head">
+            <h2 className="section-title">
+              {editionGroups.length > 1 ? selected.name : "Reading path"}
+            </h2>
+            <p className="section-note">
+              {selected.publisher ? `${selected.publisher.name} · ` : ""}
+              {plural(selected.books.length, "book", "books")}
+              {selected.kind === "line"
+                ? " in the publisher's own numbering"
+                : " in reading order"}
+            </p>
           </div>
+          <div className="shelf">
+            {pathSlots(selected, volumes).map((slot) =>
+              slot.kind === "book" ? (
+                <BookShelfItem
+                  key={slot.book.publicId}
+                  book={slot.book}
+                  seriesTitle={series.title}
+                  seriesPublicId={series.publicId}
+                  showCoverage={selected.kind === "line"}
+                />
+              ) : (
+                <MissingVolume
+                  key={`missing-${slot.volume.publicId}`}
+                  volume={slot.volume}
+                  seriesTitle={series.title}
+                />
+              ),
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      {editionGroups.length === 0 ? (
+        <section className="section reading-path">
+          <div className="section-head">
+            <h2 className="section-title">Volumes</h2>
+            <p className="section-note">
+              No English edition is on file for this series yet.
+            </p>
+          </div>
+          {volumes.length === 0 ? (
+            <p className="notice">No volumes are recorded for this series yet.</p>
+          ) : (
+            <div className="shelf">
+              {volumes.map((volume) => (
+                <MissingVolume
+                  key={volume.publicId}
+                  volume={volume}
+                  seriesTitle={series.title}
+                />
+              ))}
+            </div>
+          )}
         </section>
       ) : null}
 
@@ -385,38 +489,154 @@ function SeriesPage() {
   );
 }
 
-/** Volume Label if the publisher gave one, else the em dash (spec §2). */
-function volumeLabelText(volume: Volume): string {
-  return volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume";
-}
-
-function releaseCountOf(volume: Volume): number {
-  return volume.editions.reduce((n, edition) => n + edition.releases.length, 0);
+/**
+ * The edition picker: each path's first book as its cover, then the path's
+ * name, publisher and extent. Selection lives in the URL (`?edition=`), so a
+ * path is shareable and the picker works before hydration.
+ */
+function EditionPicker({
+  groups,
+  selectedKey,
+  series,
+}: {
+  groups: ReadonlyArray<EditionGroup>;
+  selectedKey: string | null;
+  series: SeriesPageData["series"];
+}) {
+  return (
+    <nav className="edition-picker" aria-label="Editions">
+      {groups.map((group) => {
+        const first = group.books[0];
+        const span = dateSpan(group.books);
+        const isSelected = group.key === selectedKey;
+        return (
+          <Link
+            key={group.key}
+            className={isSelected ? "edition-card is-selected" : "edition-card"}
+            to="/series/$publicId/$slug"
+            params={seriesLinkParams(series.publicId, series.title)}
+            search={{ edition: group.key }}
+            hash="reading-path"
+            resetScroll={false}
+            aria-current={isSelected ? "true" : undefined}
+          >
+            <span className="edition-card-cover">
+              {first ? (
+                <Cover
+                  src={first.coverUrl}
+                  isbn13={firstIsbn([first])}
+                  title={bookTitle(series.title, first)}
+                  foot={[bookLabel(first), group.publisher?.name]}
+                />
+              ) : null}
+            </span>
+            <span className="edition-card-body">
+              <span className="edition-card-name">{group.name}</span>
+              {group.publisher ? (
+                <span className="edition-card-meta">{group.publisher.name}</span>
+              ) : null}
+              <span className="edition-card-meta">
+                {plural(group.books.length, "book", "books")}
+                {span ? ` · ${span}` : ""}
+              </span>
+            </span>
+          </Link>
+        );
+      })}
+    </nav>
+  );
 }
 
 /**
- * One book on the wall. The cloth binding carries the Volume Label (what the
- * publisher prints on the spine); the badge carries the Volume Position (the
- * canonical sort key, spec §2) — they are deliberately never conflated.
- * `seriesPage` has no per-Volume cover art, so these are cloth bindings until
- * it does; the hero shows the one representative cover the query finds.
+ * One book on a reading path, linking its Edition page (the book detail page,
+ * where its Releases and the collection controls live). The cloth carries the
+ * book's own number: its line position in a line, its Volume label otherwise.
  */
-function VolumeShelfItem({
-  volume,
+function BookShelfItem({
+  book,
   seriesTitle,
   seriesPublicId,
+  showCoverage,
 }: {
-  volume: Volume;
+  book: Book;
   seriesTitle: string;
   seriesPublicId: number;
+  showCoverage: boolean;
 }) {
-  const title = volumeTitle(seriesTitle, volume.label);
-  const releaseCount = releaseCountOf(volume);
+  const title = bookTitle(seriesTitle, book);
+  const number = book.lineName !== null ? book.linePosition : (book.coverage[0]?.label ?? null);
+  const date = formatPartialDate(book.releases[0]?.pubDate ?? null);
+  const formats = [...new Set(book.releases.map((r) => r.format))];
+  const covered = showCoverage ? coveredText(book) : null;
   return (
     <div className="shelf-item">
       <div className="cover-wrap">
-        {/* Links the Volume page (ticket #23): every covering Release with
-            complete/partial coverage listed distinctly. */}
+        <Link
+          className="cover-link"
+          to="/edition/$publicId/$slug"
+          params={slugParams(book.publicId, title)}
+          aria-label={title}
+        >
+          <Cover
+            src={book.coverUrl}
+            isbn13={firstIsbn([book])}
+            title={title}
+            numbered={number !== null ? { series: seriesTitle, number } : undefined}
+          />
+        </Link>
+      </div>
+      <div className="caption">
+        <Link
+          className="caption-title"
+          to="/edition/$publicId/$slug"
+          params={slugParams(book.publicId, title)}
+        >
+          {bookLabel(book)}
+        </Link>
+        <div className="caption-meta">
+          {covered ? (
+            <>
+              <span>{covered}</span>
+              <span className="dot" />
+            </>
+          ) : null}
+          <span>{date ?? "Date TBA"}</span>
+          {/* Line books already carry their Volume range; formats would
+              overflow the caption. */}
+          {!showCoverage && formats.length > 0 ? (
+            <>
+              <span className="dot" />
+              <span>
+                {formats.map((f) => (f === "physical" ? "Print" : "Digital")).join(" + ")}
+              </span>
+            </>
+          ) : null}
+        </div>
+        {/* Durable, edition-independent read count (#28) for a one-volume
+            book; signed-in only. */}
+        {book.coverage.length === 1 && book.coverage[0] ? (
+          <VolumeReadCount
+            seriesPublicId={seriesPublicId}
+            volumePublicId={book.coverage[0].volumePublicId}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** A canonical Volume with no book in this path, linking its Volume page. */
+function MissingVolume({
+  volume,
+  seriesTitle,
+}: {
+  volume: Volume;
+  seriesTitle: string;
+}) {
+  const title = volumeTitle(seriesTitle, volume.label);
+  return (
+    <div className="shelf-item shelf-item--missing">
+      <div className="cover-wrap">
         <Link
           className="cover-link"
           to="/volume/$publicId/$slug"
@@ -424,24 +644,11 @@ function VolumeShelfItem({
           aria-label={title}
         >
           <Cover
-            src={volume.coverUrl}
-            isbn13={firstIsbn(volume.editions)}
             title={title}
-            // A Volume Label goes on the cloth as the big number; an
-            // unlabeled Volume (a oneshot, an extra) carries its title
-            // instead — it has no number to print.
             numbered={
               volume.label !== null
                 ? { series: seriesTitle, number: volume.label }
                 : undefined
-            }
-            badges={
-              <span
-                className="vol-index"
-                title="Position in the canonical reading order"
-              >
-                #{volume.position}
-              </span>
             }
           />
         </Link>
@@ -452,241 +659,11 @@ function VolumeShelfItem({
           to="/volume/$publicId/$slug"
           params={slugParams(volume.publicId, title)}
         >
-          {volumeLabelText(volume)}
+          {volume.label !== null ? `Vol. ${volume.label}` : "Unnumbered"}
         </Link>
         <div className="caption-meta">
-          {volume.editions.length === 0 ? (
-            <span>No English edition yet</span>
-          ) : (
-            <>
-              <a className="caption-open" href={`#volume-${volume.position}`}>
-                {plural(volume.editions.length, "edition", "editions")}
-              </a>
-              <span className="dot" />
-              <span>{plural(releaseCount, "release", "releases")}</span>
-            </>
-          )}
+          <span>Not on file</span>
         </div>
-        {/* Durable, edition-independent read count (#28); signed-in only. */}
-        <VolumeReadCount
-          seriesPublicId={seriesPublicId}
-          volumePublicId={volume.publicId}
-        />
-      </div>
-    </div>
-  );
-}
-
-/**
- * The Volume's editions, stacked like books laid on their side. Still a
- * `<details>`, so it stays keyboard-operable and works with no JavaScript;
- * the cover wall above links each volume's caption to this panel.
- */
-function VolumePanel({
-  volume,
-  seriesTitle,
-  open,
-}: {
-  volume: Volume;
-  seriesTitle: string;
-  open?: boolean;
-}) {
-  const title = volumeTitle(seriesTitle, volume.label);
-  const releaseCount = releaseCountOf(volume);
-  return (
-    <details
-      className="vol-panel"
-      id={`volume-${volume.position}`}
-      open={open}
-    >
-      <summary className="vol-panel-head">
-        <h3 className="vol-panel-title">{volumeLabelText(volume)}</h3>
-        <span className="chip" title="Position in the canonical reading order">
-          #{volume.position}
-        </span>
-        <span className="vol-panel-note">
-          {volume.editions.length === 0
-            ? "No English edition yet"
-            : `${plural(volume.editions.length, "edition", "editions")} · ${plural(releaseCount, "release", "releases")}`}
-        </span>
-      </summary>
-      <div className="vol-panel-body">
-        {volume.synopsis ? (
-          <p className="vol-synopsis">{volume.synopsis}</p>
-        ) : null}
-        {volume.editions.length > 0 ? (
-          <div className="spines">
-            {volume.editions.map((edition) => (
-              <EditionSpine
-                key={edition.publicId}
-                edition={edition}
-                volume={volume}
-                seriesTitle={seriesTitle}
-              />
-            ))}
-          </div>
-        ) : null}
-        <p className="note">
-          <Link
-            to="/volume/$publicId/$slug"
-            params={slugParams(volume.publicId, title)}
-          >
-            Open the full volume page
-          </Link>
-        </p>
-      </div>
-    </details>
-  );
-}
-
-/** Coverage rows in canonical reading order; Labels display, Positions sort. */
-function orderedCoverage(edition: Edition) {
-  return [...edition.coverage].sort((a, b) => a.position - b.position);
-}
-
-/**
- * What this Edition contains, said once: "covers this volume completely" for
- * the ordinary one-to-one case, the full ordered span for an omnibus or a
- * split edition, with partial coverage always called out.
- */
-function coverageSentence(edition: Edition): string {
-  const coverage = orderedCoverage(edition);
-  if (coverage.length <= 1) {
-    return edition.extentForVolume === "partial"
-      ? "Covers part of this volume"
-      : "Covers this volume completely";
-  }
-  const spans = coverage.map(
-    (cov) =>
-      `Vol ${cov.label ?? `#${cov.position}`}${cov.extent === "partial" ? " (part)" : ""}`,
-  );
-  return `Covers ${spans.join(", ")}`;
-}
-
-/** The short mark on the spine's head band: line position, else the label. */
-function spineMark(edition: Edition, volume: Volume): string {
-  if (edition.lineName) {
-    const initial = edition.lineName.slice(0, 1).toUpperCase();
-    return edition.linePosition ? `${initial}${edition.linePosition}` : initial;
-  }
-  return volume.label ?? String(volume.position);
-}
-
-function EditionSpine({
-  edition,
-  volume,
-  seriesTitle,
-}: {
-  edition: Edition;
-  volume: Volume;
-  seriesTitle: string;
-}) {
-  // The Edition's title is composed, never stored (spec §8).
-  const title = editionTitle({
-    seriesTitle,
-    lineName: edition.lineName,
-    linePosition: edition.linePosition,
-    covered: orderedCoverage(edition).map((cov) => ({
-      label: cov.label,
-      position: cov.position,
-    })),
-  });
-  const notes = orderedCoverage(edition).filter((cov) => cov.note !== null);
-  const style = { "--cloth": clothColor(title) } as CSSProperties;
-  return (
-    <article className="spine" style={style}>
-      <span className="spine-head" aria-hidden="true">
-        {spineMark(edition, volume)}
-      </span>
-      <div className="spine-body">
-        <h4 className="spine-title">
-          {/* Links the Edition page — the book detail page (ticket #23). */}
-          <Link
-            to="/edition/$publicId/$slug"
-            params={slugParams(edition.publicId, title)}
-          >
-            {title}
-          </Link>
-        </h4>
-        <p className="spine-cov">
-          {edition.publisher ? `${edition.publisher.name} · ` : ""}
-          {coverageSentence(edition)}
-        </p>
-        {/* Edition Line Position is publisher package numbering — never the
-            canonical volume number (spec §2). */}
-        {edition.lineName ? (
-          <p className="spine-line">
-            {edition.lineName}
-            {edition.linePosition ? `, position ${edition.linePosition}` : ""}
-          </p>
-        ) : null}
-        {notes.map((cov) => (
-          <p key={cov.volumePublicId} className="spine-line">
-            Vol {cov.label ?? `#${cov.position}`} — {cov.note}
-          </p>
-        ))}
-      </div>
-      <div className="spine-releases">
-        {edition.releases.map((release) => (
-          <SpineRelease key={release.id} release={release} />
-        ))}
-      </div>
-    </article>
-  );
-}
-
-/**
- * A Release as a line on the spine's end band: the publication facts that
- * tell two Releases of one Edition apart, then the signed-in tracking
- * controls. The Release Description lives on the Volume and Edition pages —
- * the reading path keeps to dates, formats, and identifiers.
- */
-function SpineRelease({ release }: { release: Release }) {
-  const date = formatPartialDate(release.pubDate);
-  const price = formatPrice(release.price);
-  // Binding describes physical construction only (glossary: Binding).
-  const binding = release.format === "physical" ? release.binding : null;
-  return (
-    <div className="spine-rel" id={release.isbn13 ?? undefined}>
-      <p className="spine-rel-facts">
-        <span className="spine-rel-date">{date ?? "Date TBA"}</span>
-        <span className="chip">
-          {release.format === "physical" ? "Physical" : "Digital"}
-        </span>
-        {binding ? <span>{binding}</span> : null}
-        {release.language !== "en" ? <span>{release.language}</span> : null}
-        {release.isbn13 ? (
-          <span className="spine-rel-isbn">{release.isbn13}</span>
-        ) : null}
-        {price ? <span className="spine-rel-price">{price}</span> : null}
-      </p>
-      {release.variants.length > 0 ? (
-        <p className="spine-rel-note">
-          Cover variants:{" "}
-          {release.variants.map((variant) => variant.name).join(", ")}
-        </p>
-      ) : null}
-      {release.bundles.length > 0 ? (
-        <p className="spine-rel-note">
-          Also sold inside{" "}
-          {release.bundles.map((bundle, i) => (
-            <span key={bundle.publicId}>
-              {i > 0 ? ", " : ""}
-              <Link
-                to="/bundle/$publicId/$slug"
-                params={slugParams(bundle.publicId, bundle.name)}
-              >
-                {bundle.name}
-              </Link>
-            </span>
-          ))}
-        </p>
-      ) : null}
-      <div className="spine-rel-controls">
-        {/* Collection Entry controls (#27); render nothing signed out. */}
-        <ReleaseCollectionControls releaseId={release.id} />
-        {/* Release Progress pass controls (#28); render nothing signed out. */}
-        <ReleasePassControls releaseId={release.id} />
       </div>
     </div>
   );

@@ -3,7 +3,8 @@
    markup lives in lib/reading.tsx and lib/report.tsx. Owner: catalog-series.
 
    The shape of both pages: a book standing on a ledge on the left, its facts
-   on the right, then the canonical Volume sequence as a wall of covers. The
+   on the right; the Series page then offers its editions and the selected
+   edition's reading path as a wall of covers. The
    Release row, coverage chips and collection controls belong to
    styles/catalog-edition.css; nothing here redefines them. */
 
@@ -215,27 +216,53 @@
   background: linear-gradient(90deg, var(--accent), var(--gold));
 }
 
-/* --- The volume wall ----------------------------------------------------
-   The cloth binding carries the Volume Label the publisher prints; the badge
-   carries the canonical Volume Position. They are never the same field, so
-   they never share one mark. */
+/* --- Editions and reading paths ----------------------------------------
+   The picker shows each edition's first book standing on its own; the
+   selected edition's books then fill a shelf in reading order. A canonical
+   Volume the run has no book for stands in as a faded cloth binding. */
 
-.cover-badges .vol-index {
-  padding: 2px 9px;
-  border-radius: var(--r-pill);
-  background: var(--on-cover-scrim);
-  color: var(--on-cover-ink);
-  font-family: var(--display);
-  font-variation-settings: "opsz" 20;
-  font-weight: 700;
-  font-size: 0.74rem;
-  font-variant-numeric: tabular-nums;
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+.series-synopsis {
+  margin-top: 18px;
+  max-width: 62ch;
+  color: var(--text-dim);
+  line-height: 1.6;
 }
 
-.caption-open { border-bottom: 1px solid var(--line-strong); }
-.caption-open:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.edition-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: 14px;
+}
+.edition-card {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.edition-card:hover { border-color: var(--line-strong); }
+.edition-card.is-selected {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+}
+.edition-card-cover .cover-ph { padding: 8px 6px 6px 12px; }
+.edition-card-cover .cover-ph-title { font-size: 0.72rem; }
+.edition-card-body { display: grid; gap: 4px; min-width: 0; }
+.edition-card-name {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.08rem;
+}
+.edition-card.is-selected .edition-card-name { color: var(--accent); }
+.edition-card-meta { font-size: 0.82rem; color: var(--text-dim); }
+
+.reading-path { scroll-margin-top: calc(var(--header-h) + 16px); }
+.shelf-item--missing .cover { opacity: 0.38; filter: saturate(0.4); }
+.shelf-item--missing .caption-meta { font-style: italic; }
 
 /* Volume Progress: a durable read count, edited in place. Sits in the shelf
    caption on the Series page and in the tracking card on the Volume page. */
@@ -262,166 +289,6 @@
   cursor: pointer;
 }
 .volume-read .read-adjust:hover { border-color: var(--accent); color: var(--accent); }
-
-/* --- Volume panels: the editions, stacked like laid-down books -----------
-   Still a <details> per Volume, so the whole reading path stays keyboard
-   operable and readable with no JavaScript. */
-
-.vol-panels { display: grid; gap: 10px; }
-
-.vol-panel {
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
-  transition: border-color 140ms ease;
-  scroll-margin-top: calc(var(--header-h) + 16px);
-}
-.vol-panel:hover { border-color: var(--line-strong); }
-.vol-panel[open] {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
-  background: linear-gradient(180deg, var(--surface-2), var(--surface));
-}
-
-.vol-panel-head {
-  position: relative;
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 14px 42px 14px 18px;
-  cursor: pointer;
-  list-style: none;
-}
-.vol-panel-head::-webkit-details-marker { display: none; }
-/* the chevron keeps its corner however the head wraps */
-.vol-panel-head::after {
-  content: "";
-  position: absolute;
-  right: 20px;
-  top: 21px;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid var(--text-mute);
-  border-bottom: 2px solid var(--text-mute);
-  transform: rotate(45deg);
-  transition: transform 160ms ease;
-}
-.vol-panel[open] .vol-panel-head::after { transform: rotate(-135deg); }
-
-.vol-panel-title { font-size: 1.15rem; }
-.vol-panel-note {
-  margin-left: auto;
-  font-size: 0.86rem;
-  color: var(--text-mute);
-}
-
-.vol-panel-body { padding: 4px 18px 20px; }
-.vol-synopsis {
-  max-width: 68ch;
-  margin-bottom: 16px;
-  font-size: 0.92rem;
-  line-height: 1.62;
-  color: var(--text-dim);
-}
-.vol-panel-body > .note { margin-top: 16px; }
-.vol-panel-body > .note a { color: var(--accent); border-bottom: 1px solid transparent; }
-.vol-panel-body > .note a:hover { border-bottom-color: var(--accent); }
-
-/* --- Edition spines -----------------------------------------------------
-   Each Edition is a book lying on its side: a head band with its short mark,
-   the identity in the middle, and its Releases banded down the end. */
-
-.spines { display: grid; gap: 12px; }
-
-.spine {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) minmax(0, auto);
-  border-radius: 4px 9px 9px 4px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--cloth) 84%, #fff) 0%,
-    var(--cloth) 40%,
-    color-mix(in srgb, var(--cloth) 72%, #000) 100%
-  );
-  box-shadow: var(--cover-shadow);
-  overflow: hidden;
-  color: #fdf6ea;
-  transition: transform 150ms ease, box-shadow 150ms ease;
-}
-.spine:hover { transform: translateX(4px); box-shadow: var(--cover-shadow-hi); }
-
-.spine-head {
-  display: grid;
-  place-items: center;
-  background: rgba(0, 0, 0, 0.26);
-  border-right: 1px solid rgba(255, 255, 255, 0.16);
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 0.82rem;
-}
-
-.spine-body {
-  padding: 13px 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
-  min-width: 0;
-}
-.spine-title {
-  font-family: var(--display);
-  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 30;
-  font-weight: 700;
-  font-size: 1.04rem;
-}
-.spine-title a { border-bottom: 1px solid rgba(255, 255, 255, 0.3); }
-.spine-title a:hover { border-bottom-color: #fff; }
-.spine-cov { font-size: 0.84rem; color: rgba(255, 250, 240, 0.82); }
-.spine-line { font-size: 0.8rem; color: rgba(255, 250, 240, 0.7); }
-
-.spine-releases {
-  padding: 10px 16px;
-  background: rgba(0, 0, 0, 0.2);
-  border-left: 1px solid rgba(255, 255, 255, 0.14);
-  min-width: 300px;
-}
-.spine-rel { padding: 6px 0; }
-.spine-rel + .spine-rel {
-  margin-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.14);
-  padding-top: 10px;
-}
-.spine-rel-facts {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 0.82rem;
-  color: rgba(255, 250, 240, 0.9);
-}
-.spine-rel .chip {
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.3);
-  color: #fffaf0;
-}
-.spine-rel-date { font-weight: 800; font-variant-numeric: tabular-nums; }
-.spine-rel-isbn {
-  font-family: var(--display);
-  font-variation-settings: "opsz" 14;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.03em;
-  color: rgba(255, 250, 240, 0.72);
-}
-.spine-rel-price { font-weight: 800; }
-.spine-rel-note {
-  margin-top: 6px;
-  padding-left: 11px;
-  border-left: 2px solid rgba(255, 255, 255, 0.3);
-  font-size: 0.78rem;
-  color: rgba(255, 250, 240, 0.76);
-}
-.spine-rel-note a { border-bottom: 1px solid rgba(255, 255, 255, 0.45); }
-.spine-rel-controls:not(:empty) { margin-top: 8px; }
 
 /* --- Series Family ------------------------------------------------------ */
 
@@ -652,13 +519,6 @@
 @media (max-width: 960px) {
   .series-hero { grid-template-columns: 186px minmax(0, 1fr); gap: 28px; }
   .volume-hero { grid-template-columns: 236px minmax(0, 1fr); gap: 32px; }
-  .spine { grid-template-columns: 30px minmax(0, 1fr); }
-  .spine-releases {
-    grid-column: 1 / -1;
-    min-width: 0;
-    border-left: 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.14);
-  }
 }
 
 @media (max-width: 720px) {
@@ -675,19 +535,12 @@
   .owner-bar .series-visibility,
   .owner-bar .series-visibility > summary,
   .follow-btn { width: 100%; justify-content: center; }
-  .vol-panel-head { padding: 12px 38px 12px 14px; }
-  .vol-panel-head::after { right: 16px; }
-  .vol-panel-note { margin-left: 0; flex-basis: 100%; }
-  .vol-panel-body { padding: 4px 14px 18px; }
   .vol-edition-extent { flex-basis: 100%; }
 }
 
 /* Motion here is only ever a response to a pointer or a disclosure; when the
    viewer asks for less, drop it entirely. */
 @media (prefers-reduced-motion: reduce) {
-  .spine,
   .follow-btn,
-  .vol-panel,
-  .vol-panel-head::after { transition: none; }
-  .spine:hover { transform: none; }
+  .edition-card { transition: none; }
 }

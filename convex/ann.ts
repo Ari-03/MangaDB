@@ -44,6 +44,7 @@ import {
   type AnnMangaSnapshot,
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
+import { canonicalLabel } from "./lib/bookTitle";
 import { candidateSeries, labelsEqual } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
@@ -259,31 +260,61 @@ type ApplyResult = {
 };
 
 /** Volume labels this entry evidences: plain GN/eBook numbers, no ranges or
- * omnibus/box-set packaging (those describe Editions, not source Volumes). */
+ * omnibus/box-set packaging (those describe Editions, not source Volumes).
+ * Canonical and deduplicated numerically ("1" and "01" are one Volume). */
 function backboneLabels(snapshot: AnnMangaSnapshot): Array<string | undefined> {
   const labels: Array<string | undefined> = [];
-  const has = (label: string | undefined) =>
-    labels.some((l) => (l ?? null) === (label ?? null));
   for (const release of snapshot.releases) {
     if (release.multi || release.editionLineHint) continue;
-    if (!has(release.label)) labels.push(release.label);
+    const label = release.label !== undefined ? canonicalLabel(release.label) : undefined;
+    if (!labels.some((l) => labelsEqual(l, label ?? null))) labels.push(label);
   }
   return labels;
 }
+
+/** Every release line is packaging: the entry evidences no single Volume. */
+function packagingOnly(snapshot: AnnMangaSnapshot): boolean {
+  return (
+    snapshot.releases.length > 0 &&
+    snapshot.releases.every((release) => release.multi || release.editionLineHint)
+  );
+}
+
+type AnnLine = AnnMangaSnapshot["releases"][number];
+
+/** How many of the entry's lines share this line's label and format. */
+function printingsOf(snapshot: AnnMangaSnapshot, line: AnnLine): number {
+  return snapshot.releases.filter(
+    (other) =>
+      !other.multi &&
+      !other.editionLineHint &&
+      other.format === line.format &&
+      labelsEqual(other.label, line.label ?? null),
+  ).length;
+}
+
+// An ANN line and a canonical Release more than this many years apart are
+// different printings (Tokyopop 2004 vs a 2025 reissue), never one book.
+const PRINTING_YEAR_TOLERANCE = 1;
 
 /**
  * The series-scoped release match: under a rung-①-linked Series, a volume
  * label + format is the full key (the ladder's publisher+title key exists
  * to disambiguate same-titled series; a stored series link is strictly
- * stronger). Exactly one clean candidate links; anything else stays
- * unlinked — the importer never guesses.
+ * stronger) — but only for a line that is the entry's ONLY printing of that
+ * label and format, and only onto a Release dated within a year of it. ANN
+ * lists every North American printing of a volume; linking them all to one
+ * Release made their dates overwrite each other. Exactly one clean
+ * candidate links; anything else stays unlinked — the importer never guesses.
  */
 async function matchReleaseInSeries(
   ctx: MutationCtx,
   seriesId: Id<"series">,
-  label: string | undefined,
-  format: "physical" | "digital",
+  snapshot: AnnMangaSnapshot,
+  line: AnnLine,
 ): Promise<{ kind: "one"; release: Doc<"releases"> } | { kind: "none" | "many" }> {
+  if (printingsOf(snapshot, line) !== 1) return { kind: "many" };
+  const { label, format } = line;
   const volumes = await ctx.db
     .query("volumes")
     .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
@@ -311,6 +342,13 @@ async function matchReleaseInSeries(
       for (const release of releases) {
         if (release.status !== "active" || release.locked) continue;
         if (release.format !== format) continue;
+        if (
+          line.date !== undefined &&
+          release.pubDate !== undefined &&
+          Math.abs(release.pubDate.year - line.date.year) > PRINTING_YEAR_TOLERANCE
+        ) {
+          continue;
+        }
         candidates.set(release._id, release);
       }
     }
@@ -392,6 +430,7 @@ export const applyManga = internalMutation({
           seriesTitle: snapshot.title,
           seriesAltTitles: snapshot.altTitles,
           labels: labels.filter((l): l is string => l !== undefined),
+          seriesOnly: packagingOnly(snapshot),
           now,
           comment: `"${snapshot.title}" observed at ${sourceName} needs a brand-new Series — steady-state creation gate. Series + Volume backbone only; ANN carries no publisher, so Releases arrive from other sources.`,
         });
@@ -406,6 +445,8 @@ export const applyManga = internalMutation({
         seriesTitle: snapshot.title,
         seriesAltTitles: snapshot.altTitles,
         labels: labels.filter((l): l is string => l !== undefined),
+        // Omnibus-only entries evidence no single Volume: no placeholder.
+        seriesOnly: packagingOnly(snapshot),
         tagBootstrapUnreviewed: true,
         now,
       });
@@ -451,12 +492,7 @@ export const applyManga = internalMutation({
           canonical = linked;
         }
       } else if (!release.multi && !release.editionLineHint) {
-        const match = await matchReleaseInSeries(
-          ctx,
-          seriesId,
-          release.label,
-          release.format,
-        );
+        const match = await matchReleaseInSeries(ctx, seriesId, snapshot, release);
         if (match.kind === "one") {
           canonical = match.release;
           await ctx.db.patch(releaseObs._id, {

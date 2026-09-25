@@ -350,6 +350,132 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
   });
 });
 
+// The releases audit: ANN lists every North American printing of a volume,
+// and linking them all to one Release made dates flip-flop by decades.
+describe("ann.sync — printings, packaging-only entries, labels", () => {
+  async function releaseFor(
+    t: TestT,
+    label: string,
+    pubDate: { year: number; month: number; day: number; sort: number },
+  ) {
+    return await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === label)!;
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "VIZ Media",
+        slug: "viz-media",
+      });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 77,
+        publisherId,
+      });
+      await ctx.db.insert("volumeCoverages", {
+        editionId,
+        volumeId: volume._id,
+        order: 1,
+        extent: "complete",
+      });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        pubDate,
+        publisherId,
+        seriesIds: [series._id],
+      });
+    });
+  }
+
+  const linkOf = (t: TestT, annId: number) =>
+    t.run(async (ctx) => {
+      const obs = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "ann").eq("sourceRecordId", `release:${annId}`),
+        )
+        .unique();
+      // t.run results cross a serialization boundary: absent reads as null.
+      return obs?.recordRef ?? null;
+    });
+
+  it("links no line when the entry lists several printings of one volume", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const NANA: FixtureManga = {
+      id: 300,
+      title: "NANA",
+      releases: [
+        { annId: 9101, date: "2005-12-06", designator: "GN 1" },
+        { annId: 9102, date: "2025-10-21", designator: "GN 1" },
+      ],
+    };
+    stubAnn([NANA]);
+    await sync(t);
+    const release = await releaseFor(t, "1", { year: 2005, month: 12, day: 6, sort: 20051206 });
+    await sync(t);
+    expect(await linkOf(t, 9101)).toBeNull();
+    expect(await linkOf(t, 9102)).toBeNull();
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(release))!.pubDate!.year).toBe(2005);
+    });
+  });
+
+  it("never links a line years away from the Release's own date", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const TRIGUN: FixtureManga = {
+      id: 301,
+      title: "Trigun",
+      releases: [{ annId: 9201, date: "2025-06-17", designator: "GN 5" }],
+    };
+    stubAnn([TRIGUN]);
+    await sync(t);
+    await releaseFor(t, "5", { year: 2005, month: 3, day: 1, sort: 20050301 });
+    await sync(t);
+    expect(await linkOf(t, 9201)).toBeNull();
+  });
+
+  it("builds no placeholder Volume for an omnibus-only entry and dedupes labels", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([
+      {
+        id: 302,
+        title: "Homunculus",
+        releases: [
+          { annId: 9301, date: "2023-01-10", designator: "GN 1-2" },
+          { annId: 9302, date: "2023-05-10", designator: "GN 3-4" },
+        ],
+      },
+      {
+        id: 303,
+        title: "Sand Land",
+        releases: [
+          { annId: 9401, date: "2008-02-05", designator: "GN 1" },
+          { annId: 9402, date: "2020-07-07", designator: "GN 01" },
+        ],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      const byTitle = (title: string) => series.find((s) => s.title === title)!._id;
+      const volumesOf = async (title: string) =>
+        await ctx.db
+          .query("volumes")
+          .withIndex("by_series", (q) => q.eq("seriesId", byTitle(title)))
+          .collect();
+      expect(await volumesOf("Homunculus")).toHaveLength(0);
+      expect((await volumesOf("Sand Land")).map((v) => [v.label, v.position])).toEqual([
+        ["1", 1],
+      ]);
+    });
+  });
+});
+
 describe("ann.sync — steady state", () => {
   it("queues a Series+Volumes proposal for a brand-new series, once, with no release ops", async () => {
     const t = makeT();

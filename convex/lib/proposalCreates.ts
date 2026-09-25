@@ -17,6 +17,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { volumePositionFor } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
 import {
   fieldDescriptor,
@@ -409,14 +410,17 @@ export async function applyCreatePlan(
     }
     case "volumes": {
       const seriesId = resolved(plan.series, temp);
-      // Volume Position: next in the series' canonical sequence, counting
-      // volumes this same proposal just created (reads see our writes).
-      const last = await ctx.db
+      // Volume Position: the volume number when the label is one (spec §2),
+      // else just after the last whole number — counting volumes this same
+      // proposal just created (reads see our writes).
+      const siblings = await ctx.db
         .query("volumes")
         .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-        .order("desc")
-        .first();
-      const position = (last?.position ?? 0) + 1;
+        .collect();
+      const position = volumePositionFor(
+        plan.fields.label,
+        new Set(siblings.map((vol) => vol.position)),
+      );
       const publicId = await allocatePublicId(ctx, "volume");
       const id = await ctx.db.insert("volumes", {
         status: "active",

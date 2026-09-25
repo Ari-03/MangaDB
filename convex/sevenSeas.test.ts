@@ -152,8 +152,9 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
 
       const series = await ctx.db.query("series").collect();
       expect(series).toHaveLength(1);
+      // The publisher's "(Manga)" discriminator never reaches the Series title.
       expect(series[0]).toMatchObject({
-        title: "Alpha Adventures (Manga)",
+        title: "Alpha Adventures",
         bootstrapUnreviewed: true,
         publicId: 1,
       });

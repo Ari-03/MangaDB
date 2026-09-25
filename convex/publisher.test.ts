@@ -247,3 +247,56 @@ describe("publisher.publisherPage", () => {
     expect(page.upcomingCapped).toBe(false);
   });
 });
+
+describe("publisherPage — imprint family", () => {
+  async function family() {
+    const t = convexTest(schema);
+    await t.run(async (ctx) => {
+      const sevenSeas = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+      });
+      for (const [name, slug] of [
+        ["Steamship", "steamship"],
+        ["Ghost Ship", "ghost-ship"],
+      ] as const) {
+        await ctx.db.insert("publishers", {
+          status: "active",
+          name,
+          slug,
+          parentPublisherId: sevenSeas,
+        });
+      }
+      await ctx.db.insert("publishers", {
+        status: "hidden",
+        name: "Waves of Color",
+        slug: "waves-of-color",
+        parentPublisherId: sevenSeas,
+      });
+    });
+    return t;
+  }
+
+  it("an imprint's page names its parent company", async () => {
+    const t = await family();
+    const page = await t.query(api.publisher.publisherPage, { slug: "ghost-ship", ...bounds });
+    expect(page).toMatchObject({
+      publisher: { name: "Ghost Ship" },
+      parent: { name: "Seven Seas Entertainment", slug: "seven-seas" },
+      imprints: [],
+    });
+  });
+
+  it("a parent's page lists its active imprints, alphabetically", async () => {
+    const t = await family();
+    const page = await t.query(api.publisher.publisherPage, { slug: "seven-seas", ...bounds });
+    expect(page).toMatchObject({
+      parent: null,
+      imprints: [
+        { name: "Ghost Ship", slug: "ghost-ship" },
+        { name: "Steamship", slug: "steamship" },
+      ],
+    });
+  });
+});

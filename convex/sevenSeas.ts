@@ -28,16 +28,22 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { errorMessage, politeFetch } from "./lib/http";
-import { matchRelease, type ReleaseFact } from "./lib/matching";
+import { rangeLabels } from "./lib/bookTitle";
+import {
+  candidateSeries,
+  matchRelease,
+  type MatchOutcome,
+  type ReleaseFact,
+} from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
-  coveredLabels,
   createCanonicalRecords,
+  createReleaseBundle,
   creationGates,
-  needsEditionLine,
   queueCreationProposal,
   reconcileLinkedSeries,
+  recordUnplaced,
   toPartialDate,
   linkSeriesObservation,
 } from "./lib/pipeline";
@@ -357,25 +363,57 @@ export const applyBook = internalMutation({
       };
     }
 
+    if (observation.recordRef?.type === "releaseBundle") {
+      return { status: changed ? "recordOnly" : "unchanged", changed: false };
+    }
+
     // The series half of rung ① (keyed on the source's own series slug),
-    // including a rename check; then rungs ②–⑤ via the shared ladder.
-    const { seriesId } = await reconcileSeries(ctx, snapshot, citation, now);
+    // including a rename check; without a stored link, the base Series by
+    // title — never a new Series while one already exists.
+    let { seriesId } = await reconcileSeries(ctx, snapshot, citation, now);
+    let ambiguousSeries = 0;
+    if (seriesId === null) {
+      const candidates = await candidateSeries(ctx, snapshot.seriesTitle);
+      if (candidates.length === 1) {
+        seriesId = candidates[0]!._id;
+        await linkSeriesObservation(ctx, {
+          sourceKey: SOURCE_KEY,
+          seriesKey: snapshot.seriesSlug,
+          title: snapshot.seriesTitle,
+          url: snapshot.seriesUrl,
+          seriesId,
+          now,
+        });
+      }
+      ambiguousSeries = candidates.length > 1 ? candidates.length : 0;
+    }
 
     const publisher = await ctx.db
       .query("publishers")
       .withIndex("by_slug", (q) => q.eq("slug", PUBLISHER.slug))
       .unique();
-    const labels = coveredLabels(snapshot.volumeLabel);
+    // Packaging covers the base Series' real Volumes; it is never a Volume.
+    const packaging = snapshot.packaging ?? null;
+    const labels = packaging
+      ? packaging.coverRange
+        ? rangeLabels(packaging.coverRange)
+        : []
+      : snapshot.volumeLabel !== undefined
+        ? [snapshot.volumeLabel]
+        : [];
     const fact: ReleaseFact = {
       seriesTitle: snapshot.seriesTitle,
-      volumeLabel: labels.length === 1 ? labels[0]! : null,
-      multiVolume: labels.length > 1,
+      volumeLabel: packaging ? null : (snapshot.volumeLabel ?? null),
+      multiVolume: packaging !== null,
       format: "physical",
       isbn13: snapshot.isbn13,
       publisherId:
         publisher && publisher.status === "active" ? publisher._id : null,
     };
-    const match = await matchRelease(ctx, fact);
+    // A box set is never a Release: it skips the ladder for the bundle path.
+    const match: MatchOutcome = snapshot.isBox
+      ? { kind: "create", rung: 5 }
+      : await matchRelease(ctx, fact);
 
     if (match.kind === "match") {
       // Rung ② or ③ found the one canonical Release this book is: link the
@@ -423,12 +461,57 @@ export const applyBook = internalMutation({
           : undefined,
     };
 
-    if (match.kind === "review") {
+    const bootstrap = await getBootstrapMode(ctx);
+
+    // A box set is a Release Bundle of the base Series' existing Releases.
+    if (snapshot.isBox) {
+      if (seriesId === null || labels.length === 0 || !bootstrap) {
+        await recordUnplaced(
+          ctx,
+          observation,
+          `Box set "${snapshot.title}" needs a unique base Series and stated coverage, and outside Bootstrap Mode a review.`,
+          now,
+        );
+        return { status: "recordOnly", changed: false, reason: "box set" };
+      }
+      const bundle = await createReleaseBundle(ctx, {
+        sourceKey: SOURCE_KEY,
+        observation,
+        citation,
+        importComment: IMPORT_COMMENT,
+        seriesId,
+        name: snapshot.title,
+        labels,
+        publisher: PUBLISHER,
+        release: releasePayload,
+        tagBootstrapUnreviewed: true,
+        now,
+      });
+      return { status: bundle.created ? "created" : "linked", changed: true };
+    }
+
+    if (packaging && labels.length === 0) {
+      await recordUnplaced(
+        ctx,
+        observation,
+        `"${snapshot.title}" is packaging whose covered Volumes the title does not state — an Editor maps it.`,
+        now,
+      );
+      return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
+    }
+    const editionLine =
+      packaging?.lineName != null
+        ? { name: packaging.lineName, position: packaging.linePosition }
+        : undefined;
+
+    if (match.kind === "review" || ambiguousSeries > 0) {
       // Ambiguity always queues flagged (spec §6) — the importer never
       // merges, in Bootstrap Mode or out of it. The queue item is the
       // pre-filled creation guess with the flag in its change comment.
+      const reason =
+        match.kind === "review" ? match.reason : `${ambiguousSeries} same-titled Series`;
       if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false, reason: match.reason };
+        return { status: "alreadyQueued", changed: false, reason };
       }
       await queueCreationProposal(ctx, {
         sourceKey: SOURCE_KEY,
@@ -436,11 +519,15 @@ export const applyBook = internalMutation({
         seriesId,
         seriesTitle: snapshot.seriesTitle,
         labels,
+        linePosition: packaging?.linePosition ?? undefined,
         release: { ...releasePayload, publisherSlug: PUBLISHER.slug },
         now,
-        comment: `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`,
+        comment:
+          match.kind === "review"
+            ? `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`
+            : `"${snapshot.seriesTitle}" matches ${ambiguousSeries} same-titled Series — the importer never guesses.`,
       });
-      return { status: "needsReview", changed: true, reason: match.reason };
+      return { status: "needsReview", changed: true, reason };
     }
 
     // Rung ⑤ — creation, behind the steady-state boundaries (spec §6): a
@@ -448,11 +535,10 @@ export const applyBook = internalMutation({
     // brand-new Series, multi-Volume Coverage, or an Edition-Line-shaped
     // release always queues, pre-filled so a correct guess is one click.
     // Bootstrap Mode lifts the gates (spec §7).
-    const bootstrap = await getBootstrapMode(ctx);
     const gates = creationGates({
       seriesId,
-      multiVolume: fact.multiVolume,
-      editionLineHint: needsEditionLine(snapshot.seriesTitle, snapshot.title),
+      multiVolume: labels.length > 1,
+      editionLineHint: editionLine !== undefined,
     });
     if (gates.length > 0 && !bootstrap) {
       if (await alreadyHandled(ctx, observation)) {
@@ -464,9 +550,10 @@ export const applyBook = internalMutation({
         seriesId,
         seriesTitle: snapshot.seriesTitle,
         labels,
+        linePosition: packaging?.linePosition ?? undefined,
         release: { ...releasePayload, publisherSlug: PUBLISHER.slug },
         now,
-        comment: `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.`,
+        comment: `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.${editionLine ? ` Edition Line: ${editionLine.name}.` : ""}`,
       });
       return { status: "queued", changed: true };
     }
@@ -481,6 +568,7 @@ export const applyBook = internalMutation({
       seriesKey: snapshot.seriesSlug,
       seriesUrl: snapshot.seriesUrl,
       labels,
+      editionLine,
       release: { ...releasePayload, publisher: PUBLISHER },
       // Tag exactly what steady state would have queued (spec §7).
       tagBootstrapUnreviewed: bootstrap && gates.length > 0,

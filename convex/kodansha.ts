@@ -16,7 +16,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalAction, internalMutation } from "./_generated/server";
+import { internalAction, internalMutation, type MutationCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { errorMessage, politeFetch } from "./lib/http";
 import {
@@ -28,23 +28,26 @@ import {
   type KodanshaItem,
   type KodanshaSnapshot,
 } from "./lib/kodansha";
-import { matchRelease, type ReleaseFact } from "./lib/matching";
+import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
 import { upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
   creationGates,
   linkSeriesObservation,
-  needsEditionLine,
+  publisherBySlug,
   queueCreationProposal,
   reconcileLinkedSeries,
+  recordUnplaced,
   toPartialDate,
 } from "./lib/pipeline";
+import type { CanonicalPublisher } from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
 
 export const SOURCE_KEY = "kodansha";
 const BASE_URL = "https://kodansha.us";
-const PUBLISHER = { name: "Kodansha", slug: "kodansha" };
+const PUBLISHER: CanonicalPublisher = { name: "Kodansha", slug: "kodansha" };
+const VERTICAL: CanonicalPublisher = { name: "Vertical", slug: "vertical", parentSlug: "kodansha" };
 const IMPORT_COMMENT = "Imported from Kodansha.";
 
 // ---------- the sync action ----------
@@ -257,7 +260,7 @@ export const applyVolume = internalMutation({
       };
     }
 
-    const { seriesId } = await reconcileLinkedSeries(ctx, {
+    let { seriesId } = await reconcileLinkedSeries(ctx, {
       sourceKey: SOURCE_KEY,
       seriesKey: snapshot.seriesSlug,
       offeredTitle: snapshot.seriesTitle,
@@ -265,10 +268,39 @@ export const applyVolume = internalMutation({
       now,
     });
 
-    const publisher = await ctx.db
-      .query("publishers")
-      .withIndex("by_slug", (q) => q.eq("slug", PUBLISHER.slug))
-      .unique();
+    // No stored series link yet: resolve the base Series by title before
+    // ever creating one (the ANN backbone usually has it already).
+    let ambiguousSeries = 0;
+    if (seriesId === null) {
+      const candidates = await candidateSeries(ctx, snapshot.seriesTitle);
+      if (candidates.length === 1) {
+        seriesId = candidates[0]!._id;
+        await linkSeriesObservation(ctx, {
+          sourceKey: SOURCE_KEY,
+          seriesKey: snapshot.seriesSlug,
+          title: snapshot.seriesTitle,
+          url: snapshot.seriesUrl,
+          seriesId,
+          now,
+        });
+      }
+      ambiguousSeries = candidates.length > 1 ? candidates.length : 0;
+    }
+
+    // A packaging line's volume is an Edition Line member whose covered
+    // Volumes Kodansha never states: never a Volume, left for an Editor.
+    if (snapshot.packaging) {
+      await recordUnplaced(
+        ctx,
+        observation,
+        `"${snapshot.title}" is ${snapshot.packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
+        now,
+      );
+      return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
+    }
+
+    const publisherRef = await publisherForSeries(ctx, seriesId);
+    const publisher = await publisherBySlug(ctx, publisherRef.slug);
     const fact: ReleaseFact = {
       seriesTitle: snapshot.seriesTitle,
       volumeLabel: snapshot.volumeLabel ?? null,
@@ -318,9 +350,13 @@ export const applyVolume = internalMutation({
       };
     }
 
-    if (match.kind === "review") {
+    if (match.kind === "review" || ambiguousSeries > 0) {
+      const reason =
+        match.kind === "review"
+          ? match.reason
+          : `${ambiguousSeries} same-titled Series`;
       if (await alreadyHandled(ctx, observation)) {
-        return { status: "alreadyQueued", changed: false, reason: match.reason };
+        return { status: "alreadyQueued", changed: false, reason };
       }
       await queueCreationProposal(ctx, {
         sourceKey: SOURCE_KEY,
@@ -328,18 +364,21 @@ export const applyVolume = internalMutation({
         seriesId,
         seriesTitle: snapshot.seriesTitle,
         labels,
-        release: { ...releasePayload, publisherSlug: PUBLISHER.slug },
+        release: { ...releasePayload, publisherSlug: publisherRef.slug },
         now,
-        comment: `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`,
+        comment:
+          match.kind === "review"
+            ? `Flagged by the matching ladder (rung ${match.rung}): ${match.reason}. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.`
+            : `"${snapshot.seriesTitle}" matches ${ambiguousSeries} same-titled Series — the importer never guesses.`,
       });
-      return { status: "needsReview", changed: true, reason: match.reason };
+      return { status: "needsReview", changed: true, reason };
     }
 
     const bootstrap = await getBootstrapMode(ctx);
     const gates = creationGates({
       seriesId,
       multiVolume: false,
-      editionLineHint: needsEditionLine(snapshot.seriesTitle, snapshot.title),
+      editionLineHint: false,
     });
     if (gates.length > 0 && !bootstrap) {
       if (await alreadyHandled(ctx, observation)) {
@@ -351,7 +390,7 @@ export const applyVolume = internalMutation({
         seriesId,
         seriesTitle: snapshot.seriesTitle,
         labels,
-        release: { ...releasePayload, publisherSlug: PUBLISHER.slug },
+        release: { ...releasePayload, publisherSlug: publisherRef.slug },
         now,
         comment: `"${snapshot.title}" observed at ${sourceName} needs ${gates.join(" and ")} — steady-state creation gate.`,
       });
@@ -368,7 +407,7 @@ export const applyVolume = internalMutation({
       seriesKey: snapshot.seriesSlug,
       seriesUrl: snapshot.seriesUrl,
       labels,
-      release: { ...releasePayload, publisher: PUBLISHER },
+      release: { ...releasePayload, publisher: publisherRef },
       tagBootstrapUnreviewed: bootstrap && gates.length > 0,
       now,
     });
@@ -380,3 +419,36 @@ export const applyVolume = internalMutation({
     };
   },
 });
+
+/**
+ * The publisher a Kodansha record belongs to. kodansha.us also lists its
+ * Vertical imprint's books and the API names no imprint, so a Series whose
+ * existing Editions are Vertical's (and none Kodansha's) is Vertical's —
+ * never hard-coded Kodansha. A new or Kodansha Series stays Kodansha.
+ */
+async function publisherForSeries(
+  ctx: MutationCtx,
+  seriesId: Id<"series"> | null,
+): Promise<CanonicalPublisher> {
+  if (seriesId === null) return PUBLISHER;
+  const slugs = new Set<string>();
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
+  for (const volume of volumes) {
+    const coverages = await ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
+      .collect();
+    for (const coverage of coverages) {
+      const edition = await ctx.db.get(coverage.editionId);
+      if (!edition || edition.status !== "active") continue;
+      const publisher = await ctx.db.get(edition.publisherId);
+      if (publisher) slugs.add(publisher.slug);
+    }
+  }
+  const vertical = (slug: string) => slug === "vertical" || slug === "vertical-comics";
+  const kodansha = (slug: string) => slug === "kodansha" || slug === "kodansha-comics";
+  return [...slugs].some(vertical) && ![...slugs].some(kodansha) ? VERTICAL : PUBLISHER;
+}
