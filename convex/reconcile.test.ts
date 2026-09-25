@@ -500,7 +500,7 @@ describe("matching ladder rungs ③/④ in the apply path", () => {
 });
 
 describe("steady-state creation boundaries", () => {
-  it("an Edition-Line-shaped single volume queues a pre-filled Proposal", async () => {
+  it("an Edition Line book queues a pre-filled Proposal covering the real Volumes", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
@@ -511,8 +511,8 @@ describe("steady-state creation boundaries", () => {
       ALPHA_1,
       {
         id: 501,
-        slug: "alpha-deluxe-vol-5",
-        title: "Alpha Adventures (Manga) Deluxe Edition Vol. 5",
+        slug: "alpha-deluxe-2",
+        title: "Alpha Adventures (Manga) Deluxe Edition 2 (Vol. 4-6 Hardcover Omnibus)",
         seriesSlug: "alpha-manga",
         seriesTitle: "Alpha Adventures (Manga)",
         date: "July 7, 2026",
@@ -526,9 +526,48 @@ describe("steady-state creation boundaries", () => {
     const open = await inReviewProposals(t);
     expect(open).toHaveLength(1);
     const version = await versionOf(t, open[0]!);
-    expect(version?.changeComment).toContain("Edition Line");
-    // Pre-filled: approving creates volume + edition + release in one click.
-    expect(version?.ops.map((op) => op.kind)).toEqual(["create", "create", "create"]);
+    expect(version?.changeComment).toContain("Edition Line: Deluxe Edition");
+    // Pre-filled: volumes 4-6 + the Edition covering them + the Release;
+    // the Deluxe number is the line position, never a Volume.
+    const tables = version?.ops.map((op) => (op.kind === "create" ? op.table : op.kind));
+    expect(tables).toEqual(["volumes", "volumes", "volumes", "editions", "releases"]);
+    const labels = version?.ops.flatMap((op) =>
+      op.kind === "create" && op.table === "volumes"
+        ? [(op.fields as { label?: string }).label]
+        : [],
+    );
+    expect(labels).toEqual(["4", "5", "6"]);
+    const edition = version?.ops.find((op) => op.kind === "create" && op.table === "editions");
+    expect(edition).toMatchObject({ fields: { linePosition: "2" } });
+  });
+
+  it("packaging whose coverage the title never states stays on its observation", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([
+      ALPHA_1,
+      {
+        id: 502,
+        slug: "alpha-deluxe-vol-5",
+        title: "Alpha Adventures (Manga) Deluxe Edition Vol. 5",
+        seriesSlug: "alpha-manga",
+        seriesTitle: "Alpha Adventures (Manga)",
+        date: "July 7, 2026",
+        isbn: "978-1-9990001-6-5",
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      // Only volume 1 exists: "Deluxe Edition Vol. 5" never became Volume 5.
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes.map((v) => v.label)).toEqual(["1"]);
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "502",
+      );
+      expect(obs?.recordRef).toBeUndefined();
+      expect(obs?.conflicts?.[0]).toMatchObject({ field: "placement" });
+    });
+    expect(await inReviewProposals(t)).toHaveLength(0);
   });
 });
 

@@ -12,7 +12,6 @@ import {
   parseBookListing,
   parseBookPage,
   parseUsDate,
-  splitBookTitle,
   stripHtml,
 } from "./sevenSeas";
 
@@ -106,25 +105,41 @@ describe("parseUsDate", () => {
   });
 });
 
-describe("splitBookTitle", () => {
-  it("splits series and label, keeping the publisher's discriminator", () => {
-    expect(splitBookTitle("Betrothed to My Sister’s Ex (Manga) Vol. 6")).toEqual({
-      seriesTitle: "Betrothed to My Sister’s Ex (Manga)",
+// Title splitting is the shared parser (lib/bookTitle.ts); these pin what
+// normalizeBook stores for Seven Seas' own title styles.
+function snapshotFor(title: string) {
+  const listing = parseBookListing({ ...LISTING_FIXTURE, title: { rendered: title } })!;
+  return normalizeBook(listing, parseBookPage(""));
+}
+
+describe("normalizeBook — title splitting", () => {
+  it("drops the publisher's (Manga) discriminator from the series title", () => {
+    expect(snapshotFor("Betrothed to My Sister&#8217;s Ex (Manga) Vol. 6")).toMatchObject({
+      seriesTitle: "Betrothed to My Sister’s Ex",
       volumeLabel: "6",
     });
-    expect(splitBookTitle("A Story Vol. 7.5")).toEqual({
+    expect(snapshotFor("A Story Vol. 7.5")).toMatchObject({
       seriesTitle: "A Story",
       volumeLabel: "7.5",
     });
   });
 
-  it("normalizes omnibus ranges and passes oneshots through", () => {
-    expect(splitBookTitle("Big Series (Omnibus) Vols. 1-3")).toEqual({
-      seriesTitle: "Big Series (Omnibus)",
-      volumeLabel: "1–3",
+  it("maps omnibus ranges to packaging and passes oneshots through", () => {
+    expect(snapshotFor("Tokyo Revengers (Omnibus) Vol. 23-24")).toMatchObject({
+      seriesTitle: "Tokyo Revengers",
+      volumeLabel: undefined,
+      packaging: { lineName: "Omnibus", coverRange: { from: "23", to: "24" } },
     });
-    expect(splitBookTitle("One Rainy Evening")).toEqual({
+    expect(
+      snapshotFor("Monster Musume: Deluxe Edition 1 (Vol. 1-3 Hardcover Omnibus)"),
+    ).toMatchObject({
+      seriesTitle: "Monster Musume",
+      packaging: { lineName: "Deluxe Edition", linePosition: "1" },
+    });
+    expect(snapshotFor("One Rainy Evening")).toMatchObject({
       seriesTitle: "One Rainy Evening",
+      volumeLabel: undefined,
+      packaging: undefined,
     });
   });
 });
@@ -138,8 +153,16 @@ describe("isMangaBook", () => {
     expect(isMangaBook({ category: "Audiobook", title: "X Vol. 1" })).toBe(false);
   });
 
+  it("treats every novel category as prose, but not graphic novels", () => {
+    expect(isMangaBook({ category: "Novel", title: "X Vol. 1" })).toBe(false);
+    expect(isMangaBook({ category: "Deluxe Hardcover Novel", title: "X Vol. 1" })).toBe(false);
+    expect(isMangaBook({ category: "Graphic Novel", title: "X Vol. 1" })).toBe(true);
+  });
+
   it("falls back to the title discriminator", () => {
     expect(isMangaBook({ title: "X (Light Novel) Vol. 10" })).toBe(false);
+    expect(isMangaBook({ title: "Little Mushroom (Deluxe Hardcover Novel) Vol. 2" })).toBe(false);
+    expect(isMangaBook({ title: "Anne of Green Gables (Illustrated Novel)" })).toBe(false);
     expect(isMangaBook({ title: "X (Manga) Vol. 10" })).toBe(true);
     expect(isMangaBook({ title: "A Novel Concept (Manga) Vol. 1" })).toBe(true);
     expect(isMangaBook({ title: "Plain Title Vol. 2" })).toBe(true);
@@ -155,7 +178,7 @@ describe("normalizeBook", () => {
       url: listing.url,
       title: "Betrothed to My Sister’s Ex (Manga) Vol. 6",
       modifiedGmt: "2026-08-18T00:31:08",
-      seriesTitle: "Betrothed to My Sister’s Ex (Manga)",
+      seriesTitle: "Betrothed to My Sister’s Ex",
       seriesSlug: "betrothed-to-my-sisters-ex-manga",
       volumeLabel: "6",
       binding: "paperback",
@@ -174,7 +197,8 @@ describe("normalizeBook", () => {
     expect(snapshot.binding).toBe("hardcover");
     // No series block on the page → the title-derived series and the book
     // slug stand in, so the snapshot still has a usable identity.
-    expect(snapshot.seriesTitle).toBe("Big Series Deluxe Hardcover");
+    expect(snapshot.seriesTitle).toBe("Big Series");
+    expect(snapshot.packaging).toMatchObject({ lineName: "Deluxe", linePosition: "1" });
     expect(snapshot.seriesSlug).toBe(listing.slug);
   });
 });

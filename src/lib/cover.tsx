@@ -15,30 +15,36 @@ const CLOTH = [
 
 /**
  * Cover art by ISBN-13, served from our own domain (src/server/covers.ts):
- * the Worker fetches it from the publisher-distribution CDN on first request
- * and keeps it. A Release with an ISBN therefore always has a cover URL; the
- * 404 for art nobody has is caught by <Cover> and drawn as cloth.
+ * the Worker fetches it from a publisher-distribution CDN or OpenLibrary on
+ * first request and keeps it. A Release with an ISBN therefore always has a
+ * cover URL; the 404 for art nobody has is caught by <Cover>, which tries its
+ * next candidate and ends at cloth.
  */
 export function coverPath(isbn13: string): string {
   return `/covers/${isbn13}.jpg`;
 }
 
+// Enough to step past a physical ISBN nobody has art for to its digital
+// twin (or the next Edition) without a long chain of misses per cover.
+const MAX_CANDIDATES = 3;
+
 /**
- * The ISBN to derive a page's hero cover from when no stored art exists:
- * the first physical Release with an ISBN across the given Editions, else
- * the first Release with one at all.
+ * The ISBN-13s to look a page's cover up by when no stored art exists, best
+ * first, for `<Cover isbn13>`: physical Releases before digital ones, each in
+ * the given order across the Editions. The same jacket is usually on file
+ * under several ISBNs, and not every upstream knows every one.
  */
-export function firstIsbn(
+export function coverIsbns(
   editions: ReadonlyArray<{
     releases: ReadonlyArray<{ isbn13: string | null; format?: string }>;
   }>,
-): string | null {
+): string[] {
   const releases = editions.flatMap((edition) => edition.releases);
-  return (
-    releases.find((r) => r.format === "physical" && r.isbn13)?.isbn13 ??
-    releases.find((r) => r.isbn13)?.isbn13 ??
-    null
-  );
+  const ordered = [
+    ...releases.filter((r) => r.format === "physical"),
+    ...releases.filter((r) => r.format !== "physical"),
+  ].flatMap((r) => (r.isbn13 ? [r.isbn13] : []));
+  return [...new Set(ordered)].slice(0, MAX_CANDIDATES);
 }
 
 export function clothColor(seed: string): string {
@@ -93,8 +99,11 @@ export function CoverBadge({ state, label }: { state: CollectionState; label?: s
 type CoverProps = {
   /** Cover art URL; when absent the cloth placeholder renders. */
   src?: string | null;
-  /** ISBN-13 to derive a cover URL from when `src` is absent. */
-  isbn13?: string | null;
+  /**
+   * ISBN-13(s) to derive cover art from, tried in order after `src` until
+   * one has art (see `coverIsbns`).
+   */
+  isbn13?: string | ReadonlyArray<string> | null;
   /** The book's title, used for alt text and printed on the placeholder. */
   title: string;
   /** Placeholder foot, e.g. the volume label and publisher. */
@@ -126,30 +135,40 @@ export function Cover({
 }: CoverProps) {
   const seed = numbered ? numbered.series : title;
   const style = { "--cloth": clothColor(seed) } as CSSProperties;
-  // An ISBN-derived URL can 404 (no art anywhere); when it does, the cloth
-  // binding takes over. Stored covers never fail this way.
-  const [broken, setBroken] = useState(false);
+  // Every art URL to try, best first. An ISBN-derived URL 404s when nobody
+  // has art for it; the next candidate takes over, and cloth after the last.
+  // Failed URLs (not an index) are remembered, so a failure reported twice —
+  // by onError and by the hydration check below — skips only one candidate,
+  // and new props start clean.
+  const isbns = typeof isbn13 === "string" ? [isbn13] : (isbn13 ?? []);
+  const urls = [...new Set([src, ...isbns.map(coverPath)])].filter(
+    (url): url is string => Boolean(url),
+  );
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const art = urls.find((url) => !failed.has(url)) ?? null;
+  const fail = (url: string) =>
+    setFailed((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
   const img = useRef<HTMLImageElement>(null);
-  const url = src ?? (isbn13 ? coverPath(isbn13) : null);
-  const art = broken ? null : url;
   // A server-rendered <img> can fail before React hydrates, and that error
   // event is gone by the time onError is attached; a finished image with no
   // pixels is the tell.
   useEffect(() => {
     const el = img.current;
-    if (el && el.complete && el.naturalWidth === 0) setBroken(true);
-  }, [url]);
+    if (art && el && el.complete && el.naturalWidth === 0) fail(art);
+  }, [art]);
   return (
     <span className={className ? `cover ${className}` : "cover"}>
       {art ? (
         <img
+          // A fresh element per candidate, so `complete` above describes it.
+          key={art}
           ref={img}
           src={art}
           alt={`Cover of ${title}`}
           loading={lazy ? "lazy" : "eager"}
           width={400}
           height={600}
-          onError={() => setBroken(true)}
+          onError={() => fail(art)}
         />
       ) : numbered ? (
         <span className="cover-ph cover-ph--numbered" style={style} aria-label={`${title} (no cover on file)`}>

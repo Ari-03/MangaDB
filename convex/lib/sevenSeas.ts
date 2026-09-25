@@ -14,6 +14,7 @@
 // parsers be unit-tested against saved fixture responses without a backend.
 
 import { v, type Infer } from "convex/values";
+import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
 
 // ---------- the normalized snapshot ----------
 
@@ -25,10 +26,15 @@ export const bookSnapshotValidator = v.object({
   url: v.string(),
   title: v.string(),
   modifiedGmt: v.string(),
+  /** The base Series title (lib/bookTitle.ts): no "(Manga)", no packaging. */
   seriesTitle: v.string(),
   seriesSlug: v.string(),
   seriesUrl: v.optional(v.string()),
+  /** The single covered Volume; absent for oneshots and all packaging. */
   volumeLabel: v.optional(v.string()),
+  /** Omnibus / deluxe / box-set / range shape, when the title has one. */
+  packaging: v.optional(packagingValidator),
+  isBox: v.optional(v.boolean()),
   creators: v.array(v.string()),
   /** Seven Seas' own category line ("Manga", "Light Novel", …). */
   category: v.optional(v.string()),
@@ -213,39 +219,18 @@ export function parseBookPage(html: string): BookPageDetails {
 
 // ---------- title & scope rules ----------
 
-/**
- * Split a Seven Seas book title into its series part and volume label:
- * "Betrothed to My Sister's Ex (Manga) Vol. 6" → series title with the
- * publisher's own "(Manga)" discriminator kept verbatim (imports record the
- * source's facts; curation may retitle), label "6". A title without a
- * volume marker (a oneshot) yields no label.
- */
-export function splitBookTitle(title: string): {
-  seriesTitle: string;
-  volumeLabel?: string;
-} {
-  const m = /^(.*?)\s+Vols?\.?\s+([0-9]+(?:\.[0-9]+)?(?:\s*[-–]\s*[0-9]+(?:\.[0-9]+)?)?)\s*$/i.exec(
-    title,
-  );
-  if (!m) return { seriesTitle: title.trim() };
-  return {
-    seriesTitle: m[1]!.trim(),
-    volumeLabel: m[2]!.replace(/\s*[-–]\s*/, "–"),
-  };
-}
-
 // MangaDB's catalog is manga (spec §1); Seven Seas also publishes prose
-// novels and audiobooks. The page's own Format line decides; the title's
-// parenthesized discriminator is the fallback when the line is missing.
-const NON_MANGA = /light novel|audiobook|audio book|^novel$|prose/i;
+// novels ("Light Novel", "Deluxe Hardcover Novel", "Illustrated Novel") and
+// audiobooks. The page's own Format line decides; the shared title scope
+// rules are the fallback when the line is missing.
+const NON_MANGA = /(?<!graphic\s)\bnovels?\b|audio\s?books?|\bprose\b/i;
 
 export function isMangaBook(args: {
   category?: string;
   title: string;
 }): boolean {
   if (args.category !== undefined) return !NON_MANGA.test(args.category);
-  const disc = /\(([^)]+)\)\s*(?:Vols?\.?\s|$)/i.exec(args.title);
-  return disc ? !NON_MANGA.test(disc[1]!) : true;
+  return outOfScopeReason(args.title) === null;
 }
 
 /**
@@ -257,8 +242,13 @@ export function normalizeBook(
   listing: BookListing,
   page: BookPageDetails,
 ): BookSnapshot {
-  const split = splitBookTitle(listing.title);
-  const seriesTitle = page.seriesTitle ?? split.seriesTitle;
+  const parsed = parseBookTitle(listing.title);
+  // The page's own series link is the better name, minus "(Manga)" and
+  // packaging words; the title's parse is the fallback.
+  const seriesTitle =
+    page.seriesTitle !== undefined
+      ? parseBookTitle(page.seriesTitle).seriesTitle
+      : parsed.seriesTitle;
   const hardcover = /hardcover/i.test(`${listing.title} ${page.category ?? ""}`);
   return {
     kind: "book",
@@ -268,7 +258,9 @@ export function normalizeBook(
     seriesTitle,
     seriesSlug: page.seriesSlug ?? listing.slug,
     seriesUrl: page.seriesUrl,
-    volumeLabel: split.volumeLabel,
+    volumeLabel: parsed.volumeLabel ?? undefined,
+    packaging: parsed.packaging ?? undefined,
+    isBox: parsed.isBox || undefined,
     creators: page.creators,
     category: page.category,
     binding: hardcover ? "hardcover" : "paperback",

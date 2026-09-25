@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Cover } from "~/lib/cover";
 import { MONTH_NAMES } from "~/lib/month";
@@ -107,8 +107,9 @@ function browseArgs(
  * `/series` — the Series library: every Series in the catalog as a shelf,
  * sorted by title, recency, size, release dates, or popularity, filtered by
  * Publisher, Source Status, Format, first letter, or a title search. The
- * first page and the filter facets are server-rendered; "Show more" pages in
- * further results from the client.
+ * first page and the filter facets are server-rendered; further pages load
+ * from the client as the reader scrolls, and are kept for the session so
+ * coming back to the library restores the shelf and the scroll position.
  *
  * Indexing mirrors the Releases browser (spec §11): the bare, default-sorted
  * `/series` is indexable; any param makes the view noindex/follow, and the
@@ -365,7 +366,22 @@ function LetterStrip({ search }: { search: LibrarySearch }) {
 /** Covers rendered eagerly: roughly the first shelf row at desktop width. */
 const EAGER_COVERS = 7;
 
-/** The results shelf, plus "Show more", which appends the next page in place. */
+/**
+ * Pages already loaded per view (keyed by its search params), kept for the
+ * browser session so returning to the library rebuilds the whole shelf at
+ * once — the router's scroll restoration then lands where the reader left.
+ * In memory only: a fresh page load starts from the server-rendered page.
+ */
+const loadedViews = new Map<string, { items: SeriesBrowsePage["items"]; cursor: string | null }>();
+
+/** How far below the viewport the next page starts loading. */
+const PRELOAD_MARGIN = "1200px";
+
+/**
+ * The results shelf. The next page loads as the reader nears the end of the
+ * shelf (an observed sentinel), so the library scrolls without a button; a
+ * failed page offers a retry in place.
+ */
 function LibraryShelf({
   search,
   firstPage,
@@ -373,23 +389,47 @@ function LibraryShelf({
   search: LibrarySearch;
   firstPage: SeriesBrowsePage;
 }) {
-  const [items, setItems] = useState(firstPage.items);
-  const [cursor, setCursor] = useState(firstPage.nextCursor);
+  const viewKey = JSON.stringify(search);
+  const restored = loadedViews.get(viewKey);
+  const [items, setItems] = useState(restored?.items ?? firstPage.items);
+  const [cursor, setCursor] = useState(restored ? restored.cursor : firstPage.nextCursor);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+  const loading = useRef(false);
+  const sentinel = useRef<HTMLDivElement>(null);
 
-  const showMore = async () => {
-    if (!cursor) return;
+  const loadMore = useCallback(async () => {
+    if (!cursor || loading.current) return;
+    loading.current = true;
     setState("loading");
     try {
       const next = await fetchSeriesBrowse({ data: browseArgs(search, cursor) });
       if (!next) throw new Error("Convex is not configured");
-      setItems((prev) => [...prev, ...next.items]);
+      const merged = [...items, ...next.items];
+      loadedViews.set(viewKey, { items: merged, cursor: next.nextCursor });
+      setItems(merged);
       setCursor(next.nextCursor);
       setState("idle");
     } catch {
       setState("error");
+    } finally {
+      loading.current = false;
     }
-  };
+  }, [cursor, items, search, viewKey]);
+
+  // Load the next page whenever the sentinel under the shelf comes near the
+  // viewport; re-armed after each page so a short page keeps filling.
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !cursor || state === "error") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+      },
+      { rootMargin: PRELOAD_MARGIN },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [cursor, loadMore, state]);
 
   return (
     <>
@@ -404,20 +444,21 @@ function LibraryShelf({
         ))}
       </div>
       {cursor ? (
-        <div className="library-more">
-          <button
-            className="btn"
-            type="button"
-            disabled={state === "loading"}
-            onClick={() => void showMore()}
-          >
-            {state === "loading" ? "Loading…" : "Show more"}
-          </button>
+        <div className="library-more" ref={sentinel}>
           {state === "error" ? (
-            <p className="library-more-error" role="alert">
-              Could not load more series. Try again.
+            <>
+              <p className="library-more-error" role="alert">
+                Could not load more series.
+              </p>
+              <button className="btn" type="button" onClick={() => void loadMore()}>
+                Try again
+              </button>
+            </>
+          ) : (
+            <p className="library-more-status" aria-live="polite">
+              {state === "loading" ? "Loading more series…" : ""}
             </p>
-          ) : null}
+          )}
         </div>
       ) : null}
     </>

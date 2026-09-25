@@ -11,39 +11,64 @@
 //
 // Ambiguity — two plausible candidates anywhere — always resolves to
 // "review"; the importer never initiates a merge.
+//
+// Repairs stand: a merged Series or Release answers as its survivor, an
+// ISBN on a hidden Release reviews instead of creating, and hidden Series
+// are reported separately (hiddenSeriesTitled) so creation can refuse them.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { isNovelTitle } from "./bookTitle";
+import { decodeEntities } from "./text";
 
 // ---------- pure text rules ----------
 
+// Appended to a novel's key: no title text can produce it (punctuation
+// folds to spaces), so a prose novel never keys equal to its manga.
+const NOVEL_KEY = " #novel";
+
+/** Entities decoded, accents and apostrophes folded, "&" read as "and", lowercased. */
+function foldTitle(title: string): string {
+  return decodeEntities(title)
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/['’‘`´]/g, "")
+    .replace(/&/g, " and ");
+}
+
 /**
- * Normalized series-title key for rungs ③/④: lowercased, publisher
- * discriminators like "(Manga)" stripped, punctuation collapsed. Equality
- * on this key is the "normalized series title" of the ladder.
+ * Normalized series-title key for rungs ③/④ and every by-title Series
+ * lookup: entities decoded, accents/apostrophes folded, "&" ≡ "and", a
+ * leading "The" dropped, bracketed discriminators like "(Manga)" stripped,
+ * punctuation collapsed. A novel marker ("(Light Novel)", ": The Novel")
+ * stays in the key, so a novel never matches its manga. Equality on this
+ * key is the "normalized series title" of the ladder.
  */
 export function normalizeTitle(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/\(.*?\)/g, " ")
+  const key = foldTitle(title)
+    .replace(/[([][^()[\]]*[)\]]/g, " ")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .replace(/^the /, "");
+  return isNovelTitle(title) ? `${key}${NOVEL_KEY}` : key;
 }
 
 /**
  * Loose title-similarity sanity check for the ISBN rung (spec §6): at least
- * half of the shorter title's tokens must appear in the other.
+ * half of the shorter title's tokens must appear in the other, on the same
+ * folding as normalizeTitle. A novel is never similar to a manga.
  */
 export function titlesSimilar(a: string, b: string): boolean {
+  if (isNovelTitle(a) !== isNovelTitle(b)) return false;
   const tokens = (s: string) =>
     new Set(
-      s
-        .toLowerCase()
-        .replace(/\(.*?\)/g, " ")
-        .replace(/[^a-z0-9 ]/g, " ")
+      foldTitle(s)
+        .replace(/[([][^()[\]]*[)\]]/g, " ")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
         .split(/\s+/)
-        .filter((w) => w.length > 1),
+        .filter((w) => w.length > 1 && w !== "the"),
     );
   const ta = tokens(a);
   const tb = tokens(b);
@@ -85,27 +110,106 @@ export type MatchOutcome =
   | { kind: "review"; rung: 2 | 3 | 4; reason: string }
   | { kind: "create"; rung: 5 };
 
+// Full-text hits scanned per query. Generous on purpose: relevance ranking
+// can bury the one real Series under many near-namesakes ("Otherside Picnic
+// 01…16 (Manga)" shards), and a Series with no Releases yet (an ANN
+// backbone entry) must still be found.
+const SEARCH_SCAN = 100;
+
+// Merge chains are short (a repair merges into a survivor, rarely twice);
+// the bound only guards against a corrupt cycle.
+const MAX_MERGE_HOPS = 8;
+
 /**
- * Active Series whose title (or an alt title) normalizes to the given one.
- * Exported for the series-structured sources (ANN) and the fill-only source
- * (OpenLibrary), whose series resolution starts from a bare title.
+ * A canonical row followed through `mergedIntoId` to the row that absorbed
+ * it: the row itself when not merged, null when the chain dead-ends. How
+ * importers respect a repair's merges instead of recreating the loser.
+ */
+export async function survivorOf<T extends "series" | "volumes" | "releases">(
+  ctx: QueryCtx | MutationCtx,
+  doc: Doc<T> | null,
+): Promise<Doc<T> | null> {
+  let current = doc;
+  for (let hops = 0; current !== null && current.status === "merged"; hops++) {
+    if (current.mergedIntoId === undefined || hops >= MAX_MERGE_HOPS) return null;
+    current = await ctx.db.get(current.mergedIntoId);
+  }
+  return current;
+}
+
+/**
+ * Every Series whose title normalizes to the given one, merged rows
+ * answered by their survivor, split by what they mean to an importer:
+ * `active` (attach here) and `hidden` (an Editor removed this work — never
+ * recreate it). Active alt-title matches count only when no primary title
+ * matches (ANN lists sequels and spinoffs — "Citrus Plus", "Dragon Ball Z"
+ * — as alt titles). Searched under both the raw and the folded spelling, so "Candy &
+ * Cigarettes" finds "CANDY AND CIGARETTES".
+ */
+async function seriesByTitle(
+  ctx: QueryCtx | MutationCtx,
+  seriesTitle: string,
+): Promise<{ active: Doc<"series">[]; hidden: Doc<"series">[] }> {
+  const wanted = normalizeTitle(seriesTitle);
+  if (wanted === "") return { active: [], hidden: [] };
+  const queries = new Set([decodeEntities(seriesTitle), wanted.replace(NOVEL_KEY, "")]);
+  const seen = new Map<Id<"series">, Doc<"series">>();
+  for (const text of queries) {
+    const hits = await ctx.db
+      .query("series")
+      .withSearchIndex("search_title", (q) => q.search("searchText", text))
+      .take(SEARCH_SCAN);
+    for (const hit of hits) seen.set(hit._id, hit);
+  }
+  const all = [...seen.values()];
+  const resolve = async (hits: Doc<"series">[]) => {
+    const active = new Map<Id<"series">, Doc<"series">>();
+    const hidden = new Map<Id<"series">, Doc<"series">>();
+    for (const hit of hits) {
+      const series = await survivorOf<"series">(ctx, hit);
+      if (series?.status === "active") active.set(series._id, series);
+      else if (series?.status === "hidden") hidden.set(series._id, series);
+    }
+    return { active: [...active.values()], hidden: [...hidden.values()] };
+  };
+  const primary = await resolve(
+    all.filter((series) => normalizeTitle(series.title) === wanted),
+  );
+  const alt = await resolve(
+    all.filter((series) => series.altTitles.some((title) => normalizeTitle(title) === wanted)),
+  );
+  // A hidden namesake never shadows an active Series that carries the
+  // title as an alt title; and hidden Series count by primary title only —
+  // an alt title (a pinyin or romanized name) is too loose to refuse a
+  // creation on.
+  return {
+    active: primary.active.length > 0 ? primary.active : alt.active,
+    hidden: primary.hidden,
+  };
+}
+
+/**
+ * Active Series whose title normalizes to the given one (seriesByTitle): a
+ * merged Series' title finds the Series it was merged into. Exported for
+ * every by-title series resolution.
  */
 export async function candidateSeries(
   ctx: QueryCtx | MutationCtx,
   seriesTitle: string,
 ): Promise<Doc<"series">[]> {
-  const wanted = normalizeTitle(seriesTitle);
-  if (wanted === "") return [];
-  const hits = await ctx.db
-    .query("series")
-    .withSearchIndex("search_title", (q) => q.search("searchText", seriesTitle))
-    .take(20);
-  return hits.filter(
-    (series) =>
-      series.status === "active" &&
-      (normalizeTitle(series.title) === wanted ||
-        series.altTitles.some((alt) => normalizeTitle(alt) === wanted)),
-  );
+  return (await seriesByTitle(ctx, seriesTitle)).active;
+}
+
+/**
+ * Hidden Series whose title normalizes to the given one — works an Editor
+ * removed from the catalog. The creation path consults this before making
+ * a brand-new Series, so a sync never resurrects a hidden work.
+ */
+export async function hiddenSeriesTitled(
+  ctx: QueryCtx | MutationCtx,
+  seriesTitle: string,
+): Promise<Doc<"series">[]> {
+  return (await seriesByTitle(ctx, seriesTitle)).hidden;
 }
 
 /**
@@ -122,11 +226,25 @@ export async function matchRelease(
   // for review — an ISBN pointing at a dissimilar title is exactly the
   // situation a human must untangle, never an importer.
   if (fact.isbn13 !== undefined) {
-    const byIsbn = await ctx.db
+    const withIsbn = await ctx.db
       .query("releases")
       .withIndex("by_isbn13", (q) => q.eq("isbn13", fact.isbn13))
-      .first();
-    if (byIsbn && byIsbn.status === "active") {
+      .collect();
+    // A merged Release answers as its survivor; a hidden one is an Editor's
+    // decision about this very book — a human looks before anything is
+    // created for it again.
+    const resolved = await Promise.all(
+      withIsbn.map((release) => survivorOf<"releases">(ctx, release)),
+    );
+    const byIsbn = resolved.find((release) => release?.status === "active") ?? null;
+    if (byIsbn === null && resolved.some((release) => release?.status === "hidden")) {
+      return {
+        kind: "review",
+        rung: 2,
+        reason: `ISBN ${fact.isbn13} belongs to a Release an Editor hid`,
+      };
+    }
+    if (byIsbn) {
       const seriesTitles: string[] = [];
       for (const seriesId of byIsbn.seriesIds) {
         const series = await ctx.db.get(seriesId);
@@ -181,6 +299,15 @@ export async function matchRelease(
           .collect();
         for (const release of releases) {
           if (release.status !== "active") continue;
+          // A different ISBN-13 is a different Release by definition
+          // (CONTEXT.md): never this record, and not ambiguity either.
+          if (
+            fact.isbn13 !== undefined &&
+            release.isbn13 !== undefined &&
+            release.isbn13 !== fact.isbn13
+          ) {
+            continue;
+          }
           const sameEdition =
             coversOnlyThisVolume &&
             fact.publisherId !== null &&

@@ -2,18 +2,31 @@
 // (`/covers/{isbn13}.jpg`) so the shelves never depend on a third party at
 // render time and Convex file storage carries no images at all.
 //
-// Flow: edge cache → R2 bucket → upstream fetch. The upstream is the
+// Flow: edge cache → R2 bucket → upstream fetch. The first upstream is the
 // distribution CDN Penguin Random House runs for the publishers it carries,
 // which is most English manga; it answers any ISBN-13 it knows with the
-// jacket art and unknown ones with a ~2 KB stand-in, which we treat as
-// "no cover" and remember for a day. The app draws its cloth placeholder
-// for those (see ~/lib/cover.tsx). Spec §6: covers are stored under
+// jacket art and unknown ones with a stand-in. Where it has nothing (older
+// Tokyopop and VIZ backlist, much of Yen Press, many ebook ISBNs) the
+// OpenLibrary Covers API is asked next. No art from either is "no cover",
+// remembered for a day; the app draws its cloth placeholder for those (see
+// ~/lib/cover.tsx). An upstream
+// that is down or refusing us (OpenLibrary answers 403 past ~100 ISBN
+// lookups per 5 minutes per IP) makes it a five-minute miss instead, so a
+// burst of lookups never hides art for a day. Spec §6: covers are stored under
 // industry-standard tolerance with the takedown contact on /about-the-data.
+//
+// Measured on a stratified sample of the catalog's ISBNs (README "Cover
+// art"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
 import { env } from "cloudflare:workers";
 
 const COVER_PATH = /^\/covers\/(97[89]\d{10})\.jpg$/;
-const UPSTREAM = "https://images.penguinrandomhouse.com/cover/";
-// PRH's "no image available" stand-in is ~2.3 KB; real jackets are 20 KB+.
+/** Upstreams in order of preference; each maps an ISBN-13 to a jacket URL. */
+const UPSTREAMS: ReadonlyArray<(isbn13: string) => string> = [
+  (isbn13) => `https://images.penguinrandomhouse.com/cover/${isbn13}`,
+  // `default=false` makes a miss a 404 instead of a blank image.
+  (isbn13) => `https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg?default=false`,
+];
+// Stand-ins (PRH's "no image available" is ~2.3 KB) are tiny; real jackets are 20 KB+.
 const MIN_COVER_BYTES = 5000;
 // Its "coming soon" cards for unannounced books are fixed JPEGs (two styles
 // seen so far); we recognise them by hash so those books stay cloth until
@@ -69,31 +82,55 @@ async function lookup(isbn13: string): Promise<Response> {
     }
   }
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(UPSTREAM + isbn13, {
-      headers: { "User-Agent": USER_AGENT, Accept: "image/*" },
-    });
-  } catch {
-    // Upstream unreachable: a short-lived miss, not a remembered one.
+  let unavailable = false;
+  for (const source of UPSTREAMS) {
+    const found = await fetchJacket(source(isbn13));
+    if (found === "unavailable") unavailable = true;
+    if (!found || found === "unavailable") continue;
+    if (bucket) {
+      await bucket.put(key, found.bytes, {
+        httpMetadata: { contentType: found.contentType },
+        customMetadata: { source: source(isbn13), fetchedAt: new Date().toISOString() },
+      });
+    }
+    return coverOk(found.bytes, found.contentType, "upstream");
+  }
+  // An upstream that couldn't answer might have had the art: a short-lived
+  // miss, not a remembered one.
+  if (unavailable) {
     return new Response("Cover source unavailable", {
       status: 503,
       headers: { "Cache-Control": "public, max-age=300" },
     });
   }
-  const contentType = upstream.headers.get("content-type") ?? "";
-  if (!upstream.ok || !contentType.startsWith("image/")) return coverMissing();
-  const bytes = await upstream.arrayBuffer();
-  if (bytes.byteLength < MIN_COVER_BYTES) return coverMissing();
-  if (PLACEHOLDER_SHA256.has(await sha256Hex(bytes))) return coverMissing();
+  return coverMissing();
+}
 
-  if (bucket) {
-    await bucket.put(key, bytes, {
-      httpMetadata: { contentType },
-      customMetadata: { source: UPSTREAM + isbn13, fetchedAt: new Date().toISOString() },
+/**
+ * One upstream's jacket for a URL: the image, null when it has no real art
+ * (404, non-image, a tiny or known stand-in), or "unavailable" when it
+ * couldn't say (network error, rate limit, server error).
+ */
+async function fetchJacket(
+  url: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string } | null | "unavailable"> {
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, {
+      headers: { "User-Agent": USER_AGENT, Accept: "image/*" },
     });
+  } catch {
+    return "unavailable";
   }
-  return coverOk(bytes, contentType, "upstream");
+  if (upstream.status === 403 || upstream.status === 429 || upstream.status >= 500) {
+    return "unavailable";
+  }
+  const contentType = upstream.headers.get("content-type") ?? "";
+  if (!upstream.ok || !contentType.startsWith("image/")) return null;
+  const bytes = await upstream.arrayBuffer();
+  if (bytes.byteLength < MIN_COVER_BYTES) return null;
+  if (PLACEHOLDER_SHA256.has(await sha256Hex(bytes))) return null;
+  return { bytes, contentType };
 }
 
 async function sha256Hex(bytes: ArrayBuffer): Promise<string> {

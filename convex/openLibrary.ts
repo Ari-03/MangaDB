@@ -9,7 +9,11 @@
 // - an unmatched record may create at most a LEAF: a Release (+ its Edition
 //   packaging) under a Series, Volume, and Publisher that all already exist
 //   — how VIZ releases (whose site is never scraped and who is not
-//   PRH-distributed) materialize under the ANN-built backbone
+//   PRH-distributed) materialize under the ANN-built backbone. The
+//   publisher is the first listed name that resolves (records often lead
+//   with an imprint label: ["SHONEN JUMP", "viz media"]); library rebinds
+//   never count; and a Volume gets at most one OpenLibrary leaf per
+//   (publisher, format) — another ISBN there is a reprint or duplicate
 // - it never creates a Series, Volume, or Publisher, and never queues
 //   review proposals — OpenLibrary is crowd-sourced and weak-titled, so an
 //   ambiguous or structure-shaped record is simply recorded on its
@@ -26,15 +30,17 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalAction, internalMutation } from "./_generated/server";
+import { internalAction, internalMutation, type MutationCtx } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
+import { runToContinue } from "./lib/importRuns";
 import { candidateSeries, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
-import { upsertObservation } from "./lib/observations";
+import { getObservation, upsertObservation } from "./lib/observations";
 import {
   createCanonicalRecords,
   findPublisherByName,
   needsEditionLine,
+  recordUnplaced,
   toPartialDate,
 } from "./lib/pipeline";
 import { olEditionValidator, parseDumpLine, type OlEditionSnapshot } from "./lib/openLibrary";
@@ -104,11 +110,8 @@ export const sync = internalAction({
       return { skipped: "unconfigured" as const };
     }
 
-    const runId: Id<"importRuns"> =
-      args.runId ??
-      (await ctx.runMutation(internal.imports.startRun, {
-        sourceKey: SOURCE_KEY,
-      }));
+    const runId = await runToContinue(ctx, source, args);
+    if (runId === null) return { skipped: "disabled" as const };
     const startLine = args.startLine ?? 0;
     const maxLines = args.maxLines ?? DEFAULT_MAX_LINES;
     const errors = [...(args.errors ?? [])];
@@ -232,6 +235,35 @@ export const sync = internalAction({
 
 // ---------- applying one edition ----------
 
+// Library rebinders (Turtleback, Perfection Learning, …) re-issue a
+// publisher's book under their own ISBN.
+const REBINDER =
+  /^(?:turtleback|perfection learning|selbite|paw prints|demco|topeka bindery|san val|bound to stay bound|findaway|library binding)\b/i;
+
+/** An active Release of this format under the Volume from this publisher. */
+async function sameFormatRelease(
+  ctx: MutationCtx,
+  volumeId: Id<"volumes">,
+  publisherId: Id<"publishers">,
+  format: "physical" | "digital",
+): Promise<Doc<"releases"> | null> {
+  const coverages = await ctx.db
+    .query("volumeCoverages")
+    .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
+    .collect();
+  for (const coverage of coverages) {
+    const edition = await ctx.db.get(coverage.editionId);
+    if (!edition || edition.status !== "active" || edition.publisherId !== publisherId) continue;
+    const releases = await ctx.db
+      .query("releases")
+      .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+      .collect();
+    const hit = releases.find((r) => r.status === "active" && r.format === format);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 type ApplyResult = {
   status: "unchanged" | "filled" | "linked" | "created" | "recordOnly";
   changed: boolean;
@@ -239,6 +271,17 @@ type ApplyResult = {
 };
 
 /** The fields this source offers on a linked Release, per its authority row. */
+/**
+ * Why another source that keys its records by ISBN (Yen Press) holds this
+ * book out of scope, or null. PRH drops such titles before observing them,
+ * and Kodansha keys by slug, so Yen Press is the one to ask.
+ */
+async function outOfScopeElsewhere(ctx: MutationCtx, isbn13: string): Promise<string | null> {
+  const yen = await getObservation(ctx, "yenpress", isbn13);
+  const reason = (yen?.snapshot as { outOfScope?: string } | undefined)?.outOfScope;
+  return reason !== undefined ? `Yen Press (${reason})` : null;
+}
+
 function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unknown> {
   const offered: Record<string, unknown> = {};
   if (snapshot.isbn13 !== undefined) offered.isbn13 = snapshot.isbn13;
@@ -294,15 +337,26 @@ export const applyEdition = internalMutation({
     }
 
     // Rungs ②–④ via the shared ladder; the publisher key resolves against
-    // EXISTING rows only (OpenLibrary never creates publishers).
-    const publisher =
-      snapshot.publishers[0] !== undefined
-        ? await findPublisherByName(ctx, snapshot.publishers[0])
-        : null;
+    // EXISTING rows only (OpenLibrary never creates publishers). Any listed
+    // publisher that resolves counts — records often lead with an imprint
+    // label or a distributor (["SHONEN JUMP", "viz media"]) — but a library
+    // rebinder's record is another book (its own ISBN), never the
+    // publisher's edition.
+    if (snapshot.publishers.some((name) => REBINDER.test(name))) {
+      return { status: "recordOnly", changed: false };
+    }
+    let publisher: Doc<"publishers"> | null = null;
+    for (const name of snapshot.publishers) {
+      publisher = await findPublisherByName(ctx, name);
+      if (publisher) break;
+    }
+    // Packaging (omnibus, deluxe, box sets) matches by ISBN only — an
+    // Omnibus 4 is never Volume 4.
+    const packaged = snapshot.multiVolume || snapshot.packaging !== undefined;
     const fact: ReleaseFact = {
       seriesTitle: snapshot.seriesTitle,
-      volumeLabel: snapshot.multiVolume ? null : (snapshot.volumeLabel ?? null),
-      multiVolume: snapshot.multiVolume,
+      volumeLabel: packaged ? null : (snapshot.volumeLabel ?? null),
+      multiVolume: packaged,
       format: snapshot.format,
       isbn13: snapshot.isbn13,
       publisherId: publisher?._id ?? null,
@@ -346,11 +400,7 @@ export const applyEdition = internalMutation({
     // Series (unique title match), Volume (exact label), and Publisher all
     // already exist, with no Edition-Line shape. Anything else would define
     // structure, which OpenLibrary never does.
-    if (
-      publisher === null ||
-      snapshot.multiVolume ||
-      needsEditionLine(snapshot.title)
-    ) {
+    if (publisher === null || packaged || needsEditionLine(snapshot.title)) {
       return { status: "recordOnly", changed: false };
     }
     const candidates = await candidateSeries(ctx, snapshot.seriesTitle);
@@ -367,6 +417,31 @@ export const applyEdition = internalMutation({
         labelsEqual(vol.label, snapshot.volumeLabel ?? null),
     );
     if (!volume) return { status: "recordOnly", changed: false };
+
+    // One OpenLibrary leaf per (Volume, publisher, format): the ladder
+    // already linked a same-format sibling without an ISBN, so one found
+    // here carries ANOTHER ISBN — a reprint, a library binding, or an OL
+    // duplicate. Never a second Release; the record stays on its
+    // observation.
+    const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
+    if (sibling) {
+      await recordUnplaced(
+        ctx,
+        observation,
+        `Volume ${volume.label ?? "(unlabeled)"} already has a ${snapshot.format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
+        now,
+      );
+      return { status: "recordOnly", changed: false };
+    }
+
+    // A publisher feed that knows this ISBN outranks OpenLibrary's scope
+    // guess: Yen Press records its light novels and audio (by ISBN) as out of
+    // scope, and OpenLibrary titles rarely say "light novel".
+    const scopedOut = snapshot.isbn13 !== undefined ? await outOfScopeElsewhere(ctx, snapshot.isbn13) : null;
+    if (scopedOut) {
+      await recordUnplaced(ctx, observation, `Out of scope per ${scopedOut}.`, now);
+      return { status: "recordOnly", changed: false };
+    }
 
     const creation = await createCanonicalRecords(ctx, {
       sourceKey: SOURCE_KEY,

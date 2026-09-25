@@ -5,85 +5,41 @@
 // adapter overlays authoritative onsale dates and ISBNs on those records.
 //
 // Endpoint (requires an api_key; docs at developer.penguinrandomhouse.com):
-//   GET /resources/v2/title/domains/PRH.US/titles
-//       ?api_key=…&imprint={code}&rows=200&start=N[&onsaleFrom=YYYY-MM-DD]
+//   GET /resources/v2/title/domains/PRH.US/imprints/{code}/titles
+//       ?api_key=…&rows=200&start=N&sort=onsale&dir=asc|desc
+// The imprint-scoped path is mandatory: the flat /titles endpoint silently
+// ignores its `imprint` and `onsaleFrom` query params (verified live
+// 2026-08 and 2026-09), so date filtering happens client-side in the sync.
 //
 // The parser is deliberately tolerant of shape drift (nested vs flat
-// imprint/format fields, string vs number ISBNs) — the exact live shape
-// can only be re-verified once a key is activated.
+// imprint/format fields, string vs number ISBNs) — verified against the
+// live API 2026-08.
+//
+// Scope: a distributed imprint can still publish prose, merchandise, or
+// other languages, so titles are gated here — PRH's prose "Vertical"
+// imprint and Seven Seas' coloring-book "Waves of Color" imprint are denied
+// outright (only "Vertical Comics" is manga), and novels, merchandise,
+// samplers, and non-English editions are dropped by title. PRH's own
+// classification adds what titles miss (prhScopeReason): `graphicCategory`
+// "Light Novel", prose-only BISAC `subjects`, and the general TOKYOPOP
+// imprint's "Graphic Novel" category (its art books, card decks, album-style
+// GNs). Scope is "does it look like manga", not origin: OEL/global manga,
+// manhwa, manhua and manga-styled originals stay in. A non-manga-looking
+// comic PRH still files as "Manga" (e.g. a US-style issue) has no PRH
+// signal and is left to Editors.
 
 import { v, type Infer } from "convex/values";
+import { outOfScopeReason, parseBookTitle } from "./bookTitle";
+import { catalogTitleFields } from "./catalogTitle";
 
 // ---------- the normalized snapshot ----------
 
 export const prhTitleValidator = v.object({
   kind: v.literal("prhTitle"),
-  url: v.string(),
-  isbn13: v.string(),
-  isbn10: v.optional(v.string()),
-  title: v.string(),
-  seriesTitle: v.string(),
-  volumeLabel: v.optional(v.string()),
-  multiVolume: v.boolean(),
-  author: v.optional(v.string()),
-  onsale: v.optional(
-    v.object({ year: v.number(), month: v.number(), day: v.number() }),
-  ),
-  format: v.union(v.literal("physical"), v.literal("digital")),
-  binding: v.optional(v.string()),
-  /** The imprint = the publisher brand (e.g. "Kodansha Comics"). */
-  imprint: v.optional(v.string()),
-  priceCents: v.optional(v.number()),
+  ...catalogTitleFields,
 });
 
 export type PrhTitleSnapshot = Infer<typeof prhTitleValidator>;
-
-// ---------- title splitting ----------
-
-/**
- * Split a PRH title into series title + volume label. PRH styles vary by
- * publisher: "Witch Hat Atelier 15", "Chainsaw Man, Vol. 22", "Berserk
- * Volume 41", "The Way of the Househusband, Vol. 1-3 (Omnibus)". A supplied
- * seriesNumber (a PRH title field) wins over text parsing.
- */
-export function splitPrhTitle(
-  title: string,
-  seriesNumber?: number | string,
-): { seriesTitle: string; volumeLabel?: string; multiVolume: boolean } {
-  const trimmed = title.trim();
-  const range =
-    /^(.*?)(?:[,:]?\s+(?:Vols?\.?|Volumes?)\s+)(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:\(.*\))?$/i.exec(
-      trimmed,
-    );
-  if (range) {
-    return { seriesTitle: range[1]!.trim(), multiVolume: true };
-  }
-  const marked =
-    /^(.*?)(?:[,:]?\s+(?:Vols?\.?|Volumes?)\s+)(\d+(?:\.\d+)?)\s*(?:\(.*\))?$/i.exec(
-      trimmed,
-    );
-  if (marked) {
-    return {
-      seriesTitle: marked[1]!.trim(),
-      volumeLabel: marked[2],
-      multiVolume: false,
-    };
-  }
-  // Kodansha-style bare trailing number: "Witch Hat Atelier 15".
-  const bare = /^(.*[^\d\s])\s+(\d{1,3}(?:\.\d+)?)$/.exec(trimmed);
-  if (bare) {
-    return {
-      seriesTitle: bare[1]!.trim(),
-      volumeLabel: bare[2],
-      multiVolume: false,
-    };
-  }
-  const numbered =
-    seriesNumber !== undefined && seriesNumber !== null && `${seriesNumber}` !== ""
-      ? `${seriesNumber}`
-      : undefined;
-  return { seriesTitle: trimmed, volumeLabel: numbered, multiVolume: false };
-}
 
 // ---------- field plumbing ----------
 
@@ -141,6 +97,54 @@ function priceCents(entry: Record<string, unknown>): number | undefined {
 const DIGITAL = /\be-?book\b|\bdigital\b|\bDN\b/i;
 const AUDIO = /audio/i;
 
+// Imprints that are never manga: Vertical Inc.'s prose line (its manga
+// arrives as "Vertical Comics") and Seven Seas' coloring books.
+const DENIED_IMPRINTS = /^(?:vertical|waves of color)$/i;
+
+// PRH classification signals, calibrated on live imprint listings
+// (2026-09-25: 209, 210, 206, 140, KN, KM, V4, XO, XP, 123, 334):
+// - graphicCategory "Light Novel" is prose everywhere ("Berserk: The Flame
+//   Dragon Knight" carries no novel word in its title).
+// - Every BISAC subject a FIC (fiction) code: prose ("Six: Paths of Horror").
+//   Juvenile-only (JUV) subjects are NOT a signal — real kids' manga ("The
+//   Fox & Little Tanuki", Tokyopop's "Agent Boo") carry only those.
+// - "Graphic Novel" is not a signal in general (Titan Manga and Vertical
+//   Comics file real manga under it), but in the general TOKYOPOP imprint
+//   it marks only non-manga: art books, card decks, advent calendars,
+//   sticker books, the album-style "Ballad of The Broken Heart".
+const PROSE_CATEGORY = /^light novel$/i;
+const NON_MANGA_GN_IMPRINT = /^tokyopop$/i;
+
+/**
+ * Why PRH's own classification puts a title outside the manga catalog, or
+ * null when it does not: see the signals above. `imprint` is the parsed
+ * imprint description.
+ */
+export function prhScopeReason(
+  entry: Record<string, unknown>,
+  imprint: string | undefined,
+): "novel" | "prose" | "notManga" | null {
+  const category = typeof entry.graphicCategory === "string" ? entry.graphicCategory.trim() : "";
+  if (PROSE_CATEGORY.test(category)) return "novel";
+  const codes = Array.isArray(entry.subjects)
+    ? entry.subjects.flatMap((subject) =>
+        typeof subject === "object" && subject !== null && "code" in subject &&
+        typeof subject.code === "string"
+          ? [subject.code]
+          : [],
+      )
+    : [];
+  if (codes.length > 0 && codes.every((code) => code.startsWith("FIC"))) return "prose";
+  if (
+    imprint !== undefined &&
+    NON_MANGA_GN_IMPRINT.test(imprint) &&
+    /^graphic novel$/i.test(category)
+  ) {
+    return "notManga";
+  }
+  return null;
+}
+
 /** One title entry → a snapshot, or null when malformed / out of scope. */
 export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -149,6 +153,15 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   if (isbn13 === undefined) return null;
   const title = typeof entry.title === "string" ? entry.title.trim() : "";
   if (title === "") return null;
+
+  // Scope (spec §1): prose imprints, novels, merchandise, samplers, and
+  // non-English editions never enter the catalog.
+  const imprint = described(entry.imprint) ?? described(entry.publisher);
+  if (imprint !== undefined && DENIED_IMPRINTS.test(imprint)) return null;
+  if (outOfScopeReason(title) !== null) return null;
+  if (prhScopeReason(entry, imprint) !== null) return null;
+  const language = described(entry.language);
+  if (language !== undefined && !/^(?:e|en|eng|english)$/i.test(language)) return null;
 
   // Format family: audio is out of catalog scope entirely (spec §1).
   const formatText =
@@ -163,8 +176,12 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
         : undefined
     : undefined;
 
-  const seriesNumber = entry.seriesNumber as number | string | undefined;
-  const split = splitPrhTitle(title, seriesNumber);
+  const seriesNumber =
+    typeof entry.seriesNumber === "number" || typeof entry.seriesNumber === "string"
+      ? entry.seriesNumber
+      : undefined;
+  const parsed = parseBookTitle(title, { seriesNumber });
+  const coverRange = parsed.packaging?.coverRange ?? null;
 
   const seo = entry.seoFriendlyUrl;
   const url =
@@ -178,14 +195,17 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
     isbn13,
     isbn10: asIsbn10(entry.isbn10),
     title,
-    seriesTitle: split.seriesTitle,
-    volumeLabel: split.volumeLabel,
-    multiVolume: split.multiVolume,
+    seriesTitle: parsed.seriesTitle,
+    volumeLabel: parsed.volumeLabel ?? undefined,
+    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
+    packaging: parsed.packaging ?? undefined,
+    isBox: parsed.isBox || undefined,
+    bareNumber: parsed.bareNumber || undefined,
     author: typeof entry.author === "string" ? entry.author.trim() : undefined,
     onsale: parseOnsale(entry.onsale ?? entry.onSaleDate),
     format: digital ? "digital" : "physical",
     binding,
-    imprint: described(entry.imprint) ?? described(entry.publisher),
+    imprint,
     priceCents: priceCents(entry),
   };
 }
@@ -210,14 +230,4 @@ export function parseTitleList(raw: unknown): {
     titles,
     recordCount: typeof count === "number" ? count : undefined,
   };
-}
-
-/** "Kodansha Comics" → the publisher row shape {name, slug}. */
-export function imprintPublisher(imprint: string): { name: string; slug: string } {
-  const name = imprint.trim();
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return { name, slug: slug === "" ? "prh-imprint" : slug };
 }

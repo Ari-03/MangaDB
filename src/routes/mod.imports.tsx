@@ -186,7 +186,9 @@ function Imports() {
                       ? "bad"
                       : run.status === "running"
                         ? "info"
-                        : "ok"
+                        : run.status === "stopped"
+                          ? "warn"
+                          : "ok"
                   }`}
                 >
                   {run.status}

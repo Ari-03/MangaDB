@@ -1,37 +1,99 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import {
+  internalMutation,
+  internalQuery,
+  query,
+  type ActionCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { coverUrl, seriesCover } from "./lib/covers";
+import { groupEditions } from "./lib/editionGroups";
 
-// Cap per-table counting so the scaffold query stays cheap even once imports
-// start filling the catalog; the home page renders "N+" past the cap.
+// Fallback cap for counting on a deployment the rebuild has not counted yet;
+// the home page renders "N+" past it.
 export const COUNT_CAP = 1000;
 
+const COUNTED_TABLES = ["publishers", "series", "volumes", "editions", "releases"] as const;
+type CountedTable = (typeof COUNTED_TABLES)[number];
+/** Documents read per page when recounting; well inside a query's read limit. */
+const COUNT_PAGE = 4000;
+
 /**
- * Scaffold proof query (#21): a tiny public read the home page server-renders
- * to demonstrate the SSR → Convex round-trip. Counts active catalog records
- * (capped) so the page works on a fresh deployment with an empty database.
+ * Active catalog totals for the home page: the exact counts the Series
+ * library rebuild stores (`recountCatalog`), else a capped live count so a
+ * fresh deployment still renders.
  */
 export const stats = query({
   args: {},
   handler: async (ctx) => {
-    const countActive = async (
-      table: "publishers" | "series" | "volumes" | "editions" | "releases",
-    ) => {
-      const docs = await ctx.db.query(table).take(COUNT_CAP + 1);
-      const active = docs.filter((doc) => doc.status === "active").length;
-      return { count: Math.min(active, COUNT_CAP), capped: docs.length > COUNT_CAP };
-    };
+    const stored = await ctx.db.query("catalogCounts").first();
+    const entries = await Promise.all(
+      COUNTED_TABLES.map(async (table) => {
+        if (stored) return [table, { count: stored[table], capped: false }] as const;
+        const docs = await ctx.db.query(table).take(COUNT_CAP + 1);
+        const active = docs.filter((doc) => doc.status === "active").length;
+        return [table, { count: Math.min(active, COUNT_CAP), capped: docs.length > COUNT_CAP }] as const;
+      }),
+    );
+    return Object.fromEntries(entries) as Record<CountedTable, { count: number; capped: boolean }>;
+  },
+});
 
+/** One page of a table, counting its active documents. */
+export const countActivePage = internalQuery({
+  args: {
+    table: v.union(...COUNTED_TABLES.map((table) => v.literal(table))),
+    cursor: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, { table, cursor }) => {
+    const page = await ctx.db.query(table).paginate({ numItems: COUNT_PAGE, cursor });
     return {
-      publishers: await countActive("publishers"),
-      series: await countActive("series"),
-      volumes: await countActive("volumes"),
-      editions: await countActive("editions"),
-      releases: await countActive("releases"),
+      active: page.page.filter((doc) => doc.status === "active").length,
+      cursor: page.continueCursor,
+      isDone: page.isDone,
     };
   },
 });
+
+export const saveCounts = internalMutation({
+  args: {
+    publishers: v.number(),
+    series: v.number(),
+    volumes: v.number(),
+    editions: v.number(),
+    releases: v.number(),
+    countedAt: v.number(),
+  },
+  handler: async (ctx, counts) => {
+    const existing = await ctx.db.query("catalogCounts").first();
+    if (existing) await ctx.db.replace(existing._id, counts);
+    else await ctx.db.insert("catalogCounts", counts);
+  },
+});
+
+/**
+ * Count every active catalog record, a page at a time, and store the totals.
+ * Runs at the end of each Series library rebuild (every six hours).
+ */
+export async function recountCatalog(ctx: ActionCtx): Promise<Record<CountedTable, number>> {
+  const totals = { publishers: 0, series: 0, volumes: 0, editions: 0, releases: 0 };
+  for (const table of COUNTED_TABLES) {
+    let cursor: string | null = null;
+    for (;;) {
+      const page: { active: number; cursor: string; isDone: boolean } = await ctx.runQuery(
+        internal.catalog.countActivePage,
+        { table, cursor },
+      );
+      totals[table] += page.active;
+      if (page.isDone) break;
+      cursor = page.cursor;
+    }
+  }
+  await ctx.runMutation(internal.catalog.saveCounts, { ...totals, countedAt: Date.now() });
+  return totals;
+}
 
 /**
  * Active Series in public-ID order, for the home page's browse list. Capped;
@@ -174,7 +236,7 @@ export async function resolveActiveSeries(
 /**
  * Everything the Series page renders, shaped as the Reading Path hierarchy
  * validated in prototype #16 (spec §10): the canonical Volume sequence leads
- * (ordered by hidden Volume Position — the Label is display-only); each
+ * (ordered by Volume Position — the Label is display-only); each
  * Volume carries every covering Edition with its full ordered Coverage,
  * Edition Line membership, Releases, Variants, and Bundle cross-links.
  *
@@ -254,122 +316,105 @@ export const seriesPage = query({
         .withIndex("by_series", (q) => q.eq("seriesId", series._id))
         .collect()
     ).filter((doc) => doc.status === "active");
+    const volumeById = new Map(volumeDocs.map((doc) => [doc._id, doc]));
 
-    const volumes = [];
-    // Series pages pick a representative release cover at query time (spec
-    // §8): the first covering Release with a cover, in reading order. It
-    // fronts the cover-led OG/Twitter card (spec §11, ticket #39). Each
-    // Volume also carries the first real cover among its own Releases, so
-    // the Reading Path can show the books rather than placeholders.
-    let representativeCover: string | null = null;
+    // Every Edition of the Series: those covering its Volumes, plus Edition
+    // Line members whose volume range is not mapped yet (an omnibus of
+    // unknown extent still belongs to its line's reading path).
+    const editionIds = new Set<Id<"editions">>();
     for (const volume of volumeDocs) {
-      let volumeCover: string | null = null;
-      const coveringRows = await ctx.db
+      const rows = await ctx.db
         .query("volumeCoverages")
         .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
         .collect();
+      for (const row of rows) editionIds.add(row.editionId);
+    }
+    const lines = await ctx.db
+      .query("editionLines")
+      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+      .collect();
+    for (const line of lines) {
+      if (line.status !== "active") continue;
+      const members = await ctx.db
+        .query("editions")
+        .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+        .collect();
+      for (const member of members) editionIds.add(member._id);
+    }
 
-      const editions = [];
-      for (const row of coveringRows) {
-        const edition = await ctx.db.get(row.editionId);
-        if (!edition || edition.status !== "active") continue;
-        const publisher = await ctx.db.get(edition.publisherId);
-        const line = edition.editionLineId
-          ? await ctx.db.get(edition.editionLineId)
-          : null;
+    const editions = [];
+    for (const editionId of editionIds) {
+      const edition = await ctx.db.get(editionId);
+      if (!edition || edition.status !== "active") continue;
+      const publisher = await ctx.db.get(edition.publisherId);
+      const line = edition.editionLineId
+        ? await ctx.db.get(edition.editionLineId)
+        : null;
 
-        // The Edition's full ordered Coverage, so an omnibus shows "covers
-        // Vol 1–3" under every covered Volume.
-        const coverageRows = await ctx.db
-          .query("volumeCoverages")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect();
-        const coverage = [];
-        for (const cov of coverageRows) {
-          const covered = await ctx.db.get(cov.volumeId);
-          if (!covered || covered.status !== "active") continue;
-          coverage.push({
-            volumePublicId: covered.publicId,
-            position: covered.position,
-            label: covered.label ?? null,
-            extent: cov.extent,
-            note: cov.note ?? null,
-          });
-        }
-
-        const releaseDocs = (
-          await ctx.db
-            .query("releases")
-            .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-            .collect()
-        ).filter((doc) => doc.status === "active");
-        const releases = [];
-        for (const release of releaseDocs) {
-          const variants = (
-            await ctx.db
-              .query("releaseVariants")
-              .withIndex("by_release", (q) => q.eq("releaseId", release._id))
-              .collect()
-          )
-            .filter((doc) => doc.status === "active")
-            .map((doc) => ({ name: doc.name }));
-
-          const memberships = await ctx.db
-            .query("bundleMemberships")
-            .withIndex("by_release", (q) => q.eq("releaseId", release._id))
-            .collect();
-          const bundles = [];
-          for (const membership of memberships) {
-            const bundle = await ctx.db.get(membership.bundleId);
-            if (!bundle || bundle.status !== "active") continue;
-            bundles.push({ publicId: bundle.publicId, name: bundle.name });
-          }
-
-          if (volumeCover === null && release.coverImage) {
-            volumeCover = await coverUrl(ctx, release.coverImage.storageId);
-            if (representativeCover === null) representativeCover = volumeCover;
-          }
-
-          releases.push({
-            id: release._id,
-            format: release.format,
-            binding: release.binding ?? null,
-            language: release.language,
-            isbn13: release.isbn13 ?? null,
-            pubDate: release.pubDate ?? null,
-            price: release.price ?? null,
-            description: release.description ?? null,
-            variants,
-            bundles,
-          });
-        }
-        releases.sort(
-          (a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity),
-        );
-
-        editions.push({
-          publicId: edition.publicId,
-          publisher: publisher
-            ? { name: publisher.name, slug: publisher.slug }
-            : null,
-          lineName: line && line.status === "active" ? line.name : null,
-          linePosition: edition.linePosition ?? null,
-          extentForVolume: row.extent,
-          coverage,
-          releases,
+      // The Edition's ordered Coverage within this Series.
+      const coverageRows = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+        .collect();
+      const coverage = [];
+      for (const cov of coverageRows) {
+        const covered = volumeById.get(cov.volumeId);
+        if (!covered) continue;
+        coverage.push({
+          volumePublicId: covered.publicId,
+          position: covered.position,
+          label: covered.label ?? null,
+          extent: cov.extent,
         });
       }
-      editions.sort((a, b) => a.publicId - b.publicId);
 
-      volumes.push({
-        publicId: volume.publicId,
-        position: volume.position,
-        label: volume.label ?? null,
-        synopsis: volume.synopsis ?? null,
-        coverUrl: volumeCover,
-        editions,
+      const releaseDocs = (
+        await ctx.db
+          .query("releases")
+          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+          .collect()
+      ).filter((doc) => doc.status === "active");
+      // A book's jacket: the first stored cover among its Releases; the page
+      // falls back to ISBN-derived art (lib/cover.tsx) when there is none.
+      let editionCover: string | null = null;
+      const releases = [];
+      for (const release of releaseDocs) {
+        if (editionCover === null && release.coverImage) {
+          editionCover = await coverUrl(ctx, release.coverImage.storageId);
+        }
+        releases.push({
+          format: release.format,
+          isbn13: release.isbn13 ?? null,
+          pubDate: release.pubDate ?? null,
+        });
+      }
+      releases.sort(
+        (a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity),
+      );
+
+      editions.push({
+        publicId: edition.publicId,
+        publisher:
+          publisher && publisher.status === "active"
+            ? { name: publisher.name, slug: publisher.slug }
+            : null,
+        lineName: line && line.status === "active" ? line.name : null,
+        linePosition: edition.linePosition ?? null,
+        coverage,
+        coverUrl: editionCover,
+        releases,
       });
     }
+
+    // The reading paths the page offers; the first path's first book fronts
+    // the Series (its cover and social card).
+    const editionGroups = groupEditions(editions);
+    const volumes = volumeDocs.map((volume) => ({
+      publicId: volume.publicId,
+      position: volume.position,
+      label: volume.label ?? null,
+      synopsis: volume.synopsis ?? null,
+    }));
 
     return {
       series: {
@@ -377,10 +422,12 @@ export const seriesPage = query({
         title: series.title,
         altTitles: series.altTitles,
         sourceStatus: series.sourceStatus ?? null,
+        synopsis: series.synopsis ?? null,
       },
       family,
       volumes,
-      coverUrl: representativeCover,
+      editionGroups,
+      coverUrl: editionGroups[0]?.books[0]?.coverUrl ?? null,
     };
   },
 });

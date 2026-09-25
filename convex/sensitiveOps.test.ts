@@ -688,6 +688,47 @@ describe("sensitiveOps — split", () => {
     expect(manifests[0].reversedAt).toBeDefined();
   });
 
+  it("replays every manifest of a chunked merge, not just the last", async () => {
+    const t = makeT();
+    await setup(t);
+    const fixture = await seedMergeFixture(t);
+    const { survivor, loser } = fixture;
+    await asMod(t).mutation(api.sensitiveOps.mergeRecords, {
+      survivor: { type: "series", id: survivor },
+      loser: { type: "series", id: loser },
+      reason: "Merge in two chunks.",
+      confirmImpact: true,
+    });
+    // A second chunk of the same merge (same Proposal) moved an Edition from
+    // one publisher to another, as the data repair's chunked merge does.
+    const { editionId, from } = await t.run(async (ctx) => {
+      const [first] = await ctx.db.query("mergeManifests").collect();
+      const from = await ctx.db.insert("publishers", { status: "active", name: "Old", slug: "old" });
+      const to = await ctx.db.insert("publishers", { status: "active", name: "New", slug: "new" });
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 900, publisherId: to });
+      await ctx.db.insert("mergeManifests", {
+        loserRef: first!.loserRef,
+        survivorRef: first!.survivorRef,
+        proposalId: first!.proposalId,
+        repointed: [{ table: "editions", docId: editionId, field: "publisherId", before: from, after: to }],
+        removed: [],
+        inserted: [],
+      });
+      return { editionId, from };
+    });
+
+    await asMod(t).mutation(api.sensitiveOps.splitRecord, {
+      ref: { type: "series", id: loser },
+      reason: "Different works after all.",
+      confirmImpact: true,
+    });
+
+    expect((await t.run((ctx) => ctx.db.get(editionId)))?.publisherId).toBe(from);
+    expect((await t.run((ctx) => ctx.db.get(loser)))?.status).toBe("active");
+    const manifests = await t.run((ctx) => ctx.db.query("mergeManifests").collect());
+    expect(manifests.every((m) => m.reversedAt !== undefined)).toBe(true);
+  });
+
   it("leaves references alone that the world re-aimed after the merge", async () => {
     const t = makeT();
     await setup(t);

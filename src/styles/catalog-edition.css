@@ -386,6 +386,16 @@
   color: var(--text-dim);
   line-height: 1.66;
 }
+/* Imprint family: the parent company above the blurb, imprints below it. */
+.pub-parent,
+.pub-imprints {
+  margin-top: 8px;
+  color: var(--text-dim);
+}
+.pub-parent a,
+.pub-imprints a {
+  color: var(--text);
+}
 .pub-cta {
   margin-top: 20px;
 }

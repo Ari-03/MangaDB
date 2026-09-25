@@ -201,6 +201,8 @@
 
 .icon-btn {
   width: 38px; height: 38px;
+  /* the global button padding would push the icon off-centre in the circle */
+  padding: 0;
   display: grid;
   place-items: center;
   border-radius: var(--r-pill);

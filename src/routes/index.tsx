@@ -5,6 +5,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import { clothColor, Cover } from "~/lib/cover";
 import {
+  addMonths,
   currentMonth,
   MONTH_NAMES,
   monthParam,
@@ -40,13 +41,15 @@ export const Route = createFileRoute("/")({
   // Convex read for public catalog data.
   loader: async () => {
     const month = currentMonth();
-    const [home, releases] = await Promise.all([
+    const [home, releases, nextReleases] = await Promise.all([
       fetchHomeData(),
       fetchMonthReleases({ data: month }),
+      // The hero wall runs on into next month when this one is nearly done.
+      fetchMonthReleases({ data: addMonths(month, 1) }),
     ]);
     // The "today" boundary travels with the loader data so SSR and hydration
     // group the shelves identically.
-    return { home, month, todaySort: todaySortKey(), releases };
+    return { home, month, todaySort: todaySortKey(), releases, nextReleases };
   },
   // Canonical + social card for the home page (ticket #39); the title and
   // description templates live in the root route's defaults.
@@ -78,11 +81,17 @@ const SHELF_LIMIT = 14;
 const NEXT_SHELF_LIMIT = 7;
 
 function Home() {
-  const { home, month, todaySort, releases } = Route.useLoaderData();
+  const { home, month, todaySort, releases, nextReleases } = Route.useLoaderData();
   const stats = home?.stats ?? null;
   const series = home?.series ?? [];
-  const monthReleases = releases?.releases ?? [];
-  const heroCovers = monthReleases.slice(0, HERO_ROWS * HERO_COLS);
+  // A book's physical and digital Releases are one cover on a shelf.
+  const monthBooks = oneCoverPer(releases?.releases ?? [], (r) => r.edition.publicId);
+  const heroCovers = heroBooks(
+    [...monthBooks, ...oneCoverPer(nextReleases?.releases ?? [], (r) => r.edition.publicId)],
+    todaySort,
+    // The day the shelf below leads with (see ReleaseShelves).
+    monthBooks.find((book) => book.day !== null && book.sort >= todaySort)?.sort ?? null,
+  );
 
   return (
     <main className="home">
@@ -129,7 +138,7 @@ function Home() {
       <ReleaseShelves
         month={month}
         todaySort={todaySort}
-        releases={monthReleases}
+        releases={monthBooks}
       />
 
       {series.length > 0 ? (
@@ -206,7 +215,7 @@ function Home() {
   );
 }
 
-/** Three short ledges of this month's covers, standing beside the hero copy. */
+/** Three short ledges of the soonest covers, standing beside the hero copy. */
 function HeroShelf({ releases }: { releases: Array<BrowseRelease> }) {
   // A thin month should not leave four fifths of a five-wide ledge bare, so
   // the shelf narrows to what it actually holds (never below three).
@@ -220,7 +229,7 @@ function HeroShelf({ releases }: { releases: Array<BrowseRelease> }) {
       className="hero-shelf"
       style={{ "--hero-cols": cols } as CSSProperties}
       role="group"
-      aria-label="Covers publishing this month"
+      aria-label="Covers publishing soon"
     >
       {rows.map((row, index) => (
         <div className="hero-row" key={index}>
@@ -474,7 +483,52 @@ function releaseTitle(release: BrowseRelease): string {
 }
 
 function countLabel(count: number): string {
-  return `${count} ${count === 1 ? "release" : "releases"}`;
+  return `${count} ${count === 1 ? "book" : "books"}`;
+}
+
+/**
+ * The hero wall: the soonest books from today on, one per Series, skipping
+ * the publication day the "on the shelf" row below already shows so the two
+ * never repeat each other. Day-precision dates only — a "day TBA" book has no
+ * place in a soonest-first line.
+ */
+function heroBooks(
+  books: Array<BrowseRelease>,
+  todaySort: number,
+  shelfDay: number | null,
+): Array<BrowseRelease> {
+  const upcoming = books.filter((book) => book.day !== null && book.sort >= todaySort);
+  const rest = upcoming.filter((book) => book.sort !== shelfDay);
+  // A thin stretch after the shelf day still fills the wall from that day.
+  const pool = rest.length >= HERO_ROWS * HERO_COLS ? rest : upcoming;
+  return oneCoverPer(pool, (book) => book.series[0]?.publicId ?? book.edition.publicId).slice(
+    0,
+    HERO_ROWS * HERO_COLS,
+  );
+}
+
+/**
+ * Keep the first Release per key (date order is preserved), trading it for a
+ * later sibling that has jacket art when the first has none — so a shelf never
+ * shows one book twice, and prefers the copy that shows a cover.
+ */
+function oneCoverPer(
+  releases: Array<BrowseRelease>,
+  keyOf: (release: BrowseRelease) => number,
+): Array<BrowseRelease> {
+  const kept = new Map<number, BrowseRelease>();
+  for (const release of releases) {
+    const key = keyOf(release);
+    const current = kept.get(key);
+    if (!current) kept.set(key, release);
+    else if (!hasArt(current) && hasArt(release)) kept.set(key, release);
+  }
+  // Map keeps first-insertion order, so a swapped-in sibling keeps its slot.
+  return [...kept.values()];
+}
+
+function hasArt(release: BrowseRelease): boolean {
+  return release.coverUrl !== null || release.coverIsbn !== null;
 }
 
 /** Thousands separators without a locale, so SSR and hydration agree. */

@@ -1,4 +1,4 @@
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 
 // Some publishers serve a generic "no cover yet" SVG where the artwork would
@@ -76,9 +76,51 @@ async function isbnInEdition(
   );
 }
 
+/** What picking a Series' jacket needs to know about one of its Releases. */
+export type SeriesCoverCandidate = Pick<Doc<"releases">, "isbn13" | "format" | "pubDate"> & {
+  /** Its Edition is in an Edition Line (omnibus, deluxe…), not the standard run. */
+  inLine: boolean;
+  /** Position of the first Volume its Edition covers. */
+  position: number;
+};
+
 /**
- * A jacket for a whole Series: the first Volume in reading order that has a
- * Release with an ISBN (or stored art). Cheap enough for a home-page shelf.
+ * The ISBN-13 a Series' jacket is looked up by (library shelf, home shelf):
+ * physical before digital, published before forthcoming (unannounced books
+ * have no art yet), then the earliest Volume, the standard run before an
+ * Edition Line covering the same Volume, and the earliest release — so a
+ * standard-edition Volume 1 in print when one is on file, else the earliest
+ * book that is. Only one ISBN is stored per Series, so the pick favours the
+ * Releases the cover upstreams know best.
+ */
+export function seriesCoverIsbn(
+  candidates: ReadonlyArray<SeriesCoverCandidate>,
+  now: Date = new Date(),
+): string | null {
+  const today = now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+  const published = (c: SeriesCoverCandidate) => {
+    const sort = c.pubDate?.sort ?? 0;
+    return sort > 0 && sort <= today;
+  };
+  const rank = (c: SeriesCoverCandidate) => [
+    c.format === "physical" ? 0 : 1,
+    published(c) ? 0 : 1,
+    c.position,
+    c.inLine ? 1 : 0,
+    c.pubDate?.sort || Number.MAX_SAFE_INTEGER,
+  ];
+  const ranked = candidates
+    .flatMap((c) => (c.isbn13 ? [{ isbn13: c.isbn13, key: rank(c) }] : []))
+    .sort((a, b) => {
+      const n = a.key.findIndex((k, i) => k !== b.key[i]);
+      return n < 0 ? 0 : a.key[n]! - b.key[n]!;
+    });
+  return ranked[0]?.isbn13 ?? null;
+}
+
+/**
+ * A jacket for a whole Series from its first few Volumes: the first stored
+ * cover, else the `seriesCoverIsbn` pick. Cheap enough for a home-page shelf.
  */
 export async function seriesCover(
   ctx: QueryCtx,
@@ -88,6 +130,8 @@ export async function seriesCover(
     .query("volumes")
     .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
     .take(3);
+  const candidates: SeriesCoverCandidate[] = [];
+  const seen = new Set<Id<"editions">>();
   for (const volume of volumes) {
     if (volume.status !== "active") continue;
     const covering = await ctx.db
@@ -95,6 +139,10 @@ export async function seriesCover(
       .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
       .collect();
     for (const row of covering) {
+      if (seen.has(row.editionId)) continue;
+      seen.add(row.editionId);
+      const edition = await ctx.db.get(row.editionId);
+      if (!edition || edition.status !== "active") continue;
       const releases = (
         await ctx.db
           .query("releases")
@@ -104,12 +152,13 @@ export async function seriesCover(
       for (const release of releases) {
         const url = await coverUrl(ctx, release.coverImage?.storageId);
         if (url) return { coverUrl: url, coverIsbn: release.isbn13 ?? null };
+        candidates.push({
+          ...release,
+          inLine: edition.editionLineId !== undefined,
+          position: volume.position,
+        });
       }
-      const isbn =
-        releases.find((r) => r.format === "physical" && r.isbn13)?.isbn13 ??
-        releases.find((r) => r.isbn13)?.isbn13;
-      if (isbn) return { coverUrl: null, coverIsbn: isbn };
     }
   }
-  return { coverUrl: null, coverIsbn: null };
+  return { coverUrl: null, coverIsbn: seriesCoverIsbn(candidates) };
 }

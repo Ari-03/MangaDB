@@ -8,6 +8,7 @@
 import { v } from "convex/values";
 
 import { internal } from "./_generated/api";
+import { recountCatalog } from "./catalog";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalAction,
@@ -16,7 +17,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { coverUrl } from "./lib/covers";
+import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
 
 export const SORTS = [
   "title",
@@ -82,7 +83,9 @@ export const rebuild = internalAction({
       swept += n;
       if (n < STALE_SWEEP) break;
     }
-    return { rows, swept, ms: Date.now() - startedAt };
+    // The home page's catalog totals ride along on the same schedule.
+    const counts = await recountCatalog(ctx);
+    return { rows, swept, counts, ms: Date.now() - startedAt };
   },
 });
 
@@ -142,12 +145,17 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   ).filter((v) => v.status === "active");
 
   const editionIds = new Set<Id<"editions">>();
+  // Each Edition's first covered Volume, for the cover pick.
+  const firstPosition = new Map<Id<"editions">, number>();
   for (const volume of volumes) {
     const rows = await ctx.db
       .query("volumeCoverages")
       .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
       .collect();
-    for (const row of rows) editionIds.add(row.editionId);
+    for (const row of rows) {
+      editionIds.add(row.editionId);
+      if (!firstPosition.has(row.editionId)) firstPosition.set(row.editionId, volume.position);
+    }
   }
 
   const publishers = new Map<string, { name: string; slug: string }>();
@@ -157,7 +165,8 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   let first = 0;
   let latest = 0;
   let next = 0;
-  let cover: { url: string | null; isbn: string | null } = { url: null, isbn: null };
+  let storedCover: string | null = null;
+  const coverCandidates: SeriesCoverCandidate[] = [];
   const collectors = new Set<string>();
   const today = todaySortKey();
 
@@ -187,32 +196,17 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
         const forthcoming = sort > today || (sort % 100 === 0 && sort >= today - (today % 100));
         if (forthcoming && (next === 0 || sort < next)) next = sort;
       }
-      if (!cover.url) {
-        const url = await coverUrl(ctx, release.coverImage?.storageId);
-        if (url) cover = { url, isbn: release.isbn13 ?? cover.isbn };
-        else if (!cover.isbn && release.isbn13 && release.format === "physical") {
-          cover = { url: null, isbn: release.isbn13 };
-        }
-      }
+      storedCover ??= await coverUrl(ctx, release.coverImage?.storageId);
+      coverCandidates.push({
+        ...release,
+        inLine: edition.editionLineId !== undefined,
+        position: firstPosition.get(editionId) ?? Number.MAX_SAFE_INTEGER,
+      });
       const entries = await ctx.db
         .query("collectionEntries")
         .withIndex("by_release", (q) => q.eq("releaseId", release._id))
         .collect();
       for (const entry of entries) collectors.add(entry.userId);
-    }
-  }
-  if (!cover.isbn) {
-    // No physical ISBN anywhere: a digital one still finds jacket art.
-    for (const editionId of editionIds) {
-      const any = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-        .filter((q) => q.neq(q.field("isbn13"), undefined))
-        .first();
-      if (any?.isbn13) {
-        cover = { url: cover.url, isbn: any.isbn13 };
-        break;
-      }
     }
   }
 
@@ -241,8 +235,8 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     nextReleaseSort: next,
     followers,
     collectors: collectors.size,
-    coverUrl: cover.url,
-    coverIsbn: cover.isbn,
+    coverUrl: storedCover,
+    coverIsbn: seriesCoverIsbn(coverCandidates),
     rebuiltAt,
   };
   const existing = await ctx.db
@@ -500,6 +494,16 @@ export const browse = query({
     if (!cursor && args.sort === "upcoming" && order === "asc") {
       cursor = { v: 0, id: Number.MAX_SAFE_INTEGER };
     }
+    // A letter under the title sort is a contiguous stretch of the title
+    // index: start the range at it and stop once past it, rather than
+    // scanning from "a" and running out of budget before "m" is reached.
+    const letterRange =
+      args.sort === "title" && filters.letter && filters.letter !== "#"
+        ? { from: filters.letter, to: String.fromCharCode(filters.letter.charCodeAt(0) + 1) }
+        : null;
+    if (!cursor && letterRange) {
+      cursor = order === "asc" ? { v: letterRange.from, id: -1 } : { v: letterRange.to, id: -1 };
+    }
     // Collect one row past the page: finding it is how we know there is a
     // next page without guessing at the end of the index.
     const target = pageSize + 1;
@@ -523,6 +527,10 @@ export const browse = query({
       }
       const last = chunk[chunk.length - 1];
       if (last) cursor = { v: last[SORT_INDEX[args.sort].field], id: last.publicId };
+      if (last && letterRange) {
+        const past = order === "asc" ? last.titleSort >= letterRange.to : last.titleSort < letterRange.from;
+        if (past) exhausted = true;
+      }
     }
     const page = items.slice(0, pageSize);
     const edge = page[page.length - 1];

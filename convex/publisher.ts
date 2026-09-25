@@ -6,6 +6,11 @@
 // so a rename 301s through publisherSlugRedirects instead of a public-ID URL.
 // The query resolves old slugs (and merged Publishers) to `redirectTo` so the
 // route can issue the 301 itself.
+//
+// An imprint is a Publisher of its own that names its parent company
+// (publishers.parentPublisherId, one level deep): its page links up to the
+// parent ("An imprint of Seven Seas Entertainment"), and a parent's page
+// lists its imprints.
 
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
@@ -99,6 +104,23 @@ export const publisherPage = query({
       upcoming = await joinBrowseRows(ctx, refined);
     }
 
+    // Imprint family, one level deep: the parent company, or the imprints.
+    const parentDoc = publisher.parentPublisherId
+      ? await followMerges(
+          ctx,
+          "publishers",
+          await ctx.db.get(publisher.parentPublisherId),
+        )
+      : null;
+    const imprintDocs = await ctx.db
+      .query("publishers")
+      .withIndex("by_parent", (q) => q.eq("parentPublisherId", publisher._id))
+      .collect();
+    const imprints = imprintDocs
+      .filter((doc) => doc.status === "active")
+      .map((doc) => ({ name: doc.name, slug: doc.slug }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
     // Profile fact: active Editions in the catalog, capped like catalog.stats.
     const editionDocs = await ctx.db
       .query("editions")
@@ -114,6 +136,8 @@ export const publisherPage = query({
         slug: publisher.slug,
         description: publisher.description ?? null,
       },
+      parent: parentDoc ? { name: parentDoc.name, slug: parentDoc.slug } : null,
+      imprints,
       upcoming: upcoming.slice(0, LANE_CAP),
       // More upcoming Releases exist beyond the lane (the browser shows all).
       upcomingCapped: upcoming.length > LANE_CAP || scanFull,

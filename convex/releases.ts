@@ -12,6 +12,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { PUBLISHER_SCAN_CAP } from "./catalog";
+import { followMerges } from "./catalogPages";
 import { editionTitle, releaseAnchor } from "./lib/titles";
 import { coverIsbnForRelease, coverUrl } from "./lib/covers";
 
@@ -21,24 +22,25 @@ export const WINDOW_CAP = 1000;
 
 /**
  * Follow a Publisher-filter slug to its publisher: current slug first, then
- * the rename-redirect table, so shared filter URLs survive publisher renames.
+ * the rename-redirect table, then a merged row to its survivor, so shared
+ * filter URLs survive publisher renames and duplicate-row merges.
  */
 async function resolvePublisher(
   ctx: QueryCtx,
   slug: string,
 ): Promise<Doc<"publishers"> | null> {
-  const bySlug = await ctx.db
+  let doc = await ctx.db
     .query("publishers")
     .withIndex("by_slug", (q) => q.eq("slug", slug))
     .unique();
-  if (bySlug) return bySlug.status === "active" ? bySlug : null;
-  const redirect = await ctx.db
-    .query("publisherSlugRedirects")
-    .withIndex("by_fromSlug", (q) => q.eq("fromSlug", slug))
-    .unique();
-  if (!redirect) return null;
-  const doc = await ctx.db.get(redirect.publisherId);
-  return doc && doc.status === "active" ? doc : null;
+  if (!doc) {
+    const redirect = await ctx.db
+      .query("publisherSlugRedirects")
+      .withIndex("by_fromSlug", (q) => q.eq("fromSlug", slug))
+      .unique();
+    doc = redirect ? await ctx.db.get(redirect.publisherId) : null;
+  }
+  return await followMerges(ctx, "publishers", doc);
 }
 
 /** Memoized ctx.db.get so the per-release joins stay cheap within a window. */

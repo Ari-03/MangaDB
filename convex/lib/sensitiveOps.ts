@@ -779,6 +779,19 @@ export async function reversibleManifestOf(
   ctx: QueryCtx | MutationCtx,
   ref: RecordRef,
 ): Promise<Doc<"mergeManifests"> | null> {
+  return (await reversibleManifestsOf(ctx, ref))[0] ?? null;
+}
+
+/**
+ * Every open manifest of the latest merge of this record, newest first. A
+ * merge too large for one transaction (the data repair's chunked publisher
+ * merge) writes several manifests under one Proposal; Split must replay
+ * them all, not just the last.
+ */
+async function reversibleManifestsOf(
+  ctx: QueryCtx | MutationCtx,
+  ref: RecordRef,
+): Promise<Array<Doc<"mergeManifests">>> {
   const manifests = await ctx.db
     .query("mergeManifests")
     .withIndex("by_loser", (q) =>
@@ -788,12 +801,14 @@ export async function reversibleManifestOf(
   const open = manifests
     .filter((m) => m.reversedAt === undefined)
     .sort((a, b) => b._creationTime - a._creationTime);
-  return open[0] ?? null;
+  const latest = open[0];
+  if (!latest) return [];
+  return open.filter((m) => m.proposalId === latest.proposalId);
 }
 
 /**
- * Split — the only reversal of a mistaken merge: replay the merge manifest
- * backward (delete what it inserted, reinsert what it removed, repoint back
+ * Split — the only reversal of a mistaken merge: replay the merge's
+ * manifest(s) backward (delete what it inserted, reinsert what it removed, repoint back
  * every reference that still points where the merge left it) and reactivate
  * the loser. References the world re-aimed since the merge are left alone.
  */
@@ -806,30 +821,35 @@ export async function applySplit(
   if (doc.status !== "merged" || !doc.mergedIntoId) {
     fail("badState", `Only merged records can be split back out; this ${ref.type} is ${doc.status}.`);
   }
-  const manifest = await reversibleManifestOf(ctx, ref);
-  if (!manifest) {
+  // Newest first: a chunked merge's manifests are undone in reverse order.
+  const manifests = await reversibleManifestsOf(ctx, ref);
+  const latest = manifests[0];
+  if (!latest) {
     fail("noManifest", "This merge predates manifests and cannot be split automatically.");
   }
-  const survivor = manifest!.survivorRef as RecordRef;
+  const survivor = latest!.survivorRef as RecordRef;
 
-  for (const row of manifest!.inserted) {
-    const id = ctx.db.normalizeId(row.table as TableNames, row.docId);
-    if (id && (await ctx.db.get(id))) await ctx.db.delete(id);
-  }
-  for (const row of manifest!.removed) {
-    await ctx.db.insert(row.table as TableNames, row.doc as never);
-  }
-  for (const entry of [...manifest!.repointed].reverse()) {
-    const id = ctx.db.normalizeId(entry.table as TableNames, entry.docId);
-    if (!id) continue;
-    const target = (await ctx.db.get(id)) as Record<string, unknown> | null;
-    if (!target) continue;
-    if (!sameValue(target[entry.field], entry.after)) continue;
-    await ctx.db.patch(id, { [entry.field]: entry.before } as never);
+  for (const manifest of manifests) {
+    for (const row of manifest.inserted) {
+      const id = ctx.db.normalizeId(row.table as TableNames, row.docId);
+      if (id && (await ctx.db.get(id))) await ctx.db.delete(id);
+    }
+    for (const row of manifest.removed) {
+      await ctx.db.insert(row.table as TableNames, row.doc as never);
+    }
+    for (const entry of [...manifest.repointed].reverse()) {
+      const id = ctx.db.normalizeId(entry.table as TableNames, entry.docId);
+      if (!id) continue;
+      const target = (await ctx.db.get(id)) as Record<string, unknown> | null;
+      if (!target) continue;
+      if (!sameValue(target[entry.field], entry.after)) continue;
+      await ctx.db.patch(id, { [entry.field]: entry.before } as never);
+    }
   }
 
   await ctx.db.patch(ref.id, { status: "active", mergedIntoId: undefined } as never);
-  await ctx.db.patch(manifest!._id, { reversedAt: Date.now() });
+  const reversedAt = Date.now();
+  for (const manifest of manifests) await ctx.db.patch(manifest._id, { reversedAt });
 
   const survivorDoc = await getCanonical(ctx, survivor);
   const survivorTitle = survivorDoc

@@ -20,7 +20,8 @@ import {
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
-import { ensurePublisher } from "./lib/pipeline";
+import { ensurePublisher, publisherBySlug } from "./lib/pipeline";
+import { CANONICAL_PUBLISHERS, DEFUNCT_SLUGS } from "./lib/publishers";
 import { findDuplicatePairs, pairKeyOf, Reservoir, type SweepEntry } from "./lib/qa";
 import { requireDataTeam, requireModerator, requireRole } from "./lib/roles";
 
@@ -208,45 +209,16 @@ export const startSeedStageInternal = internalMutation({
 
 /**
  * The spec's "small publisher list" (§8 search, §6 matching rung ③) as
- * canonical rows. Sources resolve publisher NAMES against existing rows only
- * (normalized-prefix match, so "VIZ Media LLC" hits "VIZ Media") and never
- * create publishers — without these rows OpenLibrary can't materialize leaf
- * Releases under the ANN backbone. One short-named row per publisher family;
- * idempotent by slug. Operator escape hatch:
+ * canonical rows (lib/publishers.ts: one row per company, imprints as rows
+ * of their own naming their parent). Sources resolve publisher NAMES
+ * against existing rows (canonical names and duplicate aliases first, then
+ * a normalized prefix, so "VIZ Media LLC" hits "VIZ Media"); only PRH
+ * creates a row, for an imprint the list does not know. Without these rows
+ * OpenLibrary can't materialize leaf Releases under the ANN backbone.
+ * Idempotent by slug; records a missing imprint parent on an existing row.
+ * Operator escape hatch:
  *   npx convex run launch:seedPublishers '{}'
  */
-const CANONICAL_PUBLISHERS = [
-  { name: "VIZ Media", slug: "viz-media" },
-  { name: "Kodansha", slug: "kodansha" },
-  { name: "Seven Seas Entertainment", slug: "seven-seas" },
-  { name: "Yen Press", slug: "yen-press" },
-  { name: "Dark Horse", slug: "dark-horse" },
-  { name: "Square Enix", slug: "square-enix" },
-  { name: "Vertical", slug: "vertical" },
-  { name: "Denpa", slug: "denpa" },
-  { name: "Tokyopop", slug: "tokyopop" },
-  { name: "Del Rey Manga", slug: "del-rey-manga" },
-  { name: "Udon Entertainment", slug: "udon-entertainment" },
-  { name: "One Peace Books", slug: "one-peace-books" },
-  { name: "Kaiten Books", slug: "kaiten-books" },
-  { name: "J-Novel Club", slug: "j-novel-club" },
-  { name: "Drawn & Quarterly", slug: "drawn-and-quarterly" },
-  { name: "Fantagraphics", slug: "fantagraphics" },
-  { name: "Titan Manga", slug: "titan-manga" },
-  { name: "ABLAZE", slug: "ablaze" },
-  { name: "Ize Press", slug: "ize-press" },
-  { name: "CMX", slug: "cmx" },
-  { name: "Digital Manga", slug: "digital-manga" },
-  { name: "NETCOMICS", slug: "netcomics" },
-  { name: "ComicsOne", slug: "comicsone" },
-  { name: "Star Fruit Books", slug: "star-fruit-books" },
-  { name: "Glacier Bay Books", slug: "glacier-bay-books" },
-  { name: "FAKKU", slug: "fakku" },
-  { name: "Irodori Comics", slug: "irodori-comics" },
-  { name: "Last Gasp", slug: "last-gasp" },
-  { name: "Kuma", slug: "kuma" },
-];
-
 export const seedPublishers = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -254,7 +226,27 @@ export const seedPublishers = internalMutation({
     for (const pub of CANONICAL_PUBLISHERS) {
       if ((await ensurePublisher(ctx, pub)).created) created.push(pub.slug);
     }
-    return { created, total: CANONICAL_PUBLISHERS.length };
+    // Defunct marks (display/reporting data), on new and existing rows.
+    const markedDefunct: string[] = [];
+    for (const slug of DEFUNCT_SLUGS) {
+      const row = await publisherBySlug(ctx, slug);
+      if (row && row.slug === slug && row.defunct !== true) {
+        await ctx.db.patch(row._id, { defunct: true });
+        markedDefunct.push(slug);
+      }
+    }
+    // Parents second: an imprint seeded before its parent row existed.
+    const parented: string[] = [];
+    for (const pub of CANONICAL_PUBLISHERS) {
+      if (pub.parentSlug === undefined) continue;
+      const row = await publisherBySlug(ctx, pub.slug);
+      const parent = await publisherBySlug(ctx, pub.parentSlug);
+      if (row && parent && row.parentPublisherId === undefined && row._id !== parent._id) {
+        await ctx.db.patch(row._id, { parentPublisherId: parent._id });
+        parented.push(pub.slug);
+      }
+    }
+    return { created, parented, markedDefunct, total: CANONICAL_PUBLISHERS.length };
   },
 });
 

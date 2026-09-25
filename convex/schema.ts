@@ -163,7 +163,16 @@ export default defineSchema({
     // publisherSlugRedirects.
     slug: v.string(),
     description: v.optional(v.string()),
-  }).index("by_slug", ["slug"]),
+    // An imprint names its parent company ("Ghost Ship" → Seven Seas); one
+    // level deep — a parent never has a parent itself. Duplicate strings for
+    // one company are merged instead (lib/publishers.ts).
+    parentPublisherId: v.optional(v.id("publishers")),
+    // No longer publishing English manga (ADV, Tokyopop's Blu, CMX, …):
+    // their books stay in the catalog; the flag is display/reporting data.
+    defunct: v.optional(v.boolean()),
+  })
+    .index("by_slug", ["slug"])
+    .index("by_parent", ["parentPublisherId"]),
 
   // Series browse (the /series library): one denormalized row per active
   // Series, rebuilt on a schedule by seriesBrowse.rebuild so the browse
@@ -231,6 +240,9 @@ export default defineSchema({
     // title + altTitles concatenated on write; search indexes take one field.
     searchText: v.string(),
     familyId: v.optional(v.id("seriesFamilies")),
+    // What the Series is about, shown under its title; absent until a source
+    // or an Editor supplies one.
+    synopsis: v.optional(v.string()),
     sourceStatus: v.optional(
       v.union(
         v.literal("ongoing"),
@@ -267,7 +279,9 @@ export default defineSchema({
     ...canonical("volumes"),
     publicId: v.number(),
     seriesId: v.id("series"),
-    // Hidden consecutive ordinal for the canonical reading sequence.
+    // Sort key of the canonical reading sequence: the volume number itself
+    // for numbered Volumes (so a gap shows a missing Volume; fractional and
+    // 0 allowed), appended after the last one for unnumbered Volumes.
     position: v.number(),
     // Publisher-facing designation ("7.5", "Side Story"); absent for oneshots.
     label: v.optional(v.string()),
@@ -547,7 +561,12 @@ export default defineSchema({
 
   importRuns: defineTable({
     sourceKey: v.string(),
-    status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed")),
+    // "stopped": an automatic run closed early because its source was disabled.
+    status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("stopped")),
+    // Started by a sync itself (the cadence dispatcher, or an operator's bare
+    // `sync '{}'`): such a run stops at its next link once its source is
+    // disabled. An operator's explicit run (imports:startRun) carries on.
+    automatic: v.optional(v.boolean()),
     finishedAt: v.optional(v.number()),
     recordsSeen: v.number(),
     recordsChanged: v.number(),
@@ -585,6 +604,17 @@ export default defineSchema({
   // The launch bookkeeping (#40, spec §7) also lives here: the latest
   // duplicate-sweep summary (QA gate ③) and the Administrator's attestation
   // that the correction loop ran end-to-end for real (launch gate ④).
+  // Exact active-record totals for the home page, refreshed by the Series
+  // library rebuild (seriesBrowse.rebuild); one row.
+  catalogCounts: defineTable({
+    publishers: v.number(),
+    series: v.number(),
+    volumes: v.number(),
+    editions: v.number(),
+    releases: v.number(),
+    countedAt: v.number(),
+  }),
+
   appConfig: defineTable({
     bootstrapMode: v.boolean(),
     duplicateSweep: v.optional(

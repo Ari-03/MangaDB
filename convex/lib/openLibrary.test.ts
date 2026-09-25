@@ -4,10 +4,13 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  isbn10To13,
+  isbnPair,
+  isEnglishEdition,
   parseDumpLine,
   parseEditionJson,
   parseOlDate,
-  splitOlTitle,
+  toIsbn13,
 } from "./openLibrary";
 
 const EDITION = {
@@ -36,27 +39,93 @@ describe("parseOlDate — precision preserved", () => {
   });
 });
 
-describe("splitOlTitle", () => {
+// Title splitting is the shared parser (lib/bookTitle.ts); these pin the
+// OpenLibrary shapes it sees, including the separate subtitle field.
+const titled = (title: string, subtitle?: string) =>
+  parseEditionJson({ ...EDITION, title, subtitle });
+
+describe("parseEditionJson — title splitting", () => {
   it("handles the common OL title styles", () => {
-    expect(splitOlTitle("Chainsaw Man, Vol. 22")).toMatchObject({
+    expect(titled("Chainsaw Man, Vol. 22")).toMatchObject({
       seriesTitle: "Chainsaw Man",
       volumeLabel: "22",
     });
-    expect(splitOlTitle("Berserk Volume 41")).toMatchObject({
+    expect(titled("Berserk Volume 41")).toMatchObject({
       seriesTitle: "Berserk",
       volumeLabel: "41",
     });
-    expect(splitOlTitle("One Piece #3")).toMatchObject({
+    expect(titled("One Piece #3")).toMatchObject({
       seriesTitle: "One Piece",
       volumeLabel: "3",
     });
-    expect(splitOlTitle("Frieren", "Vol. 5")).toMatchObject({
+    expect(titled("Frieren", "Vol. 5")).toMatchObject({
       seriesTitle: "Frieren",
       volumeLabel: "5",
     });
+    expect(titled("Rising of the Shield Hero Volume 08")).toMatchObject({
+      seriesTitle: "Rising of the Shield Hero",
+      volumeLabel: "8",
+    });
     // Bare trailing numbers are NOT labels for OL ("1984" is a title).
-    expect(splitOlTitle("1984")).toEqual({ seriesTitle: "1984", multiVolume: false });
-    expect(splitOlTitle("Naruto, Vol. 1-3")).toMatchObject({ multiVolume: true });
+    expect(titled("1984")).toMatchObject({ seriesTitle: "1984", multiVolume: false });
+    expect(titled("Naruto, Vol. 1-3")).toMatchObject({ multiVolume: true });
+  });
+
+  it("maps packaging onto the base series, never onto a volume", () => {
+    expect(titled("Fullmetal Alchemist: 3-in-1 Edition, Vol. 4")).toMatchObject({
+      seriesTitle: "Fullmetal Alchemist",
+      volumeLabel: undefined,
+      packaging: { lineName: "3-in-1 Edition", linePosition: "4" },
+    });
+    expect(titled("Berserk Deluxe Volume 1")).toMatchObject({
+      seriesTitle: "Berserk",
+      volumeLabel: undefined,
+    });
+  });
+});
+
+describe("OpenLibrary scope", () => {
+  it("rejects Japanese ISBNs, undeclared non-English-market ISBNs, and Spanish", () => {
+    // Real OL records: a Kodansha JP tankōbon and a declared-Japanese edition.
+    expect(
+      parseEditionJson({ ...EDITION, languages: undefined, isbn_13: ["9784065116173"], isbn_10: [] }),
+    ).toBeNull();
+    expect(
+      parseEditionJson({ ...EDITION, isbn_13: ["9784065116173"], isbn_10: [] }),
+    ).toBeNull();
+    expect(
+      parseEditionJson({ ...EDITION, languages: undefined, isbn_13: [], isbn_10: [] }),
+    ).toBeNull();
+    expect(parseEditionJson({ ...EDITION, languages: undefined })).toMatchObject({
+      isbn13: "9781974766512",
+    });
+    expect(isEnglishEdition(undefined, "9798888772584")).toBe(true);
+    expect(isEnglishEdition(undefined, "9788419412287")).toBe(false);
+  });
+
+  it("drops light novels and merchandise", () => {
+    expect(titled("Accel World, Vol. 18 (light Novel)")).toBeNull();
+    expect(titled("Street Fighter : The Novel")).toBeNull();
+    expect(titled("Hansel and Gretel: A Grimm Fable Coloring Book")).toBeNull();
+  });
+});
+
+describe("isbnPair", () => {
+  it("keeps an ISBN-10 only when it is the same book as the ISBN-13", () => {
+    expect(isbnPair(["9781974766512"], ["1974766519"])).toEqual({
+      isbn13: "9781974766512",
+      isbn10: "1974766519",
+    });
+    // Rurouni Kenshin v2: the 2017 3-in-1 ISBN-13 next to the 2003 single's ISBN-10.
+    expect(isbnPair(["9781421592466"], ["1591162491"])).toEqual({
+      isbn13: "9781421592466",
+    });
+    expect(isbnPair([], ["1591162491"])).toEqual({
+      isbn13: isbn10To13("1591162491"),
+      isbn10: "1591162491",
+    });
+    // A bad check digit is no ISBN at all.
+    expect(isbnPair(["9781637867317"], [])).toEqual({});
   });
 });
 
@@ -90,5 +159,35 @@ describe("parseEditionJson / parseDumpLine", () => {
     expect(
       parseEditionJson({ ...EDITION, physical_format: "E-book" }),
     ).toMatchObject({ format: "digital", binding: undefined });
+  });
+});
+
+describe("title + subtitle split across fields", () => {
+  it("re-reads a subtitle that is the rest of the title plus the volume", () => {
+    expect(
+      parseEditionJson({ ...EDITION, title: "Mashle", subtitle: "Magic and Muscles, Vol. 3" }),
+    ).toMatchObject({ seriesTitle: "Mashle: Magic and Muscles", volumeLabel: "3" });
+    expect(
+      parseEditionJson({ ...EDITION, title: "Mission", subtitle: "Yozakura Family, Vol. 12" }),
+    ).toMatchObject({ seriesTitle: "Mission: Yozakura Family", volumeLabel: "12" });
+  });
+
+  it("keeps the split reading when the joined one finds nothing more", () => {
+    expect(
+      parseEditionJson({ ...EDITION, title: "Chainsaw Man, Vol. 22", subtitle: "Something Sinister" }),
+    ).toMatchObject({ seriesTitle: "Chainsaw Man", volumeLabel: "22" });
+    expect(
+      parseEditionJson({ ...EDITION, title: "Honey Hunt", subtitle: "Shojo Beat edition" }),
+    ).toMatchObject({ seriesTitle: "Honey Hunt", volumeLabel: undefined });
+  });
+});
+
+describe("toIsbn13", () => {
+  it("accepts checksum-valid 13- and 10-character ISBNs and nothing else", () => {
+    expect(toIsbn13("978-1-9747-6670-3")).toBe("9781974766703");
+    expect(toIsbn13("1591163269")).toBe("9781591163268");
+    expect(toIsbn13("9781974766704")).toBeUndefined();
+    expect(toIsbn13("CTFL-02")).toBeUndefined();
+    expect(toIsbn13(undefined)).toBeUndefined();
   });
 });

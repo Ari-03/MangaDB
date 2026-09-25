@@ -27,16 +27,50 @@ import { revisionsOf } from "./moderation";
 /** Errors kept per run — enough to debug, bounded so a bad sweep can't bloat. */
 const MAX_RUN_ERRORS = 50;
 
+/**
+ * Open an Import Run. Syncs open their own with `automatic: true`; an
+ * operator forcing a run of a disabled source calls this by hand and passes
+ * the id to the sync, which then runs to completion (lib/importRuns.ts).
+ */
 export const startRun = internalMutation({
-  args: { sourceKey: v.string() },
-  handler: async (ctx, { sourceKey }) => {
+  args: { sourceKey: v.string(), automatic: v.optional(v.boolean()) },
+  handler: async (ctx, { sourceKey, automatic }) => {
     return await ctx.db.insert("importRuns", {
       sourceKey,
       status: "running",
       recordsSeen: 0,
       recordsChanged: 0,
       errors: [],
+      ...(automatic ? { automatic } : {}),
     });
+  },
+});
+
+/**
+ * A continuation link found its source disabled: close an automatic run with
+ * what it has done so far and report that it stopped; an operator's run is
+ * left running. Returns whether the run is over.
+ */
+export const stopIfAutomatic = internalMutation({
+  args: {
+    runId: v.id("importRuns"),
+    recordsSeen: v.number(),
+    recordsChanged: v.number(),
+    errors: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run || run.status !== "running") return true;
+    if (!run.automatic) return false;
+    // Its own status, not "succeeded": the sweep is incomplete.
+    await ctx.db.patch(args.runId, {
+      status: "stopped",
+      finishedAt: Date.now(),
+      recordsSeen: args.recordsSeen,
+      recordsChanged: args.recordsChanged,
+      errors: [...args.errors, "Stopped: the source was disabled mid-run."].slice(0, MAX_RUN_ERRORS),
+    });
+    return true;
   },
 });
 
@@ -206,8 +240,9 @@ export function isDue(
 
 // The code half of the registry: which adapter action serves each source
 // key. A registry row without an adapter is inert data until its adapter
-// ships. All five v1 sources have adapters (tickets #34/#36); adapters take
-// only optional tuning args, so dispatching with {} is valid.
+// ships. All five v1 sources (tickets #34/#36), Yen Press, and the Kodansha
+// backlist crawl have adapters;
+// adapters take only optional tuning args, so dispatching with {} is valid.
 const ADAPTERS: Record<
   string,
   FunctionReference<"action", "internal", Record<string, unknown>>
@@ -217,6 +252,8 @@ const ADAPTERS: Record<
   ann: internal.ann.sync,
   prh: internal.prh.sync,
   openlibrary: internal.openLibrary.sync,
+  yenpress: internal.yenPress.sync,
+  "kodansha-backlist": internal.kodansha.backlistSync,
 };
 
 export const enabledSources = internalQuery({

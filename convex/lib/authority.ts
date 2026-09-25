@@ -14,9 +14,13 @@
 //   overwrites.
 //
 // Two deliberate extensions where the table is silent:
-// - A source revising its OWN previously imported fact is not a
+// - A source record revising its OWN previously imported fact is not a
 //   cross-source disagreement — it auto-updates (a rename at the source is
 //   a field conflict that resolves in the source's favor on its own scope).
+//   "Own" is per record, not per source: the incumbent value must have come
+//   from the very observation now offering a new one. Two different records
+//   of one source disagreeing (two ANN printings, two OpenLibrary editions)
+//   is an equal-authority conflict, never a silent flip-flop.
 // - Filling a field that has no canonical value is not a disagreement —
 //   any source with authority over the field may fill it (how OpenLibrary's
 //   ISBN fill works in seeding stage ④).
@@ -111,7 +115,13 @@ export type Incumbent =
   // A value exists but predates revision history — treated like a human's.
   | { kind: "unattributed" }
   | { kind: "human" }
-  | { kind: "source"; sourceKey: string; rank: number };
+  | {
+      kind: "source";
+      sourceKey: string;
+      rank: number;
+      /** The observations the incumbent value was imported from (its evidence). */
+      observationIds: string[];
+    };
 
 export type FieldDecision = {
   action: "auto" | "queue" | "recordOnly" | "skip";
@@ -138,10 +148,16 @@ export function decideField(args: {
   /** Is the field on the record's sticky overriddenFields list? */
   overridden: boolean;
   incomingSourceKey: string;
+  /** The observation offering the value; "own fact" is judged per record. */
+  incomingObservationId: string;
   incomingRank: number;
   incumbent: Incumbent;
 }): FieldDecision {
   const { current, offered, incumbent, incomingRank } = args;
+  const ownFact =
+    incumbent.kind === "source" &&
+    incumbent.sourceKey === args.incomingSourceKey &&
+    incumbent.observationIds.includes(args.incomingObservationId);
 
   if (sameValue(current, offered)) return skip("value already matches");
 
@@ -176,10 +192,7 @@ export function decideField(args: {
       return skip("less precise never replaces more precise");
     }
     if (incumbent.kind === "source") {
-      if (
-        incumbent.sourceKey === args.incomingSourceKey ||
-        incomingRank >= incumbent.rank
-      ) {
+      if (ownFact || incomingRank >= incumbent.rank) {
         return auto("consistent more-precise date at equal-or-higher authority");
       }
       return recordOnly("more precise, but from a lower authority");
@@ -201,8 +214,8 @@ export function decideField(args: {
   }
 
   // Source vs source: the conflict table proper.
-  if (incumbent.sourceKey === args.incomingSourceKey) {
-    return auto("the source updated its own fact");
+  if (ownFact) {
+    return auto("the source record updated its own fact");
   }
   if (incomingRank > incumbent.rank) {
     return auto("strictly higher authority than the current value's source");
