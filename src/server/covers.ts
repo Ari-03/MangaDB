@@ -5,11 +5,18 @@
 // Flow: edge cache → R2 bucket → upstream fetch. The first upstream is the
 // distribution CDN Penguin Random House runs for the publishers it carries,
 // which is most English manga; it answers any ISBN-13 it knows with the
-// jacket art and unknown ones with a stand-in. Where it has nothing (VIZ and
-// other non-PRH publishers, most ebook ISBNs) the OpenLibrary Covers API is
-// asked next. No art from either is "no cover", remembered for a day. The app draws its cloth placeholder
-// for those (see ~/lib/cover.tsx). Spec §6: covers are stored under
+// jacket art and unknown ones with a stand-in. Where it has nothing (older
+// Tokyopop and VIZ backlist, much of Yen Press, many ebook ISBNs) the
+// OpenLibrary Covers API is asked next. No art from either is "no cover",
+// remembered for a day; the app draws its cloth placeholder for those (see
+// ~/lib/cover.tsx). An upstream
+// that is down or refusing us (OpenLibrary answers 403 past ~100 ISBN
+// lookups per 5 minutes per IP) makes it a five-minute miss instead, so a
+// burst of lookups never hides art for a day. Spec §6: covers are stored under
 // industry-standard tolerance with the takedown contact on /about-the-data.
+//
+// Measured on a stratified sample of the catalog's ISBNs (README "Cover
+// art"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
 import { env } from "cloudflare:workers";
 
 const COVER_PATH = /^\/covers\/(97[89]\d{10})\.jpg$/;
@@ -75,12 +82,11 @@ async function lookup(isbn13: string): Promise<Response> {
     }
   }
 
-  let reachable = false;
+  let unavailable = false;
   for (const source of UPSTREAMS) {
     const found = await fetchJacket(source(isbn13));
-    if (found === "unreachable") continue;
-    reachable = true;
-    if (!found) continue;
+    if (found === "unavailable") unavailable = true;
+    if (!found || found === "unavailable") continue;
     if (bucket) {
       await bucket.put(key, found.bytes, {
         httpMetadata: { contentType: found.contentType },
@@ -89,8 +95,9 @@ async function lookup(isbn13: string): Promise<Response> {
     }
     return coverOk(found.bytes, found.contentType, "upstream");
   }
-  // Every upstream unreachable: a short-lived miss, not a remembered one.
-  if (!reachable) {
+  // An upstream that couldn't answer might have had the art: a short-lived
+  // miss, not a remembered one.
+  if (unavailable) {
     return new Response("Cover source unavailable", {
       status: 503,
       headers: { "Cache-Control": "public, max-age=300" },
@@ -101,18 +108,22 @@ async function lookup(isbn13: string): Promise<Response> {
 
 /**
  * One upstream's jacket for a URL: the image, null when it has no real art
- * (error, non-image, a tiny or known stand-in), or "unreachable".
+ * (404, non-image, a tiny or known stand-in), or "unavailable" when it
+ * couldn't say (network error, rate limit, server error).
  */
 async function fetchJacket(
   url: string,
-): Promise<{ bytes: ArrayBuffer; contentType: string } | null | "unreachable"> {
+): Promise<{ bytes: ArrayBuffer; contentType: string } | null | "unavailable"> {
   let upstream: Response;
   try {
     upstream = await fetch(url, {
       headers: { "User-Agent": USER_AGENT, Accept: "image/*" },
     });
   } catch {
-    return "unreachable";
+    return "unavailable";
+  }
+  if (upstream.status === 403 || upstream.status === 429 || upstream.status >= 500) {
+    return "unavailable";
   }
   const contentType = upstream.headers.get("content-type") ?? "";
   if (!upstream.ok || !contentType.startsWith("image/")) return null;

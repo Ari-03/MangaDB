@@ -326,6 +326,35 @@ describe("field repairs and scope", () => {
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
   });
 
+  it("withdraws an untouched importer Proposal, and a dry run leaves it open", async () => {
+    const t = makeT();
+    await seed(t);
+    const { proposalId, observationId } = await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "prh" },
+        state: "inReview",
+        currentVersionNo: 1,
+        submittedAt: 1,
+      });
+      const observationId = await ctx.db.insert("sourceObservations", {
+        sourceKey: "prh",
+        sourceRecordId: "9780000000066",
+        snapshot: {},
+        lastSeenAt: 1,
+        withdrawn: false,
+        queuedProposalId: proposalId,
+      });
+      return { proposalId, observationId };
+    });
+    const entry: RepairEntry = { kind: "withdrawProposal", key: "w", reason: "stale review", proposalId, observationId };
+    expect((await run(t, [entry], true))[0]?.status).toBe("applied");
+    expect((await t.run(async (ctx) => ctx.db.get(proposalId)))?.state).toBe("inReview");
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    expect((await t.run(async (ctx) => ctx.db.get(proposalId)))?.state).toBe("withdrawn");
+    expect((await t.run(async (ctx) => ctx.db.get(observationId)))?.queuedProposalId).toBeUndefined();
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
   it("hides a series with its cascade and unlinks an observation", async () => {
     const t = makeT();
     const s = await seed(t);

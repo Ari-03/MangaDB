@@ -167,6 +167,9 @@ export default defineSchema({
     // level deep — a parent never has a parent itself. Duplicate strings for
     // one company are merged instead (lib/publishers.ts).
     parentPublisherId: v.optional(v.id("publishers")),
+    // No longer publishing English manga (ADV, Tokyopop's Blu, CMX, …):
+    // their books stay in the catalog; the flag is display/reporting data.
+    defunct: v.optional(v.boolean()),
   })
     .index("by_slug", ["slug"])
     .index("by_parent", ["parentPublisherId"]),
@@ -596,6 +599,17 @@ export default defineSchema({
   // The launch bookkeeping (#40, spec §7) also lives here: the latest
   // duplicate-sweep summary (QA gate ③) and the Administrator's attestation
   // that the correction loop ran end-to-end for real (launch gate ④).
+  // Exact active-record totals for the home page, refreshed by the Series
+  // library rebuild (seriesBrowse.rebuild); one row.
+  catalogCounts: defineTable({
+    publishers: v.number(),
+    series: v.number(),
+    volumes: v.number(),
+    editions: v.number(),
+    releases: v.number(),
+    countedAt: v.number(),
+  }),
+
   appConfig: defineTable({
     bootstrapMode: v.boolean(),
     duplicateSweep: v.optional(

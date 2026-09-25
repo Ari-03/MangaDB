@@ -58,6 +58,26 @@ const MANGA_PUBLISHERS = [
   /^823 press\b/i,
   /^kuma\b/i,
   /^last gasp\b/i,
+  // VIZ imprint labels OpenLibrary records as the publisher.
+  /^shojo beat\b/i,
+  /^sublime\b/i,
+  // Legacy publishers with catalog rows (lib/publishers.ts) — their books
+  // can land now that the rows exist.
+  /^adv manga\b/i,
+  /^aurora publishing\b/i,
+  /^central park media\b/i,
+  /^cpm manga\b/i,
+  /^go!? ?comi\b/i,
+  /^broccoli books\b/i,
+  /^dr\.? ?master\b/i,
+  /^drama ?queen\b/i,
+  /^media blasters\b/i,
+  /^801 media\b/i,
+  /^blu(?: manga)?$/i,
+  /^icarus publishing\b/i,
+  /^project-h\b/i,
+  // Deliberately absent: "Del Rey"/"Ballantine" and "Yen On" — prose
+  // lines that would resolve onto their manga siblings.
 ];
 
 /** Does one parsed edition name a manga publisher and carry a usable ISBN? */

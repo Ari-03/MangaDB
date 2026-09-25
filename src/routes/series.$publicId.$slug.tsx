@@ -1,7 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
-import { Cover, firstIsbn } from "~/lib/cover";
+import { Cover, coverIsbns } from "~/lib/cover";
 import { SeriesFollowControls } from "~/lib/follows";
 import { formatPartialDate } from "~/lib/format";
 import {
@@ -251,7 +251,14 @@ function SeriesPage() {
   // The first path's first book fronts the Series — the standard run leads,
   // so this is its Volume 1 whenever one is on file.
   const frontBook = editionGroups[0]?.books[0] ?? null;
-  const heroIsbn = frontBook ? firstIsbn([frontBook]) : null;
+  // Its ISBNs first, then the next few books' best one: when Vol. 1 has no
+  // art anywhere, the series still wears its own run's jacket, not cloth.
+  const heroIsbns = frontBook
+    ? [
+        ...coverIsbns([frontBook]),
+        ...(editionGroups[0]?.books.slice(1, 6) ?? []).flatMap((book) => coverIsbns([book]).slice(0, 1)),
+      ]
+    : [];
   // One path needs no picker; with several, the reader picks one.
   const selected =
     editionGroups.length === 1
@@ -270,7 +277,7 @@ function SeriesPage() {
           <div className="series-cover">
             {/* The front book's jacket; coverless Series get the cloth
                 binding rather than a broken image. */}
-            <Cover src={coverUrl} isbn13={heroIsbn} title={series.title} lazy={false} />
+            <Cover src={coverUrl} isbn13={heroIsbns} title={series.title} lazy={false} />
           </div>
           {facts.dateSpan ? (
             <p className="note">English releases on file: {facts.dateSpan}.</p>
@@ -524,7 +531,7 @@ function EditionPicker({
               {first ? (
                 <Cover
                   src={first.coverUrl}
-                  isbn13={firstIsbn([first])}
+                  isbn13={coverIsbns([first])}
                   title={bookTitle(series.title, first)}
                   foot={[bookLabel(first), group.publisher?.name]}
                 />
@@ -579,7 +586,7 @@ function BookShelfItem({
         >
           <Cover
             src={book.coverUrl}
-            isbn13={firstIsbn([book])}
+            isbn13={coverIsbns([book])}
             title={title}
             numbered={number !== null ? { series: seriesTitle, number } : undefined}
           />

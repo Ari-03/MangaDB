@@ -1,7 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
-import { Cover, firstIsbn } from "~/lib/cover";
+import { Cover, coverIsbns } from "~/lib/cover";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { VolumeReadCount } from "~/lib/reading";
@@ -135,7 +135,7 @@ function VolumePage() {
                 coverless Volume gets its cloth binding with the Label on it. */}
             <Cover
               src={coverUrl}
-              isbn13={firstIsbn(editions)}
+              isbn13={coverIsbns(editions)}
               title={volume.title}
               // The Label goes on the cloth; an unlabeled Volume carries its
               // title instead, since it has no number to print.

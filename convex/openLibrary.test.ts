@@ -241,6 +241,59 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     });
   });
 
+  it("resolves any listed publisher, reads a volume split into the subtitle, and skips rebinders", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: false });
+    stubDump([
+      {
+        // Imprint label first, the resolvable company second; the volume
+        // only in the subtitle ("Chainsaw" + "Man, Vol. 21" is contrived,
+        // the live shape is "Mashle" + "Magic and Muscles, Vol. 3").
+        key: "/books/OL1M",
+        title: "Chainsaw",
+        subtitle: "Man, Vol. 21",
+        publishers: ["Some Imprint Label", "viz media"],
+        isbn_13: ["9781974727094"],
+        languages: [{ key: "/languages/eng" }],
+      },
+      {
+        // A library rebind of volume 22: another ISBN, never the edition.
+        key: "/books/OL2M",
+        title: "Chainsaw Man, Vol. 22",
+        publishers: ["Turtleback Books", "VIZ Media"],
+        isbn_13: ["9781435299990"],
+        languages: [{ key: "/languages/eng" }],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.isbn13)).toEqual(["9781974727094"]);
+    });
+  });
+
+  it("never gives a Volume a second same-format Release from one publisher", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: false });
+    stubDump([
+      CHAINSAW_22,
+      // A reprint / OL duplicate of volume 22 with another ISBN.
+      { ...CHAINSAW_22, key: "/books/OL51694099M", isbn_13: ["9781974799985"] },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.isbn13)).toEqual(["9781974766512"]);
+      const held = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "/books/OL51694099M",
+      )!;
+      expect(held.recordRef).toBeUndefined();
+      expect(held.conflicts?.[0]?.reason).toContain("already has a physical VIZ Media Release");
+    });
+  });
+
   it("streams in chained links across the action budget", async () => {
     const t = makeT();
     await seedRegistry(t);

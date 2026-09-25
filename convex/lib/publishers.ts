@@ -15,6 +15,8 @@ export type CanonicalPublisher = {
   slug: string;
   /** The parent company's slug when this row is an imprint. */
   parentSlug?: string;
+  /** No longer publishing English manga (seeded as publishers.defunct). */
+  defunct?: boolean;
 };
 
 /**
@@ -32,7 +34,7 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "Vertical", slug: "vertical", parentSlug: "kodansha" },
   { name: "Denpa", slug: "denpa" },
   { name: "Tokyopop", slug: "tokyopop" },
-  { name: "Del Rey Manga", slug: "del-rey-manga" },
+  { name: "Del Rey Manga", slug: "del-rey-manga", defunct: true },
   { name: "Udon Entertainment", slug: "udon-entertainment" },
   { name: "One Peace Books", slug: "one-peace-books" },
   { name: "Kaiten Books", slug: "kaiten-books" },
@@ -42,10 +44,10 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "Titan Manga", slug: "titan-manga" },
   { name: "ABLAZE", slug: "ablaze" },
   { name: "Ize Press", slug: "ize-press", parentSlug: "yen-press" },
-  { name: "CMX", slug: "cmx" },
+  { name: "CMX", slug: "cmx", defunct: true },
   { name: "Digital Manga", slug: "digital-manga" },
   { name: "NETCOMICS", slug: "netcomics" },
-  { name: "ComicsOne", slug: "comicsone" },
+  { name: "ComicsOne", slug: "comicsone", defunct: true },
   { name: "Star Fruit Books", slug: "star-fruit-books" },
   { name: "Glacier Bay Books", slug: "glacier-bay-books" },
   { name: "FAKKU", slug: "fakku" },
@@ -65,7 +67,46 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
     slug: "tokyopop-lovelove",
     parentSlug: "tokyopop",
   },
+  // The distributors ANN names on the releases no other source covers
+  // (the release-less audit, 2026-09): legacy and small English manga
+  // publishers, so ANN's release pages and OpenLibrary can place their
+  // books. Imprints name their parent where it is a row here.
+  { name: "SuBLime", slug: "sublime", parentSlug: "viz-media" },
+  { name: "June", slug: "june", parentSlug: "digital-manga" },
+  { name: "801 Media", slug: "801-media", parentSlug: "digital-manga", defunct: true },
+  { name: "Blu", slug: "blu", parentSlug: "tokyopop", defunct: true },
+  { name: "ADV Manga", slug: "adv-manga", defunct: true },
+  { name: "Aurora Publishing", slug: "aurora-publishing", defunct: true },
+  { name: "Deux Press", slug: "deux-press", parentSlug: "aurora-publishing", defunct: true },
+  { name: "Central Park Media", slug: "central-park-media", defunct: true },
+  { name: "Go! Comi", slug: "go-comi", defunct: true },
+  { name: "Media Blasters", slug: "media-blasters", defunct: true },
+  { name: "Kitty Media", slug: "kitty-media", parentSlug: "media-blasters", defunct: true },
+  { name: "Broccoli Books", slug: "broccoli-books", defunct: true },
+  { name: "Icarus Publishing", slug: "icarus-publishing", defunct: true },
+  { name: "Bandai Entertainment", slug: "bandai-entertainment", defunct: true },
+  { name: "DramaQueen", slug: "dramaqueen", defunct: true },
+  { name: "DrMaster", slug: "drmaster", defunct: true },
+  { name: "Studio Ironcat", slug: "studio-ironcat", defunct: true },
+  { name: "Infinity Studios", slug: "infinity-studios", defunct: true },
+  { name: "Gutsoon! Entertainment", slug: "gutsoon-entertainment", defunct: true },
+  { name: "PictureBox", slug: "picturebox", defunct: true },
+  { name: "Gen Manga", slug: "gen-manga", defunct: true },
+  { name: "Tanoshimi", slug: "tanoshimi", defunct: true },
+  { name: "Eros Comix", slug: "eros-comix", parentSlug: "fantagraphics", defunct: true },
+  { name: "Project-H", slug: "project-h" },
+  { name: "Ponent Mon", slug: "ponent-mon" },
+  { name: "Fanfare", slug: "fanfare", parentSlug: "ponent-mon" },
+  { name: "Living the Line", slug: "living-the-line" },
+  { name: "Cross Infinite World", slug: "cross-infinite-world" },
+  { name: "NBM Publishing", slug: "nbm-publishing" },
+  { name: "Sol Press", slug: "sol-press" },
 ];
+
+/** Slugs of the rows above that no longer publish (seedPublishers marks them). */
+export const DEFUNCT_SLUGS: ReadonlySet<string> = new Set(
+  CANONICAL_PUBLISHERS.filter((pub) => pub.defunct).map((pub) => pub.slug),
+);
 
 /**
  * Imprints the catalog knows the parent of but does not seed (out of scope
@@ -103,7 +144,25 @@ export const DUPLICATE_ALIASES: Record<string, string> = {
   "seven seas": "seven-seas",
   viz: "viz-media",
   "viz communications": "viz-media",
+  "viz communication": "viz-media",
+  "viz llc": "viz-media",
+  "viz kids": "viz-media",
+  "viz comics": "viz-media",
+  // VIZ's imprint labels, which OpenLibrary records as the publisher
+  // (One Piece's records read ["SHONEN JUMP", "viz media"]). Only VIZ uses
+  // them; SuBLime, a real imprint, has its own row instead.
+  "shonen jump": "viz-media",
+  "shonen jump advanced": "viz-media",
+  "shojo beat": "viz-media",
+  "viz signature": "viz-media",
+  "shonen sunday": "viz-media",
+  "seven seas siren": "seven-seas",
+  "titan comics": "titan-manga",
+  "cpm manga": "central-park-media",
+  dmp: "digital-manga",
   "irodori inc": "irodori-comics",
+  // Deliberately absent: "yen on" and "del rey"/"ballantine" name prose
+  // lines (light novels, SF), never their manga siblings.
 };
 
 /** Historical slugs of duplicate rows → the company slug they merge into. */

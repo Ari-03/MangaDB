@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-router";
 
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
-import { Cover, firstIsbn } from "~/lib/cover";
+import { Cover, coverIsbns } from "~/lib/cover";
 import {
   ModEditLink,
   ModReleaseEditLinks,
@@ -168,7 +168,7 @@ function EditionPage() {
           <div className="detail-cover-plate">
             <Cover
               src={coverUrl}
-              isbn13={firstIsbn([{ releases }])}
+              isbn13={coverIsbns([{ releases }])}
               title={edition.title}
               foot={[
                 single

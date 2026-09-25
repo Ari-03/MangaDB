@@ -12,13 +12,17 @@
 //   ("2024-11-00"), eBook lines for digital.
 //
 // ANN is series-structured: one manga entry = one Series; the "(GN n)"
-// suffixes define the Volume backbone. The API carries no publishers and no
-// ISBNs (spec §6 authority table: ANN has no ISBN cell), which shapes the
-// adapter: it builds Series/Volumes and reconciles dates into releases
-// other sources created, keyed through its own stable release ids.
+// suffixes define the Volume backbone. Each release line also carries the
+// book's ISBN (`ean="978…"` — present on >99.9% of lines, verified live
+// 2026-09-25), which links lines to canonical Releases exactly. The API has
+// no publisher, so creating a Release needs the per-release Encyclopedia
+// page — `releases.php?id=NNN` — whose Distributor, ISBN-10/13, release
+// date, and suggested retail price `parseReleasePage` reads (see ann.ts's
+// release-page pass).
 
 import { v, type Infer } from "convex/values";
-import { cleanTitleText, decodeEntities } from "./text";
+import { toIsbn13 } from "./openLibrary";
+import { cleanTitleText, decodeEntities, stripHtml } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -47,6 +51,8 @@ export const annMangaValidator = v.object({
       multi: v.boolean(),
       format: v.union(v.literal("physical"), v.literal("digital")),
       editionLineHint: v.boolean(),
+      /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
+      isbn13: v.optional(v.string()),
     }),
   ),
 });
@@ -87,6 +93,8 @@ export type AnnRelease = {
   format: "physical" | "digital";
   /** Omnibus/box-set/deluxe packaging — an Edition Line shape. */
   editionLineHint: boolean;
+  /** The book's ISBN-13, from the line's `ean` attribute. */
+  isbn13?: string;
 };
 
 // Before 2010 ANN recorded month-only dates as the 1st (day 1 is a third of
@@ -113,14 +121,25 @@ export function parseAnnDate(
   return { year, month, day };
 }
 
+// Packaging words. In the designator ("Omnibus GN 1-3", "GN box 2") they
+// always mean packaging; in the line's own title ("Berserk Deluxe Edition
+// (GN 1)") only when the entry's name does not itself contain them.
+const DESIGNATOR_PACKAGING =
+  /\b(omnibus|box(?:ed)?(?: set)?|deluxe|collector'?s|hardcover)\b/i;
+const TITLE_PACKAGING =
+  /\b(omnibus|box(?:ed)? set|deluxe|collector['’]?s|perfect edition|\d-in-1)\b/i;
+
 /**
  * Split one release line's text: "Frieren: Beyond Journey's End (GN 14)" →
  * title + label + format. GN/OGN designators are print, eBook digital;
  * omnibus/box-set designators flag Edition Line packaging; "1-3" ranges are
  * multi-volume. Returns null for lines that are not book releases (DVDs and
- * other designators ANN mixes into other media types).
+ * other designators ANN mixes into other media types) and for single
+ * chapters ("eBook ch 17") — chapters are never Volumes. `entryName` (the
+ * manga's own title) lets packaging words in the line title count only when
+ * they are not part of the series name.
  */
-export function splitReleaseTitle(text: string): {
+export function splitReleaseTitle(text: string, entryName = ""): {
   title: string;
   label?: string;
   multi: boolean;
@@ -135,9 +154,11 @@ export function splitReleaseTitle(text: string): {
   const isEbook = /\be-?book\b/i.test(designator);
   const isPrint = /\bO?GN\b/.test(designator) || /graphic novel/i.test(designator);
   if (!isEbook && !isPrint) return null;
-  const editionLineHint = /\b(omnibus|box(?:ed)? set|deluxe|collector'?s|hardcover)\b/i.test(
-    designator,
-  );
+  if (/\bch(?:apter)?\.?\s*\d/i.test(designator)) return null;
+  const titleWord = TITLE_PACKAGING.exec(title)?.[1];
+  const editionLineHint =
+    DESIGNATOR_PACKAGING.test(designator) ||
+    (titleWord !== undefined && !entryName.toLowerCase().includes(titleWord.toLowerCase()));
   const range =
     /(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
   const single = /(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
@@ -160,18 +181,19 @@ export type AnnManga = {
   releases: AnnRelease[];
 };
 
-function parseReleases(body: string): AnnRelease[] {
+function parseReleases(body: string, entryName: string): AnnRelease[] {
   const releases: AnnRelease[] = [];
   for (const m of body.matchAll(
     /<release\s+([^>]*)>([\s\S]*?)<\/release>/g,
   )) {
     const attrs = m[1]!;
     const text = decodeEntities(m[2]!).trim();
-    const split = splitReleaseTitle(text);
+    const split = splitReleaseTitle(text, entryName);
     if (!split) continue;
     const dateAttr = /date="([^"]*)"/.exec(attrs)?.[1];
     const href = /href="([^"]*)"/.exec(attrs)?.[1];
     const annId = href !== undefined ? /[?&]id=(\d+)/.exec(href)?.[1] : undefined;
+    const isbn13 = toIsbn13(/\bean="([^"]*)"/.exec(attrs)?.[1]);
     releases.push({
       // A missing href falls back to a content-derived identity.
       annId:
@@ -183,6 +205,7 @@ function parseReleases(body: string): AnnRelease[] {
       multi: split.multi,
       format: split.format,
       editionLineHint: split.editionLineHint,
+      ...(isbn13 !== undefined ? { isbn13 } : {}),
     });
   }
   return releases;
@@ -231,9 +254,84 @@ export function parseApiResponse(xml: string): AnnManga[] {
       if (name !== "" && !staff.includes(name)) staff.push(name);
     }
 
-    records.push({ id, title, altTitles, staff, releases: parseReleases(body) });
+    records.push({ id, title, altTitles, staff, releases: parseReleases(body, title) });
   }
   return records;
+}
+
+// ---------- release pages ----------
+
+/**
+ * What one Encyclopedia release page (`releases.php?id=NNN`) adds to its
+ * API line: the Distributor — the publisher a Release needs — plus the
+ * page's own ISBNs, date, and suggested retail price. Stored on the line's
+ * observation as `page` (the fetch state that keeps the pass incremental).
+ */
+export type AnnReleasePage = {
+  title?: string;
+  /** The designator as the page shows it ("GN 2 / 2", "eBook 1"). */
+  volume?: string;
+  distributor?: string;
+  /** ANN's company id for the distributor (company.php?id=N). */
+  distributorId?: string;
+  date?: { year: number; month?: number; day?: number };
+  isbn13?: string;
+  isbn10?: string;
+  priceCents?: number;
+  /** The manga entry the page belongs to. */
+  mangaId?: string;
+};
+
+/** One labelled field's raw HTML: `<b>Label:</b> …` up to the next break. */
+function pageField(html: string, label: string): string | undefined {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`<b>${escaped}:</b>([\\s\\S]*?)(?:<br\\s*/?>|</p>|<p\\b)`, "i").exec(
+    html,
+  )?.[1];
+}
+
+/**
+ * One release page's HTML → its fields, or null when the page is not a
+ * release (no "Title:" field — ANN's not-found page, a login wall).
+ */
+export function parseReleasePage(html: string): AnnReleasePage | null {
+  const titleHtml = pageField(html, "Title");
+  if (titleHtml === undefined) return null;
+  const text = (raw: string | undefined) =>
+    raw !== undefined ? cleanTitleText(stripHtml(raw)) || undefined : undefined;
+
+  const distributorHtml = pageField(html, "Distributor");
+  const distributorId =
+    distributorHtml !== undefined
+      ? /company\.php\?id=(\d+)/.exec(distributorHtml)?.[1]
+      : undefined;
+  const dateText = text(pageField(html, "Release date"));
+  const price = /\$\s*(\d+(?:\.\d{1,2})?)/.exec(
+    pageField(html, "Suggested retail price") ?? "",
+  )?.[1];
+  // The ISBN spans spell the number out in parts, then repeat it whole in
+  // a hidden span: the first valid 13/10-digit run is the ISBN.
+  const isbnIn = (label: string, width: 10 | 13) => {
+    const raw = stripHtml(pageField(html, label) ?? "").replace(/\s+/g, " ");
+    const runs = raw.match(width === 13 ? /\d{13}/g : /\d{9}[\dX]/g) ?? [];
+    return runs.find((run) => toIsbn13(run) !== undefined);
+  };
+  const isbn13 = toIsbn13(isbnIn("ISBN-13", 13));
+  const isbn10 = isbnIn("ISBN-10", 10);
+
+  return {
+    title: text(titleHtml),
+    volume: text(pageField(html, "Volume")),
+    distributor: text(distributorHtml),
+    distributorId,
+    date: dateText !== undefined ? parseAnnDate(dateText) : undefined,
+    isbn13,
+    isbn10: isbn10 !== undefined && toIsbn13(isbn10) === isbn13 ? isbn10 : undefined,
+    priceCents: price !== undefined ? Math.round(Number(price) * 100) : undefined,
+    // The entry link under the release ("Encyclopedia information about"),
+    // not whatever manga the site chrome happens to link.
+    mangaId: /Encyclopedia information about[\s\S]{0,200}?manga\.php\?id=(\d+)/.exec(html)?.[1],
+  };
 }
 
 // ---------- URLs & snapshots ----------

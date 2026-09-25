@@ -1,38 +1,99 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import {
+  internalMutation,
+  internalQuery,
+  query,
+  type ActionCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { coverUrl, seriesCover } from "./lib/covers";
 import { groupEditions } from "./lib/editionGroups";
 
-// Cap per-table counting so the scaffold query stays cheap even once imports
-// start filling the catalog; the home page renders "N+" past the cap.
+// Fallback cap for counting on a deployment the rebuild has not counted yet;
+// the home page renders "N+" past it.
 export const COUNT_CAP = 1000;
 
+const COUNTED_TABLES = ["publishers", "series", "volumes", "editions", "releases"] as const;
+type CountedTable = (typeof COUNTED_TABLES)[number];
+/** Documents read per page when recounting; well inside a query's read limit. */
+const COUNT_PAGE = 4000;
+
 /**
- * Scaffold proof query (#21): a tiny public read the home page server-renders
- * to demonstrate the SSR → Convex round-trip. Counts active catalog records
- * (capped) so the page works on a fresh deployment with an empty database.
+ * Active catalog totals for the home page: the exact counts the Series
+ * library rebuild stores (`recountCatalog`), else a capped live count so a
+ * fresh deployment still renders.
  */
 export const stats = query({
   args: {},
   handler: async (ctx) => {
-    const countActive = async (
-      table: "publishers" | "series" | "volumes" | "editions" | "releases",
-    ) => {
-      const docs = await ctx.db.query(table).take(COUNT_CAP + 1);
-      const active = docs.filter((doc) => doc.status === "active").length;
-      return { count: Math.min(active, COUNT_CAP), capped: docs.length > COUNT_CAP };
-    };
+    const stored = await ctx.db.query("catalogCounts").first();
+    const entries = await Promise.all(
+      COUNTED_TABLES.map(async (table) => {
+        if (stored) return [table, { count: stored[table], capped: false }] as const;
+        const docs = await ctx.db.query(table).take(COUNT_CAP + 1);
+        const active = docs.filter((doc) => doc.status === "active").length;
+        return [table, { count: Math.min(active, COUNT_CAP), capped: docs.length > COUNT_CAP }] as const;
+      }),
+    );
+    return Object.fromEntries(entries) as Record<CountedTable, { count: number; capped: boolean }>;
+  },
+});
 
+/** One page of a table, counting its active documents. */
+export const countActivePage = internalQuery({
+  args: {
+    table: v.union(...COUNTED_TABLES.map((table) => v.literal(table))),
+    cursor: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, { table, cursor }) => {
+    const page = await ctx.db.query(table).paginate({ numItems: COUNT_PAGE, cursor });
     return {
-      publishers: await countActive("publishers"),
-      series: await countActive("series"),
-      volumes: await countActive("volumes"),
-      editions: await countActive("editions"),
-      releases: await countActive("releases"),
+      active: page.page.filter((doc) => doc.status === "active").length,
+      cursor: page.continueCursor,
+      isDone: page.isDone,
     };
   },
 });
+
+export const saveCounts = internalMutation({
+  args: {
+    publishers: v.number(),
+    series: v.number(),
+    volumes: v.number(),
+    editions: v.number(),
+    releases: v.number(),
+    countedAt: v.number(),
+  },
+  handler: async (ctx, counts) => {
+    const existing = await ctx.db.query("catalogCounts").first();
+    if (existing) await ctx.db.replace(existing._id, counts);
+    else await ctx.db.insert("catalogCounts", counts);
+  },
+});
+
+/**
+ * Count every active catalog record, a page at a time, and store the totals.
+ * Runs at the end of each Series library rebuild (every six hours).
+ */
+export async function recountCatalog(ctx: ActionCtx): Promise<Record<CountedTable, number>> {
+  const totals = { publishers: 0, series: 0, volumes: 0, editions: 0, releases: 0 };
+  for (const table of COUNTED_TABLES) {
+    let cursor: string | null = null;
+    for (;;) {
+      const page: { active: number; cursor: string; isDone: boolean } = await ctx.runQuery(
+        internal.catalog.countActivePage,
+        { table, cursor },
+      );
+      totals[table] += page.active;
+      if (page.isDone) break;
+      cursor = page.cursor;
+    }
+  }
+  await ctx.runMutation(internal.catalog.saveCounts, { ...totals, countedAt: Date.now() });
+  return totals;
+}
 
 /**
  * Active Series in public-ID order, for the home page's browse list. Capped;

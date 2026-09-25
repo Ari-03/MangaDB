@@ -461,6 +461,15 @@ describe("seedPublishers (the canonical publisher list)", () => {
       // Duplicate strings are not rows of their own.
       expect(await bySlug("kodansha-comics")).toBeNull();
       expect(kodansha?.parentPublisherId).toBeUndefined();
+      // The legacy distributors ANN names: imprints under their parents,
+      // defunct companies flagged, active ones not.
+      expect((await bySlug("sublime"))?.parentPublisherId).toBe((await bySlug("viz-media"))!._id);
+      expect((await bySlug("june"))?.parentPublisherId).toBe((await bySlug("digital-manga"))!._id);
+      expect((await bySlug("adv-manga"))?.defunct).toBe(true);
+      expect((await bySlug("del-rey-manga"))?.defunct).toBe(true);
+      expect((await bySlug("viz-media"))?.defunct).toBeUndefined();
     });
+    expect(first.markedDefunct).toContain("central-park-media");
+    expect(again.markedDefunct).toEqual([]);
   });
 });

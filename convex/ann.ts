@@ -1,47 +1,62 @@
 // The ANN Encyclopedia adapter (ticket #36, spec §6/§7): the weekly full
 // mirror that builds the all-publisher, series-structured Series/Volume
 // backbone — including the publishers whose sites are never scraped (VIZ,
-// Square Enix).
+// Square Enix) — and, through the per-release page pass, the Releases of
+// publishers no other source covers.
 //
 // Etiquette: ANN allows 1 request per second; every fetch waits ≥1.1 s and
-// details are batched 50 manga per request, so a ~40k-entry mirror is ~800
+// details are batched 50 manga per request, so a ~24k-entry mirror is ~500
 // detail requests. One action invocation processes a bounded number of
 // batches (Convex actions are time-limited) and schedules itself to
 // continue, carrying the Import Run and counters; the run closes — and the
 // post-sweep withdrawal pass fires — only when the final link of the chain
-// reaches the end of the report.
+// reaches the end of the report. A completed mirror then chains the
+// release-page pass (below).
 //
-// What ANN writes, and deliberately does not write:
+// What the mirror writes:
 // - one manga entry = one Series (linked via the manga observation itself;
 //   a title change at ANN is a rung-① field conflict at standard authority)
 // - "(GN n)" / "(eBook n)" designators define the Volume backbone; missing
 //   Volumes are created under the linked Series (spec §6 allows creating
 //   the Volume of a single-volume release under a linked Series); brand-new
 //   Series queue in steady state and create tagged in Bootstrap Mode
-// - ANN's API carries no publisher and no ISBN, and a Release requires a
-//   Publisher (spec §2) — so ANN never creates Editions or Releases. Its
-//   release lines are stored as observations keyed on ANN's own release
-//   ids; each links to the canonical Release once one exists (created by a
-//   publisher source, PRH, or OpenLibrary) — series link + volume label +
-//   format under one series is a full-key match — and from then on ANN's
-//   dates reconcile in at standard authority (how VIZ dates keep fresh).
-//   Ambiguity (two same-label same-format releases) is left unlinked for
-//   the record — the importer never guesses.
+// - each release line is an observation keyed on ANN's own release id. It
+//   links to the canonical Release carrying its ISBN (the line's `ean`), or
+//   — for a line without one — the single same-label, same-format Release
+//   under the linked Series; from then on ANN's dates reconcile in at
+//   standard authority (how VIZ dates keep fresh). Ambiguity is left
+//   unlinked for the record — the importer never guesses.
+//
+// The release-page pass (`syncReleasePages`): the API has no publisher, so
+// for every still-unlinked line it fetches the line's Encyclopedia page
+// once (Distributor, ISBNs, date, SRP — stored on the observation as
+// `page`, the fetch state that keeps the pass incremental) and places it
+// through the pipeline: an existing Release with the ISBN links; otherwise
+// a LEAF Release (Edition + Release) is created under the linked Series'
+// existing Volume when the Distributor resolves to an existing publisher
+// row — the OpenLibrary rung-⑤ boundary. ANN never creates a Series or
+// Volume this way, never a publisher, never packaging (omnibus/box-set
+// lines link by ISBN only), and never a second same-format Release of one
+// Volume from one publisher (reprints/variants stay on the observation).
+// Authority is unchanged: PRH and publisher feeds stay authoritative for
+// ISBN and date and overwrite what ANN created.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalAction, internalMutation } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import {
   annMangaValidator,
   mangaUrl,
   parseApiResponse,
+  parseReleasePage,
   parseReport,
   releaseUrl,
   toSnapshot,
   type AnnMangaSnapshot,
+  type AnnReleasePage,
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
 import { canonicalLabel } from "./lib/bookTitle";
@@ -50,7 +65,9 @@ import { getObservation, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
+  findPublisherByName,
   queueCreationProposal,
+  recordUnplaced,
   toPartialDate,
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
@@ -96,6 +113,8 @@ export const sync = internalAction({
     politeDelayMs: v.optional(v.number()),
     /** Detail batches (50 manga each) per invocation before continuing. */
     maxBatches: v.optional(v.number()),
+    /** Chain the release-page pass after a completed mirror (default true). */
+    releasePages: v.optional(v.boolean()),
     // ----- continuation state (never passed by callers) -----
     nskip: v.optional(v.number()),
     runId: v.optional(v.id("importRuns")),
@@ -193,6 +212,7 @@ export const sync = internalAction({
         await ctx.scheduler.runAfter(0, internal.ann.sync, {
           politeDelayMs: args.politeDelayMs,
           maxBatches: args.maxBatches,
+          releasePages: args.releasePages,
           nskip,
           runId,
           runStartedAt,
@@ -222,6 +242,12 @@ export const sync = internalAction({
         recordsChanged: changed,
         errors,
       });
+      // The mirror refreshed every line: now place the unlinked ones.
+      if (args.releasePages !== false) {
+        await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
+          politeDelayMs: args.politeDelayMs,
+        });
+      }
       return {
         runId,
         recordsSeen: seen,
@@ -249,6 +275,59 @@ export const sync = internalAction({
     }
   },
 });
+
+// ---------- release-line snapshots ----------
+
+/** Fetch state of a line's Encyclopedia page, stored on its observation. */
+const pageStateValidator = v.object({
+  status: v.union(
+    v.literal("ok"),
+    // 404: the release was removed at ANN.
+    v.literal("notFound"),
+    // Served, but not a release page (layout change, login wall).
+    v.literal("unparsed"),
+    // Transient failure — retried after ERROR_RETRY_MS.
+    v.literal("error"),
+  ),
+  fetchedAt: v.number(),
+  error: v.optional(v.string()),
+  title: v.optional(v.string()),
+  volume: v.optional(v.string()),
+  distributor: v.optional(v.string()),
+  distributorId: v.optional(v.string()),
+  date: v.optional(
+    v.object({ year: v.number(), month: v.optional(v.number()), day: v.optional(v.number()) }),
+  ),
+  isbn13: v.optional(v.string()),
+  isbn10: v.optional(v.string()),
+  priceCents: v.optional(v.number()),
+  mangaId: v.optional(v.string()),
+});
+
+type PageState = AnnReleasePage & {
+  status: "ok" | "notFound" | "unparsed" | "error";
+  fetchedAt: number;
+  error?: string;
+};
+
+/** One release line's observation snapshot (`release:NNN`). */
+export type AnnReleaseSnapshot = AnnMangaSnapshot["releases"][number] & {
+  kind: "annRelease";
+  mangaId: string;
+  url: string;
+  page?: PageState;
+};
+
+async function activeReleaseByIsbn(
+  ctx: MutationCtx,
+  isbn13: string,
+): Promise<Doc<"releases"> | null> {
+  const hits = await ctx.db
+    .query("releases")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+    .collect();
+  return hits.find((release) => release.status === "active") ?? null;
+}
 
 // ---------- applying one manga entry ----------
 
@@ -342,6 +421,14 @@ async function matchReleaseInSeries(
       for (const release of releases) {
         if (release.status !== "active" || release.locked) continue;
         if (release.format !== format) continue;
+        // A different ISBN-13 is a different book (another printing).
+        if (
+          line.isbn13 !== undefined &&
+          release.isbn13 !== undefined &&
+          release.isbn13 !== line.isbn13
+        ) {
+          continue;
+        }
         if (
           line.date !== undefined &&
           release.pubDate !== undefined &&
@@ -478,10 +565,22 @@ export const applyManga = internalMutation({
       const url = /^\d+$/.test(release.annId)
         ? releaseUrl(release.annId)
         : snapshot.url;
+      const sourceRecordId = `release:${release.annId}`;
+      // The release-page pass's fetch state rides on the line's snapshot:
+      // carry it over, or every mirror would forget the pages it fetched.
+      const prior = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
+      const page = (prior?.snapshot as AnnReleaseSnapshot | undefined)?.page;
+      const lineSnapshot: AnnReleaseSnapshot = {
+        kind: "annRelease",
+        mangaId: snapshot.id,
+        ...release,
+        url,
+        ...(page !== undefined ? { page } : {}),
+      };
       const { observation: releaseObs } = await upsertObservation(ctx, {
         sourceKey: SOURCE_KEY,
-        sourceRecordId: `release:${release.annId}`,
-        snapshot: { kind: "annRelease", mangaId: snapshot.id, ...release, url },
+        sourceRecordId,
+        snapshot: lineSnapshot,
         now,
       });
 
@@ -491,8 +590,19 @@ export const applyManga = internalMutation({
         if (linked && linked.status === "active" && !linked.locked) {
           canonical = linked;
         }
-      } else if (!release.multi && !release.editionLineHint) {
-        const match = await matchReleaseInSeries(ctx, seriesId, snapshot, release);
+      } else {
+        // An ISBN names exactly one book: it links whatever the packaging,
+        // but only onto a Release of this Series (elsewhere it is a
+        // duplicate-Series question for a human, not a link).
+        const byIsbn =
+          release.isbn13 !== undefined ? await activeReleaseByIsbn(ctx, release.isbn13) : null;
+        const match = byIsbn
+          ? byIsbn.seriesIds.includes(seriesId) && !byIsbn.locked
+            ? ({ kind: "one", release: byIsbn } as const)
+            : ({ kind: "none" } as const)
+          : !release.multi && !release.editionLineHint
+            ? await matchReleaseInSeries(ctx, seriesId, snapshot, release)
+            : ({ kind: "none" } as const);
         if (match.kind === "one") {
           canonical = match.release;
           await ctx.db.patch(releaseObs._id, {
@@ -523,5 +633,395 @@ export const applyManga = internalMutation({
       seriesId,
       releasesLinked,
     };
+  },
+});
+
+// ---------- the release-page pass ----------
+
+/** A transient page failure is retried after this long. */
+const ERROR_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
+/** A missing/unparsable page is re-checked after this long. */
+const GONE_RETRY_MS = 90 * 24 * 60 * 60 * 1000;
+/** Candidate lines per registry query page. */
+const CANDIDATE_PAGE = 25;
+/** Page fetches per action link before it hands off (~1.1 s each). */
+const DEFAULT_MAX_FETCHES = 300;
+
+// Distributor strings that are prose imprints: their lines never create
+// manga Releases, whatever their designator says.
+const NOVEL_DISTRIBUTORS = /^(?:yen on|j-novel club novels?|seven seas airship|airship)$/i;
+
+// A store-exclusive or variant cover is a second ISBN of the same volume
+// ("Jujutsu Kaisen - [Walmart Exclusive Cover] (GN 30)"): never a leaf.
+const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
+
+/** Whether a line needs (another) page fetch, per its stored fetch state. */
+function needsFetch(page: PageState | undefined, now: number): boolean {
+  if (page === undefined) return true;
+  if (page.status === "ok") return false;
+  const retry = page.status === "error" ? ERROR_RETRY_MS : GONE_RETRY_MS;
+  return now - page.fetchedAt > retry;
+}
+
+/**
+ * One page of unlinked release lines, in source-record-id order. Linked
+ * lines drop out, so a later pass only touches new or still-unplaced ones.
+ */
+export const releasePageCandidates = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()), numItems: v.number(), now: v.number() },
+  handler: async (ctx, { cursor, numItems, now }) => {
+    const result = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q
+          .eq("sourceKey", SOURCE_KEY)
+          .gte("sourceRecordId", "release:")
+          .lt("sourceRecordId", "release;"),
+      )
+      .paginate({ cursor, numItems });
+    const candidates = result.page.flatMap((obs) => {
+      if (obs.recordRef !== undefined || obs.withdrawn) return [];
+      const snapshot = obs.snapshot as AnnReleaseSnapshot;
+      // Content-derived ids (a line without an href) have no page.
+      if (!/^\d+$/.test(snapshot.annId)) return [];
+      return [{ annId: snapshot.annId, fetch: needsFetch(snapshot.page, now) }];
+    });
+    return { candidates, continueCursor: result.continueCursor, isDone: result.isDone };
+  },
+});
+
+type PageSyncResult =
+  | { skipped: "disabled" }
+  | {
+      runId: Id<"importRuns">;
+      recordsSeen: number;
+      recordsChanged: number;
+      fetched: number;
+      continued: boolean;
+      errorCount: number;
+      failed?: boolean;
+    };
+
+/**
+ * The release-page pass: walks every unlinked release line, fetches its
+ * Encyclopedia page once (1 req/s), and places it (`applyReleasePage`).
+ * Lines whose page is already stored are re-placed without a fetch — a
+ * newly seeded publisher or Volume can unblock them. Chained after each
+ * completed mirror; self-continues across the action time limit.
+ *
+ *   npx convex run ann:syncReleasePages '{}'
+ */
+export const syncReleasePages = internalAction({
+  args: {
+    politeDelayMs: v.optional(v.number()),
+    /** Page fetches per invocation before continuing. */
+    maxFetches: v.optional(v.number()),
+    // ----- continuation state (never passed by callers) -----
+    cursor: v.optional(v.union(v.string(), v.null())),
+    runId: v.optional(v.id("importRuns")),
+    seen: v.optional(v.number()),
+    changed: v.optional(v.number()),
+    fetched: v.optional(v.number()),
+    errors: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args): Promise<PageSyncResult> => {
+    const source: Doc<"approvedSources"> | null = await ctx.runQuery(
+      internal.importSources.getByKey,
+      { key: SOURCE_KEY },
+    );
+    if (!source || (!source.enabled && args.runId === undefined)) {
+      return { skipped: "disabled" as const };
+    }
+    const runId: Id<"importRuns"> =
+      args.runId ??
+      (await ctx.runMutation(internal.imports.startRun, { sourceKey: SOURCE_KEY }));
+    const delay = args.politeDelayMs ?? ANN_DELAY_MS;
+    const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
+    const errors = [...(args.errors ?? [])];
+    let seen = args.seen ?? 0;
+    let changed = args.changed ?? 0;
+    let fetchedTotal = args.fetched ?? 0;
+    let cursor: string | null = args.cursor ?? null;
+    let fetchedHere = 0;
+    let done = false;
+
+    try {
+      while (!done && fetchedHere < maxFetches) {
+        const page: {
+          candidates: Array<{ annId: string; fetch: boolean }>;
+          continueCursor: string;
+          isDone: boolean;
+        } = await ctx.runQuery(internal.ann.releasePageCandidates, {
+          cursor,
+          numItems: CANDIDATE_PAGE,
+          now: Date.now(),
+        });
+        for (const candidate of page.candidates) {
+          seen++;
+          let state: PageState | undefined;
+          if (candidate.fetch) {
+            state = await fetchReleasePage(candidate.annId, delay);
+            fetchedHere++;
+            fetchedTotal++;
+          }
+          try {
+            const result = await ctx.runMutation(internal.ann.applyReleasePage, {
+              annId: candidate.annId,
+              page: state,
+            });
+            if (result.changed) changed++;
+          } catch (e) {
+            errors.push(`release ${candidate.annId}: ${errorMessage(e)}`);
+          }
+        }
+        cursor = page.continueCursor;
+        done = page.isDone;
+      }
+
+      if (!done) {
+        await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
+          politeDelayMs: args.politeDelayMs,
+          maxFetches: args.maxFetches,
+          cursor,
+          runId,
+          seen,
+          changed,
+          fetched: fetchedTotal,
+          errors: errors.slice(0, MAX_CARRIED_ERRORS),
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          fetched: fetchedTotal,
+          continued: true,
+          errorCount: errors.length,
+        };
+      }
+      await ctx.runMutation(internal.imports.finishRun, {
+        runId,
+        status: "succeeded",
+        recordsSeen: seen,
+        recordsChanged: changed,
+        errors,
+      });
+      return {
+        runId,
+        recordsSeen: seen,
+        recordsChanged: changed,
+        fetched: fetchedTotal,
+        continued: false,
+        errorCount: errors.length,
+      };
+    } catch (e) {
+      errors.push(errorMessage(e));
+      await ctx.runMutation(internal.imports.finishRun, {
+        runId,
+        status: "failed",
+        recordsSeen: seen,
+        recordsChanged: changed,
+        errors,
+      });
+      return {
+        runId,
+        recordsSeen: seen,
+        recordsChanged: changed,
+        fetched: fetchedTotal,
+        continued: false,
+        errorCount: errors.length,
+        failed: true,
+      };
+    }
+  },
+});
+
+/** Fetch + parse one release page into its stored fetch state. */
+async function fetchReleasePage(annId: string, delay: number): Promise<PageState> {
+  const fetchedAt = Date.now();
+  try {
+    const res = await politeFetch(releaseUrl(annId), delay);
+    const parsed = parseReleasePage(await res.text());
+    return parsed ? { status: "ok", fetchedAt, ...parsed } : { status: "unparsed", fetchedAt };
+  } catch (e) {
+    const message = errorMessage(e);
+    return /HTTP 404\b/.test(message)
+      ? { status: "notFound", fetchedAt }
+      : { status: "error", fetchedAt, error: message.slice(0, 200) };
+  }
+}
+
+type PlaceResult = {
+  status: "skipped" | "stored" | "linked" | "created" | "recordOnly";
+  changed: boolean;
+  reason?: string;
+  releaseId?: Id<"releases">;
+};
+
+/**
+ * Place one release line from its page (freshly fetched, or the stored
+ * one): link the Release carrying its ISBN, else create a leaf Release
+ * under the linked Series' existing Volume when the Distributor resolves
+ * to an existing publisher row. Everything the importer will not decide
+ * stays on the observation as a placement note. One atomic mutation.
+ */
+export const applyReleasePage = internalMutation({
+  args: { annId: v.string(), page: v.optional(pageStateValidator) },
+  handler: async (ctx, { annId, page: fetched }): Promise<PlaceResult> => {
+    const now = Date.now();
+    let observation = await getObservation(ctx, SOURCE_KEY, `release:${annId}`);
+    if (!observation || observation.recordRef !== undefined) {
+      return { status: "skipped", changed: false };
+    }
+    let line = observation.snapshot as AnnReleaseSnapshot;
+    let changed = false;
+    if (fetched !== undefined) {
+      line = { ...line, page: fetched };
+      ({ observation } = await upsertObservation(ctx, {
+        sourceKey: SOURCE_KEY,
+        sourceRecordId: observation.sourceRecordId,
+        snapshot: line,
+        now,
+      }));
+      changed = true;
+    }
+    const page = line.page;
+    if (page === undefined || page.status !== "ok") {
+      return { status: fetched ? "stored" : "skipped", changed };
+    }
+    const source = await getSourceByKey(ctx, SOURCE_KEY);
+    const citation = {
+      sourceName: source?.name ?? "Anime News Network Encyclopedia",
+      url: releaseUrl(annId),
+    };
+    const hold = async (reason: string): Promise<PlaceResult> => {
+      const current = (observation!.conflicts ?? []).find((c) => c.field === "placement");
+      if (current?.reason !== reason) {
+        await recordUnplaced(ctx, observation!, reason, now);
+        changed = true;
+      }
+      return { status: "recordOnly", changed, reason };
+    };
+
+    const isbn13 = page.isbn13 ?? line.isbn13;
+    if (isbn13 === undefined) return await hold("ANN lists no ISBN for this release.");
+
+    // The Series: the manga entry's rung-① link.
+    const mangaObs = await getObservation(ctx, SOURCE_KEY, `manga:${line.mangaId}`);
+    const seriesRef = mangaObs?.recordRef;
+    const series =
+      seriesRef?.type === "series" ? await ctx.db.get(seriesRef.id) : null;
+
+    // An existing Release with the ISBN: link it (same Series only).
+    const byIsbn = await activeReleaseByIsbn(ctx, isbn13);
+    if (byIsbn) {
+      if (!series || !byIsbn.seriesIds.includes(series._id)) {
+        return await hold(
+          `ISBN ${isbn13} is already on a Release of another Series — a duplicate-Series question for an Editor.`,
+        );
+      }
+      return await link(byIsbn);
+    }
+
+    if (line.multi || line.editionLineHint) {
+      return await hold("Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
+    }
+    if (VARIANT_LINE.test(line.title)) {
+      return await hold("A store-exclusive or variant cover: never a Release of its own.");
+    }
+    if (!series || series.status !== "active") {
+      return await hold("The manga entry has no linked active Series.");
+    }
+    if (series.locked) return await hold("The Series is locked.");
+
+    const distributor = page.distributor;
+    if (distributor === undefined) return await hold("The release page names no distributor.");
+    if (NOVEL_DISTRIBUTORS.test(distributor)) {
+      return await hold(`"${distributor}" is a prose imprint: out of manga scope.`);
+    }
+    const publisher = await findPublisherByName(ctx, distributor);
+    if (!publisher) {
+      return await hold(`Distributor "${distributor}" resolves to no publisher row.`);
+    }
+
+    // Leaf boundary: the Volume must already exist under the Series.
+    const volumes = await ctx.db
+      .query("volumes")
+      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+      .collect();
+    const volume = volumes.find(
+      (vol) => vol.status === "active" && labelsEqual(vol.label, line.label ?? null),
+    );
+    if (!volume) {
+      return await hold(`No Volume ${line.label ?? "(unlabeled)"} under the Series.`);
+    }
+
+    // One Release per (Volume, publisher, format): a same-format sibling
+    // without an ISBN is this book (link); one with another ISBN is a
+    // reprint or variant — held, never a second Release.
+    const coverages = await ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
+      .collect();
+    for (const coverage of coverages) {
+      const edition = await ctx.db.get(coverage.editionId);
+      if (!edition || edition.status !== "active" || edition.publisherId !== publisher._id) {
+        continue;
+      }
+      const releases = await ctx.db
+        .query("releases")
+        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+        .collect();
+      for (const release of releases) {
+        if (release.status !== "active" || release.format !== line.format) continue;
+        if (release.isbn13 === undefined && !release.locked) return await link(release);
+        return await hold(
+          `Volume ${line.label ?? "(unlabeled)"} already has a ${line.format} ${publisher.name} Release (ISBN ${release.isbn13 ?? "none"}): a reprint or variant, not created.`,
+        );
+      }
+    }
+
+    const date = page.date ?? line.date;
+    const creation = await createCanonicalRecords(ctx, {
+      sourceKey: SOURCE_KEY,
+      observation,
+      citation,
+      importComment: IMPORT_COMMENT,
+      seriesId: series._id,
+      seriesTitle: series.title,
+      labels: line.label !== undefined ? [line.label] : [],
+      release: {
+        format: line.format,
+        isbn13,
+        isbn10: page.isbn10,
+        pubDate: date ? toPartialDate(date) : undefined,
+        price:
+          page.priceCents !== undefined
+            ? { amountCents: page.priceCents, currency: "USD" }
+            : undefined,
+        publisher: { name: publisher.name, slug: publisher.slug },
+      },
+      tagBootstrapUnreviewed: false,
+      now,
+    });
+    return { status: "created", changed: true, releaseId: creation.releaseId };
+
+    async function link(release: Doc<"releases">): Promise<PlaceResult> {
+      await ctx.db.patch(observation!._id, {
+        recordRef: { type: "release", id: release._id },
+      });
+      const date = page!.date ?? line.date;
+      if (date && !release.locked) {
+        await reconcileFields(ctx, {
+          sourceKey: SOURCE_KEY,
+          ref: { type: "release", id: release._id },
+          doc: release,
+          offered: { pubDate: toPartialDate(date) },
+          observation: observation!,
+          citation,
+          now,
+        });
+      }
+      return { status: "linked", changed: true, releaseId: release._id };
+    }
   },
 });

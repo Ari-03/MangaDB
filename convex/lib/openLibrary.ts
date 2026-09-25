@@ -114,6 +114,26 @@ export function isbn10To13(isbn10: string): string {
 }
 
 /**
+ * Any ISBN spelling → a checksum-valid ISBN-13: a 13-digit form as is, a
+ * 10-character form converted. Hyphens and spaces are ignored; anything
+ * else (an SKU, a UPC, a bad check digit) is undefined. Shared by every
+ * adapter that reads bare ISBN strings (ANN, Yen Press).
+ */
+export function toIsbn13(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const chars = raw.replace(/[\s-]/g, "").toUpperCase();
+  if (/^\d{13}$/.test(chars)) return isbn13CheckOk(chars) ? chars : undefined;
+  if (/^\d{9}[\dX]$/.test(chars)) {
+    const sum = [...chars].reduce(
+      (acc, c, i) => acc + (c === "X" ? 10 : Number(c)) * (10 - i),
+      0,
+    );
+    return sum % 11 === 0 ? isbn10To13(chars) : undefined;
+  }
+  return undefined;
+}
+
+/**
  * The record's ISBN pair, naming ONE book: the first valid ISBN-13 (or one
  * derived from an ISBN-10), plus an ISBN-10 only when it is that same book —
  * OpenLibrary arrays can mix printings, and a 979 ISBN has no ISBN-10.
@@ -185,7 +205,16 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
         : undefined
     : undefined;
 
-  const parsed = parseBookTitle(title, { subtitle });
+  // OpenLibrary often splits a volume title across title + subtitle
+  // ("Mashle" + "Magic and Muscles, Vol. 3", "Mission" + "Yozakura Family,
+  // Vol. 12"). A subtitle the parser can't read as a bare volume marker is
+  // re-read joined to the title; the joined reading wins only when it finds
+  // the volume (or packaging) the split one missed.
+  let parsed = parseBookTitle(title, { subtitle });
+  if (subtitle !== undefined && parsed.volumeLabel === null && parsed.packaging === null) {
+    const joined = parseBookTitle(`${title}: ${subtitle}`);
+    if (joined.volumeLabel !== null || joined.packaging !== null) parsed = joined;
+  }
   const coverRange = parsed.packaging?.coverRange ?? null;
   const publishers = Array.isArray(edition.publishers)
     ? edition.publishers.filter((p): p is string => typeof p === "string")

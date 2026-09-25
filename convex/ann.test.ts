@@ -1,10 +1,11 @@
-// ANN adapter tests (ticket #36): the weekly mirror run against a stubbed
-// ANN serving fixture XML in the live wire shapes — no network. Covers the
-// acceptance criteria: the series-structured Series/Volume backbone (never
-// Editions/Releases — ANN carries no publisher), release-observation
-// linking with date reconciliation at standard authority, the steady-state
-// new-Series gate, chained continuation, withdrawal, and the 1 req/s
-// etiquette default.
+// ANN adapter tests (ticket #36): the weekly mirror and the release-page
+// pass, run against a stubbed ANN serving fixture XML/HTML in the live wire
+// shapes — no network. Covers the series-structured Series/Volume backbone
+// (the mirror itself never creates Editions/Releases), ISBN- and
+// label-based release-line linking with date reconciliation at standard
+// authority, the release-page pass's leaf creation and hold rules, the
+// steady-state new-Series gate, chained continuation, withdrawal, and the
+// 1 req/s etiquette default.
 
 import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +14,14 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
-type FixtureRelease = { annId: number; date: string; designator: string };
+type FixtureRelease = {
+  annId: number;
+  date: string;
+  designator: string;
+  ean?: string;
+  /** The line title when it differs from the manga title (variants). */
+  title?: string;
+};
 type FixtureManga = {
   id: number;
   title: string;
@@ -46,7 +54,7 @@ function apiXml(manga: FixtureManga[], ids: string[]) {
       const releases = m.releases
         .map(
           (r) =>
-            `<release date="${r.date}" href="https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${r.annId}">${m.title} (${r.designator})</release>`,
+            `<release date="${r.date}" href="https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${r.annId}"${r.ean ? ` ean="${r.ean}"` : ""}>${r.title ?? m.title} (${r.designator})</release>`,
         )
         .join("\n");
       return `<manga id="${m.id}" gid="1" type="manga" name="${m.title}" precision="manga">
@@ -59,10 +67,21 @@ ${releases}
   return `<ann>${blocks}</ann>`;
 }
 
-function stubAnn(manga: FixtureManga[]) {
+const pageRequests: string[] = [];
+
+/** Serves the report + API for `manga`, and release pages from `pages`. */
+function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
     const url =
       typeof input === "object" && "url" in input ? input.url : String(input);
+    if (url.includes("/encyclopedia/releases.php")) {
+      const id = Number(new URL(url).searchParams.get("id"));
+      pageRequests.push(String(id));
+      const html = pages[id];
+      return html !== undefined
+        ? new Response(html, { headers: { "content-type": "text/html" } })
+        : new Response("not found", { status: 404 });
+    }
     if (url.includes("/encyclopedia/reports.xml")) {
       const params = new URL(url).searchParams;
       const nskip = Number(params.get("nskip") ?? 0);
@@ -83,6 +102,7 @@ function stubAnn(manga: FixtureManga[]) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  pageRequests.length = 0;
 });
 
 function makeT() {
@@ -494,5 +514,243 @@ describe("ann.sync — steady state", () => {
       );
       expect(tables).toEqual(["series", "volumes"]);
     });
+  });
+});
+
+// A release page in the live layout (see lib/ann.test.ts for real copies).
+function releasePage(args: {
+  title: string;
+  volume: string;
+  distributor: string;
+  date: string;
+  isbn13: string;
+  mangaId: number;
+}) {
+  return `<html><body><hr><b>Title:</b> ${args.title}<br><b>Volume:</b>  ${args.volume}<br><b>Distributor:</b> <a href="company.php?id=4552">${args.distributor}</a><p><b>Release date:</b> ${args.date}<br><b>Suggested retail price:</b> $11.99<br></p><p><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">${args.isbn13.slice(0, 3)}</span><span>${args.isbn13.slice(3)}</span></span><span style="visibility:hidden"> ${args.isbn13}</span><br></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=${args.mangaId}">x</a></b></li></ul></body></html>`;
+}
+
+const syncPages = (t: TestT, args: object = {}) =>
+  t.action(internal.ann.syncReleasePages, { politeDelayMs: 0, ...args });
+
+const obsFor = (t: TestT, annId: number) =>
+  t.run(async (ctx) =>
+    ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q.eq("sourceKey", "ann").eq("sourceRecordId", `release:${annId}`),
+      )
+      .unique(),
+  );
+
+async function seedPublisher(t: TestT, name: string, slug: string) {
+  return await t.run(async (ctx) =>
+    ctx.db.insert("publishers", { status: "active", name, slug }),
+  );
+}
+
+describe("ann — ISBN-linked release lines", () => {
+  it("links a line to the Release carrying its ISBN, even among several printings", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const NANA: FixtureManga = {
+      id: 310,
+      title: "NANA",
+      releases: [
+        { annId: 9111, date: "2005-12-06", designator: "GN 1", ean: "9781421501086" },
+        { annId: 9112, date: "2025-10-21", designator: "GN 1", ean: "9781974757282" },
+      ],
+    };
+    stubAnn([NANA]);
+    await sync(t, { releasePages: false });
+    const releaseId = await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volume = (await ctx.db.query("volumes").collect())[0]!;
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "VIZ Media",
+        slug: "viz-media",
+      });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 5,
+        publisherId,
+      });
+      await ctx.db.insert("volumeCoverages", {
+        editionId,
+        volumeId: volume._id,
+        order: 1,
+        extent: "complete",
+      });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        isbn13: "9781974757282",
+        publisherId,
+        seriesIds: [series._id],
+      });
+    });
+    await sync(t, { releasePages: false });
+    expect((await obsFor(t, 9112))!.recordRef).toEqual({ type: "release", id: releaseId });
+    // The 2005 printing (another ISBN) never links to the 2025 book.
+    expect((await obsFor(t, 9111))!.recordRef).toBeUndefined();
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId))!.pubDate).toMatchObject({ year: 2025, month: 10 });
+    });
+  });
+});
+
+describe("ann.syncReleasePages — leaf Releases from release pages", () => {
+  const ONE: FixtureManga = {
+    id: 1223,
+    title: "One Piece",
+    releases: [
+      { annId: 57439, date: "2026-11-10", designator: "GN 113", ean: "9781974766703" },
+      { annId: 57440, date: "2026-12-08", designator: "GN 114", ean: "9781974766710" },
+      {
+        annId: 57441,
+        date: "2026-11-10",
+        designator: "GN 113",
+        ean: "9781974799992",
+        title: "One Piece - [Walmart Exclusive Cover]",
+      },
+      { annId: 24124, date: "2013-11-05", designator: "GN 1-23", ean: "9781421560748" },
+    ],
+  };
+  const PAGES = {
+    57439: releasePage({
+      title: "One Piece",
+      volume: "GN 113",
+      distributor: "Viz Media",
+      date: "2026-11-10",
+      isbn13: "9781974766703",
+      mangaId: 1223,
+    }),
+    57440: releasePage({
+      title: "One Piece",
+      volume: "GN 114",
+      distributor: "Defunct Comics",
+      date: "2026-12-08",
+      isbn13: "9781974766710",
+      mangaId: 1223,
+    }),
+    57441: releasePage({
+      title: "One Piece - [Walmart Exclusive Cover]",
+      volume: "GN 113",
+      distributor: "Viz Media",
+      date: "2026-11-10",
+      isbn13: "9781974799992",
+      mangaId: 1223,
+    }),
+  };
+
+  it("creates a leaf under the existing Volume for a resolvable distributor and holds the rest", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ONE], PAGES);
+    await sync(t, { releasePages: false });
+    const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
+
+    const result = await syncPages(t);
+    expect(result).toMatchObject({ continued: false, fetched: 4, recordsSeen: 4 });
+
+    const created = (await obsFor(t, 57439))!;
+    expect(created.recordRef?.type).toBe("release");
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.get(created.recordRef!.id as Id<"releases">))!;
+      expect(release).toMatchObject({
+        format: "physical",
+        isbn13: "9781974766703",
+        publisherId: vizId,
+        pubDate: { year: 2026, month: 11, day: 10 },
+        price: { amountCents: 1199, currency: "USD" },
+      });
+      // Leaf only: the Release hangs off the backbone's Volume 113.
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      const cover = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
+        .collect();
+      const volume = (await ctx.db.get(cover[0]!.volumeId))!;
+      expect(volume.label).toBe("113");
+    });
+    const held = async (annId: number) =>
+      (await obsFor(t, annId))!.conflicts?.find((c) => c.field === "placement")?.reason;
+    expect(await held(57440)).toContain('"Defunct Comics" resolves to no publisher');
+    expect(await held(57441)).toContain("variant");
+    // The box set's page 404s: stored as notFound, nothing placed.
+    const box = (await obsFor(t, 24124))!;
+    expect((box.snapshot as { page?: { status: string } }).page?.status).toBe("notFound");
+    expect(box.recordRef).toBeUndefined();
+  });
+
+  it("is incremental: stored pages are re-placed without refetching, and the mirror keeps them", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ONE], PAGES);
+    await sync(t, { releasePages: false });
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await syncPages(t);
+    pageRequests.length = 0;
+
+    // A new publisher row unblocks the held line on the next pass — with no
+    // new page fetches (57440's page is stored; 24124's 404 is fresh).
+    await seedPublisher(t, "Defunct Comics", "defunct-comics");
+    await sync(t, { releasePages: false });
+    const again = await syncPages(t);
+    expect(pageRequests).toEqual([]);
+    expect(again).toMatchObject({ fetched: 0 });
+    expect((await obsFor(t, 57440))!.recordRef?.type).toBe("release");
+    const page = ((await obsFor(t, 57441))!.snapshot as { page?: { status: string } }).page;
+    expect(page?.status).toBe("ok");
+  });
+
+  it("links instead of creating when the Volume already has that publisher's Release without an ISBN", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ONE], PAGES);
+    await sync(t, { releasePages: false });
+    const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
+    const existing = await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "113")!;
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 9,
+        publisherId: vizId,
+      });
+      await ctx.db.insert("volumeCoverages", {
+        editionId,
+        volumeId: volume._id,
+        order: 1,
+        extent: "complete",
+      });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        publisherId: vizId,
+        seriesIds: [series._id],
+      });
+    });
+    await syncPages(t);
+    expect((await obsFor(t, 57439))!.recordRef).toEqual({ type: "release", id: existing });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+  });
+
+  it("the completed mirror chains the page pass", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ONE], PAGES);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await sync(t);
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    expect((await obsFor(t, 57439))!.recordRef?.type).toBe("release");
   });
 });

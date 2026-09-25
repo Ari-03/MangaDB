@@ -42,12 +42,32 @@ uses. The five mock-ups the look was chosen from live on the
 Nothing image-shaped lives in Convex for most of the catalog. `/covers/{isbn13}.jpg`
 (`src/server/covers.ts`) serves jacket art for any Release with an ISBN-13:
 edge cache → the `mangadb-covers` R2 bucket → the distribution CDN Penguin
-Random House runs for the publishers it carries (most English manga) → the
-OpenLibrary Covers API for what PRH lacks (VIZ and other non-PRH publishers,
-most ebook ISBNs). Known "no image" and "coming soon" stand-ins are rejected by
-size and hash, so those books stay cloth. `<Cover isbn13>` derives the URL and falls back to cloth on a
-404. The few stored covers (Kodansha imports) still win where they exist, and
+Random House runs for the publishers it carries → the OpenLibrary Covers API
+for what PRH lacks. Known "no image" and "coming soon" stand-ins are rejected
+by size and hash, so those books stay cloth. A miss everywhere is remembered
+for a day; an upstream that is down or rate-limiting (OpenLibrary returns 403
+past ~100 ISBN lookups per 5 minutes per IP) makes it a five-minute miss.
+
+`<Cover>` takes a stored `src` and one or more ISBNs (`isbn13`, or the
+ordered list `coverIsbns()` builds: physical before digital) and tries them
+in order, drawing cloth after the last 404, including one that failed before
+hydration. Series shelves store one ISBN per Series (`seriesStats.coverIsbn`,
+and `seriesCover` for the home shelf), picked by `seriesCoverIsbn`: physical,
+already published, earliest Volume, standard run before an Edition Line. The
+few stored covers (Kodansha imports) win where they exist, and
 `convex/lib/covers.ts` hides the blank SVG some importers stored.
+
+Coverage, measured September 2026 on a 627-ISBN sample stratified by
+publisher × format × date (weighted to the 17,169 active Releases with an
+ISBN-13; ±0.8 pt): PRH 86%, OpenLibrary 8.5% more, nothing 5.4%. The gap is
+Yen Press print (2.3 pt: neither upstream has much of 2013–22), unannounced
+books with no art yet (1.0), pre-2010 Tokyopop (0.6), VIZ backlist (0.5) and
+TOKYOPOP Classics ebooks (0.3). At Series level, 96% of active Series with any
+ISBN show art; a third of active Series have no Release with an ISBN at all
+and stay cloth. Sources ruled out: Google Books (keyless quota is zero, and
+its terms require a "Powered by Google" mark and a link on every result), the
+VIZ and Yen Press sites (their terms forbid reuse of site material; Yen's
+images are signed URLs), and OpenLibrary by edition key (no extra hits).
 
 ## Series library (`/series`)
 
@@ -689,27 +709,48 @@ never withdraws. `npx convex run kodansha:sync '{}'`
 **ANN Encyclopedia** (`convex/ann.ts`, parsers `convex/lib/ann.ts`;
 weekly). The full mirror that builds the all-publisher, series-structured
 **Series/Volume backbone** — including VIZ and Square Enix, whose sites are
-never scraped. Enumerates `reports.xml?id=155` and batch-fetches
-`api.xml?manga=…` 50 ids at a time at **1 req/s** (1.1 s pause before every
-request); one action invocation processes a bounded number of batches and
-schedules itself to continue, so the ~40k-entry mirror chains across
-Convex's action time limit under one Import Run — withdrawal fires only
-when the final link reaches the end. ANN's API carries no publisher and no
-ISBN, so ANN never creates Editions or Releases: one manga entry = one
-Series (standard-authority title), "(GN n)"/"(eBook n)" designators define
-the Volumes, and each release line is an observation keyed on ANN's own
-release id that links to the canonical Release once another source creates
-it (series link + label + format is the full key under a linked Series) —
-from then on ANN dates reconcile in at standard authority, which is how
-VIZ dates stay fresh. Citations link the Encyclopedia entry, satisfying
-ANN's attribution license. `npx convex run ann:sync '{}'`
+never scraped. Enumerates `reports.xml?id=155` (~24k manga entries, ~5k
+with English releases) and batch-fetches `api.xml?manga=…` 50 ids at a
+time at **1 req/s** (1.1 s pause before every request); one action
+invocation processes a bounded number of batches and schedules itself to
+continue under one Import Run — withdrawal fires only when the final link
+reaches the end. One manga entry = one Series (standard-authority title);
+"(GN n)"/"(eBook n)" designators define the Volumes (single chapters —
+"eBook ch 17" — never do). Each release line is an observation keyed on
+ANN's release id carrying the line's **ISBN** (the API's `ean` attribute):
+it links to the canonical Release with that ISBN, or — without one — the
+single same-label, same-format Release under the linked Series; from then
+on ANN dates reconcile in at standard authority.
+
+A completed mirror chains the **release-page pass**
+(`ann:syncReleasePages`): the API has no publisher, so each still-unlinked
+line's Encyclopedia page (`releases.php?id=N`: Distributor, ISBN-10/13,
+date, SRP) is fetched **once** at 1 req/s and stored on the line's
+observation as `page` (the fetch state — later passes re-place stored
+pages without refetching; 404s re-check after 90 days, errors after 7).
+A line then links to the Release carrying its ISBN, or becomes a **leaf
+Release** (Edition + Release) under the linked Series' existing Volume
+when the Distributor resolves to an existing publisher row — never a new
+Series, Volume, or publisher, never packaging (omnibus/box-set lines link
+by ISBN only), never a store-exclusive/variant cover, never prose
+imprints (Yen On), and never a second same-format Release of a Volume
+from one publisher. Everything held stays on the observation as a
+`placement` note (e.g. `Distributor "Kana" resolves to no publisher row`).
+The first pass over the ~17k unlinked lines is ~5 h of fetching, chained
+300 pages per action. Citations link the Encyclopedia entry or release
+page, satisfying ANN's attribution license. `npx convex run ann:sync '{}'`
+(`'{"releasePages": false}'` skips the chained pass).
 
 **PRH API** (`convex/prh.ts`, parsers `convex/lib/prh.ts`; daily +
 weekly full sweep). The authoritative date/ISBN/price overlay on
 PRH-distributed records — scope is inherent, the API only returns titles
-PRH distributes. Daily runs fetch future-dated titles (`onsaleFrom`
-today); UTC-Sunday runs (or `{"mode":"full"}`) sweep each configured
-imprint's catalog, and only a complete full sweep withdraws. Unmatched
+PRH distributes. Every request uses the imprint-scoped path
+`/imprints/{code}/titles` — the flat `/titles` endpoint silently ignores
+its `imprint` and `onsaleFrom` params (it returns the whole ~313k-title
+domain). Daily runs page each imprint newest-first and stop at the first
+title dated before today; UTC-Sunday runs (or `{"mode":"full"}`) sweep each
+configured imprint's catalog (`{"imprints":["XO"]}` sweeps a subset), and
+only a complete full sweep withdraws. Run errors never carry the api key. Unmatched
 titles follow the standard creation boundaries under the imprint's
 publisher row: a duplicate string resolves to its company ("Kodansha
 Comics" → Kodansha, "Square Enix Manga" → Square Enix), and an imprint
@@ -727,9 +768,13 @@ outright. Setup (no live key exists in this repo):
 # 1. Request a key at developer.penguinrandomhouse.com (manual activation).
 # 2. Once active, list imprint codes:
 #    curl "https://api.penguinrandomhouse.com/resources/v2/title/domains/PRH.US/imprints?api_key=KEY"
-#    and pick the manga imprints (Kodansha Comics, Seven Seas, Ghost Ship,
-#    Dark Horse Manga, Square Enix Manga, Denpa, Vertical Comics, …).
-#    Never the plain "Vertical" imprint: that is Vertical's prose line.
+#    and pick the manga imprints — as of 2026-09: XO Seven Seas, XP Ghost
+#    Ship, 123 Steamship, KM Kodansha Comics, V4 Vertical Comics, 41 Square
+#    Enix Manga, KN Dark Horse Manga, 334 Dark Horse Manhwa, 140 Titan
+#    Manga, 209/206/210/344 TOKYOPOP (+LoveLove, Classics, Kids), 204 Disney
+#    Manga, 205 International Women of Manga. Never the plain "Vertical"
+#    (VT) imprint — Vertical's prose line — nor 182 Manga UP! (single
+#    digital chapters) or XR Airship (light novels).
 npx convex env set PRH_API_KEY <key>
 npx convex env set PRH_IMPRINT_CODES CODE1,CODE2,CODE3
 npx convex run prh:sync '{"mode":"full"}'
@@ -743,7 +788,14 @@ binding (standard); an unmatched record may create at most a **leaf**
 Release under a Series, Volume, and Publisher that all already exist (how
 VIZ physical releases materialize under the ANN backbone), and it never
 creates Series/Volumes/Publishers, never queues review proposals, and
-never withdraws. Only English editions enter: a declared non-English
+never withdraws. The publisher is the first listed name that resolves
+(records often lead with a VIZ imprint label — `["SHONEN JUMP", "viz
+media"]` — which `lib/publishers.ts` also aliases to VIZ); library
+rebinds (Turtleback, Perfection Learning, …) never count; a volume split
+across title + subtitle ("Mashle" + "Magic and Muscles, Vol. 3") is
+re-read joined; and a Volume gets at most one OpenLibrary leaf per
+(publisher, format) — a second ISBN there is a reprint or duplicate and
+stays on the observation. Only English editions enter: a declared non-English
 language, a non-English ISBN group (978-4 Japanese and the like), or no
 declared language without an English-market ISBN (978-0/978-1/979-8) is
 skipped, as are novels. The raw editions dump is ~10 GB, so filter it
@@ -758,14 +810,44 @@ npx convex env set OPENLIBRARY_DUMP_URL https://…/filtered.txt
 npx convex run openLibrary:sync '{}'   # streams + self-continues to the end
 ```
 
+**Yen Press** (`convex/yenPress.ts`, parsers `convex/lib/yenPress.ts`;
+daily; post-v1). Yen is Hachette-distributed, so PRH never carried it.
+`yenpress.com/sitemap.xml` lists every title page as
+`/titles/{isbn13}-{slug}` (~15.7k URLs; a book's print and digital ISBNs
+share one slug and one page). A run groups URLs by slug, skips slugs that
+name prose, audio, or a single digital chapter, and fetches (1 req/s) only
+books that are new or due —
+weekly while the date is upcoming or within 60 days, every ~6 months
+otherwise — chaining 300 pages per action (cursor = last slug). Each page
+yields one snapshot per format (tab "Paperback"/"Hardback"/"Digital":
+ISBN, date, US price, imprint); every snapshot is observed (the fetch
+state), and in-scope ones go through the same catalog-title placement as
+PRH (`convex/lib/catalogTitle.ts`) at own-catalog authority. Out of scope,
+observed only: Yen On, Yen Audio, and JY imprints; the light-novel/audio
+categories (so J-Novel Club's novels stay out while its print manga,
+which Yen distributes, comes in); single chapters; western "comics" (except
+Ize Press manhwa, which Yen files there). The sitemap has no lastmod and
+fresh pages are skipped, so this adapter never withdraws. The first run
+is ~6.2k pages (~2 h). `npx convex run yenPress:sync '{}'`
+
+**Publisher rows** (`launch:seedPublishers`, `convex/lib/publishers.ts`)
+include the legacy distributors ANN names (ADV Manga, Aurora, Central Park
+Media, Go! Comi, Broccoli, DrMaster, …, marked `defunct`) and imprints
+under their parents (SuBLime → VIZ Media, June/801 Media → Digital Manga,
+Blu → Tokyopop), so ANN's release pages and OpenLibrary can place those
+books. Re-run it after deploying.
+
 **Seeding order** (spec §7): `seedRegistry` → Bootstrap Mode on → ①
 `sevenSeas:sync` + `kodansha:sync` until settled → ② `ann:sync` (the
 backbone; hours at 1 req/s) → ③ `prh:sync '{"mode":"full"}'` → ④
 `openLibrary:sync` → quality gates → Bootstrap Mode off, permanently.
+`ann:sync` chains its release-page pass; `yenPress:sync` runs on its own
+daily cadence once `seedRegistry` has added its row.
 
 Tests: `convex/lib/{kodansha,ann,prh,openLibrary}.test.ts` (parsers against
-captured live payloads / documented shapes) and
-`convex/{kodansha,ann,prh,openLibrary}.test.ts` (each adapter end to end
+captured live payloads / documented shapes — ANN release pages and Yen
+title pages are trimmed live copies) and
+`convex/{kodansha,ann,prh,openLibrary,yenPress}.test.ts` (each adapter end to end
 against a stubbed source: creation, per-format Edition sharing, backbone
 building, linking + authority reconciliation, overlay fills + conflicts,
 leaf-only creation, continuation chaining, withdrawal, steady-state gates).

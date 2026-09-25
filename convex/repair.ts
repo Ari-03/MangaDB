@@ -56,7 +56,11 @@ export const applyOne = internalMutation({
       ...(audit.notes.length > 0 ? { notes: audit.notes } : {}),
     };
     // Throwing rolls this sub-transaction back; runBatch reads the outcome.
-    if (dryRun && audit.wrote) throw new ConvexError({ dryRun: reported });
+    // Any write counts, not just audited ones: some ops (withdrawing a stale
+    // Proposal) touch no catalog record and so leave no audit trail.
+    if (dryRun && (audit.wrote || result.status === "applied" || result.status === "partial")) {
+      throw new ConvexError({ dryRun: reported });
+    }
     return reported;
   },
 });

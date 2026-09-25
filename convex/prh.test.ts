@@ -89,16 +89,59 @@ describe("prh.sync — configuration", () => {
     });
   });
 
-  it("future mode bounds the query by onsaleFrom; full mode does not", async () => {
+  it("sweeps the imprint-scoped path, newest-first in future mode", async () => {
+    // PRH ignores `imprint`/`onsaleFrom` on the flat /titles endpoint, so
+    // the sync must use /imprints/{code}/titles and sort by onsale itself.
     const t = makeT();
     await seedRegistry(t, true);
     stubApi([]);
     await sync(t, { mode: "future" });
-    expect(requestedUrls.some((u) => u.includes("onsaleFrom="))).toBe(true);
+    expect(requestedUrls.some((u) => u.includes("/imprints/KODCM/titles"))).toBe(true);
+    expect(requestedUrls.some((u) => u.includes("dir=desc"))).toBe(true);
+    expect(requestedUrls.some((u) => u.includes("imprint=") || u.includes("onsaleFrom="))).toBe(false);
     requestedUrls.length = 0;
     await sync(t, { mode: "full" });
-    expect(requestedUrls.some((u) => u.includes("onsaleFrom="))).toBe(false);
-    expect(requestedUrls.some((u) => u.includes("imprint=KODCM"))).toBe(true);
+    expect(requestedUrls.some((u) => u.includes("/imprints/KODCM/titles"))).toBe(true);
+    expect(requestedUrls.some((u) => u.includes("sort=onsale") && u.includes("dir=asc"))).toBe(true);
+  });
+
+  it("future mode applies only future-dated titles and stops at the first past page", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // Newest-first fixture: one future title, then a past one — the past
+    // title must end the imprint without being applied.
+    stubApi([
+      { isbn: "9781646519811", title: "Future Manga 1", onsale: "2099-01-01" },
+      { isbn: "9781646519828", title: "Past Manga 1", onsale: "2001-01-01" },
+    ]);
+    const result = await sync(t, { mode: "future" });
+    expect(result).toMatchObject({ recordsSeen: 1 });
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519811"]);
+    });
+  });
+
+  it("an imprint override sweeps only those codes and never withdraws", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([]);
+    const result = await sync(t, { mode: "full", imprints: ["XO"] });
+    expect(requestedUrls.every((u) => u.includes("/imprints/XO/titles"))).toBe(true);
+    expect(result).toMatchObject({ completeSweep: false });
+  });
+
+  it("never writes the api key into run errors", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    vi.stubGlobal("fetch", async () => new Response("down", { status: 404 }));
+    const result = await sync(t, { mode: "full" });
+    expect(result).toMatchObject({ failed: true });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.errors.join(" ")).toContain("api_key=…");
+      expect(run!.errors.join(" ")).not.toContain("test-key");
+    });
   });
 });
 

@@ -30,7 +30,8 @@ const fieldAuthority = v.record(v.string(), authorityLevel);
 // The v1 authority table from spec §6, as seed data. `seedRegistry` only
 // inserts missing keys — it never overwrites a row an Administrator edited
 // (existing deployments flip sources on via `upsert` or the dashboard).
-// All five v1 adapters exist (tickets #34/#36), so every row seeds enabled;
+// Every adapter exists (v1's five, tickets #34/#36, plus Yen Press), so
+// every row seeds enabled;
 // PRH and OpenLibrary additionally need environment configuration (API
 // key/imprints, filtered-dump URL — see README) and skip gracefully as
 // "unconfigured" until it is set. The `price` column extends the spec table
@@ -114,6 +115,25 @@ export const V1_SOURCE_DEFAULTS = [
     },
     cadence: "monthly",
     attribution: "Bibliographic data from OpenLibrary (openlibrary.org), CC0.",
+  },
+  // Post-v1 (spec §6 candidate, built 2026-09): Yen Press is Hachette-
+  // distributed, so no other source covers it. Own-catalog authority, like
+  // the other publisher feeds.
+  {
+    key: "yenpress",
+    name: "Yen Press",
+    enabled: true,
+    scope: "Yen Press' own catalog (Yen Press, Ize Press)",
+    fieldAuthority: {
+      date: "authoritative",
+      isbn: "authoritative",
+      titles: "authoritative",
+      creators: "authoritative",
+      format: "authoritative",
+      price: "authoritative",
+    },
+    cadence: "daily",
+    attribution: "Publication data courtesy of Yen Press (yenpress.com).",
   },
 ] as const;
 

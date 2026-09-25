@@ -4,7 +4,8 @@
 // nested and flat field variants the parser tolerates.
 
 import { describe, expect, it } from "vitest";
-import { imprintPublisher, parseOnsale, parseTitle, parseTitleList } from "./prh";
+import { imprintPublisher } from "./catalogTitle";
+import { parseOnsale, parseTitle, parseTitleList } from "./prh";
 
 const TITLE = {
   isbn: 9781646094356,

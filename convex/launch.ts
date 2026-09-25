@@ -21,7 +21,7 @@ import {
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { ensurePublisher, publisherBySlug } from "./lib/pipeline";
-import { CANONICAL_PUBLISHERS } from "./lib/publishers";
+import { CANONICAL_PUBLISHERS, DEFUNCT_SLUGS } from "./lib/publishers";
 import { findDuplicatePairs, pairKeyOf, Reservoir, type SweepEntry } from "./lib/qa";
 import { requireDataTeam, requireModerator, requireRole } from "./lib/roles";
 
@@ -226,6 +226,15 @@ export const seedPublishers = internalMutation({
     for (const pub of CANONICAL_PUBLISHERS) {
       if ((await ensurePublisher(ctx, pub)).created) created.push(pub.slug);
     }
+    // Defunct marks (display/reporting data), on new and existing rows.
+    const markedDefunct: string[] = [];
+    for (const slug of DEFUNCT_SLUGS) {
+      const row = await publisherBySlug(ctx, slug);
+      if (row && row.slug === slug && row.defunct !== true) {
+        await ctx.db.patch(row._id, { defunct: true });
+        markedDefunct.push(slug);
+      }
+    }
     // Parents second: an imprint seeded before its parent row existed.
     const parented: string[] = [];
     for (const pub of CANONICAL_PUBLISHERS) {
@@ -237,7 +246,7 @@ export const seedPublishers = internalMutation({
         parented.push(pub.slug);
       }
     }
-    return { created, parented, total: CANONICAL_PUBLISHERS.length };
+    return { created, parented, markedDefunct, total: CANONICAL_PUBLISHERS.length };
   },
 });
 

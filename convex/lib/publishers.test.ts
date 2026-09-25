@@ -54,6 +54,14 @@ describe("canonicalPublisherFor", () => {
       "drawn-and-quarterly",
     );
     expect(canonicalPublisherFor("Kumar Publishing")).toBeNull();
+    // VIZ's imprint labels are VIZ; its prose-free sibling SuBLime is a row.
+    expect(canonicalPublisherFor("SHONEN JUMP")?.slug).toBe("viz-media");
+    expect(canonicalPublisherFor("Shojo Beat")?.slug).toBe("viz-media");
+    expect(canonicalPublisherFor("VIZ Signature")?.slug).toBe("viz-media");
+    expect(canonicalPublisherFor("SuBLime")).toMatchObject({ slug: "sublime", parentSlug: "viz-media" });
+    // Prose lines never alias to their manga siblings.
+    expect(canonicalPublisherFor("Yen On")).toBeNull();
+    expect(canonicalPublisherFor("Del Rey")).toBeNull();
     expect(canonicalPublisherFor("")).toBeNull();
   });
 });

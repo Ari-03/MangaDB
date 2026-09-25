@@ -246,6 +246,18 @@ export const normalizeVolumesEntry = v.object({
   ),
 });
 
+/**
+ * Withdraw an importer's own In-Review Proposal that no human has touched,
+ * clearing the observation's queue link, so the next import re-evaluates the
+ * record under the current parser (queue dedup otherwise holds it forever).
+ */
+export const withdrawProposalEntry = v.object({
+  kind: v.literal("withdrawProposal"),
+  ...base,
+  proposalId: v.id("proposals"),
+  observationId: v.id("sourceObservations"),
+});
+
 export const repairEntry = v.union(
   publisherMergeEntry,
   publisherParentEntry,
@@ -258,6 +270,7 @@ export const repairEntry = v.union(
   foldEditionEntry,
   updateFieldsEntry,
   normalizeVolumesEntry,
+  withdrawProposalEntry,
 );
 
 export type RepairEntry = Infer<typeof repairEntry>;

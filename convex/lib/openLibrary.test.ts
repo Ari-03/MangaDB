@@ -10,6 +10,7 @@ import {
   parseDumpLine,
   parseEditionJson,
   parseOlDate,
+  toIsbn13,
 } from "./openLibrary";
 
 const EDITION = {
@@ -158,5 +159,35 @@ describe("parseEditionJson / parseDumpLine", () => {
     expect(
       parseEditionJson({ ...EDITION, physical_format: "E-book" }),
     ).toMatchObject({ format: "digital", binding: undefined });
+  });
+});
+
+describe("title + subtitle split across fields", () => {
+  it("re-reads a subtitle that is the rest of the title plus the volume", () => {
+    expect(
+      parseEditionJson({ ...EDITION, title: "Mashle", subtitle: "Magic and Muscles, Vol. 3" }),
+    ).toMatchObject({ seriesTitle: "Mashle: Magic and Muscles", volumeLabel: "3" });
+    expect(
+      parseEditionJson({ ...EDITION, title: "Mission", subtitle: "Yozakura Family, Vol. 12" }),
+    ).toMatchObject({ seriesTitle: "Mission: Yozakura Family", volumeLabel: "12" });
+  });
+
+  it("keeps the split reading when the joined one finds nothing more", () => {
+    expect(
+      parseEditionJson({ ...EDITION, title: "Chainsaw Man, Vol. 22", subtitle: "Something Sinister" }),
+    ).toMatchObject({ seriesTitle: "Chainsaw Man", volumeLabel: "22" });
+    expect(
+      parseEditionJson({ ...EDITION, title: "Honey Hunt", subtitle: "Shojo Beat edition" }),
+    ).toMatchObject({ seriesTitle: "Honey Hunt", volumeLabel: undefined });
+  });
+});
+
+describe("toIsbn13", () => {
+  it("accepts checksum-valid 13- and 10-character ISBNs and nothing else", () => {
+    expect(toIsbn13("978-1-9747-6670-3")).toBe("9781974766703");
+    expect(toIsbn13("1591163269")).toBe("9781591163268");
+    expect(toIsbn13("9781974766704")).toBeUndefined();
+    expect(toIsbn13("CTFL-02")).toBeUndefined();
+    expect(toIsbn13(undefined)).toBeUndefined();
   });
 });

@@ -25,7 +25,7 @@ async function setup(t: ReturnType<typeof convexTest>) {
 }
 
 describe("importSources.seedRegistry", () => {
-  it("seeds the five v1 sources per the spec authority table", async () => {
+  it("seeds the five v1 sources plus Yen Press per the spec authority table", async () => {
     const t = convexTest(schema);
     const { inserted } = await t.mutation(internal.importSources.seedRegistry, {});
     expect(inserted.sort()).toEqual([
@@ -34,6 +34,7 @@ describe("importSources.seedRegistry", () => {
       "openlibrary",
       "prh",
       "sevenseas",
+      "yenpress",
     ]);
     const sources = await t.run((ctx) => ctx.db.query("approvedSources").collect());
     const sevenSeas = sources.find((s) => s.key === "sevenseas")!;
@@ -47,7 +48,7 @@ describe("importSources.seedRegistry", () => {
     // ANN has no ISBN authority at all (spec §6 table).
     const ann = sources.find((s) => s.key === "ann")!;
     expect(ann.fieldAuthority.isbn).toBeUndefined();
-    // All five adapters exist (#34/#36), so every row seeds enabled.
+    // Every adapter exists (#34/#36 + Yen Press), so every row seeds enabled.
     expect(sources.every((s) => s.enabled)).toBe(true);
   });
 
@@ -214,13 +215,14 @@ describe("cadence", () => {
     const t = convexTest(schema);
     await t.mutation(internal.importSources.seedRegistry, {});
     const before = await t.query(internal.imports.enabledSources, {});
-    // All five seeded sources are enabled and unrun.
+    // Every seeded source is enabled and unrun.
     expect(before.map((s) => s.key).sort()).toEqual([
       "ann",
       "kodansha",
       "openlibrary",
       "prh",
       "sevenseas",
+      "yenpress",
     ]);
     expect(
       before.every((s) => s.lastStartedAt === null && s.lastStatus === null),

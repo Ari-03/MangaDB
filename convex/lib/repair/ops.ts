@@ -67,7 +67,40 @@ export async function applyEntry(ctx: MutationCtx, audit: Audit, entry: RepairEn
       return await updateFields(ctx, audit, entry);
     case "normalizeVolumes":
       return await normalizeVolumes(ctx, audit, entry);
+    case "withdrawProposal":
+      return await withdrawProposal(ctx, entry);
   }
+}
+
+/**
+ * Withdraw a source-authored In-Review Proposal nobody has claimed or noted,
+ * and unlink it from its observation. No catalog record changes, so there is
+ * no Revision; the Proposal's own state is the audit trail.
+ */
+async function withdrawProposal(ctx: MutationCtx, entry: EntryOf<"withdrawProposal">): Promise<Result> {
+  const proposal = await ctx.db.get(entry.proposalId);
+  const observation = await ctx.db.get(entry.observationId);
+  if (!proposal || !observation) return skip("proposal or observation missing");
+  if (proposal.state === "withdrawn") {
+    if (observation.queuedProposalId === proposal._id) {
+      await ctx.db.patch(observation._id, { queuedProposalId: undefined });
+      return applied;
+    }
+    return already;
+  }
+  if (proposal.state !== "inReview") return skip(`proposal is ${proposal.state}`);
+  if (proposal.author.kind !== "source") return skip("proposal was written by a person");
+  if (proposal.claimedBy) return skip("a reviewer has claimed the proposal");
+  const note = await ctx.db
+    .query("proposalNotes")
+    .withIndex("by_proposal", (q) => q.eq("proposalId", proposal._id))
+    .first();
+  if (note) return skip("the proposal has reviewer notes");
+  await ctx.db.patch(proposal._id, { state: "withdrawn", decidedAt: Date.now() });
+  if (observation.queuedProposalId === proposal._id) {
+    await ctx.db.patch(observation._id, { queuedProposalId: undefined });
+  }
+  return applied;
 }
 
 /** Hide a record through the stock Hide unless it already is hidden. */

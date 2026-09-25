@@ -23,6 +23,7 @@ import type * as lib_ann from "../lib/ann.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_authority from "../lib/authority.js";
 import type * as lib_bookTitle from "../lib/bookTitle.js";
+import type * as lib_catalogTitle from "../lib/catalogTitle.js";
 import type * as lib_covers from "../lib/covers.js";
 import type * as lib_editionGroups from "../lib/editionGroups.js";
 import type * as lib_email from "../lib/email.js";
@@ -50,6 +51,7 @@ import type * as lib_text from "../lib/text.js";
 import type * as lib_titles from "../lib/titles.js";
 import type * as lib_usernames from "../lib/usernames.js";
 import type * as lib_values from "../lib/values.js";
+import type * as lib_yenPress from "../lib/yenPress.js";
 import type * as moderation from "../moderation.js";
 import type * as openLibrary from "../openLibrary.js";
 import type * as prh from "../prh.js";
@@ -67,6 +69,7 @@ import type * as seriesBrowse from "../seriesBrowse.js";
 import type * as sevenSeas from "../sevenSeas.js";
 import type * as sharing from "../sharing.js";
 import type * as users from "../users.js";
+import type * as yenPress from "../yenPress.js";
 
 import type {
   ApiFromModules,
@@ -90,6 +93,7 @@ declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
   "lib/authority": typeof lib_authority;
   "lib/bookTitle": typeof lib_bookTitle;
+  "lib/catalogTitle": typeof lib_catalogTitle;
   "lib/covers": typeof lib_covers;
   "lib/editionGroups": typeof lib_editionGroups;
   "lib/email": typeof lib_email;
@@ -117,6 +121,7 @@ declare const fullApi: ApiFromModules<{
   "lib/titles": typeof lib_titles;
   "lib/usernames": typeof lib_usernames;
   "lib/values": typeof lib_values;
+  "lib/yenPress": typeof lib_yenPress;
   moderation: typeof moderation;
   openLibrary: typeof openLibrary;
   prh: typeof prh;
@@ -134,6 +139,7 @@ declare const fullApi: ApiFromModules<{
   sevenSeas: typeof sevenSeas;
   sharing: typeof sharing;
   users: typeof users;
+  yenPress: typeof yenPress;
 }>;
 
 /**

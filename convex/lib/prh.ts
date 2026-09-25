@@ -5,12 +5,15 @@
 // adapter overlays authoritative onsale dates and ISBNs on those records.
 //
 // Endpoint (requires an api_key; docs at developer.penguinrandomhouse.com):
-//   GET /resources/v2/title/domains/PRH.US/titles
-//       ?api_key=…&imprint={code}&rows=200&start=N[&onsaleFrom=YYYY-MM-DD]
+//   GET /resources/v2/title/domains/PRH.US/imprints/{code}/titles
+//       ?api_key=…&rows=200&start=N&sort=onsale&dir=asc|desc
+// The imprint-scoped path is mandatory: the flat /titles endpoint silently
+// ignores its `imprint` and `onsaleFrom` query params (verified live
+// 2026-08 and 2026-09), so date filtering happens client-side in the sync.
 //
 // The parser is deliberately tolerant of shape drift (nested vs flat
-// imprint/format fields, string vs number ISBNs) — the exact live shape
-// can only be re-verified once a key is activated.
+// imprint/format fields, string vs number ISBNs) — verified against the
+// live API 2026-08.
 //
 // Scope: a distributed imprint can still publish prose, merchandise, or
 // other languages, so titles are gated here — PRH's prose "Vertical"
@@ -19,38 +22,14 @@
 // samplers, and non-English editions are dropped by title.
 
 import { v, type Infer } from "convex/values";
-import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
-import { canonicalPublisherFor, type CanonicalPublisher } from "./publishers";
+import { outOfScopeReason, parseBookTitle } from "./bookTitle";
+import { catalogTitleFields } from "./catalogTitle";
 
 // ---------- the normalized snapshot ----------
 
 export const prhTitleValidator = v.object({
   kind: v.literal("prhTitle"),
-  url: v.string(),
-  isbn13: v.string(),
-  isbn10: v.optional(v.string()),
-  title: v.string(),
-  /** The base Series title (lib/bookTitle.ts), never the book title. */
-  seriesTitle: v.string(),
-  /** The single covered Volume; absent for oneshots and all packaging. */
-  volumeLabel: v.optional(v.string()),
-  /** Packaging covering more than one Volume. */
-  multiVolume: v.boolean(),
-  /** Omnibus / deluxe / box-set / range shape, when the title has one. */
-  packaging: v.optional(packagingValidator),
-  /** A box set: a Release Bundle, never a Release. */
-  isBox: v.optional(v.boolean()),
-  /** The label came from an unmarked trailing number ("Omega 6" may be a title). */
-  bareNumber: v.optional(v.boolean()),
-  author: v.optional(v.string()),
-  onsale: v.optional(
-    v.object({ year: v.number(), month: v.number(), day: v.number() }),
-  ),
-  format: v.union(v.literal("physical"), v.literal("digital")),
-  binding: v.optional(v.string()),
-  /** The imprint = the publisher brand (e.g. "Kodansha Comics"). */
-  imprint: v.optional(v.string()),
-  priceCents: v.optional(v.number()),
+  ...catalogTitleFields,
 });
 
 export type PrhTitleSnapshot = Infer<typeof prhTitleValidator>;
@@ -199,20 +178,4 @@ export function parseTitleList(raw: unknown): {
     titles,
     recordCount: typeof count === "number" ? count : undefined,
   };
-}
-
-/**
- * An imprint string → the publisher row it belongs on: the canonical row
- * for a known name ("Kodansha Comics" → Kodansha, "Ghost Ship" → the Ghost
- * Ship imprint under Seven Seas), else a row slugified from the name.
- */
-export function imprintPublisher(imprint: string): CanonicalPublisher {
-  const known = canonicalPublisherFor(imprint);
-  if (known) return known;
-  const name = imprint.trim();
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return { name, slug: slug === "" ? "prh-imprint" : slug };
 }

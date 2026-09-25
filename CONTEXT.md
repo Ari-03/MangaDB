@@ -94,7 +94,7 @@ A user's view of Upcoming Releases that either belong to a followed Series and m
 A user's private-by-default sharing policy for Ownership and Reading, with separate defaults for each and per-Series overrides. Visibility is not configured separately for individual Volumes or Releases.
 
 **Publisher**:
-The company issuing a Release (e.g. VIZ Media, Seven Seas). One company is one Publisher, whatever strings sources use for it ("Kodansha Comics" is Kodansha). An imprint (e.g. Ghost Ship) is a Publisher of its own that names its parent company; imprints nest one level only.
+The company issuing a Release (e.g. VIZ Media, Seven Seas). One company is one Publisher, whatever strings sources use for it ("Kodansha Comics" is Kodansha). An imprint (e.g. Ghost Ship) is a Publisher of its own that names its parent company; imprints nest one level only. A Publisher that no longer publishes English manga (ADV, Tokyopop's Blu, CMX) stays a Publisher, marked defunct; its Releases remain in the catalog.
 _Avoid_: brand
 
 **Bootstrap Mode**:
