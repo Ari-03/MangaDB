@@ -64,6 +64,7 @@ import {
   type AnnReleasePage,
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
+import { runToContinue } from "./lib/importRuns";
 import { canonicalLabel } from "./lib/bookTitle";
 import { candidateSeries, labelsEqual, survivorOf } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
@@ -140,15 +141,8 @@ export const sync = internalAction({
         'The approved-source registry has no "ann" row. Run: npx convex run importSources:seedRegistry \'{}\'',
       );
     }
-    if (!source.enabled && args.runId === undefined) {
-      return { skipped: "disabled" as const };
-    }
-
-    const runId: Id<"importRuns"> =
-      args.runId ??
-      (await ctx.runMutation(internal.imports.startRun, {
-        sourceKey: SOURCE_KEY,
-      }));
+    const runId = await runToContinue(ctx, source, args);
+    if (runId === null) return { skipped: "disabled" as const };
     const runStartedAt = args.runStartedAt ?? Date.now();
     const delay = args.politeDelayMs ?? ANN_DELAY_MS;
     const maxBatches = args.maxBatches ?? 40;
@@ -813,12 +807,9 @@ export const syncReleasePages = internalAction({
       internal.importSources.getByKey,
       { key: SOURCE_KEY },
     );
-    if (!source || (!source.enabled && args.runId === undefined)) {
-      return { skipped: "disabled" as const };
-    }
-    const runId: Id<"importRuns"> =
-      args.runId ??
-      (await ctx.runMutation(internal.imports.startRun, { sourceKey: SOURCE_KEY }));
+    if (!source) return { skipped: "disabled" as const };
+    const runId = await runToContinue(ctx, source, args);
+    if (runId === null) return { skipped: "disabled" as const };
     const delay = args.politeDelayMs ?? ANN_DELAY_MS;
     const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
     const errors = [...(args.errors ?? [])];

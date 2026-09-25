@@ -33,6 +33,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, type MutationCtx } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
+import { runToContinue } from "./lib/importRuns";
 import { candidateSeries, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
@@ -109,11 +110,8 @@ export const sync = internalAction({
       return { skipped: "unconfigured" as const };
     }
 
-    const runId: Id<"importRuns"> =
-      args.runId ??
-      (await ctx.runMutation(internal.imports.startRun, {
-        sourceKey: SOURCE_KEY,
-      }));
+    const runId = await runToContinue(ctx, source, args);
+    if (runId === null) return { skipped: "disabled" as const };
     const startLine = args.startLine ?? 0;
     const maxLines = args.maxLines ?? DEFAULT_MAX_LINES;
     const errors = [...(args.errors ?? [])];

@@ -27,16 +27,49 @@ import { revisionsOf } from "./moderation";
 /** Errors kept per run — enough to debug, bounded so a bad sweep can't bloat. */
 const MAX_RUN_ERRORS = 50;
 
+/**
+ * Open an Import Run. Syncs open their own with `automatic: true`; an
+ * operator forcing a run of a disabled source calls this by hand and passes
+ * the id to the sync, which then runs to completion (lib/importRuns.ts).
+ */
 export const startRun = internalMutation({
-  args: { sourceKey: v.string() },
-  handler: async (ctx, { sourceKey }) => {
+  args: { sourceKey: v.string(), automatic: v.optional(v.boolean()) },
+  handler: async (ctx, { sourceKey, automatic }) => {
     return await ctx.db.insert("importRuns", {
       sourceKey,
       status: "running",
       recordsSeen: 0,
       recordsChanged: 0,
       errors: [],
+      ...(automatic ? { automatic } : {}),
     });
+  },
+});
+
+/**
+ * A continuation link found its source disabled: close an automatic run with
+ * what it has done so far and report that it stopped; an operator's run is
+ * left running. Returns whether the run is over.
+ */
+export const stopIfAutomatic = internalMutation({
+  args: {
+    runId: v.id("importRuns"),
+    recordsSeen: v.number(),
+    recordsChanged: v.number(),
+    errors: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run || run.status !== "running") return true;
+    if (!run.automatic) return false;
+    await ctx.db.patch(args.runId, {
+      status: "succeeded",
+      finishedAt: Date.now(),
+      recordsSeen: args.recordsSeen,
+      recordsChanged: args.recordsChanged,
+      errors: [...args.errors, "Stopped: the source was disabled mid-run."].slice(0, MAX_RUN_ERRORS),
+    });
+    return true;
   },
 });
 

@@ -562,6 +562,10 @@ export default defineSchema({
   importRuns: defineTable({
     sourceKey: v.string(),
     status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed")),
+    // Started by a sync itself (the cadence dispatcher, or an operator's bare
+    // `sync '{}'`): such a run stops at its next link once its source is
+    // disabled. An operator's explicit run (imports:startRun) carries on.
+    automatic: v.optional(v.boolean()),
     finishedAt: v.optional(v.number()),
     recordsSeen: v.number(),
     recordsChanged: v.number(),

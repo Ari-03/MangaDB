@@ -26,6 +26,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { errorMessage, politeFetch } from "./lib/http";
+import { runToContinue } from "./lib/importRuns";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   skipsWithoutFetch,
@@ -136,10 +137,8 @@ export const sync = internalAction({
         "The approved-source registry has no \"yenpress\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
-    if (!source.enabled && args.runId === undefined) return { skipped: "disabled" as const };
-
-    const runId: Id<"importRuns"> =
-      args.runId ?? (await ctx.runMutation(internal.imports.startRun, { sourceKey: SOURCE_KEY }));
+    const runId = await runToContinue(ctx, source, args);
+    if (runId === null) return { skipped: "disabled" as const };
     const delay = args.politeDelayMs ?? YEN_DELAY_MS;
     const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
     const errors = [...(args.errors ?? [])];

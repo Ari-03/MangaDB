@@ -181,6 +181,46 @@ describe("yenPress.booksToFetch", () => {
   });
 });
 
+describe("yenPress.sync — disabling a source", () => {
+  const drain = async (t: ReturnType<typeof convexTest>) => {
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+  };
+
+  it("stops a scheduled run at its next link once the source is disabled", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    stubYen({ [MANGA_URL]: MANGA_PAGE, [DELUXE_URL]: DELUXE_PAGE, [IZE_URL]: IZE_BOX_PAGE });
+    expect(await sync(t, { maxFetches: 1 })).toMatchObject({ continued: true, fetched: 1 });
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled: false });
+    await drain(t);
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "succeeded", automatic: true });
+      expect(run!.errors.at(-1)).toMatch(/disabled mid-run/);
+    });
+    // Only the first link's page was fetched.
+    expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(1);
+  });
+
+  it("finishes a run an operator forced on the disabled source", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled: false });
+    stubYen({ [MANGA_URL]: MANGA_PAGE, [DELUXE_URL]: DELUXE_PAGE, [IZE_URL]: IZE_BOX_PAGE });
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "yenpress" });
+    expect(await sync(t, { runId, maxFetches: 1 })).toMatchObject({ continued: true });
+    await drain(t);
+    await t.run(async (ctx) => {
+      const run = await ctx.db.get(runId);
+      expect(run?.status).toBe("succeeded");
+      expect(run?.errors.some((e) => /disabled mid-run/.test(e))).toBe(false);
+    });
+    expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(3);
+  });
+});
+
 describe("yenPress.sync", () => {
   it("creates in-scope books under Yen's publisher rows, once per page, never novels", async () => {
     const t = convexTest(schema);
