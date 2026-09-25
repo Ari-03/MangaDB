@@ -9,3 +9,4 @@ dist/
 worker-configuration.d.ts
 .tanstack/
 filtered.txt
+.scratch/
