@@ -86,7 +86,7 @@ Decided in [import reconciliation, provenance, and confidence rules](https://git
 | Seven Seas | own catalog | auth | auth | auth | auth | auth |
 | Kodansha | own catalog | auth | auth | auth | auth | auth |
 | PRH API | PRH-distributed | auth | auth | std | std | std |
-| ANN | all English | std | — | std | std | std |
+| ANN | all English | std | weak | std | std | std |
 | OpenLibrary | all English | weak | std | weak | weak | std |
 | Yen Press | own catalog | auth | auth | auth | auth | auth |
 
@@ -96,7 +96,7 @@ Decided in [import reconciliation, provenance, and confidence rules](https://git
 
 **Creation boundaries (steady-state):** auto-create single-Volume Releases (and their Volume) under an already-linked Series; always review brand-new Series and anything needing multi-Volume Coverage or an Edition Line — pre-filled so a correct guess is one-click.
 
-**ANN and OpenLibrary create leaves only** (owner decision, 2026-09-25 — ANN previously never created Releases): a Release (+ its Edition) under a Series, Volume, and Publisher that all already exist, never structure, never a publisher, never packaging (omnibus/box-set lines link by ISBN only), and at most one Release per (Volume, Publisher, Format) from that source — a second ISBN there is a reprint or variant and stays on the observation. ANN's publisher comes from each release's Encyclopedia page (Distributor), fetched once per still-unlinked release line at 1 req/s; its ISBN from the API line itself (`ean`). The authority table is unchanged: what ANN creates carries its ISBN and date at creation, and PRH/publisher feeds overwrite them at higher authority.
+**ANN and OpenLibrary create leaves only** (owner decision, 2026-09-25 — ANN previously never created Releases): a Release (+ its Edition) under a Series, Volume, and Publisher that all already exist, never structure, never a publisher, never packaging (omnibus/box-set lines link by ISBN only), and at most one Release per (Volume, Publisher, Format) from that source — a second ISBN there is a reprint or variant and stays on the observation. ANN's publisher comes from each release's Encyclopedia page (Distributor), fetched once per still-unlinked release line at 1 req/s; its ISBN from the API line itself (`ean`). What ANN creates carries its ISBN and date at creation, and PRH/publisher feeds overwrite them at higher authority. ANN's ISBN authority is weak (2026-09-25): a line may fill the blank ISBN of a Release it links to — never one another Release holds, never over a set value.
 
 **Cadence** (Convex scheduled jobs): Seven Seas, Kodansha & Yen Press daily; Kodansha backlist crawl weekly (incremental: only new, re-stamped, or still-moving series, each re-crawled whole every 180 days); PRH daily future-dated + weekly full sweep; ANN weekly full mirror (1 req/s), each completed mirror chaining its release-page pass over still-unlinked lines; OpenLibrary monthly bulk dump.
 

@@ -46,9 +46,9 @@ describe("importSources.seedRegistry", () => {
       consecutiveFailures: 0,
       fieldAuthority: { date: "authoritative", isbn: "authoritative" },
     });
-    // ANN has no ISBN authority at all (spec §6 table).
+    // ANN's ISBN authority is weak: it fills a blank ISBN, never overrides (spec §6 table).
     const ann = sources.find((s) => s.key === "ann")!;
-    expect(ann.fieldAuthority.isbn).toBeUndefined();
+    expect(ann.fieldAuthority.isbn).toBe("weak");
     // Every adapter exists (#34/#36 + Yen Press + Kodansha backlist), so every row seeds enabled.
     expect(sources.every((s) => s.enabled)).toBe(true);
   });
