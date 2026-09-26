@@ -215,21 +215,29 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
 
 /**
  * The title-list envelope → its parsed titles + the total record count.
- * A missing `titles` array is tolerated only with an explicit recordCount 0.
- * An absent count provides no evidence that the catalog is empty; rejecting
- * that response prevents an incomplete sweep from withdrawing observations.
+ * Verified live 2026-09-26 (__fixtures__/prh/titles-page.json): every page
+ * carries `status` ("ok", or "warning" with the data intact), a root
+ * `recordCount`, and `data.titles`; a page past the end or an unknown
+ * imprint is an HTTP 404, never an empty page. So the count is required —
+ * without it an empty page is no evidence the imprint is empty, and a
+ * missing `titles` array is tolerated only with an explicit recordCount 0.
  */
 export function parseTitleList(raw: unknown): {
   titles: PrhTitleSnapshot[];
-  recordCount?: number;
+  recordCount: number;
   /** Upstream page size, before scope filtering. */
   rawCount: number;
 } {
   const root = raw as Record<string, unknown> | null;
   const envelope = typeof root?.data === "object" && root.data !== null;
   const data = (envelope ? root.data : root) as Record<string, unknown> | null;
+  const status = root?.status;
+  if (typeof status === "string" && status !== "ok" && status !== "warning") {
+    throw new Error(`PRH response status is ${status}`);
+  }
   const count = root?.recordCount ?? data?.recordCount;
-  const recordCount = typeof count === "number" ? count : undefined;
+  if (typeof count !== "number") throw new Error("PRH response is missing its recordCount");
+  const recordCount = count;
   const list = data?.titles;
   if (!Array.isArray(list)) {
     if (list == null && recordCount === 0) {

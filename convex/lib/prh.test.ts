@@ -3,6 +3,7 @@
 // Title resource: isbn, onsale, format, imprint, price…) with both the
 // nested and flat field variants the parser tolerates.
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { imprintPublisher } from "./catalogTitle";
 import { parseOnsale, parseTitle, parseTitleList, prhScopeReason } from "./prh";
@@ -243,24 +244,56 @@ describe("parseTitleList", () => {
   it("keeps the upstream page size when all entries are excluded", () => {
     expect(
       parseTitleList({
+        recordCount: 1,
         data: { titles: [{ ...TITLE, title: "A Light Novel" }] },
       }),
     ).toMatchObject({ titles: [], rawCount: 1 });
   });
 
+  it("parses the live envelope (redacted api_key in _links)", () => {
+    const { titles, recordCount, rawCount } = parseTitleList(
+      JSON.parse(
+        readFileSync(new URL("./__fixtures__/prh/titles-page.json", import.meta.url), "utf8"),
+      ),
+    );
+    expect({ recordCount, rawCount }).toEqual({ recordCount: 2677, rawCount: 2 });
+    expect(titles[0]).toMatchObject({
+      isbn13: "9781935429005",
+      title: "Akira 1",
+      volumeLabel: "1",
+      format: "physical",
+      binding: "paperback",
+      imprint: "Kodansha Comics",
+    });
+  });
+
+  it.each([
+    { recordCount: 5, data: {} },
+    { recordCount: 3, data: { titles: null } },
+    { recordCount: 3, data: { titles: "nope" } },
+  ])("rejects truncated envelopes: %j", (raw) =>
+    expect(() => parseTitleList(raw)).toThrow("titles array"),
+  );
+
+  // A page without a count is no evidence of anything: PRH always sends one,
+  // and an empty page past the end is an HTTP 404, not a 200.
   it.each([
     null,
     {},
     { error: "unauthorized" },
     { data: {} },
     { data: { titles: null } },
+    { data: { titles: [] } },
     { data: { error: "upstream unavailable" } },
-    { recordCount: 5, data: {} },
-    { recordCount: 3, data: { titles: null } },
-    { data: { titles: "nope" } },
-  ])("rejects malformed and truncated envelopes: %j", (raw) =>
-    expect(() => parseTitleList(raw)).toThrow("titles array"),
+  ])("rejects envelopes without a recordCount: %j", (raw) =>
+    expect(() => parseTitleList(raw)).toThrow("recordCount"),
   );
+
+  it("rejects a non-ok status even with a count", () => {
+    expect(() => parseTitleList({ status: "error", recordCount: 0 })).toThrow("status is error");
+    expect(parseTitleList({ status: "warning", recordCount: 1, data: { titles: [TITLE] } }))
+      .toMatchObject({ rawCount: 1 });
+  });
 
   // A missing titles array requires an explicit zero count, not an absent count.
   it.each([

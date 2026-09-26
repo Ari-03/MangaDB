@@ -1,0 +1,560 @@
+{
+ "status": "ok",
+ "recordCount": 2677,
+ "startTimestamp": "2026-09-26T15:37:46Z",
+ "endTimestamp": "2026-09-26T15:37:47Z",
+ "timeTaken": 481,
+ "data": {
+  "titles": [
+   {
+    "isbn": 9781935429005,
+    "isbnHyphenated": "978-1-935429-00-5",
+    "title": "Akira 1",
+    "subtitle": null,
+    "author": "Katsuhiro Otomo",
+    "onsale": "2009-10-13",
+    "price": [
+     {
+      "amount": 29.99,
+      "currencyCode": "CAD",
+      "pricingType": null
+     },
+     {
+      "amount": 24.99,
+      "currencyCode": "USD",
+      "pricingType": null
+     }
+    ],
+    "seoFriendlyUrl": "/books/643406/akira-1-by-katsuhiro-otomo/9781935429005",
+    "format": {
+     "code": "TR",
+     "description": "Trade Paperback"
+    },
+    "subformat": {
+     "code": "MLT",
+     "description": "Manga LTR - TR"
+    },
+    "division": {
+     "code": "EA",
+     "description": "Kodansha Comics"
+    },
+    "imprint": {
+     "code": "KM",
+     "description": "Kodansha Comics"
+    },
+    "publisher": {
+     "code": "EAEA",
+     "description": "Kodansha Comics"
+    },
+    "pages": 352,
+    "age": {
+     "code": null,
+     "description": null
+    },
+    "grade": {
+     "code": null,
+     "description": null
+    },
+    "educationGrade": {
+     "code": null,
+     "description": null
+    },
+    "sgmt_desc": null,
+    "subjects": [
+     {
+      "code": "CGN004050",
+      "description": "Comics & Graphic Novels - East Asian Style - Manga - General"
+     },
+     {
+      "code": "CGN004400",
+      "description": "Comics & Graphic Novels - Science Fiction - Apocalyptic & Post-Apocalyptic"
+     },
+     {
+      "code": "CGN004060",
+      "description": "Comics & Graphic Novels - Media Tie-In"
+     }
+    ],
+    "trim": "7 x 10",
+    "formatFamily": "Paperback",
+    "consumerFormat": "Paperback",
+    "consumerImprint": null,
+    "consumerImprintUri": null,
+    "saleStatus": "IP",
+    "language": "E",
+    "seriesNumber": 1,
+    "subseries": null,
+    "editionType": null,
+    "propertyName": null,
+    "cartonQuantity": 20,
+    "version": "Regular Edition",
+    "productLine": "E11",
+    "productType": "EL1",
+    "flags": [
+     "3PD"
+    ],
+    "workId": 643406,
+    "frontlistiestSeq": null,
+    "contribRoleCode": null,
+    "contribRoleDesc": null,
+    "salesRestriction": {
+     "code": "00",
+     "description": "World"
+    },
+    "titleBlock": null,
+    "titleShort": "AKIRA 1",
+    "audioPackage": null,
+    "projectedMinutes": null,
+    "binding": {
+     "code": null,
+     "description": null
+    },
+    "editionId": 0,
+    "editionTarget": {
+     "code": null,
+     "description": null
+    },
+    "originalIsbn": null,
+    "illustPhoto": null,
+    "childrensBookCategory": null,
+    "asin": "1935429000",
+    "customSubjectCategory": "Graphic Novel",
+    "coverUpdatedOn": "2014-02-26",
+    "otherFields": {},
+    "isbn10": "1935429000",
+    "isbn10hyphenated": null,
+    "boxComponentCt": 0,
+    "focDate": null,
+    "cataDate": null,
+    "itemTypeCode": null,
+    "rcatDate": null,
+    "reisFocDate": null,
+    "reisCataDate": null,
+    "orderReq": 0,
+    "overUpc": null,
+    "additionalSeriesInfo": null,
+    "mediaRating": "TP",
+    "mediaRatingDesc": "Rated T+",
+    "coverVariantDesc": null,
+    "catalogs": [],
+    "familyCoverVariantFlag": false,
+    "explicitCoverFlag": false,
+    "sortByAuthor": "Otomo",
+    "alerts": [],
+    "cbRtnDate": null,
+    "isbnCounts": {
+     "variant": 0,
+     "format": 1
+    },
+    "graphicCategory": "Manga",
+    "shortRunInd": null,
+    "seriesFrequency": null,
+    "asset_types": {},
+    "isbnStr": "9781935429005",
+    "_embeds": null,
+    "_links": [
+     {
+      "rel": "self",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "icon",
+      "href": "https://images.penguinrandomhouse.com/cover/9781935429005",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/authors/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/authors?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/categories/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/categories?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/awards/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/awards?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/characters/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/characters?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/content/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/content?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/dimensions/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/dimensions?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/events/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/events?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/hashtags/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/hashtags?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/keywords/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/keywords?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/promoimages/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/promoimages?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/retaillinks/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/retaillinks?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/vendorids/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/vendorids?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/weblinks/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/weblinks?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/series/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/series/AKR?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/divisions/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/divisions/EA?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/imprints/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/imprints/KM?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/works/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/works/643406?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     }
+    ]
+   },
+   {
+    "isbn": 9781935429012,
+    "isbnHyphenated": "978-1-935429-01-2",
+    "title": "The Ghost in the Shell 1",
+    "subtitle": null,
+    "author": "Shirow Masamune",
+    "onsale": "2009-10-13",
+    "price": [
+     {
+      "amount": 33.99,
+      "currencyCode": "CAD",
+      "pricingType": null
+     },
+     {
+      "amount": 26.99,
+      "currencyCode": "USD",
+      "pricingType": null
+     }
+    ],
+    "seoFriendlyUrl": "/books/166169/the-ghost-in-the-shell-1-by-shirow-masamune/9781935429012",
+    "format": {
+     "code": "TR",
+     "description": "Trade Paperback"
+    },
+    "subformat": {
+     "code": "MLT",
+     "description": "Manga LTR - TR"
+    },
+    "division": {
+     "code": "EA",
+     "description": "Kodansha Comics"
+    },
+    "imprint": {
+     "code": "KM",
+     "description": "Kodansha Comics"
+    },
+    "publisher": {
+     "code": "EAEA",
+     "description": "Kodansha Comics"
+    },
+    "pages": 368,
+    "age": {
+     "code": null,
+     "description": null
+    },
+    "grade": {
+     "code": null,
+     "description": null
+    },
+    "educationGrade": {
+     "code": null,
+     "description": null
+    },
+    "sgmt_desc": null,
+    "subjects": [
+     {
+      "code": "CGN004050",
+      "description": "Comics & Graphic Novels - East Asian Style - Manga - General"
+     },
+     {
+      "code": "CGN004070",
+      "description": "Comics & Graphic Novels - Science Fiction - General"
+     },
+     {
+      "code": "CGN004060",
+      "description": "Comics & Graphic Novels - Media Tie-In"
+     }
+    ],
+    "trim": "7 x 10",
+    "formatFamily": "Paperback",
+    "consumerFormat": "Paperback",
+    "consumerImprint": null,
+    "consumerImprintUri": null,
+    "saleStatus": "IP",
+    "language": "E",
+    "seriesNumber": 1,
+    "subseries": null,
+    "editionType": null,
+    "propertyName": null,
+    "cartonQuantity": 16,
+    "version": "Regular Edition",
+    "productLine": "E11",
+    "productType": "EL1",
+    "flags": [
+     "3PD"
+    ],
+    "workId": 166169,
+    "frontlistiestSeq": null,
+    "contribRoleCode": null,
+    "contribRoleDesc": null,
+    "salesRestriction": {
+     "code": "00",
+     "description": "World"
+    },
+    "titleBlock": null,
+    "titleShort": "GHOST IN THE SHELL, THE 1",
+    "audioPackage": null,
+    "projectedMinutes": null,
+    "binding": {
+     "code": null,
+     "description": null
+    },
+    "editionId": 0,
+    "editionTarget": {
+     "code": null,
+     "description": null
+    },
+    "originalIsbn": null,
+    "illustPhoto": null,
+    "childrensBookCategory": null,
+    "asin": "1935429019",
+    "customSubjectCategory": "Graphic Novel",
+    "coverUpdatedOn": "2014-02-22",
+    "otherFields": {},
+    "isbn10": "1935429019",
+    "isbn10hyphenated": null,
+    "boxComponentCt": 0,
+    "focDate": null,
+    "cataDate": null,
+    "itemTypeCode": null,
+    "rcatDate": null,
+    "reisFocDate": null,
+    "reisCataDate": null,
+    "orderReq": 0,
+    "overUpc": null,
+    "additionalSeriesInfo": null,
+    "mediaRating": "MT",
+    "mediaRatingDesc": "Mature",
+    "coverVariantDesc": null,
+    "catalogs": [],
+    "familyCoverVariantFlag": false,
+    "explicitCoverFlag": false,
+    "sortByAuthor": "Shirow Masamune",
+    "alerts": [],
+    "cbRtnDate": null,
+    "isbnCounts": {
+     "variant": 0,
+     "format": 1
+    },
+    "graphicCategory": "Manga",
+    "shortRunInd": null,
+    "seriesFrequency": null,
+    "asset_types": {},
+    "isbnStr": "9781935429012",
+    "_embeds": null,
+    "_links": [
+     {
+      "rel": "self",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "icon",
+      "href": "https://images.penguinrandomhouse.com/cover/9781935429012",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/authors/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/authors?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/categories/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/categories?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/awards/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/awards?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/characters/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/characters?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/content/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/content?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/dimensions/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/dimensions?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/events/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/events?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/hashtags/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/hashtags?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/keywords/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/keywords?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/promoimages/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/promoimages?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/retaillinks/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/retaillinks?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/vendorids/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/vendorids?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/weblinks/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429012/weblinks?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/series/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/series/GHS?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/divisions/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/divisions/EA?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/imprints/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/imprints/KM?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/works/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/works/166169?sort=onsale&dir=asc&api_key=REDACTED_API_KEY",
+      "method": "GET",
+      "parameters": null
+     }
+    ]
+   }
+  ],
+  "_embeds": null,
+  "_links": [
+   {
+    "rel": "https://api.penguinrandomhouse.com/title/domains/definition",
+    "href": "https://api.penguinrandomhouse.com/title",
+    "method": "GET",
+    "parameters": null
+   },
+   {
+    "rel": "next",
+    "href": "https://api.penguinrandomhouse.com/title/domains/PRH.US/titles?sort=onsale&dir=asc&api_key=REDACTED_API_KEY&imprintCode=KM&start=2&rows=2",
+    "method": "GET",
+    "parameters": null
+   }
+  ]
+ },
+ "error": null,
+ "params": {
+  "clientGroup": "Public",
+  "domain": "PRH.US",
+  "imprintCode": "KM",
+  "sort": "onsale",
+  "rows": 2,
+  "dir": "asc"
+ },
+ "requestedMethod": "listTitles"
+}
