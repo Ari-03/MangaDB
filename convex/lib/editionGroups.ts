@@ -24,13 +24,28 @@ export type EditionGroup<E extends GroupableEdition> = {
   books: E[];
 };
 
-function keyPart(text: string): string {
+export function keyPart(text: string): string {
   return text
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * The reading-path key one Edition belongs to — the same value `groupEditions`
+ * gives its group, so a personal view can name a path ("Dark Horse's Deluxe
+ * Edition") without rebuilding the whole Series page.
+ */
+export function editionPathKey(edition: {
+  publisher: { slug: string } | null;
+  lineName: string | null;
+}): string {
+  const publisherKey = edition.publisher?.slug ?? "unknown";
+  return edition.lineName === null
+    ? publisherKey
+    : `${publisherKey}-${keyPart(edition.lineName) || "line"}`;
 }
 
 function firstPosition(edition: GroupableEdition): number {
@@ -70,12 +85,8 @@ export function groupEditions<E extends GroupableEdition>(
 ): Array<EditionGroup<E>> {
   const groups = new Map<string, EditionGroup<E>>();
   for (const edition of editions) {
-    const publisherKey = edition.publisher?.slug ?? "unknown";
     const kind = edition.lineName === null ? "standard" : "line";
-    const key =
-      edition.lineName === null
-        ? publisherKey
-        : `${publisherKey}-${keyPart(edition.lineName) || "line"}`;
+    const key = editionPathKey(edition);
     const group = groups.get(key);
     if (group) group.books.push(edition);
     else

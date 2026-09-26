@@ -48,6 +48,7 @@
 .cover img { width: 100%; height: 100%; object-fit: cover; }
 
 .shelf-item:hover .cover,
+.shelf-item:focus-within .cover,
 .cover-link:hover .cover,
 .cover-link:focus-visible .cover {
   transform: translateY(-7px);
@@ -186,34 +187,114 @@
   -webkit-backdrop-filter: blur(6px);
 }
 
-/* hover: quick collection actions slide up from the cover's foot */
+/* hover: quick actions slide up from the cover's foot (lib/quickActions.tsx):
+   a row of collection states, then the read toggle. The pressed one is the
+   book's current state; pressing it again clears it. */
 .cover-actions {
   position: absolute;
   left: 0; right: 0; bottom: 0;
   z-index: 2;
   display: flex;
-  gap: 6px;
-  padding: 9px 8px;
-  background: linear-gradient(180deg, transparent, rgba(10, 7, 4, 0.92) 42%);
-  transform: translateY(103%);
-  opacity: 0;
-  transition: transform 170ms ease, opacity 170ms ease;
+  flex-direction: column;
+  gap: 5px;
+  padding: 18px 7px 8px;
+  border-radius: 0 0 5px 3px;
+  background: linear-gradient(180deg, transparent, rgba(10, 7, 4, 0.9) 34%);
+  /* hidden by a wipe, not by moving below the jacket: it is revealed from the
+     cover's bottom edge upward and never shows outside the cover */
+  clip-path: inset(100% 0 0 0);
+  transition: clip-path 190ms ease, transform 170ms cubic-bezier(.22,.7,.3,1);
 }
+.cover-actions-row { display: flex; gap: 5px; }
+/* the panel rides the lifted cover (same 7px, same curve as .cover) */
 .shelf-item:hover .cover-actions,
-.shelf-item:focus-within .cover-actions { transform: translateY(0); opacity: 1; }
+.shelf-item:focus-within .cover-actions {
+  clip-path: inset(0 0 0 0);
+  transform: translateY(-7px);
+}
 .quick-btn {
   flex: 1;
-  padding: 5px 0;
+  min-width: 0;
+  padding: 5px 2px;
   border-radius: var(--r-sm);
   border: 1px solid rgba(246, 236, 218, 0.34);
   background: rgba(246, 236, 218, 0.1);
   color: #f6efe3;
-  font-size: 0.74rem;
+  font-size: 0.72rem;
   font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
-.quick-btn:hover { background: var(--on-cover-accent); border-color: var(--on-cover-accent); color: #1a1206; }
+.quick-btn:hover { background: rgba(246, 236, 218, 0.22); }
+.quick-btn[aria-pressed="true"] {
+  background: var(--on-cover-accent);
+  border-color: var(--on-cover-accent);
+  color: #1a1206;
+}
+.quick-btn[aria-pressed="true"]:hover { background: #ffc46a; border-color: #ffc46a; }
+.quick-btn:disabled { opacity: 0.45; cursor: default; }
+/* no pointer to hover with: the actions stay out, quieter, until touched */
+@media (hover: none) {
+  .cover-actions { clip-path: none; opacity: 0.92; }
+  .shelf-item:hover .cover-actions,
+  .shelf-item:focus-within .cover-actions { transform: none; }
+}
+
+/* a book the viewer has not marked, on a shelf that exists to mark more:
+   faded until pointed at */
+.shelf-item--dim .cover { opacity: 0.42; filter: saturate(0.45); }
+.shelf-item--dim:hover .cover,
+.shelf-item--dim:focus-within .cover { opacity: 1; filter: none; }
+
+/* what the quick actions raise (a follow suggestion, a fully read series)
+   and the whole-run tools sit above the shelf, never on it */
+.shelf-prompts { display: grid; gap: 8px; margin-bottom: 14px; }
+.shelf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+/* whole-run marking (lib/quickActions.tsx RunActions): one quiet row of pills,
+   a done state reading as a stamp rather than a button */
+.run-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.run-actions-label {
+  margin-right: 4px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-mute);
+}
+.run-btn {
+  padding: 5px 13px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 130ms ease, color 130ms ease, background 130ms ease;
+}
+.run-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.run-btn[aria-pressed="true"] {
+  background: var(--accent-tint);
+  border-color: transparent;
+  color: var(--accent);
+  opacity: 1;
+  cursor: default;
+}
+.run-btn:disabled:not([aria-pressed="true"]) { opacity: 0.55; cursor: default; }
+.caption-date { color: var(--accent); font-weight: 800; }
 
 /* the ledge: drawn by the caption so it sits between cover and label */
 .caption {
@@ -344,3 +425,9 @@
 @media (max-width: 1180px) { :root { --cover-w: 150px; } }
 @media (max-width: 720px)  { :root { --cover-w: 128px; } }
 @media (max-width: 420px)  { :root { --cover-w: 132px; } .shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* a hover reveal is the only motion here; drop it when the viewer asks */
+@media (prefers-reduced-motion: reduce) {
+  .cover,
+  .cover-actions { transition: none; }
+}

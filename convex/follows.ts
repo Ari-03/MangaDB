@@ -88,6 +88,54 @@ export const followedSeries = query({
 });
 
 /**
+ * The Series the viewer follows, for the library's Following shelf: each
+ * with its library cover and the next announced release date (0 when
+ * nothing is announced) from seriesStats, falling back to the Series doc
+ * when the rebuild has not stored a row yet. Null when signed out or
+ * username pending.
+ */
+export const myFollowing = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await viewerOrNull(ctx);
+    if (!user) return null;
+    const states = await ctx.db
+      .query("userSeriesStates")
+      .withIndex("by_user_series", (q) => q.eq("userId", user._id))
+      .collect();
+    const series = [];
+    const seen = new Set<Id<"series">>();
+    for (const state of states) {
+      if (!state.following) continue;
+      const doc = await followMerges(ctx, "series", await ctx.db.get(state.seriesId));
+      if (!doc || seen.has(doc._id)) continue;
+      seen.add(doc._id);
+      const stats = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", doc._id))
+        .unique();
+      series.push({
+        seriesId: doc._id,
+        seriesPublicId: doc.publicId,
+        title: doc.title,
+        coverUrl: stats?.coverUrl ?? null,
+        coverIsbn: stats?.coverIsbn ?? null,
+        nextReleaseSort: stats?.nextReleaseSort ?? 0,
+        volumeCount: stats?.volumeCount ?? null,
+      });
+    }
+    // Something announced first, soonest first; the rest by title.
+    series.sort(
+      (a, b) =>
+        (a.nextReleaseSort === 0 ? 1 : 0) - (b.nextReleaseSort === 0 ? 1 : 0) ||
+        a.nextReleaseSort - b.nextReleaseSort ||
+        a.title.localeCompare(b.title),
+    );
+    return { series };
+  },
+});
+
+/**
  * My Upcoming Releases (spec §3), computed live on every read — nothing is
  * stored. `todaySort` is the route-computed yyyymmdd key (spec §8 partial
  * dates), exactly as the Publisher Spotlight's upcoming lane takes it.

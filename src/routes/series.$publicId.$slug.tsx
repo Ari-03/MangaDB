@@ -1,19 +1,13 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
-import { editionTitle, volumeTitle } from "../../convex/lib/titles";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { SeriesFollowControls } from "~/lib/follows";
-import { formatPartialDate } from "~/lib/format";
 import {
   ModEditLink,
   ProposeNewRecordsLink,
   RecordHistory,
 } from "~/lib/moderation";
-import {
-  SeriesReadingControls,
-  SeriesReadingProgress,
-  VolumeReadCount,
-} from "~/lib/reading";
+import { SeriesReadingControls, SeriesReadingProgress } from "~/lib/reading";
 import { SeriesReportAffordance } from "~/lib/report";
 import {
   bookSeriesJsonLd,
@@ -22,8 +16,17 @@ import {
   pageHead,
   seriesTitleTag,
 } from "~/lib/seo";
+import {
+  bookLabel,
+  bookTitle,
+  dateSpan,
+  PathShelf,
+  plural,
+  MissingVolume,
+  type EditionGroup,
+} from "~/lib/seriesShelf";
 import { SeriesVisibilityControls } from "~/lib/sharing";
-import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
+import { parsePublicId, seriesPath } from "~/lib/slug";
 import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
 /**
@@ -118,29 +121,6 @@ const RELATIONSHIP_LABELS = {
   other: "related to",
 } as const;
 
-type Volume = SeriesPageData["volumes"][number];
-type EditionGroup = SeriesPageData["editionGroups"][number];
-type Book = EditionGroup["books"][number];
-
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
-/** First and last known publication dates across some books, as a span. */
-function dateSpan(books: ReadonlyArray<Book>): string | null {
-  let first: Book["releases"][number]["pubDate"] = null;
-  let last: Book["releases"][number]["pubDate"] = null;
-  for (const release of books.flatMap((book) => book.releases)) {
-    const date = release.pubDate;
-    if (!date) continue;
-    if (!first || date.sort < first.sort) first = date;
-    if (!last || date.sort > last.sort) last = date;
-  }
-  const from = formatPartialDate(first);
-  const to = formatPartialDate(last);
-  return from === null ? null : from === to ? from : `${from} – ${to}`;
-}
-
 /**
  * The packaging facts the hero states, rolled up from the reading paths:
  * how many books and Releases, which Publishers, and the dated span.
@@ -163,84 +143,6 @@ function seriesLinkParams(publicId: number, title: string) {
   const canonical = seriesPath(publicId, title);
   const slug = canonical.split("/").pop() ?? "";
   return { publicId: String(publicId), slug };
-}
-
-/** "Vol. 3", "Vol. 1–3", or null for a book with no mapped Volumes. */
-function coveredText(book: Book): string | null {
-  const first = book.coverage[0];
-  const last = book.coverage[book.coverage.length - 1];
-  if (!first || !last) return null;
-  const name = (cov: Book["coverage"][number]) => cov.label ?? `#${cov.position}`;
-  const partial = book.coverage.some((cov) => cov.extent === "partial") ? " (part)" : "";
-  return first === last
-    ? `Vol. ${name(first)}${partial}`
-    : `Vol. ${name(first)}–${name(last)}${partial}`;
-}
-
-/** What a book is called within its path: its line number, else its Volumes. */
-function bookLabel(book: Book): string {
-  if (book.lineName !== null) {
-    return book.linePosition !== null
-      ? `${book.lineName} ${book.linePosition}`
-      : book.lineName;
-  }
-  return coveredText(book) ?? "Unnumbered";
-}
-
-function bookTitle(seriesTitle: string, book: Book): string {
-  return editionTitle({
-    seriesTitle,
-    lineName: book.lineName,
-    linePosition: book.linePosition,
-    covered: book.coverage,
-  });
-}
-
-/**
- * One slot of a reading path: a book, or — in a standard path — a canonical
- * Volume this run has no book for (not on file, or never published by this
- * publisher), so gaps read as gaps instead of silently closing up.
- */
-type Slot =
-  | { kind: "book"; book: Book }
-  | { kind: "missing"; volume: Volume };
-
-/**
- * A standard path walks the canonical sequence up to its last covered
- * Volume, placing each book at its first Volume and a gap marker wherever no
- * book covers one. Line paths are simply their books in line order.
- */
-function pathSlots(group: EditionGroup, volumes: ReadonlyArray<Volume>): Slot[] {
-  if (group.kind === "line") {
-    return group.books.map((book) => ({ kind: "book", book }));
-  }
-  const byFirstVolume = new Map<number, Book[]>();
-  const covered = new Set<number>();
-  const unplaced: Book[] = [];
-  for (const book of group.books) {
-    const first = book.coverage[0];
-    if (!first) {
-      unplaced.push(book);
-      continue;
-    }
-    byFirstVolume.set(first.volumePublicId, [
-      ...(byFirstVolume.get(first.volumePublicId) ?? []),
-      book,
-    ]);
-    for (const cov of book.coverage) covered.add(cov.volumePublicId);
-  }
-  const lastPosition = Math.max(
-    -Infinity,
-    ...group.books.flatMap((book) => book.coverage.map((cov) => cov.position)),
-  );
-  const slots: Slot[] = [];
-  for (const volume of volumes) {
-    if (volume.position > lastPosition) break;
-    const books = byFirstVolume.get(volume.publicId);
-    if (books) for (const book of books) slots.push({ kind: "book", book });
-    else if (!covered.has(volume.publicId)) slots.push({ kind: "missing", volume });
-  }
-  return [...slots, ...unplaced.map((book): Slot => ({ kind: "book", book }))];
 }
 
 function SeriesPage() {
@@ -384,23 +286,32 @@ function SeriesPage() {
             ) : null}
           </dl>
 
-          {/* The signed-in tracking bar. Every control inside renders null
-              signed out, which leaves the bar empty — CSS hides it then, so
-              the public page keeps the hero clean. */}
+          {/* The signed-in tracking bar: three labelled groups so following
+              (future releases) never reads as reading (where you are in the
+              story). Every control inside renders null signed out, which
+              leaves the groups empty — CSS hides the bar then, so the public
+              page keeps the hero clean. */}
           <div className="owner-bar">
-            {/* Series Follow is the explicit toggle for future-release
-                interest (#29); always private in v1. */}
-            <SeriesFollowControls seriesPublicId={series.publicId} />
-            {/* Series Reading Status is set only here, by explicit choice
-                (#28); the tracking prompts never change it without
-                confirmation. */}
-            <SeriesReadingControls seriesPublicId={series.publicId} />
-            {/* Per-Series visibility overrides for the public profile (#30). */}
-            <SeriesVisibilityControls seriesPublicId={series.publicId} />
-            <SeriesReadingProgress
-              seriesPublicId={series.publicId}
-              volumeCount={volumes.length}
-            />
+            <div className="track-group">
+              {/* Series Follow is the explicit toggle for future-release
+                  interest (#29); always private in v1. */}
+              <SeriesFollowControls seriesPublicId={series.publicId} />
+            </div>
+            <div className="track-group track-group--reading">
+              {/* Series Reading Status is set only here, by explicit choice
+                  (#28); the tracking prompts never change it without
+                  confirmation. Progress counts read Volumes, not entries. */}
+              <SeriesReadingControls seriesPublicId={series.publicId} />
+              <SeriesReadingProgress
+                seriesPublicId={series.publicId}
+                volumeCount={volumes.length}
+              />
+            </div>
+            <div className="track-group track-group--sharing">
+              {/* Per-Series visibility overrides for the public profile (#30),
+                  in a popover so the bar never reflows. */}
+              <SeriesVisibilityControls seriesPublicId={series.publicId} />
+            </div>
           </div>
         </div>
       </section>
@@ -436,25 +347,14 @@ function SeriesPage() {
                 : " in reading order"}
             </p>
           </div>
-          <div className="shelf">
-            {pathSlots(selected, volumes).map((slot) =>
-              slot.kind === "book" ? (
-                <BookShelfItem
-                  key={slot.book.publicId}
-                  book={slot.book}
-                  seriesTitle={series.title}
-                  seriesPublicId={series.publicId}
-                  showCoverage={selected.kind === "line"}
-                />
-              ) : (
-                <MissingVolume
-                  key={`missing-${slot.volume.publicId}`}
-                  volume={slot.volume}
-                  seriesTitle={series.title}
-                />
-              ),
-            )}
-          </div>
+          {/* Signed in, every cover wears its badges and offers Want /
+              Ordered / Own and Mark read on hover (lib/quickActions.tsx). */}
+          <PathShelf
+            group={selected}
+            volumes={volumes}
+            seriesTitle={series.title}
+            seriesPublicId={series.publicId}
+          />
         </section>
       ) : null}
 
@@ -551,128 +451,6 @@ function EditionPicker({
         );
       })}
     </nav>
-  );
-}
-
-/**
- * One book on a reading path, linking its Edition page (the book detail page,
- * where its Releases and the collection controls live). The cloth carries the
- * book's own number: its line position in a line, its Volume label otherwise.
- */
-function BookShelfItem({
-  book,
-  seriesTitle,
-  seriesPublicId,
-  showCoverage,
-}: {
-  book: Book;
-  seriesTitle: string;
-  seriesPublicId: number;
-  showCoverage: boolean;
-}) {
-  const title = bookTitle(seriesTitle, book);
-  const number = book.lineName !== null ? book.linePosition : (book.coverage[0]?.label ?? null);
-  const date = formatPartialDate(book.releases[0]?.pubDate ?? null);
-  const formats = [...new Set(book.releases.map((r) => r.format))];
-  const covered = showCoverage ? coveredText(book) : null;
-  return (
-    <div className="shelf-item">
-      <div className="cover-wrap">
-        <Link
-          className="cover-link"
-          to="/edition/$publicId/$slug"
-          params={slugParams(book.publicId, title)}
-          aria-label={title}
-        >
-          <Cover
-            src={book.coverUrl}
-            isbn13={coverIsbns([book])}
-            title={title}
-            numbered={number !== null ? { series: seriesTitle, number } : undefined}
-          />
-        </Link>
-      </div>
-      <div className="caption">
-        <Link
-          className="caption-title"
-          to="/edition/$publicId/$slug"
-          params={slugParams(book.publicId, title)}
-        >
-          {bookLabel(book)}
-        </Link>
-        <div className="caption-meta">
-          {covered ? (
-            <>
-              <span>{covered}</span>
-              <span className="dot" />
-            </>
-          ) : null}
-          <span>{date ?? "Date TBA"}</span>
-          {/* Line books already carry their Volume range; formats would
-              overflow the caption. */}
-          {!showCoverage && formats.length > 0 ? (
-            <>
-              <span className="dot" />
-              <span>
-                {formats.map((f) => (f === "physical" ? "Print" : "Digital")).join(" + ")}
-              </span>
-            </>
-          ) : null}
-        </div>
-        {/* Durable, edition-independent read count (#28) for a one-volume
-            book; signed-in only. */}
-        {book.coverage.length === 1 && book.coverage[0] ? (
-          <VolumeReadCount
-            seriesPublicId={seriesPublicId}
-            volumePublicId={book.coverage[0].volumePublicId}
-          />
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/** A canonical Volume with no book in this path, linking its Volume page. */
-function MissingVolume({
-  volume,
-  seriesTitle,
-}: {
-  volume: Volume;
-  seriesTitle: string;
-}) {
-  const title = volumeTitle(seriesTitle, volume.label);
-  return (
-    <div className="shelf-item shelf-item--missing">
-      <div className="cover-wrap">
-        <Link
-          className="cover-link"
-          to="/volume/$publicId/$slug"
-          params={slugParams(volume.publicId, title)}
-          aria-label={title}
-        >
-          <Cover
-            title={title}
-            numbered={
-              volume.label !== null
-                ? { series: seriesTitle, number: volume.label }
-                : undefined
-            }
-          />
-        </Link>
-      </div>
-      <div className="caption">
-        <Link
-          className="caption-title"
-          to="/volume/$publicId/$slug"
-          params={slugParams(volume.publicId, title)}
-        >
-          {volume.label !== null ? `Vol. ${volume.label}` : "Unnumbered"}
-        </Link>
-        <div className="caption-meta">
-          <span>Not on file</span>
-        </div>
-      </div>
-    </div>
   );
 }
 

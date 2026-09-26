@@ -11,6 +11,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate } from "~/lib/format";
 import { todaySortKey } from "~/lib/month";
 import { convexClient } from "~/providers";
@@ -23,9 +24,9 @@ export type FollowSuggestion = { seriesId: Id<"series">; title: string };
 /**
  * The explicit Series Follow toggle on the Series page — the one deliberate
  * way to start tracking a Series' future Releases. Renders nothing signed
- * out. It returns the toggle and its hint as bare siblings, so the Series
- * page's tracking bar lays them out with the other tracking controls (and
- * stays empty, and hidden, for signed-out viewers).
+ * out. It returns its kicker, the toggle and its hint as bare siblings, so
+ * the Series page's tracking bar lays them out as one group (and stays
+ * empty, and hidden, for signed-out viewers).
  */
 export function SeriesFollowControls({
   seriesPublicId,
@@ -46,6 +47,7 @@ function SeriesFollowControlsInner({
   if (!data) return null; // loading, signed out, or username pending
   return (
     <>
+      <span className="track-kicker">New releases</span>
       <button
         type="button"
         aria-pressed={data.following}
@@ -80,10 +82,10 @@ function SeriesFollowControlsInner({
         )}
         {data.following ? "Following" : "Follow series"}
       </button>
-      <span className="follow-hint">
+      <span className="track-hint">
         {data.following
-          ? "New releases appear in your Upcoming. Follows are private."
-          : "See announced releases in your Upcoming. Follows are private."}
+          ? "Announced releases land in your Upcoming. Follows are private."
+          : "Follow to get announced releases in your Upcoming. Follows are private."}
       </span>
     </>
   );
@@ -140,7 +142,7 @@ export function FollowPrompt({
   );
 }
 
-// ---------- /me upcoming ----------
+// ---------- library: the Upcoming tab ----------
 
 const FORMAT_LABELS = { physical: "Physical", digital: "Digital" } as const;
 
@@ -162,67 +164,141 @@ function sortDate(sort: number, day: number | null): string | null {
 }
 
 /**
- * The Upcoming section of /me: My Upcoming Releases computed live by
- * follows.myUpcoming, plus the Physical/Digital/Both preference that scopes
- * the followed-Series clause of the formula.
+ * The Upcoming tab of the library: the Series the viewer follows as a rail
+ * of covers (each with its next announced date, unfollowable in place), the
+ * format preference that scopes them, and My Upcoming Releases —
+ * follows.myUpcoming, computed live — as a shelf of covers, nearest first.
  */
-export function MyUpcoming() {
+export function LibraryUpcoming() {
   if (!convexClient) return null;
-  return <MyUpcomingInner />;
+  return <LibraryUpcomingInner />;
 }
 
-function MyUpcomingInner() {
+function LibraryUpcomingInner() {
   // Computed once per mount so the reactive query key stays stable.
   const [todaySort] = useState(() => todaySortKey());
   const upcoming = useQuery(api.follows.myUpcoming, { todaySort });
+  const following = useQuery(api.follows.myFollowing, {});
   const viewer = useQuery(api.users.viewer, {});
   const setPreference = useMutation(api.users.setFormatPreference);
+  const setFollow = useMutation(api.follows.setSeriesFollow);
 
-  if (upcoming === undefined) return <p className="placeholder">Loading…</p>;
-  if (upcoming === null) return null;
+  if (upcoming === undefined || following === undefined) {
+    return <p className="placeholder">Loading…</p>;
+  }
+  if (upcoming === null || following === null) return null;
 
   return (
-    <div className="my-upcoming">
-      {viewer && !viewer.needsUsername ? (
-        <label className="upcoming-preference">
-          From followed series, show{" "}
-          <select
-            value={viewer.formatPreference}
-            onChange={(event) =>
-              void setPreference({
-                preference: event.currentTarget
-                  .value as keyof typeof PREFERENCE_LABELS,
-              })
-            }
-          >
-            {(["both", "physical", "digital"] as const).map((preference) => (
-              <option key={preference} value={preference}>
-                {PREFERENCE_LABELS[preference]}
-              </option>
+    <div className="lib-upcoming">
+      <section className="lib-block">
+        <div className="lib-block-head">
+          <h3 className="lib-group-title">Following</h3>
+          <p className="lib-block-note">
+            {following.series.length === 0
+              ? "Follow a series from its page to see its announced releases here. Follows are private."
+              : `${following.series.length === 1 ? "1 series" : `${following.series.length} series`} · new releases appear below. Follows are private.`}
+          </p>
+        </div>
+        {following.series.length > 0 ? (
+          <div className="rail lib-rail lib-following">
+            {following.series.map((series) => {
+              const next = sortDate(series.nextReleaseSort, null);
+              return (
+                <div key={series.seriesId} className="shelf-item">
+                  <div className="cover-wrap">
+                    <Link
+                      className="cover-link"
+                      to="/series/$publicId/$slug"
+                      params={slugParams(series.seriesPublicId, series.title)}
+                      aria-label={series.title}
+                    >
+                      <Cover
+                        src={series.coverUrl}
+                        isbn13={series.coverIsbn}
+                        title={series.title}
+                        followed
+                      />
+                    </Link>
+                    <div className="cover-actions">
+                      <div className="cover-actions-row">
+                        <button
+                          type="button"
+                          className="quick-btn"
+                          onClick={() =>
+                            void setFollow({ seriesId: series.seriesId, following: false })
+                          }
+                        >
+                          Unfollow
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="caption">
+                    <Link
+                      className="caption-title"
+                      to="/series/$publicId/$slug"
+                      params={slugParams(series.seriesPublicId, series.title)}
+                    >
+                      {series.title}
+                    </Link>
+                    <div className="caption-meta">
+                      {series.nextReleaseSort > 0 ? (
+                        <span className="caption-date">Next {next}</span>
+                      ) : (
+                        <span>Nothing announced</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="lib-block">
+        <div className="lib-block-head">
+          <h3 className="lib-group-title">Announced releases</h3>
+          {viewer && !viewer.needsUsername ? (
+            <label className="upcoming-preference">
+              From followed series, show{" "}
+              <select
+                value={viewer.formatPreference}
+                onChange={(event) =>
+                  void setPreference({
+                    preference: event.currentTarget
+                      .value as keyof typeof PREFERENCE_LABELS,
+                  })
+                }
+              >
+                {(["both", "physical", "digital"] as const).map((preference) => (
+                  <option key={preference} value={preference}>
+                    {PREFERENCE_LABELS[preference]}
+                  </option>
+                ))}
+              </select>{" "}
+              <span className="pass-facts">Wanted and Ordered items always appear.</span>
+            </label>
+          ) : null}
+        </div>
+        {upcoming.items.length === 0 ? (
+          <p className="placeholder">
+            Follow a series, or mark a release or box set Wanted or Ordered, and
+            its announced future releases will appear here.
+          </p>
+        ) : (
+          <div className="shelf">
+            {upcoming.items.map((item) => (
+              <UpcomingItem key={item.id} item={item} />
             ))}
-          </select>{" "}
-          <span className="pass-facts">
-            Wanted and Ordered items always appear.
-          </span>
-        </label>
-      ) : null}
-      {upcoming.items.length === 0 ? (
-        <p className="placeholder">
-          Follow a series, or mark a release or box set Wanted or Ordered, and
-          its announced future releases will appear here.
-        </p>
-      ) : (
-        <ul className="upcoming-list">
-          {upcoming.items.map((item) => (
-            <UpcomingItem key={item.id} item={item} />
-          ))}
-        </ul>
-      )}
-      {upcoming.capped ? (
-        <p className="pass-facts">
-          Showing the nearest announced releases; more exist further out.
-        </p>
-      ) : null}
+          </div>
+        )}
+        {upcoming.capped ? (
+          <p className="pass-facts">
+            Showing the nearest announced releases; more exist further out.
+          </p>
+        ) : null}
+      </section>
     </div>
   );
 }
@@ -231,58 +307,85 @@ type UpcomingData = NonNullable<
   FunctionReturnType<typeof api.follows.myUpcoming>
 >;
 
+/** One announced release (or box set) as a book on the Upcoming shelf. */
 function UpcomingItem({ item }: { item: UpcomingData["items"][number] }) {
-  const date = sortDate(item.sort, item.day);
-  return (
-    <li className="upcoming-item">
-      <span className="upcoming-date">{date ?? "Date TBA"}</span>{" "}
-      {item.kind === "release" ? (
-        <>
+  const date = sortDate(item.sort, item.day) ?? "Date TBA";
+  if (item.kind === "bundle") {
+    return (
+      <div className="shelf-item">
+        <div className="cover-wrap">
           <Link
-            to="/edition/$publicId/$slug"
-            params={slugParams(item.edition.publicId, item.edition.title)}
-            hash={item.anchor}
+            className="cover-link"
+            to="/bundle/$publicId/$slug"
+            params={slugParams(item.bundlePublicId, item.name)}
+            aria-label={item.name}
           >
-            {item.series.map((series) => series.title).join(" × ")}
-            {item.volumeLabel ? ` — ${item.volumeLabel}` : ""}
-          </Link>{" "}
-          <span className="pass-facts">
-            {item.format === "physical"
-              ? `Physical${item.binding ? ` · ${item.binding}` : ""}`
-              : "Digital"}
-            {item.publisher ? ` · ${item.publisher.name}` : ""}
-          </span>
-          {item.state ? (
-            <span className={`upcoming-badge ${item.state}`}>
-              {item.state === "wanted" ? "Wanted" : "Ordered"}
-            </span>
-          ) : null}
-          {item.followed ? (
-            <span
-              className="followed-marker"
-              title="From a series you follow"
-            >
-              ★ Following
-            </span>
-          ) : null}
-        </>
-      ) : (
-        <>
+            <Cover
+              title={item.name}
+              foot={["Box set", item.format ? FORMAT_LABELS[item.format] : null]}
+              badges={<CoverBadge state={item.state} />}
+            />
+          </Link>
+        </div>
+        <div className="caption">
           <Link
+            className="caption-title"
             to="/bundle/$publicId/$slug"
             params={slugParams(item.bundlePublicId, item.name)}
           >
             {item.name}
-          </Link>{" "}
-          <span className="pass-facts">
-            Box set
-            {item.format ? ` · ${FORMAT_LABELS[item.format]}` : ""}
+          </Link>
+          <div className="caption-meta">
+            <span className="caption-date">{date}</span>
+            <span className="dot" />
+            <span>Box set</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const title = item.series.map((series) => series.title).join(" × ");
+  const label = item.volumeLabel ? `${title} — ${item.volumeLabel}` : title;
+  return (
+    <div className="shelf-item">
+      <div className="cover-wrap">
+        <Link
+          className="cover-link"
+          to="/edition/$publicId/$slug"
+          params={slugParams(item.edition.publicId, item.edition.title)}
+          hash={item.anchor}
+          aria-label={item.edition.title}
+        >
+          <Cover
+            src={item.coverUrl}
+            isbn13={item.coverIsbn}
+            title={item.edition.title}
+            foot={[item.volumeLabel, item.publisher?.name]}
+            badges={item.state ? <CoverBadge state={item.state} /> : undefined}
+            followed={item.followed}
+          />
+        </Link>
+      </div>
+      <div className="caption">
+        <Link
+          className="caption-title"
+          to="/edition/$publicId/$slug"
+          params={slugParams(item.edition.publicId, item.edition.title)}
+          hash={item.anchor}
+        >
+          {label}
+        </Link>
+        <div className="caption-meta">
+          <span className="caption-date">{date}</span>
+          <span className="dot" />
+          <span>
+            {item.format === "physical"
+              ? (item.binding ?? "Print")
+              : "Digital"}
+            {item.publisher ? ` · ${item.publisher.name}` : ""}
           </span>
-          <span className={`upcoming-badge ${item.state}`}>
-            {item.state === "wanted" ? "Wanted" : "Ordered"}
-          </span>
-        </>
-      )}
-    </li>
+        </div>
+      </div>
+    </div>
   );
 }

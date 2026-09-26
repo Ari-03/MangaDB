@@ -575,42 +575,6 @@
   font-size: 0.84rem;
 }
 
-.my-collection {
-  display: grid;
-  gap: 22px;
-}
-.my-collection-group h3 {
-  font-size: 1rem;
-  margin-bottom: 9px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--line);
-}
-.my-collection ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 7px;
-  font-size: 0.9rem;
-}
-.my-collection a {
-  font-weight: 700;
-}
-.my-collection a:hover {
-  color: var(--accent);
-}
-.my-collection .pass-facts {
-  color: var(--text-mute);
-  font-size: 0.84rem;
-}
-.my-collection .bundle-derived {
-  margin: 5px 0 0 16px;
-  padding-left: 12px;
-  border-left: 2px solid var(--line-strong);
-  gap: 3px;
-  font-size: 0.85rem;
-}
-
 /* --- Responsive ---------------------------------------------------------- */
 
 @media (max-width: 1080px) {

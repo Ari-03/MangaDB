@@ -225,6 +225,69 @@ describe("follows.followedSeries", () => {
   });
 });
 
+describe("follows.myFollowing", () => {
+  it("lists followed series with covers and next dates, announced first", async () => {
+    const t = convexTest(schema);
+    const { seriesA, seriesB } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: true });
+    await as.mutation(api.follows.setSeriesFollow, { seriesId: seriesB, following: true });
+    // A stats row for B only: A falls back to the Series document.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("seriesStats", {
+        seriesId: seriesB,
+        publicId: 2,
+        title: "Dungeon Meshi",
+        titleSort: "dungeon meshi",
+        letter: "d",
+        sourceStatus: "unknown",
+        publishers: [],
+        hasPhysical: false,
+        hasDigital: true,
+        volumeCount: 1,
+        releaseCount: 1,
+        firstReleaseSort: 20261001,
+        latestReleaseSort: 20261001,
+        nextReleaseSort: 20261001,
+        followers: 1,
+        collectors: 0,
+        coverUrl: null,
+        coverIsbn: "9781234567897",
+        rebuiltAt: 1,
+      });
+    });
+
+    const following = await as.query(api.follows.myFollowing, {});
+    expect(following?.series.map((row) => row.title)).toEqual([
+      "Dungeon Meshi",
+      "Witch Hat Atelier",
+    ]);
+    expect(following?.series[0]).toMatchObject({
+      seriesId: seriesB,
+      seriesPublicId: 2,
+      coverIsbn: "9781234567897",
+      nextReleaseSort: 20261001,
+      volumeCount: 1,
+    });
+    expect(following?.series[1]).toMatchObject({
+      seriesId: seriesA,
+      nextReleaseSort: 0,
+      coverIsbn: null,
+      volumeCount: null,
+    });
+  });
+
+  it("omits unfollowed series and is null signed out", async () => {
+    const t = convexTest(schema);
+    const { seriesA } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: true });
+    await as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: false });
+    expect((await as.query(api.follows.myFollowing, {}))?.series).toEqual([]);
+    expect(await t.query(api.follows.myFollowing, {})).toBeNull();
+  });
+});
+
 describe("follows.myUpcoming", () => {
   it("is null signed out", async () => {
     const t = convexTest(schema);

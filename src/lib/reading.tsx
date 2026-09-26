@@ -17,10 +17,11 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { Cover } from "~/lib/cover";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
-const STATUS_LABELS = {
+export const STATUS_LABELS = {
   planToRead: "Plan to Read",
   reading: "Reading",
   paused: "Paused",
@@ -28,9 +29,9 @@ const STATUS_LABELS = {
   completed: "Completed",
 } as const;
 
-type ReadingStatus = keyof typeof STATUS_LABELS;
+export type ReadingStatus = keyof typeof STATUS_LABELS;
 
-const STATUS_ORDER: ReadingStatus[] = [
+export const STATUS_ORDER: ReadingStatus[] = [
   "reading",
   "planToRead",
   "paused",
@@ -38,12 +39,52 @@ const STATUS_ORDER: ReadingStatus[] = [
   "dropped",
 ];
 
-type SeriesSuggestion = { seriesId: Id<"series">; title: string };
+export type SeriesSuggestion = { seriesId: Id<"series">; title: string };
+
+/**
+ * The fully-read prompt (spec §3): a completion that leaves every Volume of
+ * a Series read only *suggests* "Completed"; this renders the suggestion,
+ * and only its confirm button writes the status. Shared by the pass
+ * controls and the shelf quick actions.
+ */
+export function CompletedPrompt({
+  suggestions,
+  onDone,
+}: {
+  suggestions: SeriesSuggestion[];
+  onDone: () => void;
+}) {
+  const setStatus = useMutation(api.reading.setSeriesReadingStatus);
+  if (suggestions.length === 0) return null;
+  return (
+    <span className="prompt" role="status">
+      {suggestions.map((suggestion) => (
+        <span key={suggestion.seriesId} className="prompt-line">
+          You have now read every volume of “{suggestion.title}”. Mark the
+          series Completed?{" "}
+          <button
+            type="button"
+            onClick={() => {
+              void setStatus({ seriesId: suggestion.seriesId, status: "completed" });
+              onDone();
+            }}
+          >
+            Mark Completed
+          </button>{" "}
+          <button type="button" onClick={onDone}>
+            Not now
+          </button>
+        </span>
+      ))}
+    </span>
+  );
+}
 
 // ---------- Series Reading Status picker ----------
 
 /**
- * The explicit Series Reading Status choice on the Series page. The select
+ * The explicit Series Reading Status choice on the Series page, with the
+ * group's kicker and hint as bare siblings for the tracking bar. The select
  * is one of exactly two writers of the status (the other being a confirmed
  * prompt); nothing here changes it as a side effect of anything.
  */
@@ -65,10 +106,11 @@ function SeriesReadingControlsInner({
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   if (!tracking) return null;
   return (
-    <label className="track-field">
-      <span className="track-label">Reading status</span>
+    <>
+      <span className="track-kicker">Your reading</span>
       <select
         className="select"
+        aria-label="Reading status"
         value={tracking.readingStatus ?? ""}
         onChange={(event) => {
           const value = event.currentTarget.value as ReadingStatus | "";
@@ -78,14 +120,17 @@ function SeriesReadingControlsInner({
           });
         }}
       >
-        <option value="">Not tracked</option>
+        <option value="">No status</option>
         {STATUS_ORDER.map((status) => (
           <option key={status} value={status}>
             {STATUS_LABELS[status]}
           </option>
         ))}
       </select>
-    </label>
+      <span className="track-hint">
+        Where you are in the story — separate from following.
+      </span>
+    </>
   );
 }
 
@@ -333,30 +378,10 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
           >
             Undo
           </button>
-          {completion.suggested.map((suggestion) => (
-            <span key={suggestion.seriesId} className="prompt-line">
-              You have now read every volume of “{suggestion.title}”. Mark the
-              series Completed?{" "}
-              <button
-                type="button"
-                onClick={() => {
-                  void setStatus({
-                    seriesId: suggestion.seriesId,
-                    status: "completed",
-                  });
-                  setCompletion({ ...completion, suggested: [] });
-                }}
-              >
-                Mark Completed
-              </button>{" "}
-              <button
-                type="button"
-                onClick={() => setCompletion({ ...completion, suggested: [] })}
-              >
-                Not now
-              </button>
-            </span>
-          ))}
+          <CompletedPrompt
+            suggestions={completion.suggested}
+            onDone={() => setCompletion({ ...completion, suggested: [] })}
+          />
         </span>
       ) : (
         <button type="button" onClick={() => void start()}>
@@ -393,77 +418,167 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
 
 // ---------- /me reading overview ----------
 
-/** The Reading section of /me: chosen statuses and active passes. */
-export function MyReading() {
+type ReadingFilter = "all" | ReadingStatus;
+
+/**
+ * The Reading tab of the library: every Series the viewer reads, as a row
+ * with its cover, status (changeable in place — the same explicit choice as
+ * the Series page picker), volumes-read progress, and the active passes
+ * through its books. Filter chips narrow to one status.
+ */
+export function LibraryReading() {
   if (!convexClient) return null;
-  return <MyReadingInner />;
+  return <LibraryReadingInner />;
 }
 
-function MyReadingInner() {
+function LibraryReadingInner() {
   const overview = useQuery(api.reading.myReading, {});
+  const setStatus = useMutation(api.reading.setSeriesReadingStatus);
+  const [filter, setFilter] = useState<ReadingFilter>("all");
   if (overview === undefined) return <p className="placeholder">Loading…</p>;
   if (overview === null) return null;
-  if (overview.statuses.length === 0 && overview.passes.length === 0) {
+  if (overview.series.length === 0) {
     return (
       <p className="placeholder">
-        Pick a reading status on any series page, or start a reading pass on a
-        release, and it will appear here.
+        Pick a reading status on any series page, mark a book read from its
+        cover, or start a reading pass on a release, and it will appear here.
       </p>
     );
   }
 
-  const grouped = STATUS_ORDER.map((status) => ({
-    status,
-    entries: overview.statuses.filter((entry) => entry.readingStatus === status),
-  })).filter((group) => group.entries.length > 0);
+  const count = (status: ReadingStatus) =>
+    overview.series.filter((row) => row.readingStatus === status).length;
+  const rows =
+    filter === "all"
+      ? overview.series
+      : overview.series.filter((row) => row.readingStatus === filter);
 
   return (
-    <div className="my-reading">
-      {overview.passes.length > 0 ? (
-        <>
-          <h3>Currently reading</h3>
-          <ul className="my-reading-passes">
-            {overview.passes.map((pass) => (
-              <li key={pass.releaseId}>
-                <Link
-                  to="/edition/$publicId/$slug"
-                  params={slugParams(pass.editionPublicId, pass.editionTitle)}
-                  hash={pass.anchor}
-                >
-                  {pass.editionTitle}
-                </Link>{" "}
-                <span className="pass-facts">
-                  {pass.format === "physical"
-                    ? `Physical${pass.binding ? ` · ${pass.binding}` : ""}`
-                    : "Digital"}
-                  {pass.percent !== null ? ` · ${pass.percent}%` : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : null}
-      {grouped.map((group) => (
-        <div key={group.status} className="my-reading-group">
-          <h3>{STATUS_LABELS[group.status]}</h3>
-          <ul>
-            {group.entries.map((entry) => (
-              <li key={entry.seriesPublicId}>
-                <Link
-                  to="/series/$publicId/$slug"
-                  params={slugParams(entry.seriesPublicId, entry.title)}
-                >
-                  {entry.title}
-                </Link>{" "}
-                <span className="pass-facts">
-                  {entry.volumesRead} of {entry.totalVolumes}{" "}
-                  {entry.totalVolumes === 1 ? "volume" : "volumes"} read
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+    <div className="lib-reading">
+      <div className="lib-chips" role="group" aria-label="Filter by reading status">
+        <button
+          type="button"
+          className="lib-chip"
+          aria-pressed={filter === "all"}
+          onClick={() => setFilter("all")}
+        >
+          All <span className="lib-chip-count">{overview.series.length}</span>
+        </button>
+        {STATUS_ORDER.map((status) =>
+          count(status) > 0 ? (
+            <button
+              key={status}
+              type="button"
+              className="lib-chip"
+              aria-pressed={filter === status}
+              onClick={() => setFilter(status)}
+            >
+              {STATUS_LABELS[status]}{" "}
+              <span className="lib-chip-count">{count(status)}</span>
+            </button>
+          ) : null,
+        )}
+      </div>
+      <ul className="reading-list">
+        {rows.map((row) => {
+          const percent =
+            row.totalVolumes === 0
+              ? 0
+              : Math.round((row.volumesRead / row.totalVolumes) * 100);
+          return (
+            <li key={row.seriesPublicId} className="reading-row">
+              <Link
+                className="reading-cover"
+                to="/series/$publicId/$slug"
+                params={slugParams(row.seriesPublicId, row.title)}
+                aria-label={row.title}
+              >
+                <Cover src={row.coverUrl} isbn13={row.coverIsbn} title={row.title} />
+              </Link>
+              <div>
+                <div className="reading-title">
+                  <Link
+                    to="/series/$publicId/$slug"
+                    params={slugParams(row.seriesPublicId, row.title)}
+                  >
+                    {row.title}
+                  </Link>
+                </div>
+                <div className="reading-meta">
+                  <select
+                    className="select select-sm"
+                    aria-label={`Reading status for ${row.title}`}
+                    value={row.readingStatus ?? ""}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value as ReadingStatus | "";
+                      void setStatus({
+                        seriesId: row.seriesId,
+                        status: value === "" ? undefined : value,
+                      });
+                    }}
+                  >
+                    <option value="">No status</option>
+                    {STATUS_ORDER.map((status) => (
+                      <option key={status} value={status}>
+                        {STATUS_LABELS[status]}
+                      </option>
+                    ))}
+                  </select>
+                  <span>
+                    {row.volumesRead} of {row.totalVolumes}{" "}
+                    {row.totalVolumes === 1 ? "volume" : "volumes"} read
+                  </span>
+                </div>
+                {row.totalVolumes > 0 ? (
+                  <div className="reading-bar">
+                    <div
+                      className="reading-track"
+                      role="progressbar"
+                      aria-label={`Volumes of ${row.title} read`}
+                      aria-valuenow={row.volumesRead}
+                      aria-valuemin={0}
+                      aria-valuemax={row.totalVolumes}
+                    >
+                      <div className="reading-fill" style={{ width: `${percent}%` }} />
+                    </div>
+                  </div>
+                ) : null}
+                {row.passes.length > 0 ? (
+                  <ul className="profile-passes">
+                    {row.passes.map((pass) => (
+                      <li key={pass.releaseId} className="lib-pass">
+                        <span className="lib-pass-cover">
+                          <Cover
+                            src={pass.coverUrl}
+                            isbn13={pass.coverIsbn}
+                            title={pass.editionTitle}
+                          />
+                        </span>
+                        <span>
+                          Reading{" "}
+                          <Link
+                            to="/edition/$publicId/$slug"
+                            params={slugParams(pass.editionPublicId, pass.editionTitle)}
+                            hash={pass.anchor}
+                          >
+                            {pass.editionTitle}
+                          </Link>{" "}
+                          <span className="pass-facts">
+                            {pass.format === "physical"
+                              ? `Physical${pass.binding ? ` · ${pass.binding}` : ""}`
+                              : "Digital"}
+                            {pass.percent !== null ? ` · ${pass.percent}%` : ""}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

@@ -562,6 +562,9 @@ export const seriesPage = query({
           editionCover = await coverUrl(ctx, release.coverImage.storageId);
         }
         releases.push({
+          // The document id is what the signed-in overlay (collection and
+          // reading quick actions on the shelf) addresses a Release by.
+          id: release._id,
           format: release.format,
           isbn13: release.isbn13 ?? null,
           pubDate: release.pubDate ?? null,

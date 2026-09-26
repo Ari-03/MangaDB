@@ -19,10 +19,11 @@
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { editionCoverage, followMerges } from "./catalogPages";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { coverIsbnForRelease, coverUrl } from "./lib/covers";
 import { releaseAnchor } from "./lib/titles";
 
 // Mirrors the userSeriesStates.readingStatus union in schema.ts.
@@ -232,9 +233,12 @@ export const passForRelease = query({
 });
 
 /**
- * The viewer's reading overview for /me: every Series with a chosen Reading
- * Status (with volumes-read progress) and every active pass, joined with
- * enough catalog data to link the Series and Edition pages.
+ * The viewer's reading overview for /me: one row per Series the viewer has
+ * any reading relationship with — a chosen Reading Status, an active pass, or
+ * a read Volume — carrying the status, volumes-read progress, the Series'
+ * library cover, and its active passes (each linking its Edition row). A
+ * Series with only a pass or a read Volume shows with a null status, so
+ * nothing the viewer is reading disappears from the shelf.
  */
 export const myReading = query({
   args: {},
@@ -242,15 +246,33 @@ export const myReading = query({
     const user = await viewerOrNull(ctx);
     if (!user) return null;
 
-    const states = await ctx.db
-      .query("userSeriesStates")
-      .withIndex("by_user_series", (q) => q.eq("userId", user._id))
-      .collect();
-    const statuses = [];
-    for (const state of states) {
-      if (!state.readingStatus) continue;
-      const series = await followMerges(ctx, "series", await ctx.db.get(state.seriesId));
-      if (!series) continue;
+    type Row = {
+      seriesId: Id<"series">;
+      seriesPublicId: number;
+      title: string;
+      readingStatus: NonNullable<Doc<"userSeriesStates">["readingStatus"]> | null;
+      volumesRead: number;
+      totalVolumes: number;
+      coverUrl: string | null;
+      coverIsbn: string | null;
+      passes: Array<{
+        releaseId: Id<"releases">;
+        percent: number | null;
+        format: "physical" | "digital";
+        binding: string | null;
+        editionPublicId: number;
+        editionTitle: string;
+        anchor: string;
+        coverUrl: string | null;
+        coverIsbn: string | null;
+      }>;
+    };
+    const rows = new Map<Id<"series">, Row>();
+    const rowFor = async (rawSeriesId: Id<"series">): Promise<Row | null> => {
+      const series = await followMerges(ctx, "series", await ctx.db.get(rawSeriesId));
+      if (!series) return null;
+      const existing = rows.get(series._id);
+      if (existing) return existing;
       const volumes = await ctx.db
         .query("volumes")
         .withIndex("by_series", (q) => q.eq("seriesId", series._id))
@@ -261,23 +283,41 @@ export const myReading = query({
         const progress = await volumeProgressRow(ctx, user._id, volume._id);
         if (progress && progress.readCount >= 1) volumesRead += 1;
       }
-      statuses.push({
+      const stats = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+        .unique();
+      const row: Row = {
+        seriesId: series._id,
         seriesPublicId: series.publicId,
         title: series.title,
-        readingStatus: state.readingStatus,
+        readingStatus: null,
         volumesRead,
         totalVolumes: active.length,
-      });
+        coverUrl: stats?.coverUrl ?? null,
+        coverIsbn: stats?.coverIsbn ?? null,
+        passes: [],
+      };
+      rows.set(series._id, row);
+      return row;
+    };
+
+    const states = await ctx.db
+      .query("userSeriesStates")
+      .withIndex("by_user_series", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const state of states) {
+      if (!state.readingStatus) continue;
+      const row = await rowFor(state.seriesId);
+      if (row) row.readingStatus = state.readingStatus;
     }
-    statuses.sort((a, b) => a.title.localeCompare(b.title));
 
     const passRows = await ctx.db
       .query("releaseProgress")
       .withIndex("by_user_release", (q) => q.eq("userId", user._id))
       .collect();
-    const passes = [];
-    for (const row of passRows) {
-      const release = await followMerges(ctx, "releases", await ctx.db.get(row.releaseId));
+    for (const pass of passRows) {
+      const release = await followMerges(ctx, "releases", await ctx.db.get(pass.releaseId));
       if (!release) continue;
       const edition = await followMerges(
         ctx,
@@ -285,20 +325,38 @@ export const myReading = query({
         await ctx.db.get(release.editionId),
       );
       if (!edition) continue;
+      const row = await rowFor(pass.seriesId);
+      if (!row) continue;
       const { title } = await editionCoverage(ctx, edition);
-      passes.push({
-        releaseId: row.releaseId,
-        percent: row.percent ?? null,
+      row.passes.push({
+        releaseId: pass.releaseId,
+        percent: pass.percent ?? null,
         format: release.format,
         binding: release.binding ?? null,
         editionPublicId: edition.publicId,
         editionTitle: title,
         anchor: releaseAnchor(release),
+        coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
+        coverIsbn: await coverIsbnForRelease(ctx, release),
       });
     }
-    passes.sort((a, b) => a.editionTitle.localeCompare(b.editionTitle));
 
-    return { statuses, passes };
+    // Read Volumes without a status or pass still put the Series here.
+    const progressRows = await ctx.db
+      .query("volumeProgress")
+      .withIndex("by_user_volume", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const progress of progressRows) {
+      if (progress.readCount < 1) continue;
+      await rowFor(progress.seriesId);
+    }
+
+    const series = [...rows.values()];
+    for (const row of series) {
+      row.passes.sort((a, b) => a.editionTitle.localeCompare(b.editionTitle));
+    }
+    series.sort((a, b) => a.title.localeCompare(b.title));
+    return { series };
   },
 });
 
@@ -547,5 +605,139 @@ export const setVolumeReadCount = mutation({
       });
     }
     return { readCount };
+  },
+});
+
+/** Batch read-marking (the whole-run button) stops here, like batch entries. */
+export const MANY_EDITIONS_CAP = 200;
+
+/**
+ * The read/unread write for one Edition, shared by the single and batch
+ * mutations: every Volume the Edition covers *completely* gets a first
+ * completed read (`read: true` — Volumes already read keep their count, so
+ * a reread is never erased), or has its read history cleared (`read:
+ * false`). Partial coverage is untouched, exactly as a confirmed pass
+ * completion. Direct Volume Progress edits: no pass, no Reading Status
+ * change. Returns the covered Volumes so the caller can compute prompts.
+ */
+async function writeEditionRead(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  editionPublicId: number,
+  read: boolean,
+) {
+  const stored = await ctx.db
+    .query("editions")
+    .withIndex("by_publicId", (q) => q.eq("publicId", editionPublicId))
+    .unique();
+  const edition = await followMerges(ctx, "editions", stored);
+  if (!edition) {
+    throw new ConvexError({ code: "notFound", message: "Edition not found." });
+  }
+  const rows = await ctx.db
+    .query("volumeCoverages")
+    .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+    .collect();
+  const covered = new Map<Id<"volumes">, Doc<"volumes">>();
+  for (const row of rows) {
+    if (row.extent !== "complete") continue;
+    const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
+    if (volume) covered.set(volume._id, volume);
+  }
+
+  const now = Date.now();
+  let changed = 0;
+  for (const volume of covered.values()) {
+    const progress = await volumeProgressRow(ctx, userId, volume._id);
+    if (read) {
+      if (progress && progress.readCount >= 1) continue;
+      if (progress) {
+        await ctx.db.patch(progress._id, { readCount: 1, lastCompletedAt: now });
+      } else {
+        await ctx.db.insert("volumeProgress", {
+          userId,
+          volumeId: volume._id,
+          seriesId: volume.seriesId,
+          readCount: 1,
+          lastCompletedAt: now,
+        });
+      }
+    } else {
+      if (!progress) continue;
+      await ctx.db.delete(progress._id);
+    }
+    changed += 1;
+  }
+  return { changed, covered: [...covered.values()] };
+}
+
+/**
+ * The completed-series prompt material after read-marking: covered Series
+ * where every active Volume now has a read and the status is not already
+ * "Completed" — a suggestion only, acted on solely by setSeriesReadingStatus.
+ */
+async function completedSuggestions(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  covered: Array<Doc<"volumes">>,
+) {
+  const suggestCompleted = [];
+  const seen = new Set<Id<"series">>();
+  for (const volume of covered) {
+    if (seen.has(volume.seriesId)) continue;
+    seen.add(volume.seriesId);
+    const series = await ctx.db.get(volume.seriesId);
+    if (!series || series.status !== "active") continue;
+    const state = await seriesStateRow(ctx, userId, series._id);
+    if (state?.readingStatus === "completed") continue;
+    if (await allVolumesRead(ctx, userId, series._id)) {
+      suggestCompleted.push({ seriesId: series._id, title: series.title });
+    }
+  }
+  return suggestCompleted;
+}
+
+/** Mark a whole book read or unread from its cover (see writeEditionRead). */
+export const setEditionRead = mutation({
+  args: { editionPublicId: v.number(), read: v.boolean() },
+  handler: async (ctx, { editionPublicId, read }) => {
+    const user = await requireUser(ctx);
+    const { changed, covered } = await writeEditionRead(ctx, user._id, editionPublicId, read);
+    return {
+      changed,
+      suggestCompleted: read ? await completedSuggestions(ctx, user._id, covered) : [],
+    };
+  },
+});
+
+/**
+ * The same write for a whole run of books at once — the Series page's and
+ * the library's "Read all". Each Edition follows writeEditionRead's rules;
+ * the completed-series prompt is computed once over everything covered.
+ * Capped at MANY_EDITIONS_CAP.
+ */
+export const setEditionsRead = mutation({
+  args: { editionPublicIds: v.array(v.number()), read: v.boolean() },
+  handler: async (ctx, { editionPublicIds, read }) => {
+    const user = await requireUser(ctx);
+    if (editionPublicIds.length > MANY_EDITIONS_CAP) {
+      throw new ConvexError({
+        code: "tooMany",
+        message: `Mark at most ${MANY_EDITIONS_CAP} books at once.`,
+      });
+    }
+    let changed = 0;
+    const covered = new Map<Id<"volumes">, Doc<"volumes">>();
+    for (const editionPublicId of new Set(editionPublicIds)) {
+      const result = await writeEditionRead(ctx, user._id, editionPublicId, read);
+      changed += result.changed;
+      for (const volume of result.covered) covered.set(volume._id, volume);
+    }
+    return {
+      changed,
+      suggestCompleted: read
+        ? await completedSuggestions(ctx, user._id, [...covered.values()])
+        : [],
+    };
   },
 });

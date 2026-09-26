@@ -98,16 +98,62 @@
 
 .owner-bar {
   margin-top: 26px;
-  padding: 14px 18px;
+  padding: 16px 18px 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface);
+  display: grid;
+  /* follow and reading side by side while both get a real column; at any
+     narrower width they stack, so nothing is ever squeezed */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+  gap: 0;
+}
+/* signed out, every group is empty: no bar at all */
+.owner-bar:not(:has(.track-group > *)) { display: none; }
+.track-group:empty { display: none; }
+
+/* each group: a small-caps kicker, its controls, a one-line hint; a hairline
+   keeps following and reading visibly apart */
+.track-group {
   display: flex;
   align-items: center;
-  gap: 14px;
+  align-content: start;
   flex-wrap: wrap;
+  gap: 10px 12px;
+  padding: 0 22px;
+  border-left: 1px solid var(--line);
 }
-.owner-bar:empty { display: none; }
+.track-group:first-child { padding-left: 0; border-left: 0; }
+.track-group--reading { padding-right: 0; }
+.track-group--reading .progress { flex: 1 1 100%; }
+/* sharing is the quiet third: one footer line across the bar, its label
+   inline, so it never competes with the two groups for width */
+.track-group--sharing {
+  grid-column: 1 / -1;
+  margin-top: 14px;
+  padding: 12px 0 0;
+  border-left: 0;
+  border-top: 1px solid var(--line);
+}
+.track-group--sharing .track-kicker { flex-basis: auto; }
+.track-kicker {
+  flex-basis: 100%;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+.track-hint {
+  flex-basis: 100%;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-mute);
+}
+.track-group .select { font-size: 0.85rem; }
+/* the sharing popover's anchor is the group itself */
+.track-group--sharing .vis-pop { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center; }
 
 .follow-btn {
   display: inline-flex;
@@ -132,29 +178,11 @@
 }
 .follow-btn.is-following:hover { background: var(--gold); border-color: var(--gold); color: var(--accent-ink); }
 
-.follow-hint {
-  order: 9;
-  flex-basis: 100%;
-  font-size: 0.82rem;
-  color: var(--text-mute);
-}
-
-.track-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--text-mute);
-}
-.track-field .select { font-size: 0.85rem; }
-
-/* Per-Series visibility (lib/sharing.tsx) is a <details>; in the bar its
-   summary wears the same pill as the other controls and the two selects drop
-   onto their own band underneath. */
-.owner-bar .series-visibility { font-size: 0.85rem; }
-.owner-bar .series-visibility > summary {
-  list-style: none;
+/* Per-Series visibility (lib/sharing.tsx) is a popover: its button wears
+   the bar's pill, and the panel floats over whatever is below, so opening
+   it never moves the bar or the shelf. */
+.vis-pop { position: relative; }
+.vis-pop-btn {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -166,33 +194,48 @@
   font-size: 0.86rem;
   font-weight: 700;
   cursor: pointer;
+  transition: border-color 130ms ease, color 130ms ease;
 }
-.owner-bar .series-visibility > summary::-webkit-details-marker { display: none; }
-.owner-bar .series-visibility > summary:hover { border-color: var(--accent); color: var(--accent); }
-.owner-bar .series-visibility[open] {
-  flex-basis: 100%;
-  order: 8;
+.vis-pop-btn svg { width: 14px; height: 14px; }
+.vis-pop-btn:hover,
+.vis-pop-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.vis-pop-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
 }
-.owner-bar .series-visibility .vis-hint {
+.vis-pop-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(26rem, calc(100vw - 32px));
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--cover-shadow-hi);
+  font-size: 0.85rem;
+}
+.vis-pop-panel .vis-hint {
   display: block;
-  margin-top: 10px;
-  max-width: 70ch;
+  margin-bottom: 12px;
+  max-width: 40ch;
   font-size: 0.82rem;
   color: var(--text-mute);
 }
-.owner-bar .series-visibility .vis-hint a { color: var(--accent); }
-/* the two segmented pills (sharing.tsx) sit side by side inside the bar */
-.owner-bar .series-visibility .vis-field {
-  display: inline-flex;
+.vis-pop-panel .vis-hint a { color: var(--accent); }
+/* label left, the two-way pill right, one line per surface */
+.vis-pop-panel .vis-field {
+  display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 12px 22px 0 0;
-  font-size: 0.82rem;
+  justify-content: space-between;
+  gap: 16px;
 }
-.owner-bar .series-visibility .vis-legend {
-  font-weight: 700;
-  color: var(--text-mute);
-}
+.vis-pop-panel .vis-field + .vis-field { margin-top: 10px; }
+.vis-pop-panel .vis-legend { font-weight: 700; color: var(--text-dim); font-size: 0.84rem; }
+.vis-pop-panel .seg-opt span { padding: 5px 12px; font-size: 0.8rem; }
 
 .progress {
   flex: 1 1 200px;
@@ -230,7 +273,9 @@
 
 .edition-picker {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  /* wide enough that a name and its date span stay on two or three lines
+     even on a zoomed laptop */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
   gap: 14px;
 }
 .edition-card {
@@ -497,22 +542,6 @@
   gap: 8px;
 }
 
-/* --- /me reading overview (markup in lib/reading.tsx) ------------------- */
-
-.my-reading h3 {
-  margin: 18px 0 8px;
-  font-size: 1rem;
-}
-.my-reading ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 6px;
-  font-size: 0.92rem;
-}
-.my-reading a:hover { color: var(--accent); }
-
 /* --- Responsive --------------------------------------------------------- */
 
 @media (max-width: 960px) {
@@ -528,12 +557,18 @@
   .volume-cover { max-width: 210px; }
   .track-card { margin-top: 34px; }
   .facts { gap: 14px 20px; }
-  .owner-bar { gap: 12px; }
-  .track-field { width: 100%; justify-content: space-between; }
-  .track-field .select { flex: 1 1 auto; min-width: 0; max-width: 62%; }
-  .owner-bar .series-visibility,
-  .owner-bar .series-visibility > summary,
+  .track-group {
+    padding: 14px 0 0;
+    margin-top: 14px;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .track-group:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
+  .track-group .select { flex: 1 1 auto; min-width: 0; }
+  .vis-pop-btn,
   .follow-btn { width: 100%; justify-content: center; }
+  .vis-pop-panel { right: 0; }
+  .vis-pop-panel .vis-field { flex-wrap: wrap; }
   .vol-edition-extent { flex-basis: 100%; }
 }
 
