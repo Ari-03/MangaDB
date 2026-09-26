@@ -127,6 +127,8 @@ export const sync = internalAction({
     seen: v.optional(v.number()),
     changed: v.optional(v.number()),
     errors: v.optional(v.array(v.string())),
+    /** An earlier link got a real detail document: the detail API is up. */
+    detailsReached: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<SyncResult> => {
     // Explicit annotations break the type cycle with imports.ts's adapter map.
@@ -148,6 +150,7 @@ export const sync = internalAction({
     let seen = args.seen ?? 0;
     let changed = args.changed ?? 0;
     let nskip = args.nskip ?? 0;
+    let detailsReached = args.detailsReached ?? false;
 
     try {
       let batchesDone = 0;
@@ -189,6 +192,8 @@ export const sync = internalAction({
             if (!/^\s*(?:<\?xml[^>]*>\s*)?<ann\b[^>]*>[\s\S]*<\/ann>\s*$/.test(apiXml)) {
               throw new Error("ANN returned an invalid detail document");
             }
+            // A real detail document, whatever it lists: the API is up.
+            detailsReached = true;
             const records = parseApiResponse(apiXml);
             const returnedIds = new Set(records.map((record) => record.id));
             const missing = batch.filter((id) => !returnedIds.has(id));
@@ -238,6 +243,7 @@ export const sync = internalAction({
           seen,
           changed,
           errors: errors.slice(0, MAX_CARRIED_ERRORS),
+          detailsReached,
         });
         return {
           runId,
@@ -252,6 +258,12 @@ export const sync = internalAction({
       // Preserve prior observations until a complete, error-free sweep succeeds;
       // an errored sweep finishes failed (visible on the dashboard) but is
       // still a finished sweep, so the page pass below chains either way.
+      // No detail document at all: ANN's detail API is down (or the report
+      // listed nothing this sweep could fetch), so the sweep saw no entry
+      // and the page pass would only park lines for ERROR_RETRY_MS.
+      if (!detailsReached) {
+        errors.push("ANN detail API unreachable; release-page pass skipped");
+      }
       const complete = errors.length === 0;
       if (complete) {
         // The full mirror completed: entries the sweep no longer lists have
@@ -273,10 +285,9 @@ export const sync = internalAction({
       // The mirror refreshed the lines it could: now place the unlinked
       // ones. The page pass walks unlinked lines on its own and must not
       // wait on a mirror one persistently failing entry would never let
-      // complete. (An aborted enumeration — the catch below — does not
-      // chain: ANN itself is likely down, and each failed page fetch would
-      // park its line for ERROR_RETRY_MS.)
-      if (args.releasePages !== false) {
+      // complete. It does not chain when ANN itself looks down: an aborted
+      // enumeration (the catch below) or no detail document at all.
+      if (detailsReached && args.releasePages !== false) {
         await ctx.runMutation(internal.ann.chainReleasePages, {
           afterRunId: runId,
           politeDelayMs: args.politeDelayMs,

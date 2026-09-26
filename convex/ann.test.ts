@@ -484,6 +484,33 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     });
   });
 
+  it("a mirror whose every detail batch failed chains no page pass", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ALPHA, BETA]);
+    await sync(t, { releasePages: false });
+    // The report answers; the detail API serves an error page for the
+    // whole sweep (a 200 that is no <ann> document).
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("reports.xml")) return new Response(reportXml([ALPHA, BETA], 0, 500));
+      return new Response("<html>Service unavailable</html>");
+    });
+    expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.every((obs) => !obs.withdrawn)).toBe(true);
+      const runs = await ctx.db.query("importRuns").collect();
+      // The first mirror and the failed one; nothing chained.
+      expect(runs).toHaveLength(2);
+      expect(runs[1]).toMatchObject({ status: "failed" });
+      expect(runs[1]!.errors).toContain("ANN detail API unreachable; release-page pass skipped");
+    });
+  });
+
   it("defaults to ANN's 1 req/s etiquette", async () => {
     const t = makeT();
     await seedRegistry(t, true);
