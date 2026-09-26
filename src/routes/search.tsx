@@ -1,5 +1,5 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import { useEffect, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
@@ -75,13 +75,19 @@ function SearchPage() {
   // elsewhere (the header box, a "Did you mean" link, back/forward), even
   // to the query already shown, refills the box as it starts, and the text
   // it replaces never settles into a search; the box's own navigations
-  // never touch what is being typed (`useUrlDraft`).
-  const { draft, setDraft, request } = useUrlDraft(Route.useSearch(), validateSearch, queryOf);
+  // never touch what is being typed (`useUrlDraft`). Any other navigation
+  // — including one leaving the page — holds the live search until the next
+  // keystroke, so a pending settle can't pull the reader back to /search.
+  const held = useRef(false);
+  const hold = useCallback(() => {
+    held.current = true;
+  }, []);
+  const { draft, setDraft, request } = useUrlDraft(Route.useSearch(), validateSearch, queryOf, hold);
   const text = draft.q;
   const settled = useDebounced(text, LIVE_DEBOUNCE_MS);
   useEffect(() => {
     // An ISBN being typed waits for Enter (the loader redirects valid ones).
-    if (isbnInProgress(settled.trim()) || !request(settled)) return;
+    if (held.current || isbnInProgress(settled.trim()) || !request(settled)) return;
     void navigate({ search: { q: settled }, replace: true, resetScroll: false });
   }, [settled, request, navigate]);
 
@@ -106,7 +112,10 @@ function SearchPage() {
             type="search"
             name="q"
             value={text}
-            onChange={(event) => setDraft({ q: event.target.value })}
+            onChange={(event) => {
+              held.current = false;
+              setDraft({ q: event.target.value });
+            }}
             placeholder="Series title, publisher, or ISBN"
             aria-label="Search series, publishers, or an ISBN"
             autoFocus

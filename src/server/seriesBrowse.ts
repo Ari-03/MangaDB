@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import type { FunctionArgs } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
-import { timingNeedsToday, todaySortKey } from "../../convex/lib/dates";
+import { timingNeedsToday, todaySortKey } from "~/lib/month";
 import { convexServerClient } from "~/server/convex";
 
 // contract: `api.seriesBrowse.browse` / `api.seriesBrowse.facets` are the
@@ -17,19 +17,20 @@ export type SeriesBrowseArgs = Omit<
 /**
  * One page of the Series library (`/series`): filtered, then sorted,
  * cursor-paged, with the filtered total. Called by the route loader for the
- * first page and from the client as the shelf scrolls. A first page whose
- * timing filter counts back from today (`timingNeedsToday`) gets today's
- * date (UTC) from the server clock, since the Convex query is cached and
- * must not read one. No other request sends it, so their cache keys stay the
- * same from day to day: later pages filter by the first page's day, which
- * their cursor carries. Returns null when Convex is not configured.
+ * first page and from the client as the shelf scrolls. A view whose timing
+ * filter counts back from today (`timingNeedsToday`) gets today's date (UTC)
+ * from the server clock, since the Convex query is cached and must not read
+ * one; other views don't send it, so their cache keys stay the same from day
+ * to day. Later pages filter by the first page's day, which their cursor
+ * carries; today's date is only the fallback for a cursor that doesn't
+ * decode. Returns null when Convex is not configured.
  */
 export const fetchSeriesBrowse = createServerFn({ method: "GET" })
   .validator((args: SeriesBrowseArgs) => args)
   .handler(async ({ data }) => {
     const convex = convexServerClient();
     if (!convex) return null;
-    const needsToday = !data.cursor && data.timing !== undefined && timingNeedsToday(data.timing);
+    const needsToday = data.timing !== undefined && timingNeedsToday(data.timing);
     return await convex.query(api.seriesBrowse.browse, {
       ...data,
       todaySort: needsToday ? todaySortKey() : undefined,

@@ -44,8 +44,9 @@ export function currentMonth(now: Date = new Date()): YearMonth {
 }
 
 // yyyymmdd for today (UTC), shared with the Convex side; it lower-bounds the
-// Publisher Spotlight's upcoming lane (ticket #25) among others.
-export { todaySortKey } from "../../convex/lib/dates";
+// Publisher Spotlight's upcoming lane (ticket #25) among others. Which Series
+// library timing filters count back from it (timingNeedsToday) rides along.
+export { timingNeedsToday, todaySortKey } from "../../convex/lib/dates";
 
 /** yyyymm99 sort key covering every day of a month — an upper window bound. */
 export function monthEndSortKey({ year, month }: YearMonth): number {

@@ -317,11 +317,12 @@ export const monthBoard = query({
         // (stored, or an ISBN to fetch it by), then new series, then physical
         // over digital (a shelf shows the jacket), else date then title order.
         // Candidates are ranked before any join, then walked in (new series,
-        // Format) order in batches tested for art in parallel. A batch holds
-        // only candidates that can still change the picks (a lead Series
-        // with no art found yet), as many as there are open slots, so no
-        // lookup is spent past the cap. Stop at BOARD_COVER_CAP Series with
-        // art and fill from the best artless ones; only the picks get joined.
+        // Format) order in batches of BOARD_COVER_CAP tested for art in
+        // parallel. A batch holds only candidates that can still change the
+        // picks (a lead Series with no art found yet) and at most one per
+        // Series; a second one waits for the next batch, in case the first
+        // has no art. Stop at BOARD_COVER_CAP Series with art and fill from
+        // the best artless ones; only the picks get joined.
         const ranked = rows
           .map((row, index) => ({
             ...row,
@@ -339,14 +340,15 @@ export const monthBoard = query({
         let next = 0;
         while (withArt.length < BOARD_COVER_CAP && next < ranked.length) {
           const batch: Array<{ release: Doc<"releases">; lead: Id<"series"> }> = [];
-          while (batch.length < BOARD_COVER_CAP - withArt.length && next < ranked.length) {
-            const { release, series: [lead] } = ranked[next++]!;
+          while (batch.length < BOARD_COVER_CAP && next < ranked.length) {
+            const { release, series: [lead] } = ranked[next]!;
+            if (lead && batch.some((entry) => entry.lead === lead._id)) break;
+            next++;
             if (lead && !artSeries.has(lead._id)) batch.push({ release, lead: lead._id });
           }
           const art = await Promise.all(batch.map(({ release }) => hasArt(release)));
           for (const [i, { release, lead }] of batch.entries()) {
-            // An earlier candidate in this batch may have found its art.
-            if (artSeries.has(lead)) continue;
+            if (withArt.length === BOARD_COVER_CAP) break;
             if (art[i]) {
               artSeries.add(lead);
               withArt.push(release);
