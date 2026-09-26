@@ -5,8 +5,8 @@ import { convexServerClient } from "~/server/convex";
 
 /**
  * SSR fetch for /search (ticket #38): public catalog read, so no auth token.
- * Returns the Series + Publisher matches, or null when Convex is not
- * configured (the page renders a setup notice, matching the home page).
+ * Returns the Series + Publisher matches and any "Did you mean" near
+ * misses, or null when Convex is not configured (the page renders a setup notice, matching the home page).
  */
 export const fetchSearchResults = createServerFn({ method: "GET" })
   .validator((query: string) => query)

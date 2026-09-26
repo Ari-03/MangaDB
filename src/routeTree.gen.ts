@@ -22,6 +22,8 @@ import { Route as ModProposalsRouteImport } from './routes/mod.proposals'
 import { Route as ModQueueRouteImport } from './routes/mod.queue'
 import { Route as ModRolesRouteImport } from './routes/mod.roles'
 import { Route as PublisherSlugRouteImport } from './routes/publisher.$slug'
+import { Route as PublishersIndexRouteImport } from './routes/publishers.index'
+import { Route as PublishersMonthRouteImport } from './routes/publishers.$month'
 import { Route as ReleasesIndexRouteImport } from './routes/releases.index'
 import { Route as ReleasesMonthRouteImport } from './routes/releases.$month'
 import { Route as SeriesIndexRouteImport } from './routes/series.index'
@@ -105,6 +107,16 @@ const ModRolesRoute = ModRolesRouteImport.update({
 const PublisherSlugRoute = PublisherSlugRouteImport.update({
   id: '/publisher/$slug',
   path: '/publisher/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PublishersIndexRoute = PublishersIndexRouteImport.update({
+  id: '/publishers/',
+  path: '/publishers/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PublishersMonthRoute = PublishersMonthRouteImport.update({
+  id: '/publishers/$month',
+  path: '/publishers/$month',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ReleasesIndexRoute = ReleasesIndexRouteImport.update({
@@ -217,11 +229,13 @@ export interface FileRoutesByFullPath {
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
   '/publisher/$slug': typeof PublisherSlugRoute
+  '/publishers/$month': typeof PublishersMonthRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/u/$username': typeof UUsernameRoute
   '/me/': typeof MeIndexRoute
+  '/publishers/': typeof PublishersIndexRoute
   '/releases/': typeof ReleasesIndexRoute
   '/series/': typeof SeriesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
@@ -250,11 +264,13 @@ export interface FileRoutesByTo {
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
   '/publisher/$slug': typeof PublisherSlugRoute
+  '/publishers/$month': typeof PublishersMonthRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/u/$username': typeof UUsernameRoute
   '/me': typeof MeIndexRoute
+  '/publishers': typeof PublishersIndexRoute
   '/releases': typeof ReleasesIndexRoute
   '/series': typeof SeriesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
@@ -285,11 +301,13 @@ export interface FileRoutesById {
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
   '/publisher/$slug': typeof PublisherSlugRoute
+  '/publishers/$month': typeof PublishersMonthRoute
   '/releases/$month': typeof ReleasesMonthRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/u/$username': typeof UUsernameRoute
   '/me/': typeof MeIndexRoute
+  '/publishers/': typeof PublishersIndexRoute
   '/releases/': typeof ReleasesIndexRoute
   '/series/': typeof SeriesIndexRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
@@ -321,11 +339,13 @@ export interface FileRouteTypes {
     | '/mod/queue'
     | '/mod/roles'
     | '/publisher/$slug'
+    | '/publishers/$month'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/u/$username'
     | '/me/'
+    | '/publishers/'
     | '/releases/'
     | '/series/'
     | '/bundle/$publicId/$slug'
@@ -354,11 +374,13 @@ export interface FileRouteTypes {
     | '/mod/queue'
     | '/mod/roles'
     | '/publisher/$slug'
+    | '/publishers/$month'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/u/$username'
     | '/me'
+    | '/publishers'
     | '/releases'
     | '/series'
     | '/bundle/$publicId/$slug'
@@ -388,11 +410,13 @@ export interface FileRouteTypes {
     | '/mod/queue'
     | '/mod/roles'
     | '/publisher/$slug'
+    | '/publishers/$month'
     | '/releases/$month'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/u/$username'
     | '/me/'
+    | '/publishers/'
     | '/releases/'
     | '/series/'
     | '/bundle/$publicId/$slug'
@@ -423,10 +447,12 @@ export interface RootRouteChildren {
   ModQueueRoute: typeof ModQueueRoute
   ModRolesRoute: typeof ModRolesRoute
   PublisherSlugRoute: typeof PublisherSlugRoute
+  PublishersMonthRoute: typeof PublishersMonthRoute
   ReleasesMonthRoute: typeof ReleasesMonthRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   UUsernameRoute: typeof UUsernameRoute
+  PublishersIndexRoute: typeof PublishersIndexRoute
   ReleasesIndexRoute: typeof ReleasesIndexRoute
   SeriesIndexRoute: typeof SeriesIndexRoute
   BundlePublicIdSlugRoute: typeof BundlePublicIdSlugRoute
@@ -535,6 +561,20 @@ declare module '@tanstack/react-router' {
       path: '/publisher/$slug'
       fullPath: '/publisher/$slug'
       preLoaderRoute: typeof PublisherSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/publishers/': {
+      id: '/publishers/'
+      path: '/publishers'
+      fullPath: '/publishers/'
+      preLoaderRoute: typeof PublishersIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/publishers/$month': {
+      id: '/publishers/$month'
+      path: '/publishers/$month'
+      fullPath: '/publishers/$month'
+      preLoaderRoute: typeof PublishersMonthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/releases/': {
@@ -696,10 +736,12 @@ const rootRouteChildren: RootRouteChildren = {
   ModQueueRoute: ModQueueRoute,
   ModRolesRoute: ModRolesRoute,
   PublisherSlugRoute: PublisherSlugRoute,
+  PublishersMonthRoute: PublishersMonthRoute,
   ReleasesMonthRoute: ReleasesMonthRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   UUsernameRoute: UUsernameRoute,
+  PublishersIndexRoute: PublishersIndexRoute,
   ReleasesIndexRoute: ReleasesIndexRoute,
   SeriesIndexRoute: SeriesIndexRoute,
   BundlePublicIdSlugRoute: BundlePublicIdSlugRoute,

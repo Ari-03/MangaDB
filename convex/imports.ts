@@ -17,6 +17,7 @@ import {
 } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { getSourceByKey, recordSourceOutcome } from "./importSources";
+import { todaySortKey } from "./lib/dates";
 import { sendAdminEmail } from "./lib/email";
 import { alreadyHandled } from "./lib/pipeline";
 import { requireDataTeam, requireModerator } from "./lib/roles";
@@ -344,12 +345,6 @@ export const attachCover = internalMutation({
 
 // ---------- withdrawal (spec §6: observations, #37) ----------
 
-/** yyyymmdd sort key for "today" (UTC) — comparable to releases.pubDate.sort. */
-function todaySort(now: number): number {
-  const d = new Date(now);
-  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
-}
-
 /**
  * Is this partial-precision date still (possibly) in the future? Compares
  * the latest day the date could mean, so "2026" and "Dec 2026" count as
@@ -362,7 +357,7 @@ export function possiblyFuture(
 ): boolean {
   const latest =
     pubDate.year * 10000 + (pubDate.month ?? 12) * 100 + (pubDate.day ?? 31);
-  return latest > todaySort(now);
+  return latest > todaySortKey(new Date(now));
 }
 
 /**

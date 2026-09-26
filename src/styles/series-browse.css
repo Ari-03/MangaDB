@@ -1,25 +1,42 @@
-/* Series library (/series). Composes the Releases browser's masthead and
-   toolbar (.page-head, .toolbar, .filter, .seg, .result-count in
-   releases.css) and the shared shelf (covers.css); owns only the letter
-   index, the search field, the caption's sort line, and the scroll-to-load status. */
+/* Series library (/series). Composes the Releases browser's masthead
+   (.page-head, .filter-label, .link-btn in releases.css), the shell's
+   controls (.chip, .select, .search-input, .btn) and the shared shelf
+   (covers.css); owns the filter panel, the results header and active-filter
+   chips, the letter index, the caption's sort line, and the scroll-to-load
+   status. Filters come first: a sticky panel beside the results on wide
+   screens, folded behind a "Filters" button under 960px. */
 
-.library-page > .notice { margin-top: 24px; }
-.library-page > .notice a {
+.library-page .notice { margin-top: 24px; }
+.library-page .notice a {
   color: var(--accent);
   font-weight: 700;
   border-bottom: 1px solid transparent;
 }
-.library-page > .notice a:hover { border-bottom-color: var(--accent); }
+.library-page .notice a:hover { border-bottom-color: var(--accent); }
 
-/* --- Title search inside the toolbar ------------------------------------ */
-
-.library-search {
-  position: relative;
-  flex: 1 1 200px;
-  min-width: 0;
-  max-width: 300px;
-  margin-left: auto;
+.library-layout {
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr);
+  gap: 34px;
+  align-items: start;
+  margin-top: 24px;
 }
+
+/* --- Filter panel -------------------------------------------------------- */
+
+.library-filters {
+  position: sticky;
+  top: calc(var(--header-h) + 16px);
+  max-height: calc(100vh - var(--header-h) - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.library-search { position: relative; }
 .library-search .search-input { padding: 8px 40px 8px 14px; }
 .library-search-btn {
   position: absolute;
@@ -37,6 +54,142 @@
 .library-search-btn:hover { color: var(--accent); background: var(--surface-2); }
 .library-search-btn svg { width: 16px; height: 16px; }
 
+/* Only the narrow layout folds the groups away. */
+.filters-toggle,
+.filters-apply { display: none; }
+
+.filter-group {
+  margin: 18px 0 0;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+/* Floated, so the legend lays out like a heading instead of sitting in
+   the fieldset's border; whatever follows clears it. */
+.filter-legend {
+  float: left;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  margin-bottom: 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+.filter-legend + * { clear: both; }
+.filter-legend-clear {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.filter-legend-clear:hover { text-decoration: underline; }
+.filter-hint { margin-top: 8px; font-size: 0.76rem; color: var(--text-mute); }
+
+/* Publishers: a find box over a scrolling checklist with Series counts. */
+.publisher-find { padding: 7px 12px; font-size: 0.85rem; }
+.publisher-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 248px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.publisher-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 6px;
+  border-radius: var(--r-sm);
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.publisher-option:hover { background: var(--surface-2); }
+.publisher-option input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+.publisher-option:has(input:checked) .publisher-name { color: var(--accent); font-weight: 700; }
+.publisher-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.publisher-count { font-size: 0.76rem; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.publisher-none { padding: 6px; font-size: 0.84rem; color: var(--text-mute); }
+
+/* Single-choice groups: real radios wearing pills. */
+.choice-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.choice { position: relative; cursor: pointer; }
+.choice input {
+  position: absolute;
+  width: 1px; height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+.choice span {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  transition: border-color 130ms ease, color 130ms ease, background 130ms ease;
+}
+.choice:hover span { border-color: var(--accent); color: var(--text); }
+.choice input:checked + span {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+.choice input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* --- Results header: count, then the sort ------------------------------- */
+
+.results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.results-count { font-size: 0.95rem; color: var(--text-mute); }
+.results-count strong { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
+.results-sort { display: inline-flex; align-items: center; gap: 9px; }
+.results-sort .filter-label { font-size: 0.85rem; color: var(--text-mute); white-space: nowrap; }
+
+.active-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 14px;
+}
+.active-filter-list { display: contents; list-style: none; }
+.active-filter {
+  gap: 7px;
+  padding: 4px 8px 4px 12px;
+  font-size: 0.8rem;
+  color: var(--text);
+  transition: border-color 130ms ease, color 130ms ease;
+}
+.active-filter:hover { border-color: var(--accent); color: var(--accent); }
+.active-filter-x { font-size: 1rem; line-height: 1; color: var(--text-mute); }
+.active-filter:hover .active-filter-x { color: inherit; }
+.active-filters .link-btn { font-size: 0.84rem; }
+
+/* Results dim while the next view loads; the old shelf stays readable. */
+.library-results[aria-busy="true"] .library-shelf { opacity: 0.55; transition: opacity 160ms ease 120ms; }
+
 /* --- Letter index --------------------------------------------------------
    The strip stands on its own slim plank, like the lettered labels on a
    library shelf end; the lit letter rises off it. */
@@ -45,7 +198,7 @@
   position: relative;
   display: grid;
   grid-template-columns: 1.9fr repeat(27, minmax(0, 1fr));
-  margin: 26px 0 38px;
+  margin: 22px 0 34px;
   padding-bottom: 5px;
 }
 .letter-strip::after {
@@ -119,10 +272,49 @@
 /* --- Responsive ---------------------------------------------------------- */
 
 @media (max-width: 1180px) {
-  .library-search { max-width: none; flex-basis: 100%; margin-left: 0; }
+  .library-layout { grid-template-columns: 240px minmax(0, 1fr); gap: 26px; }
 }
 
 @media (max-width: 960px) {
+  .library-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; margin-top: 18px; }
+  .library-filters {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    padding: 12px;
+  }
+  #library-filters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+  .filters-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--line-strong);
+    background: var(--surface-2);
+    font-weight: 700;
+    font-size: 0.88rem;
+    cursor: pointer;
+  }
+  .filters-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  .filters-toggle-count {
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: var(--r-pill);
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: 0.74rem;
+    text-align: center;
+  }
+  .filter-groups { grid-column: 1 / -1; display: none; }
+  .filter-groups[data-open="true"] { display: block; }
+  .filter-group:first-child { margin-top: 4px; }
+  .filters-apply { display: flex; justify-content: center; width: 100%; margin-top: 18px; }
+
   /* 28 labels as two rows of 14 */
   .letter-strip {
     grid-template-columns: repeat(14, minmax(0, 1fr));
@@ -132,10 +324,9 @@
 }
 
 @media (max-width: 720px) {
-  .library-toolbar .seg { grid-template-columns: repeat(3, 1fr); }
-  .library-toolbar .filter { grid-template-columns: 76px minmax(0, 1fr); }
   .letter { min-height: 34px; font-size: 0.95rem; }
   .letter-strip { margin: 20px 0 30px; }
+  .results-sort .select { max-width: 60vw; }
 }
 
 /* Two title lines' worth, so every card's meta line starts at the same height. */

@@ -33,6 +33,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
+import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
 import { parseTitleList, prhTitleValidator } from "./lib/prh";
 
@@ -43,11 +44,9 @@ const ROWS_PER_PAGE = 200;
 
 // ---------- the sync action ----------
 
-/** A calendar date as a yyyymmdd number, for onsale comparisons (UTC). */
-function dateKey(date: Date | { year: number; month: number; day: number }): number {
-  return date instanceof Date
-    ? date.getUTCFullYear() * 10000 + (date.getUTCMonth() + 1) * 100 + date.getUTCDate()
-    : date.year * 10000 + date.month * 100 + date.day;
+/** An onsale date as a yyyymmdd number, comparable to `todaySortKey()`. */
+function dateKey(date: { year: number; month: number; day: number }): number {
+  return date.year * 10000 + date.month * 100 + date.day;
 }
 
 /** Masks the api_key query value in a message (fetch errors quote URLs). */
@@ -128,7 +127,7 @@ export const sync = internalAction({
     let changed = 0;
     // A subset sweep can't prove absence, so it never withdraws.
     let completeSweep = mode === "full" && args.imprints === undefined;
-    const todayKey = dateKey(new Date());
+    const todayKey = todaySortKey();
 
     try {
       for (const imprint of imprints) {

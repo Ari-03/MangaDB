@@ -1,0 +1,251 @@
+/* Publishers board (`/publishers`, `/publishers/{yyyy-mm}`): a month's
+   activity per Publisher as cards, then the A–Z directory. Composes the
+   shared vocabulary — .page-head/.toolbar/.result-count from
+   releases.css, .chip/.notice/.section-head from shell.css, .cover and
+   .cover-link from covers.css — and owns only the board's own classes. */
+
+.publishers-page { padding-bottom: 8px; }
+.publishers-page > .notice { margin-top: 24px; }
+.publishers-page > .notice a {
+  color: var(--accent);
+  font-weight: 700;
+  border-bottom: 1px solid transparent;
+}
+.publishers-page > .notice a:hover { border-bottom-color: var(--accent); }
+
+/* --- Month strip: the page's one month control ---------------------------- */
+
+.month-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.month-strip-list {
+  list-style: none;
+  margin: 0;
+  padding: 3px;
+  display: flex;
+  gap: 2px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.month-strip-item {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 6px 13px;
+  border-radius: var(--r-pill);
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+a.month-strip-item:hover { color: var(--text); }
+.month-strip-item.is-on { background: var(--accent); color: var(--accent-ink); }
+.month-strip-year { font-size: 0.7rem; font-weight: 600; opacity: 0.75; }
+/* Today's month: a small tag, on the pill or beside the label. */
+.month-strip-now {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.month-strip-item.is-on .month-strip-now { color: inherit; opacity: 0.8; }
+.month-step {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+}
+.month-step:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+.month-strip-back {
+  margin-left: 6px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.month-strip-back:hover { text-decoration: underline; }
+
+/* Narrower screens keep fewer months either side of the shown one. */
+@media (max-width: 900px) {
+  .month-strip-list [data-reach="3"] { display: none; }
+}
+@media (max-width: 560px) {
+  .month-strip-list [data-reach="2"] { display: none; }
+  .month-strip-item { padding: 6px 10px; }
+}
+
+/* --- Board --------------------------------------------------------------- */
+
+.pub-board {
+  list-style: none;
+  margin: 30px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+  gap: 22px;
+}
+
+.pub-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 20px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 var(--line);
+  scroll-margin-top: calc(var(--header-h) + 18px);
+  transition: border-color 160ms ease;
+}
+/* Arrived at from the directory's "57 in Sep" link. */
+.pub-card:target { border-color: var(--accent); }
+
+.pub-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.pub-card-id { min-width: 0; }
+.pub-card-name { font-size: 1.35rem; }
+.pub-card-name a { transition: color 130ms ease; }
+.pub-card-name a:hover { color: var(--accent); }
+.pub-card-parent {
+  margin-top: 3px;
+  font-size: 0.84rem;
+  color: var(--text-mute);
+}
+.pub-card-parent a { color: var(--text-dim); font-weight: 700; }
+.pub-card-parent a:hover { color: var(--accent); }
+
+/* The month's release count, set like the Agenda's day numbers. */
+.pub-card-count {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-mute);
+  white-space: nowrap;
+}
+.pub-card-num {
+  font-family: var(--display);
+  font-variation-settings: "SOFT" 50, "WONK" 1, "opsz" 90;
+  font-weight: 700;
+  font-size: 2.5rem;
+  line-height: 0.92;
+  color: var(--text);
+}
+
+.pub-card-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.chip--new {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 50%, transparent);
+}
+.pub-delta {
+  margin-left: auto;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-mute);
+  white-space: nowrap;
+}
+.pub-delta.is-up { color: var(--ok); }
+.pub-delta.is-down { color: var(--text-dim); }
+
+/* The cover strip is a small plank: covers stand on a ledge, and a quiet
+   month leaves the rest of it bare (the home hero's shelf, in miniature). */
+.pub-card-shelf {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 8px 0 12px;
+}
+.pub-card-shelf::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--ledge);
+  border-top: 1px solid var(--ledge-edge);
+  box-shadow: var(--ledge-shadow);
+}
+.pub-card-shelf .cover-link { min-width: 0; padding: 0 5px; }
+.pub-card-shelf .cover { border-radius: 2px 4px 4px 2px; }
+/* Placeholders are small here; the title is enough. */
+.pub-card-shelf .cover-ph-foot,
+.pub-card-shelf .cover-ph-mark { display: none; }
+.pub-card-shelf .cover-ph-title { font-size: 0.7rem; }
+
+.pub-card-more { align-self: flex-start; margin-top: auto; }
+
+/* --- Directory ----------------------------------------------------------- */
+
+.pub-directory { padding-top: 64px; }
+
+.pub-dir {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  columns: 15rem;
+  column-gap: 40px;
+}
+.pub-dir-item {
+  break-inside: avoid;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+.pub-dir-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+.pub-dir-name { font-weight: 700; transition: color 130ms ease; }
+.pub-dir-name:hover { color: var(--accent); }
+/* A defunct Publisher stays listed (its books remain), quieter. */
+.pub-dir-line:has(.pub-dir-defunct) .pub-dir-name { color: var(--text-mute); }
+.pub-dir-line:has(.pub-dir-defunct) .pub-dir-name:hover { color: var(--accent); }
+.pub-dir-defunct { padding: 0 8px; font-size: 0.68rem; color: var(--text-mute); }
+.pub-dir-count {
+  margin-left: auto;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.pub-dir-count:hover { text-decoration: underline; }
+
+.pub-dir-imprints {
+  list-style: none;
+  margin: 5px 0 2px 2px;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--line-strong);
+  font-size: 0.9rem;
+}
+.pub-dir-imprints li { padding: 2px 0; }
+.pub-dir-imprints .pub-dir-name { font-weight: 600; }
+
+@media (max-width: 720px) {
+  .pub-card { padding: 16px 16px 14px; }
+  .pub-card-num { font-size: 2.1rem; }
+}

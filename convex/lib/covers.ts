@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { todaySortKey } from "./dates";
 
 // Some publishers serve a generic "no cover yet" SVG where the artwork would
 // be, and the importers stored those as cover images. Real cover art is
@@ -97,7 +98,7 @@ export function seriesCoverIsbn(
   candidates: ReadonlyArray<SeriesCoverCandidate>,
   now: Date = new Date(),
 ): string | null {
-  const today = now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+  const today = todaySortKey(now);
   const published = (c: SeriesCoverCandidate) => {
     const sort = c.pubDate?.sort ?? 0;
     return sort > 0 && sort <= today;

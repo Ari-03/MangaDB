@@ -47,29 +47,31 @@
 
 /* --- Stat row ------------------------------------------------------------ */
 
+/* The catalog's size, set large across the full width of the copy column:
+   three rounded counts that should read as "a lot of manga" at a glance. */
 .stat-row {
   margin-top: 34px;
   display: flex;
-  gap: 0;
-  flex-wrap: wrap;
   border-top: 1px solid var(--line);
-  padding-top: 18px;
+  padding-top: 22px;
 }
 .stat {
-  padding-right: 22px;
-  margin-right: 22px;
-  border-right: 1px solid var(--line);
+  flex: 1 1 auto;
+  padding-inline: 22px;
+  border-left: 1px solid var(--line);
 }
-.stat:last-child { border-right: 0; margin-right: 0; padding-right: 0; }
+.stat:first-child { border-left: 0; padding-left: 0; }
+.stat:last-child { padding-right: 0; }
 .stat-num {
   font-family: var(--display);
-  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 60;
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 96;
   font-weight: 700;
-  font-size: 1.6rem;
-  line-height: 1.1;
+  font-size: clamp(2.2rem, 1.3rem + 1.7vw, 3rem);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
   color: var(--gold);
 }
-.stat-label { font-size: 0.82rem; color: var(--text-mute); }
+.stat-label { margin-top: 4px; font-size: 0.92rem; font-weight: 600; color: var(--text-mute); }
 
 /* --- Hero shelf: short ledges of this month's covers --------------------- */
 
@@ -166,7 +168,7 @@
   .hero { padding-block: 30px 6px; }
   .hero-shelf { padding: 20px 14px 8px; gap: 20px; }
   /* Three books read at phone width; the rest of the row stands down. */
-  .hero-row .cover-link { max-width: calc(100% / 3); }
+  .hero-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .hero-row .cover-link:nth-child(n + 4) { display: none; }
   /* Too narrow for a title (covers.css): the cloth carries its volume
      numeral instead, and the shelf below still spells every book out. */
@@ -174,7 +176,7 @@
   .hero-row .cover-ph-foot { display: none; }
   .hero-row .cover-ph { justify-content: center; padding: 6px 4px 6px 9px; }
   .hero-row .cover-ph-mark { display: block; }
-  .stat-row { display: grid; grid-template-columns: repeat(2, 1fr); row-gap: 16px; }
-  .stat { border-right: 0; padding-right: 0; margin-right: 0; }
-  .stat-num { font-size: 1.45rem; }
+  .stat { padding-inline: 14px; }
+  .stat-num { font-size: clamp(1.5rem, 0.9rem + 2.4vw, 2.2rem); }
+  .stat-label { font-size: 0.82rem; }
 }
