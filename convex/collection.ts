@@ -1,6 +1,7 @@
 // Personal collection (ticket #27, spec §3): Wanted / Ordered / Owned
-// Collection Entries on Releases and Bundles, variant pinning, and computed
-// Derived Ownership.
+// Collection Entries on Releases and Bundles, variant pinning, computed
+// Derived Ownership, the per-Series overlay behind the shelf quick actions,
+// batch marking, and the library shelf on /me.
 //
 // The invariants, straight from the glossary (CONTEXT.md):
 // - A Collection Entry targets a Release or a Bundle, in exactly one of three
@@ -17,11 +18,17 @@
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { resolveActiveSeries } from "./catalog";
 import { editionCoverage, followMerges } from "./catalogPages";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { coverIsbnForRelease, coverUrl } from "./lib/covers";
+import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
 import { requireActiveRelease } from "./reading";
+
+/** Batch marking (the library's "Own all") stops here; nobody shelves more in one click. */
+export const MANY_ENTRIES_CAP = 200;
 
 // Mirrors the collectionEntries.state union in schema.ts.
 const stateValidator = v.union(
@@ -342,13 +349,177 @@ export const volumeOwnership = query({
 });
 
 /**
- * The viewer's whole collection for /me, one item per Collection Entry with
- * its state — the route groups by state. Release entries join their Edition
- * link and pinned Variant; Owned Bundle entries list their member Releases
- * (Derived Ownership, with bundle-pinned Variants) so /me shows what the box
- * set puts on the shelf.
+ * The viewer's collection picture inside one Series, for the shelf overlay
+ * on the Series page and the library's path shelves: every direct entry on a
+ * Release of the Series (state + pinned Variant) and every Release owned
+ * through an Owned Bundle (Derived Ownership, computed here as always), plus
+ * the format preference the quick actions use to pick a Release when a book
+ * has several. Null when signed out, username pending, or the Series is
+ * unknown — the public shelf renders without badges or actions.
  */
-export const myCollection = query({
+export const seriesEntries = query({
+  args: { seriesPublicId: v.number() },
+  handler: async (ctx, { seriesPublicId }) => {
+    const user = await viewerOrNull(ctx);
+    if (!user) return null;
+    const series = await resolveActiveSeries(ctx, seriesPublicId);
+    if (!series) return null;
+
+    const inSeries = async (release: Doc<"releases">) => {
+      for (const rawId of release.seriesIds) {
+        if (rawId === series._id) return true;
+        const resolved = await followMerges(ctx, "series", await ctx.db.get(rawId));
+        if (resolved && resolved._id === series._id) return true;
+      }
+      return false;
+    };
+
+    const rows = await ctx.db
+      .query("collectionEntries")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    const entries = [];
+    const derivedOwned = new Set<Id<"releases">>();
+    for (const row of rows) {
+      if (row.releaseId) {
+        const release = await followMerges(ctx, "releases", await ctx.db.get(row.releaseId));
+        if (!release || !(await inSeries(release))) continue;
+        entries.push({
+          releaseId: release._id,
+          state: row.state,
+          variantId: row.variantId ?? null,
+        });
+      } else if (row.bundleId && row.state === "owned") {
+        const bundle = await followMerges(
+          ctx,
+          "releaseBundles",
+          await ctx.db.get(row.bundleId),
+        );
+        if (!bundle) continue;
+        const memberships = await ctx.db
+          .query("bundleMemberships")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+          .collect();
+        for (const membership of memberships) {
+          const release = await followMerges(
+            ctx,
+            "releases",
+            await ctx.db.get(membership.releaseId),
+          );
+          if (release && (await inSeries(release))) derivedOwned.add(release._id);
+        }
+      }
+    }
+    return {
+      seriesId: series._id,
+      formatPreference: user.formatPreference,
+      entries,
+      derivedOwned: [...derivedOwned],
+    };
+  },
+});
+
+/** Whether every completely covered Volume of an Edition has a completed read. */
+async function editionRead(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  editionId: Id<"editions">,
+): Promise<boolean | null> {
+  const rows = await ctx.db
+    .query("volumeCoverages")
+    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .collect();
+  let complete = 0;
+  for (const row of rows) {
+    if (row.extent !== "complete") continue;
+    const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
+    if (!volume) continue;
+    complete += 1;
+    const progress = await ctx.db
+      .query("volumeProgress")
+      .withIndex("by_user_volume", (q) =>
+        q.eq("userId", userId).eq("volumeId", volume._id),
+      )
+      .unique();
+    if (!progress || progress.readCount < 1) return false;
+  }
+  // A book covering nothing completely (a split, or coverage not yet mapped)
+  // has no read state to show.
+  return complete === 0 ? null : true;
+}
+
+/**
+ * One shelved book for the library: the Release's Edition joined with the
+ * facts the shelf shows (title, line numbering, covered Volumes, cover) and
+ * the reading-path key it belongs to on its Series page.
+ */
+async function libraryBook(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  release: Doc<"releases">,
+) {
+  const edition = await followMerges(ctx, "editions", await ctx.db.get(release.editionId));
+  if (!edition) return null;
+  const { title, lineName, coverage } = await editionCoverage(ctx, edition);
+  const series = coverage[0]?.series ?? null;
+  if (!series) return null; // nothing to shelve it under
+  const publisherDoc = await ctx.db.get(edition.publisherId);
+  const publisher =
+    publisherDoc && publisherDoc.status === "active"
+      ? { name: publisherDoc.name, slug: publisherDoc.slug }
+      : null;
+  return {
+    series,
+    pathKey: editionPathKey({ publisher, lineName }),
+    pathName: lineName ?? "Standard edition",
+    pathKind: lineName === null ? ("standard" as const) : ("line" as const),
+    publisher,
+    editionLineId: edition.editionLineId ?? null,
+    book: {
+      releaseId: release._id,
+      editionPublicId: edition.publicId,
+      title,
+      lineName,
+      linePosition: edition.linePosition ?? null,
+      coverage: coverage.map((cov) => ({
+        volumePublicId: cov.volumePublicId,
+        position: cov.position,
+        label: cov.label,
+        extent: cov.extent,
+      })),
+      anchor: releaseAnchor(release),
+      format: release.format,
+      binding: release.binding ?? null,
+      coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
+      coverIsbn: await coverIsbnForRelease(ctx, release),
+      read: await editionRead(ctx, userId, edition._id),
+    },
+  };
+}
+
+type LibraryBook = NonNullable<Awaited<ReturnType<typeof libraryBook>>>["book"] & {
+  state: Doc<"collectionEntries">["state"];
+  variantName: string | null;
+  /** True when a direct Collection Entry holds this state. */
+  direct: boolean;
+  /** The box set that also puts it on the shelf (Derived Ownership), if any. */
+  via: { bundlePublicId: number; bundleName: string } | null;
+};
+
+/**
+ * The viewer's library shelf for /me: every Collection Entry shelved under
+ * its Series and reading path — "Berserk › Deluxe Edition: 2 of 14 books" —
+ * so ownership reads at the edition level, with each path's full size on
+ * hand for the "own the rest" affordance. An Owned box set puts its members
+ * on the shelf as Derived Ownership (`via` names the box set) and is listed
+ * once more under `bundles`; Wanted/Ordered box sets are listed there only.
+ *
+ * Path size: an Edition Line's active Editions, or the Series' active Volume
+ * count for a standard run (one book per Volume is the norm; the expanded
+ * shelf shows the real books either way). Series wear the library cover
+ * from seriesStats when the rebuild has stored one.
+ */
+export const myLibrary = query({
   args: {},
   handler: async (ctx) => {
     const user = await viewerOrNull(ctx);
@@ -359,25 +530,71 @@ export const myCollection = query({
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .collect();
 
-    const entries = [];
+    type Path = {
+      key: string;
+      name: string;
+      kind: "standard" | "line";
+      publisher: { name: string; slug: string } | null;
+      editionLineId: Id<"editionLines"> | null;
+      books: LibraryBook[];
+    };
+    type SeriesShelf = {
+      seriesPublicId: number;
+      title: string;
+      paths: Map<string, Path>;
+    };
+    const shelves = new Map<number, SeriesShelf>();
+    const bundles = [];
+
+    const shelve = async (
+      release: Doc<"releases">,
+      state: Doc<"collectionEntries">["state"],
+      variantId: Id<"releaseVariants"> | undefined,
+      via: LibraryBook["via"],
+    ) => {
+      const joined = await libraryBook(ctx, user._id, release);
+      if (!joined) return;
+      const shelf = shelves.get(joined.series.publicId) ?? {
+        seriesPublicId: joined.series.publicId,
+        title: joined.series.title,
+        paths: new Map<string, Path>(),
+      };
+      shelves.set(shelf.seriesPublicId, shelf);
+      const path = shelf.paths.get(joined.pathKey) ?? {
+        key: joined.pathKey,
+        name: joined.pathName,
+        kind: joined.pathKind,
+        publisher: joined.publisher,
+        editionLineId: joined.editionLineId,
+        books: [],
+      };
+      shelf.paths.set(path.key, path);
+      // Direct ownership and Derived Ownership coexist on one book: it is
+      // shelved once, the direct entry's state winning, the box set named.
+      const existing = path.books.find((book) => book.releaseId === release._id);
+      if (existing) {
+        if (via) existing.via = via;
+        else {
+          existing.state = state;
+          existing.direct = true;
+          existing.variantName = await variantName(ctx, variantId);
+        }
+        return;
+      }
+      path.books.push({
+        ...joined.book,
+        state,
+        variantName: await variantName(ctx, variantId),
+        direct: via === null,
+        via,
+      });
+    };
+
     for (const row of rows) {
       if (row.releaseId) {
-        const release = await followMerges(
-          ctx,
-          "releases",
-          await ctx.db.get(row.releaseId),
-        );
+        const release = await followMerges(ctx, "releases", await ctx.db.get(row.releaseId));
         if (!release) continue;
-        const link = await releaseLink(ctx, release);
-        if (!link) continue;
-        entries.push({
-          kind: "release" as const,
-          state: row.state,
-          releaseId: release._id,
-          title: link.editionTitle,
-          ...link,
-          variantName: await variantName(ctx, row.variantId),
-        });
+        await shelve(release, row.state, row.variantId, null);
       } else if (row.bundleId) {
         const bundle = await followMerges(
           ctx,
@@ -385,14 +602,14 @@ export const myCollection = query({
           await ctx.db.get(row.bundleId),
         );
         if (!bundle) continue;
-        // Derived Ownership listing — only an Owned bundle confers it.
-        const members = [];
+        const memberships = await ctx.db
+          .query("bundleMemberships")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+          .collect();
+        memberships.sort((a, b) => a.order - b.order);
+        const via = { bundlePublicId: bundle.publicId, bundleName: bundle.name };
+        // Only an Owned box set confers Derived Ownership on its members.
         if (row.state === "owned") {
-          const memberships = await ctx.db
-            .query("bundleMemberships")
-            .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-            .collect();
-          memberships.sort((a, b) => a.order - b.order);
           for (const membership of memberships) {
             const release = await followMerges(
               ctx,
@@ -400,40 +617,140 @@ export const myCollection = query({
               await ctx.db.get(membership.releaseId),
             );
             if (!release) continue;
-            const link = await releaseLink(ctx, release);
-            if (!link) continue;
-            members.push({
-              ...link,
-              variantName: await variantName(ctx, membership.variantId),
-            });
+            await shelve(release, "owned", membership.variantId, via);
           }
         }
-        entries.push({
-          kind: "bundle" as const,
+        bundles.push({
           state: row.state,
           bundleId: bundle._id,
           bundlePublicId: bundle.publicId,
           title: bundle.name,
-          members,
+          format: bundle.format ?? null,
+          memberCount: memberships.length,
+          coverIsbn: bundle.isbn13 ?? null,
         });
       }
     }
-    entries.sort((a, b) => a.title.localeCompare(b.title));
-    return { entries };
+
+    const series = [];
+    for (const shelf of shelves.values()) {
+      const stats = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_publicId", (q) => q.eq("publicId", shelf.seriesPublicId))
+        .unique();
+      let volumeCount = stats?.volumeCount ?? null;
+      const paths = [];
+      for (const path of shelf.paths.values()) {
+        let bookCount: number | null = null;
+        if (path.editionLineId) {
+          const members = await ctx.db
+            .query("editions")
+            .withIndex("by_line", (q) => q.eq("editionLineId", path.editionLineId!))
+            .collect();
+          bookCount = members.filter((doc) => doc.status === "active").length;
+        } else {
+          if (volumeCount === null) {
+            const seriesDoc = await resolveActiveSeries(ctx, shelf.seriesPublicId);
+            if (seriesDoc) {
+              const volumes = await ctx.db
+                .query("volumes")
+                .withIndex("by_series", (q) => q.eq("seriesId", seriesDoc._id))
+                .collect();
+              volumeCount = volumes.filter((doc) => doc.status === "active").length;
+            }
+          }
+          bookCount = volumeCount;
+        }
+        const position = (book: LibraryBook) => {
+          const line = Number(book.linePosition);
+          if (book.linePosition !== null && Number.isFinite(line)) return line;
+          return book.coverage[0]?.position ?? Infinity;
+        };
+        path.books.sort((a, b) => position(a) - position(b) || a.title.localeCompare(b.title));
+        paths.push({
+          key: path.key,
+          name: path.name,
+          kind: path.kind,
+          publisher: path.publisher,
+          bookCount,
+          books: path.books,
+        });
+      }
+      paths.sort(
+        (a, b) =>
+          (a.kind === "line" ? 1 : 0) - (b.kind === "line" ? 1 : 0) ||
+          a.name.localeCompare(b.name),
+      );
+      series.push({
+        seriesPublicId: shelf.seriesPublicId,
+        title: shelf.title,
+        coverUrl: stats?.coverUrl ?? paths[0]?.books[0]?.coverUrl ?? null,
+        coverIsbn: stats?.coverIsbn ?? paths[0]?.books[0]?.coverIsbn ?? null,
+        paths,
+      });
+    }
+    series.sort((a, b) => a.title.localeCompare(b.title));
+    bundles.sort((a, b) => a.title.localeCompare(b.title));
+    return { series, bundles };
   },
 });
 
 // ---------- mutations ----------
 
 /**
- * The one write path for a Release's Collection Entry: set the exact state
- * (Wanted | Ordered | Owned — replacing any previous state, so exactly one
- * ever holds) with an optional pinned Variant, or omit `state` to remove the
- * entry. Removal deletes only the direct entry; Derived Ownership is
- * computed, so it is untouchable from here.
- *
- * Inserting a first Collection Entry in a Series returns `suggestFollow`
- * (ticket #29) — a suggestion only; nothing here writes the follow.
+ * The Collection Entry write for one Release, shared by the single and batch
+ * mutations: set the exact state (Wanted | Ordered | Owned — replacing any
+ * previous state, so exactly one ever holds) with an optional pinned
+ * Variant, or pass no state to remove the entry. Removal deletes only the
+ * direct entry; Derived Ownership is computed, so it is untouchable from
+ * here. Returns the follow suggestions (ticket #29) a *first* entry in a
+ * Series earns — a suggestion only; nothing here writes the follow.
+ */
+async function writeReleaseEntry(
+  ctx: MutationCtx,
+  user: Doc<"users">,
+  releaseId: Id<"releases">,
+  state: Doc<"collectionEntries">["state"] | undefined,
+  variantId: Id<"releaseVariants"> | undefined,
+) {
+  const release = await requireActiveRelease(ctx, releaseId);
+  const existing = await releaseEntryRow(ctx, user._id, release._id);
+  if (!state) {
+    if (existing) await ctx.db.delete(existing._id);
+    return { entry: null, suggestFollow: [] };
+  }
+
+  if (variantId) {
+    const variant = await ctx.db.get(variantId);
+    if (!variant || variant.status !== "active" || variant.releaseId !== release._id) {
+      throw new ConvexError({
+        code: "badVariant",
+        message: "That variant does not belong to this release.",
+      });
+    }
+  }
+
+  let suggestFollow: Awaited<ReturnType<typeof followSuggestions>> = [];
+  if (existing) {
+    // Patching variantId with undefined clears a previously pinned Variant.
+    // A state change on an existing entry is never a first entry — no prompt.
+    await ctx.db.patch(existing._id, { state, variantId });
+  } else {
+    const entryId = await ctx.db.insert("collectionEntries", {
+      userId: user._id,
+      releaseId: release._id,
+      state,
+      variantId,
+    });
+    suggestFollow = await followSuggestions(ctx, user._id, (await ctx.db.get(entryId))!);
+  }
+  return { entry: { state, variantId: variantId ?? null }, suggestFollow };
+}
+
+/**
+ * The one write path for a Release's Collection Entry (see
+ * writeReleaseEntry): set the exact state with an optional pinned Variant, or
+ * omit `state` to remove the entry.
  */
 export const setReleaseEntry = mutation({
   args: {
@@ -443,43 +760,49 @@ export const setReleaseEntry = mutation({
   },
   handler: async (ctx, { releaseId, state, variantId }) => {
     const user = await requireUser(ctx);
-    const release = await requireActiveRelease(ctx, releaseId);
+    return await writeReleaseEntry(ctx, user, releaseId, state, variantId);
+  },
+});
 
-    const existing = await releaseEntryRow(ctx, user._id, release._id);
-    if (!state) {
-      if (existing) await ctx.db.delete(existing._id);
-      return { entry: null, suggestFollow: [] };
+/**
+ * The same write for many Releases at once — the library's "Own the rest"
+ * and the Series page's whole-path marking. Each Release gets exactly the
+ * state given (or its entry removed when `state` is omitted), through the
+ * same rules as one click; pinned Variants are left as they were on entries
+ * that already exist. Follow suggestions are merged by Series, so a first
+ * entry in a Series still prompts once. Capped at MANY_ENTRIES_CAP.
+ */
+export const setManyReleaseEntries = mutation({
+  args: {
+    releaseIds: v.array(v.id("releases")),
+    state: v.optional(stateValidator),
+  },
+  handler: async (ctx, { releaseIds, state }) => {
+    const user = await requireUser(ctx);
+    if (releaseIds.length > MANY_ENTRIES_CAP) {
+      throw new ConvexError({
+        code: "tooMany",
+        message: `Mark at most ${MANY_ENTRIES_CAP} releases at once.`,
+      });
     }
-
-    if (variantId) {
-      const variant = await ctx.db.get(variantId);
-      if (!variant || variant.status !== "active" || variant.releaseId !== release._id) {
-        throw new ConvexError({
-          code: "badVariant",
-          message: "That variant does not belong to this release.",
-        });
+    const suggested = new Map<Id<"series">, { seriesId: Id<"series">; title: string }>();
+    let changed = 0;
+    for (const releaseId of new Set(releaseIds)) {
+      const release = await requireActiveRelease(ctx, releaseId);
+      const existing = await releaseEntryRow(ctx, user._id, release._id);
+      const result = await writeReleaseEntry(
+        ctx,
+        user,
+        release._id,
+        state,
+        state ? existing?.variantId : undefined,
+      );
+      changed += 1;
+      for (const suggestion of result.suggestFollow) {
+        suggested.set(suggestion.seriesId, suggestion);
       }
     }
-
-    let suggestFollow: Awaited<ReturnType<typeof followSuggestions>> = [];
-    if (existing) {
-      // Patching variantId with undefined clears a previously pinned Variant.
-      // A state change on an existing entry is never a first entry — no prompt.
-      await ctx.db.patch(existing._id, { state, variantId });
-    } else {
-      const entryId = await ctx.db.insert("collectionEntries", {
-        userId: user._id,
-        releaseId: release._id,
-        state,
-        variantId,
-      });
-      suggestFollow = await followSuggestions(
-        ctx,
-        user._id,
-        (await ctx.db.get(entryId))!,
-      );
-    }
-    return { entry: { state, variantId: variantId ?? null }, suggestFollow };
+    return { changed, suggestFollow: [...suggested.values()] };
   },
 });
 

@@ -497,17 +497,19 @@ describe("reading.myReading", () => {
     });
 
     const overview = await as.query(api.reading.myReading, {});
-    expect(overview?.statuses).toEqual([
-      {
-        seriesPublicId: 1,
-        title: "Vinland Saga",
-        readingStatus: "reading",
-        volumesRead: 1,
-        totalVolumes: 3,
-      },
-    ]);
-    expect(overview?.passes).toHaveLength(1);
-    expect(overview?.passes[0]).toMatchObject({
+    expect(overview?.series).toHaveLength(1);
+    expect(overview?.series[0]).toMatchObject({
+      seriesId,
+      seriesPublicId: 1,
+      title: "Vinland Saga",
+      readingStatus: "reading",
+      volumesRead: 1,
+      totalVolumes: 3,
+      coverUrl: null,
+      coverIsbn: null,
+    });
+    expect(overview?.series[0]?.passes).toHaveLength(1);
+    expect(overview?.series[0]?.passes[0]).toMatchObject({
       releaseId: omnibusRelease,
       percent: 40,
       format: "physical",
@@ -516,9 +518,129 @@ describe("reading.myReading", () => {
     });
   });
 
+  it("a series with only a read volume still appears, with no status", async () => {
+    const t = convexTest(schema);
+    const { v2 } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 1 });
+    const overview = await as.query(api.reading.myReading, {});
+    expect(overview?.series).toHaveLength(1);
+    expect(overview?.series[0]).toMatchObject({
+      readingStatus: null,
+      volumesRead: 1,
+      totalVolumes: 3,
+      passes: [],
+    });
+  });
+
   it("is null signed out", async () => {
     const t = convexTest(schema);
     await seed(t);
     expect(await t.query(api.reading.myReading, {})).toBeNull();
+  });
+});
+
+describe("reading.setEditionRead", () => {
+  it("marks every completely covered volume read once, keeping rereads", async () => {
+    const t = convexTest(schema);
+    const { v1, v2, v3 } = await seed(t);
+    const as = await withUser(t);
+    // Vol 2 was already read twice; marking the omnibus read must not touch it.
+    await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 2 });
+
+    const result = await as.mutation(api.reading.setEditionRead, {
+      editionPublicId: 22,
+      read: true,
+    });
+    expect(result.changed).toBe(2);
+    expect(await readCount(t, v1)).toBe(1);
+    expect(await readCount(t, v2)).toBe(2);
+    expect(await readCount(t, v3)).toBe(1);
+    // Every volume now read and no status yet: the completed prompt fires.
+    expect(result.suggestCompleted).toEqual([
+      { seriesId: expect.anything(), title: "Vinland Saga" },
+    ]);
+
+    // Idempotent: nothing left to mark.
+    const again = await as.mutation(api.reading.setEditionRead, {
+      editionPublicId: 22,
+      read: true,
+    });
+    expect(again.changed).toBe(0);
+  });
+
+  it("unmarking clears the read history of the covered volumes only", async () => {
+    const t = convexTest(schema);
+    const { v1, v2, v3 } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: true });
+    const result = await as.mutation(api.reading.setEditionRead, {
+      editionPublicId: 21,
+      read: false,
+    });
+    expect(result.changed).toBe(1);
+    expect(result.suggestCompleted).toEqual([]);
+    expect(await readCount(t, v1)).toBe(0);
+    expect(await readCount(t, v2)).toBe(1);
+    expect(await readCount(t, v3)).toBe(1);
+  });
+
+  it("partial coverage is never touched", async () => {
+    const t = convexTest(schema);
+    const { v3 } = await seed(t);
+    const as = await withUser(t);
+    const result = await as.mutation(api.reading.setEditionRead, {
+      editionPublicId: 23,
+      read: true,
+    });
+    expect(result.changed).toBe(0);
+    expect(await readCount(t, v3)).toBe(0);
+  });
+
+  it("rejects an unknown edition and requires a user", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const as = await withUser(t);
+    await expect(
+      as.mutation(api.reading.setEditionRead, { editionPublicId: 99, read: true }),
+    ).rejects.toThrow(ConvexError);
+    await expect(
+      t.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: true }),
+    ).rejects.toThrow(ConvexError);
+  });
+});
+
+describe("reading.setEditionsRead", () => {
+  it("marks a whole run, prompting once, and honours the cap", async () => {
+    const t = convexTest(schema);
+    const { v1, v2, v3 } = await seed(t);
+    const as = await withUser(t);
+    const result = await as.mutation(api.reading.setEditionsRead, {
+      editionPublicIds: [21, 22, 22, 23],
+      read: true,
+    });
+    // Vol 1 through the standard edition, Vols 2–3 through the omnibus (Vol 1
+    // already read by then); the partial split touches nothing.
+    expect(result.changed).toBe(3);
+    expect(await readCount(t, v1)).toBe(1);
+    expect(await readCount(t, v2)).toBe(1);
+    expect(await readCount(t, v3)).toBe(1);
+    expect(result.suggestCompleted).toEqual([
+      { seriesId: expect.anything(), title: "Vinland Saga" },
+    ]);
+
+    const cleared = await as.mutation(api.reading.setEditionsRead, {
+      editionPublicIds: [21],
+      read: false,
+    });
+    expect(cleared).toEqual({ changed: 1, suggestCompleted: [] });
+    expect(await readCount(t, v1)).toBe(0);
+
+    await expect(
+      as.mutation(api.reading.setEditionsRead, {
+        editionPublicIds: Array.from({ length: 201 }, (_, i) => i),
+        read: true,
+      }),
+    ).rejects.toThrow(ConvexError);
   });
 });

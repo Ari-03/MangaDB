@@ -16,7 +16,7 @@ the ubiquitous-language glossary at [`CONTEXT.md`](CONTEXT.md).
 |---|---|
 | `src/routes/` | File-based routes (`__root.tsx` is the document shell; `releases.index.tsx` + `releases.$month.tsx` are the Releases browser; `series.$publicId.$slug.tsx`, `volume.…`, `edition.…`, and `bundle.…` are the public catalog pages; `publisher.$slug.tsx` is the Publisher Spotlight; `isbn.$isbn.tsx` is the ISBN entry point; `search.tsx` is v1 search; `me.tsx` is the gated shell; `sign-in.$`/`sign-up.$` host Clerk's UI; `claim-username.tsx` is the forced first-sign-in step; `mod.edit.…` + `mod.roles.tsx` are the moderation surfaces from #31; `about-the-data.tsx` + `mod.launch.tsx` are the launch pieces from #40) |
 | `src/router.tsx` | Router factory (`getRouter`) |
-| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI; `collection.tsx` is the signed-in collection overlay from #27; `reading.tsx` is the signed-in reading-tracking overlay from #28) |
+| `src/lib/` | Isomorphic helpers (computed slugs + public-ID parsing for catalog URLs; ISBN recognition for search; month arithmetic + the shared Releases-browser UI; `collection.tsx` is the signed-in collection overlay from #27 and the library's Collection tab; `reading.tsx` is the signed-in reading-tracking overlay from #28 and the Reading tab; `quickActions.tsx` is the on-cover Want / Order / Own / Mark read overlay; `seriesShelf.tsx` is the reading-path shelf the Series page and the library share) |
 | `src/start.ts` | Global Start config: Clerk request middleware (only when credentials exist) |
 | `src/providers.tsx` | Client wiring: `<ClerkProvider>` + `ConvexProviderWithClerk`, site header |
 | `src/server.ts` | Custom Workers entry: canonical-host redirect, the `/covers/{isbn13}.jpg` cover-art route, then the Start handler |
@@ -361,8 +361,29 @@ disappear entirely signed out.
   collection" summary computed from the owned Releases covering it, direct
   or derived, with partial coverage labeled.
 
-`/me` → Collection lists every entry grouped by state (Owned / Ordered /
-Wanted); an Owned box set lists its derived member Releases beneath it.
+- **Quick actions on every cover** (`src/lib/quickActions.tsx`) — hovering a
+  book on a Series page reading path (or on the library shelf) reveals Want /
+  Order / Own and Mark read, so a run can be marked without opening each
+  Edition page. The cover wears its state as a badge. A book with several
+  Releases addresses the one that already has an entry, else the viewer's
+  preferred format (print when "both"), else the first
+  (`collection.seriesEntries` is the per-Series overlay behind it).
+- **Whole-run marking** — above every reading path (Series page and the
+  library's opened runs) sit Want all / Order all / Own all / Read all:
+  `collection.setManyReleaseEntries` sets one state on many Releases and
+  `reading.setEditionsRead` marks many books read (both capped at 200),
+  through the same rules as one click each. A button every book already
+  satisfies reads as a stamp ("All owned") and does nothing — nothing removes
+  entries in bulk.
+
+`/me` → Collection shelves every entry under its Series and reading path —
+"Berserk › Deluxe Edition · 2 of 14 books owned" — one shelf per state
+(Owned / Ordered / Wanted, `?shelf=`). "Add the other N" opens the full run
+from the public Series page query with unmarked books faded, each markable
+from its cover or all at once. Tabs and shelves switch in place (the URL is
+rewritten, never navigated, so the auth gate is not re-run per click). Owned box sets shelve their members as
+Derived Ownership and are listed again under Box sets
+(`collection.myLibrary`).
 
 ## Reading tracking (ticket #28)
 
@@ -393,11 +414,16 @@ public catalog pages and disappear entirely signed out.
   "Completed" — both render inline, and only their confirm buttons write
   the status. Declining changes nothing.
 - **Volume Progress is edition-independent and directly editable**
-  (CONTEXT.md): each Volume row shows "Read ×N" with mark-read/+1/−1
-  controls, so offline reads are recordable without a pass.
+  (CONTEXT.md): the Volume page shows "Read ×N" with mark-read/+1/−1
+  controls, so offline reads are recordable without a pass, and every cover's
+  Mark read toggle (`reading.setEditionRead`) gives each completely covered
+  Volume its first read, or clears them — partial coverage untouched, rereads
+  never erased. A Series it leaves fully read gets the same non-blocking
+  "Completed?" prompt a pass completion does.
 
-`/me` → Reading lists the chosen statuses (with volumes-read progress per
-Series) and every active pass, linking back to the Edition row.
+`/me` → Reading is one row per Series the viewer reads (status, read Volume,
+or active pass): cover, an in-place status picker, volumes-read progress, and
+the active passes beneath, with filter chips per status (`reading.myReading`).
 
 ## Series Follows + My Upcoming Releases (ticket #29)
 
@@ -405,7 +431,10 @@ Spec §3: future-release interest is a **Series Follow**, separate from
 owning and reading (`convex/follows.ts`; UI in `src/lib/follows.tsx`).
 Follows are always private in v1 — the profile never shows them.
 
-- **Explicit follow toggle** on the Series page. `setSeriesFollow` is the
+- **Explicit follow toggle** on the Series page, in its own "New releases"
+  group of the tracking bar — visibly apart from the "Your reading" group
+  (status + progress), since following a Series says nothing about reading
+  it. `setSeriesFollow` is the
   single write path; nothing follows a Series as a side effect of anything.
 - **One post-first-entry prompt per Series**: inserting a user's first
   Collection Entry in a Series returns a `suggestFollow` from the collection
@@ -413,7 +442,11 @@ Follows are always private in v1 — the profile never shows them.
   button creates the follow; "Don't ask again" dismisses permanently
   (`dismissFollowPrompt` — later entries in that Series never prompt again);
   ignoring it changes nothing.
-- **My Upcoming Releases** (`/me` → Upcoming) implements the spec formula,
+- **`/me` → Upcoming** opens with the followed Series as a rail of covers,
+  each with its next announced date and an Unfollow on hover
+  (`follows.myFollowing`), then My Upcoming Releases as a shelf of covers,
+  nearest first.
+- **My Upcoming Releases** implements the spec formula,
   computed live on every read and never stored: announced future Canonical
   Releases from followed Series matching the viewer's Physical/Digital/Both
   preference (settable right in the section via `users.setFormatPreference`),
@@ -440,11 +473,15 @@ visibility defaults for Ownership and Reading plus per-Series overrides
 
 - **Defaults** live on the User (`ownershipVisibility` /
   `readingVisibility`, both `private` at account creation). `/me` → Sharing
-  holds the two selects; `sharing.setDefaultVisibility` is the write path.
+  (`/me` → Settings) holds the two pills; `sharing.setDefaultVisibility` is the write path.
 - **Per-Series overrides** live on the per-user-per-series state row
-  (`userSeriesStates`). The Series page shows a "Sharing for this series"
-  panel (signed-in only) whose selects call `sharing.setSeriesVisibility`;
-  picking "Default" clears the override back to the account default.
+  (`userSeriesStates`). The Series page's tracking bar has a "Sharing"
+  button (signed-in only) that opens a popover floating over the page — the
+  bar and the shelf below never move. Each surface offers exactly two
+  choices: the account default, named ("Default: private"), and the one
+  other visibility; picking the default clears the override
+  (`sharing.setSeriesVisibility`), and an override that merely repeats the
+  default reads as the default.
 - **`/u/{username}`** is a current-state public profile — a public Convex
   read (`sharing.publicProfile`, no auth) that enforces visibility
   server-side and renders the same to everyone, owner included:

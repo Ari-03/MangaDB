@@ -389,8 +389,8 @@ describe("collection follow suggestions (#29)", () => {
   });
 });
 
-describe("collection.myCollection", () => {
-  it("returns every entry with its state, joined for linking", async () => {
+describe("collection.myLibrary", () => {
+  it("shelves every entry under its series and reading path", async () => {
     const t = convexTest(schema);
     const { r1, r2, variantId, bundleId } = await seed(t);
     const as = await withUser(t);
@@ -403,32 +403,199 @@ describe("collection.myCollection", () => {
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r2, state: "wanted" });
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
 
-    const overview = await as.query(api.collection.myCollection, {});
-    expect(overview?.entries).toHaveLength(3);
+    const library = await as.query(api.collection.myLibrary, {});
+    expect(library?.series).toHaveLength(1);
+    const shelf = library!.series[0]!;
+    expect(shelf).toMatchObject({ seriesPublicId: 1, title: "Witch Hat Atelier" });
+    expect(shelf.paths).toHaveLength(1);
+    const path = shelf.paths[0]!;
+    // No stats row and no line: the standard run is sized by the Series'
+    // volumes, and keyed like the Series page's reading path.
+    expect(path).toMatchObject({
+      key: "seven-seas",
+      name: "Standard edition",
+      kind: "standard",
+      bookCount: 2,
+    });
+    expect(path.books.map((book) => [book.editionPublicId, book.state, book.direct])).toEqual([
+      [21, "owned", true],
+      [22, "wanted", true],
+    ]);
+    // Vol 1: the direct entry wins, the box set is named alongside.
+    expect(path.books[0]).toMatchObject({
+      variantName: "Bookstore exclusive",
+      via: { bundlePublicId: 41, bundleName: "Witch Hat Atelier Box Set" },
+      read: false,
+    });
+    // Vol 2 is wanted directly, and also owned through the box set: the
+    // direct entry's state holds and the box set is still named.
+    expect(path.books[1]?.via?.bundlePublicId).toBe(41);
 
-    const release = overview?.entries.find(
-      (entry) => entry.kind === "release" && entry.state === "owned",
-    );
-    expect(release?.kind === "release" && release.variantName).toBe(
-      "Bookstore exclusive",
-    );
-
-    const bundle = overview?.entries.find((entry) => entry.kind === "bundle");
-    expect(bundle?.state).toBe("owned");
-    // The owned box set lists its derived members, bundle-pinned variant named.
-    expect(bundle?.kind === "bundle" && bundle.members).toHaveLength(2);
-    expect(
-      bundle?.kind === "bundle" ? bundle.members[0]?.variantName : null,
-    ).toBe("Bookstore exclusive");
+    expect(library?.bundles).toEqual([
+      expect.objectContaining({
+        state: "owned",
+        bundlePublicId: 41,
+        title: "Witch Hat Atelier Box Set",
+        memberCount: 2,
+      }),
+    ]);
   });
 
-  it("an ordered bundle carries no derived member listing", async () => {
+  it("an owned box set alone shelves its members as derived ownership", async () => {
+    const t = convexTest(schema);
+    const { bundleId } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
+    const library = await as.query(api.collection.myLibrary, {});
+    const books = library!.series[0]!.paths[0]!.books;
+    expect(books.map((book) => [book.state, book.direct, book.via?.bundlePublicId])).toEqual([
+      ["owned", false, 41],
+      ["owned", false, 41],
+    ]);
+    // The box set pins the exclusive cover for its first member.
+    expect(books[0]?.variantName).toBe("Bookstore exclusive");
+  });
+
+  it("an ordered box set is listed but shelves nothing", async () => {
     const t = convexTest(schema);
     const { bundleId } = await seed(t);
     const as = await withUser(t);
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "ordered" });
-    const overview = await as.query(api.collection.myCollection, {});
-    const bundle = overview?.entries[0];
-    expect(bundle?.kind === "bundle" && bundle.members).toEqual([]);
+    const library = await as.query(api.collection.myLibrary, {});
+    expect(library?.series).toEqual([]);
+    expect(library?.bundles[0]?.state).toBe("ordered");
+  });
+
+  it("sizes an edition line by its active editions", async () => {
+    const t = convexTest(schema);
+    const { seriesId, v1, r1 } = await seed(t);
+    const as = await withUser(t);
+    // Move r1's edition into a line of three editions (one hidden).
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.get(r1))!;
+      const lineId = await ctx.db.insert("editionLines", {
+        status: "active",
+        seriesId,
+        publisherId: release.publisherId,
+        name: "Deluxe Edition",
+      });
+      await ctx.db.patch(release.editionId, { editionLineId: lineId, linePosition: "1" });
+      for (const [i, status] of (["active", "hidden"] as const).entries()) {
+        const editionId = await ctx.db.insert("editions", {
+          status,
+          publicId: 31 + i,
+          publisherId: release.publisherId,
+          editionLineId: lineId,
+          linePosition: String(2 + i),
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId: v1,
+          order: 1,
+          extent: "complete",
+        });
+      }
+    });
+    await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "owned" });
+    const path = (await as.query(api.collection.myLibrary, {}))!.series[0]!.paths[0]!;
+    expect(path).toMatchObject({
+      key: "seven-seas-deluxe-edition",
+      name: "Deluxe Edition",
+      kind: "line",
+      bookCount: 2,
+    });
+    expect(path.books[0]).toMatchObject({ lineName: "Deluxe Edition", linePosition: "1" });
+  });
+
+  it("is null signed out", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    expect(await t.query(api.collection.myLibrary, {})).toBeNull();
+  });
+});
+
+describe("collection.seriesEntries", () => {
+  it("returns the viewer's entries and derived ownership within one series", async () => {
+    const t = convexTest(schema);
+    const { r1, r2, variantId, bundleId } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r1,
+      state: "wanted",
+      variantId,
+    });
+    await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
+
+    const overlay = await as.query(api.collection.seriesEntries, { seriesPublicId: 1 });
+    expect(overlay?.formatPreference).toBe("both");
+    expect(overlay?.entries).toEqual([{ releaseId: r1, state: "wanted", variantId }]);
+    expect(new Set(overlay?.derivedOwned)).toEqual(new Set([r1, r2]));
+  });
+
+  it("is null signed out or for an unknown series", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const as = await withUser(t);
+    expect(await t.query(api.collection.seriesEntries, { seriesPublicId: 1 })).toBeNull();
+    expect(await as.query(api.collection.seriesEntries, { seriesPublicId: 9 })).toBeNull();
+  });
+});
+
+describe("collection.setManyReleaseEntries", () => {
+  it("sets one state on every release, keeping pinned variants, prompting once", async () => {
+    const t = convexTest(schema);
+    const { r1, r2, variantId } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r1,
+      state: "wanted",
+      variantId,
+    });
+
+    const result = await as.mutation(api.collection.setManyReleaseEntries, {
+      releaseIds: [r1, r2, r2],
+      state: "owned",
+    });
+    expect(result.changed).toBe(2);
+    // r1 was already an entry in the Series, so r2 is not a first entry: no prompt.
+    expect(result.suggestFollow).toEqual([]);
+    const rows = await entryRows(t);
+    expect(rows.map((row) => [row.releaseId, row.state, row.variantId ?? null])).toEqual(
+      expect.arrayContaining([
+        [r1, "owned", variantId],
+        [r2, "owned", null],
+      ]),
+    );
+  });
+
+  it("a first entry in a series prompts once for the batch", async () => {
+    const t = convexTest(schema);
+    const { r1, r2 } = await seed(t);
+    const as = await withUser(t);
+    const result = await as.mutation(api.collection.setManyReleaseEntries, {
+      releaseIds: [r1, r2],
+      state: "owned",
+    });
+    expect(result.suggestFollow).toEqual([
+      { seriesId: expect.anything(), title: "Witch Hat Atelier" },
+    ]);
+  });
+
+  it("omitting the state removes every entry, and the cap holds", async () => {
+    const t = convexTest(schema);
+    const { r1, r2 } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.collection.setManyReleaseEntries, {
+      releaseIds: [r1, r2],
+      state: "ordered",
+    });
+    await as.mutation(api.collection.setManyReleaseEntries, { releaseIds: [r1, r2] });
+    expect(await entryRows(t)).toEqual([]);
+    await expect(
+      as.mutation(api.collection.setManyReleaseEntries, {
+        releaseIds: Array.from({ length: 201 }, () => r1),
+        state: "owned",
+      }),
+    ).rejects.toThrow(ConvexError);
   });
 });

@@ -1,27 +1,79 @@
 import { useClerk } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useAction } from "convex/react";
-import { useState } from "react";
+import { useAction, useQuery } from "convex/react";
+import { useState, type MouseEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { MyCollection } from "~/lib/collection";
-import { MyUpcoming } from "~/lib/follows";
-import { MyReading } from "~/lib/reading";
+import { countLibrary, LibraryCollection } from "~/lib/collection";
+import { LibraryUpcoming } from "~/lib/follows";
+import { todaySortKey } from "~/lib/month";
+import type { EntryState } from "~/lib/quickActions";
+import { LibraryReading } from "~/lib/reading";
 import { SharingSettings } from "~/lib/sharing";
 import { convexClient } from "~/providers";
 
+const TABS = [
+  { key: "collection", label: "Collection" },
+  { key: "reading", label: "Reading" },
+  { key: "upcoming", label: "Upcoming" },
+  { key: "settings", label: "Settings" },
+] as const;
+type Tab = (typeof TABS)[number]["key"];
+
+const SHELVES: Array<{ key: EntryState; label: string }> = [
+  { key: "owned", label: "Owned" },
+  { key: "ordered", label: "Ordered" },
+  { key: "wanted", label: "Wanted" },
+];
+
+function isTab(value: unknown): value is Tab {
+  return TABS.some((tab) => tab.key === value);
+}
+function isShelf(value: unknown): value is EntryState {
+  return SHELVES.some((shelf) => shelf.key === value);
+}
+
+/** The URL for a library view, so every tab and shelf is a plain link. */
+function viewHref(tab: Tab, shelf: EntryState): string {
+  const params = new URLSearchParams({ tab });
+  if (tab === "collection" && shelf !== "owned") params.set("shelf", shelf);
+  return `/me?${params.toString()}`;
+}
+
+/**
+ * /me — the viewer's own library, in tabs: what you have (one shelf per
+ * collection state), what you are reading, what is coming, and the account
+ * and sharing settings. The tab and shelf are read from the URL on arrival
+ * (linkable, right before hydration) and then switched in place: a click
+ * only changes local state and rewrites the address, never navigates, so
+ * the /me auth gate is not re-run for every shelf. Each tab mounts the
+ * slice that owns it; this page only frames them.
+ */
 export const Route = createFileRoute("/me/")({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: Tab; shelf?: EntryState } => ({
+    ...(isTab(search.tab) ? { tab: search.tab } : {}),
+    ...(isShelf(search.shelf) ? { shelf: search.shelf } : {}),
+  }),
   component: MePage,
 });
 
-/**
- * /me — the viewer's own shelf. Five sections in the order the shelf is
- * used: what you have, what you are reading, what is coming, who can see it,
- * and the account itself. Each section mounts the slice that owns it; this
- * page only frames them.
- */
 function MePage() {
   const { viewerState } = Route.useRouteContext();
+  const search = Route.useSearch();
+  const [view, setView] = useState({
+    tab: search.tab ?? "collection",
+    shelf: search.shelf ?? "owned",
+  });
+  const { tab, shelf } = view;
+  const show = (next: typeof view) => (event: MouseEvent<HTMLAnchorElement>) => {
+    // Plain clicks switch in place; modified clicks keep their link meaning.
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    setView(next);
+    window.history.replaceState(window.history.state, "", viewHref(next.tab, next.shelf));
+  };
 
   if (viewerState.status !== "ready") {
     // Only "unconfigured" reaches the component; the /me gate redirects the
@@ -39,69 +91,131 @@ function MePage() {
   const { viewer } = viewerState;
   return (
     <main className="me-page">
-      <div className="acct-head">
-        <h1 className="acct-title">Your library</h1>
-        <p className="acct-kicker">
-          Everything @{viewer.username} owns, is reading, and is waiting for.
-          Private until you choose to share it.
-        </p>
-      </div>
+      <header className="lib-head">
+        <div className="lib-ident">
+          <h1 className="lib-title">Library</h1>
+          <Link
+            className="lib-handle"
+            to="/u/$username"
+            params={{ username: viewer.username }}
+            title="Your public profile"
+          >
+            @{viewer.username}
+          </Link>
+        </div>
+        <p className="lib-kicker">Private until you choose to share it.</p>
+      </header>
 
-      <section className="me-section">
-        <div className="section-head">
-          <h2 className="section-title">Collection</h2>
-          <p className="section-note">Wanted, ordered and owned</p>
-        </div>
-        {/* Personal collection (#27): entries grouped by state. */}
-        <MyCollection />
-      </section>
+      <nav className="lib-tabs" aria-label="Library sections">
+        {TABS.map((entry) => (
+          <a
+            key={entry.key}
+            className="lib-tab"
+            href={viewHref(entry.key, shelf)}
+            aria-current={tab === entry.key ? "page" : undefined}
+            onClick={show({ tab: entry.key, shelf })}
+          >
+            {entry.label}
+            <TabCount tab={entry.key} />
+          </a>
+        ))}
+      </nav>
 
-      <section className="me-section">
-        <div className="section-head">
-          <h2 className="section-title">Reading</h2>
-          <p className="section-note">Series statuses and active passes</p>
-        </div>
-        {/* Reading tracking (#28): chosen statuses and active passes. */}
-        <MyReading />
-      </section>
-
-      <section className="me-section">
-        <div className="section-head">
-          <h2 className="section-title">Upcoming</h2>
-          <p className="section-note">Announced releases, nearest first</p>
-        </div>
-        {/* My Upcoming Releases (#29): followed Series matching the format
-            preference + every future Wanted/Ordered Release and Bundle,
-            deduplicated, Owned excluded, computed live. */}
-        <MyUpcoming />
-      </section>
-
-      <section className="me-section">
-        <div className="section-head">
-          <h2 className="section-title">Sharing</h2>
-        </div>
-        <div className="acct-panel">
-          {/* Tracking visibility (#30): separate Ownership/Reading defaults,
-              private until explicitly opened, plus the public-profile link. */}
-          <SharingSettings />
-        </div>
-      </section>
-
-      <section className="me-section">
-        <div className="section-head">
-          <h2 className="section-title">Account</h2>
-        </div>
-        <div className="acct-panel">
-          <p className="acct-account-row">
-            Signed in as{" "}
-            <span className="acct-handle">@{viewer.username}</span>
-            <Link to="/claim-username">Change username</Link>
-          </p>
-          <DeleteAccount />
-        </div>
-      </section>
+      {tab === "collection" ? (
+        <section className="lib-panel" aria-label="Collection">
+          <nav className="lib-subtabs" aria-label="Collection shelves">
+            {SHELVES.map((entry) => (
+              <a
+                key={entry.key}
+                className="lib-subtab"
+                href={viewHref("collection", entry.key)}
+                aria-current={shelf === entry.key ? "page" : undefined}
+                onClick={show({ tab: "collection", shelf: entry.key })}
+              >
+                {entry.label}
+                <ShelfCount shelf={entry.key} />
+              </a>
+            ))}
+          </nav>
+          {/* Keyed by shelf so a switch re-enters with the fade; the query
+              behind it is already warm, so the new shelf is there at once. */}
+          <div key={shelf} className="lib-view">
+            {/* Personal collection (#27), shelved by Series and reading path. */}
+            <LibraryCollection shelf={shelf} />
+          </div>
+        </section>
+      ) : tab === "reading" ? (
+        <section className="lib-panel lib-view" aria-label="Reading">
+          {/* Reading tracking (#28): statuses, progress and active passes. */}
+          <LibraryReading />
+        </section>
+      ) : tab === "upcoming" ? (
+        <section className="lib-panel lib-view" aria-label="Upcoming">
+          {/* Series Follows + My Upcoming Releases (#29). */}
+          <LibraryUpcoming />
+        </section>
+      ) : (
+        <section className="lib-panel lib-settings lib-view" aria-label="Settings">
+          <div className="acct-panel">
+            <h2 className="lib-group-title">Sharing</h2>
+            {/* Tracking visibility (#30): separate Ownership/Reading defaults,
+                private until explicitly opened, plus the public-profile link. */}
+            <SharingSettings />
+          </div>
+          <div className="acct-panel">
+            <h2 className="lib-group-title">Account</h2>
+            <p className="acct-account-row">
+              Signed in as{" "}
+              <span className="acct-handle">@{viewer.username}</span>
+              <Link to="/claim-username">Change username</Link>
+            </p>
+            <DeleteAccount />
+          </div>
+        </section>
+      )}
     </main>
   );
+}
+
+/** The count in a tab label; nothing until the slice's query answers. */
+function TabCount({ tab }: { tab: Tab }) {
+  if (!convexClient || tab === "settings") return null;
+  return <TabCountInner tab={tab} />;
+}
+
+function TabCountInner({ tab }: { tab: Tab }) {
+  // Each tab's own query, so the counts stay live and switching tabs is
+  // instant — the subscriptions are already warm.
+  const library = useQuery(api.collection.myLibrary, tab === "collection" ? {} : "skip");
+  const reading = useQuery(api.reading.myReading, tab === "reading" ? {} : "skip");
+  // Today's key like the Upcoming tab itself; once per mount so the query
+  // key stays stable.
+  const [todaySort] = useState(() => todaySortKey());
+  const upcoming = useQuery(
+    api.follows.myUpcoming,
+    tab === "upcoming" ? { todaySort } : "skip",
+  );
+  const count =
+    tab === "collection" && library
+      ? Object.values(countLibrary(library)).reduce((sum, n) => sum + n, 0)
+      : tab === "reading" && reading
+        ? reading.series.length
+        : tab === "upcoming" && upcoming
+          ? upcoming.items.length
+          : null;
+  if (count === null) return null;
+  return <span className="lib-tab-count">{count}</span>;
+}
+
+function ShelfCount({ shelf }: { shelf: EntryState }) {
+  if (!convexClient) return null;
+  return <ShelfCountInner shelf={shelf} />;
+}
+
+function ShelfCountInner({ shelf }: { shelf: EntryState }) {
+  const library = useQuery(api.collection.myLibrary, {});
+  if (!library) return null;
+  return <span className="lib-tab-count">{countLibrary(library)[shelf]}</span>;
 }
 
 /**
