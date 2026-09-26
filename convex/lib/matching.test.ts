@@ -293,6 +293,14 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
       rung: 3,
     });
 
+    // An edited blurb is editorial, not identity: the link still happens.
+    const t3 = makeT();
+    const prose = await buildCatalog(t3, { overriddenFields: ["description"] });
+    expect(await match(t3, fact(prose.publisherId))).toMatchObject({
+      kind: "match",
+      rung: 3,
+    });
+
     const t2 = makeT();
     const locked = await buildCatalog(t2, { locked: true });
     expect(await match(t2, fact(locked.publisherId))).toMatchObject({

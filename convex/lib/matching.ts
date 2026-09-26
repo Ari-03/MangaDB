@@ -19,6 +19,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isNovelTitle } from "./bookTitle";
+import { factualOverrides } from "./moderationFields";
 import { decodeEntities } from "./text";
 
 // ---------- pure text rules ----------
@@ -330,9 +331,13 @@ export async function matchRelease(
   const strictHits = [...strict.values()];
   if (strictHits.length === 1) {
     const candidate = strictHits[0]!;
-    // Auto only with no override/lock (spec §6): a record humans have
-    // touched that way gets a human look before any link.
-    if (candidate.locked || (candidate.overriddenFields?.length ?? 0) > 0) {
+    // Auto only with no lock or factual override (spec §6): a record humans
+    // have touched that way gets a human look before any link. An edited
+    // blurb is not such a touch.
+    if (
+      candidate.locked ||
+      factualOverrides("release", candidate.overriddenFields ?? []).length > 0
+    ) {
       return {
         kind: "review",
         rung: 3,

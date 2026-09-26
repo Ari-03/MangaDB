@@ -137,6 +137,15 @@ export function fieldDescriptor(
   return EDITABLE_FIELDS[type].find((d) => d.name === field) ?? null;
 }
 
+/**
+ * The record's Human Overrides on checkable facts (dates, ISBNs, titles…),
+ * leaving out editorial prose: a moderator polishing an imported blurb has
+ * not touched the record's identity, so matching need not stop for it.
+ */
+export function factualOverrides(type: RecordType, overriddenFields: string[]): string[] {
+  return overriddenFields.filter((field) => !fieldDescriptor(type, field)?.editorial);
+}
+
 // ---------- value validation & normalization ----------
 
 export type Normalized =
