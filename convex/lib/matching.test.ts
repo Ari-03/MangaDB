@@ -33,7 +33,10 @@ describe("normalizeTitle", () => {
     same("Saint Seiya: Saintia Sho", "Saint Seiya: Saintia Shō");
     same("The Skull Dragon's Precious Daughter", "Skull Dragon’s Precious Daughter");
     same("The Daily Lives of High School Boys", "Daily Lives of High School Boys");
-    same("Marrying the Dark Knight &amp;#40;For Her Money&amp;#41;", "Marrying the Dark Knight (For Her Money)");
+    same(
+      "Marrying the Dark Knight &amp;#40;For Her Money&amp;#41;",
+      "Marrying the Dark Knight (For Her Money)",
+    );
     same(
       "Let's Run an Inn on Dungeon Island! &lpar;In a World Ruled by Women&rpar;",
       "Let's Run an Inn on Dungeon Island!",
@@ -61,9 +64,7 @@ describe("titlesSimilar", () => {
   });
 
   it("never finds a novel similar to its manga", () => {
-    expect(
-      titlesSimilar("The Seven Deadly Sins", "The Seven Deadly Sins (Novel)"),
-    ).toBe(false);
+    expect(titlesSimilar("The Seven Deadly Sins", "The Seven Deadly Sins (Novel)")).toBe(false);
   });
 });
 
@@ -169,17 +170,13 @@ const fact = (
   ...overrides,
 });
 
-const match = (t: TestT, f: ReleaseFact) =>
-  t.run((ctx) => matchRelease(ctx, f));
+const match = (t: TestT, f: ReleaseFact) => t.run((ctx) => matchRelease(ctx, f));
 
 describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
   it("matches on ISBN when titles agree, outranking rung ③", async () => {
     const t = makeT();
     const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
-    const outcome = await match(
-      t,
-      fact(catalog.publisherId, { isbn13: "9781999000103" }),
-    );
+    const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }));
     expect(outcome).toMatchObject({ kind: "match", rung: 2 });
   });
 
@@ -187,17 +184,53 @@ describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
     const t = makeT();
     const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
     await t.run((ctx) => ctx.db.patch(catalog.releaseId, { status: "hidden" }));
-    expect(
-      await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" })),
-    ).toMatchObject({ kind: "review", rung: 2, reason: expect.stringContaining("hid") });
+    expect(await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }))).toMatchObject({
+      kind: "review",
+      rung: 2,
+      reason: expect.stringContaining("hid"),
+    });
 
     const other = await buildCatalog(t, { isbn13: "9781999000110" });
     await t.run(async (ctx) => {
-      await ctx.db.patch(catalog.releaseId, { status: "merged", mergedIntoId: other.releaseId });
+      await ctx.db.patch(catalog.releaseId, {
+        status: "merged",
+        mergedIntoId: other.releaseId,
+      });
     });
     const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }));
     expect(outcome).toMatchObject({ kind: "match", rung: 2 });
     expect(outcome.kind === "match" && outcome.release._id).toBe(other.releaseId);
+  });
+
+  it("reviews duplicate ISBNs even when only one candidate has a similar title", async () => {
+    const t = makeT();
+    const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
+    await buildCatalog(t, {
+      isbn13: "9781999000103",
+      seriesTitle: "Completely Different Zeta",
+    });
+
+    expect(await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }))).toMatchObject({
+      kind: "review",
+      rung: 2,
+      reason: expect.stringContaining("2 distinct active Releases"),
+    });
+  });
+
+  it("deduplicates ISBN rows merged into the same active survivor", async () => {
+    const t = makeT();
+    const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
+    const duplicate = await buildCatalog(t, { isbn13: "9781999000103" });
+    await t.run((ctx) =>
+      ctx.db.patch(duplicate.releaseId, {
+        status: "merged",
+        mergedIntoId: catalog.releaseId,
+      }),
+    );
+
+    const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }));
+    expect(outcome).toMatchObject({ kind: "match", rung: 2 });
+    expect(outcome.kind === "match" && outcome.release._id).toBe(catalog.releaseId);
   });
 
   it("flags an ISBN hit with a dissimilar title for review — never merges", async () => {
@@ -206,10 +239,7 @@ describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
       seriesTitle: "Completely Different Zeta",
       isbn13: "9781999000103",
     });
-    const outcome = await match(
-      t,
-      fact(catalog.publisherId, { isbn13: "9781999000103" }),
-    );
+    const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }));
     expect(outcome).toMatchObject({ kind: "review", rung: 2 });
   });
 });
@@ -246,10 +276,7 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
     // so the full key alone must not link — nor overwrite — the other book.
     const t = makeT();
     const catalog = await buildCatalog(t, { isbn13: "9781626922174" });
-    const outcome = await match(
-      t,
-      fact(catalog.publisherId, { isbn13: "9781638585268" }),
-    );
+    const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781638585268" }));
     expect(outcome).toMatchObject({ kind: "create", rung: 5 });
     // Without an ISBN on the fact, the full key still links.
     expect(await match(t, fact(catalog.publisherId))).toMatchObject({
@@ -263,6 +290,14 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
     const overridden = await buildCatalog(t, { overriddenFields: ["pubDate"] });
     expect(await match(t, fact(overridden.publisherId))).toMatchObject({
       kind: "review",
+      rung: 3,
+    });
+
+    // An edited blurb is editorial, not identity: the link still happens.
+    const t3 = makeT();
+    const prose = await buildCatalog(t3, { overriddenFields: ["description"] });
+    expect(await match(t3, fact(prose.publisherId))).toMatchObject({
+      kind: "match",
       rung: 3,
     });
 
@@ -304,9 +339,10 @@ describe("matchRelease — rungs ④ and ⑤", () => {
     const t = makeT();
     const catalog = await buildCatalog(t);
     // Same series, but volume 2 does not exist yet: create.
-    expect(
-      await match(t, fact(catalog.publisherId, { volumeLabel: "2" })),
-    ).toMatchObject({ kind: "create", rung: 5 });
+    expect(await match(t, fact(catalog.publisherId, { volumeLabel: "2" }))).toMatchObject({
+      kind: "create",
+      rung: 5,
+    });
     // A wholly unknown series: create.
     expect(
       await match(t, fact(catalog.publisherId, { seriesTitle: "Brand New Thing" })),
@@ -363,9 +399,9 @@ describe("candidateSeries", () => {
     // Plus Series wins, and the alt title counts only as a fallback.
     await insertSeries(t, "Citrus", ["Citrus Plus"]);
     const plus = await insertSeries(t, "Citrus Plus");
-    expect(
-      (await t.run((ctx) => candidateSeries(ctx, "Citrus Plus"))).map((s) => s._id),
-    ).toEqual([plus]);
+    expect((await t.run((ctx) => candidateSeries(ctx, "Citrus Plus"))).map((s) => s._id)).toEqual([
+      plus,
+    ]);
     const tenken = await insertSeries(t, "Reincarnated as a Sword", ["Tenken"]);
     expect((await t.run((ctx) => candidateSeries(ctx, "Tenken"))).map((s) => s._id)).toEqual([
       tenken,
@@ -377,9 +413,9 @@ describe("candidateSeries", () => {
     const survivor = await insertSeries(t, "Summer Ghost: Complete");
     const loser = await insertSeries(t, "Summer Ghost");
     await t.run((ctx) => ctx.db.patch(loser, { status: "merged", mergedIntoId: survivor }));
-    expect(
-      (await t.run((ctx) => candidateSeries(ctx, "Summer Ghost"))).map((s) => s._id),
-    ).toEqual([survivor]);
+    expect((await t.run((ctx) => candidateSeries(ctx, "Summer Ghost"))).map((s) => s._id)).toEqual([
+      survivor,
+    ]);
 
     const hidden = await insertSeries(t, "Emma & Capucine");
     await t.run((ctx) => ctx.db.patch(hidden, { status: "hidden" }));
@@ -405,8 +441,6 @@ describe("candidateSeries", () => {
   it("never offers a manga Series for a novel title", async () => {
     const t = makeT();
     await insertSeries(t, "The Seven Deadly Sins");
-    expect(await t.run((ctx) => candidateSeries(ctx, "The Seven Deadly Sins (Novel)"))).toEqual(
-      [],
-    );
+    expect(await t.run((ctx) => candidateSeries(ctx, "The Seven Deadly Sins (Novel)"))).toEqual([]);
   });
 });

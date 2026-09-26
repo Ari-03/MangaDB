@@ -91,6 +91,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
       options: SOURCE_STATUS_OPTIONS,
       help: "The source work's completion state, not the English edition's.",
     },
+    textarea("synopsis", "Series synopsis", { editorial: true }),
   ],
   volume: [
     text("label", "Volume label", {
@@ -134,6 +135,15 @@ export function fieldDescriptor(
   field: string,
 ): FieldDescriptor | null {
   return EDITABLE_FIELDS[type].find((d) => d.name === field) ?? null;
+}
+
+/**
+ * The record's Human Overrides on checkable facts (dates, ISBNs, titles…),
+ * leaving out editorial prose: a moderator polishing an imported blurb has
+ * not touched the record's identity, so matching need not stop for it.
+ */
+export function factualOverrides(type: RecordType, overriddenFields: string[]): string[] {
+  return overriddenFields.filter((field) => !fieldDescriptor(type, field)?.editorial);
 }
 
 // ---------- value validation & normalization ----------

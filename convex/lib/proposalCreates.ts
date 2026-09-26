@@ -134,15 +134,32 @@ async function resolveRef<Table extends "series" | "volumes" | "editions">(
     }
     return { kind: "temp", tempId: raw };
   }
-  const id = ctx.db.normalizeId(table, raw);
-  if (id === null) {
+  const stored = await storedRef(ctx, raw, table);
+  if (stored === null) {
     return bad(`${what}: "${raw}" is neither a known temp-ID nor a ${table} ID.`);
   }
-  const doc = (await ctx.db.get(id)) as { status?: string } | null;
-  if (!doc || doc.status !== "active") {
+  if (!stored.active) {
     return bad(`${what}: the referenced ${table} record is missing or not active.`);
   }
-  return { kind: "id", id };
+  return { kind: "id", id: stored.id };
+}
+
+/** Tables a create op's fields may reference by stored ID. */
+type ReferencedTable = "series" | "volumes" | "editions" | "publishers";
+
+/**
+ * Look up a stored-document reference: null when `raw` is not an ID of
+ * `table`, else the ID and whether the record is still active.
+ */
+async function storedRef<Table extends ReferencedTable>(
+  ctx: QueryCtx | MutationCtx,
+  raw: string,
+  table: Table,
+): Promise<{ id: Id<Table>; active: boolean } | null> {
+  const id = ctx.db.normalizeId(table, raw);
+  if (id === null) return null;
+  const doc = (await ctx.db.get(id)) as { status?: string } | null;
+  return { id, active: doc?.status === "active" };
 }
 
 // ---------- planning (validation) ----------
@@ -292,11 +309,8 @@ async function resolvePublisher(
   fields: Record<string, unknown>,
 ): Promise<Id<"publishers">> {
   if (typeof fields.publisherId === "string" && fields.publisherId !== "") {
-    const id = ctx.db.normalizeId("publishers", fields.publisherId);
-    if (id) {
-      const doc = await ctx.db.get(id);
-      if (doc && doc.status === "active") return id;
-    }
+    const stored = await storedRef(ctx, fields.publisherId, "publishers");
+    if (stored?.active) return stored.id;
     return bad("New edition's publisher was not found.");
   }
   if (typeof fields.publisherSlug === "string" && fields.publisherSlug !== "") {
@@ -308,6 +322,77 @@ async function resolvePublisher(
     return bad(`No active publisher with slug "${fields.publisherSlug}".`);
   }
   return bad("A new edition needs publisherId or publisherSlug.");
+}
+
+// ---------- staleness ----------
+
+const REFERENCED_TYPES: Record<ReferencedTable, RecordType> = {
+  series: "series",
+  volumes: "volume",
+  editions: "edition",
+  publishers: "publisher",
+};
+
+/** The stored-ID references one create op's fields may carry (raw, unvalidated). */
+function referencesOf(op: CreateOpInput): Array<{ table: ReferencedTable; raw: unknown }> {
+  const fields = op.fields;
+  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) return [];
+  const f = fields as Record<string, unknown>;
+  switch (op.table) {
+    case "volumes":
+      return [{ table: "series", raw: f.seriesId }];
+    case "editions": {
+      const rows = Array.isArray(f.volumeCoverage) ? f.volumeCoverage : [];
+      return [
+        { table: "publishers", raw: f.publisherId },
+        ...rows.map((row) => {
+          const r = (typeof row === "object" && row !== null ? row : {}) as Record<string, unknown>;
+          return { table: "volumes" as const, raw: r.volumeId ?? r.volume };
+        }),
+      ];
+    }
+    case "releases":
+      return [{ table: "editions", raw: f.editionId }];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Stored records the create ops reference — by ID, or a new edition's
+ * publisher by slug — that are no longer active: hidden, merged, or deleted
+ * since the proposal was written (an importer's proposal reuses existing
+ * Volumes, so this happens whenever one is merged before review). Temp-IDs of
+ * ops in the same proposal are skipped; strings that resolve to nothing are
+ * left for `planCreateOps` to reject as structural errors. Approval checks
+ * this first so a vanished reference reads as a stale proposal instead of a
+ * thrown `resolveRef`.
+ */
+export async function unavailableCreateRefs(
+  ctx: QueryCtx | MutationCtx,
+  ops: CreateOpInput[],
+): Promise<Array<{ type: RecordType; id: string }>> {
+  const tempIds = new Set(ops.map((op) => op.tempId));
+  const unavailable = new Map<string, RecordType>();
+  for (const op of ops) {
+    for (const { table, raw } of referencesOf(op)) {
+      if (typeof raw !== "string" || raw === "" || tempIds.has(raw)) continue;
+      const stored = await storedRef(ctx, raw, table);
+      if (stored !== null && !stored.active) unavailable.set(stored.id, REFERENCED_TYPES[table]);
+    }
+    // The importer's form names the publisher by slug; ID wins when both are set.
+    const fields = op.fields as { publisherId?: unknown; publisherSlug?: unknown } | null;
+    const byId = typeof fields?.publisherId === "string" && fields.publisherId !== "";
+    const slug = fields?.publisherSlug;
+    if (op.table === "editions" && !byId && typeof slug === "string" && slug !== "") {
+      const doc = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", slug))
+        .unique();
+      if (doc && doc.status !== "active") unavailable.set(doc._id, "publisher");
+    }
+  }
+  return [...unavailable].map(([id, type]) => ({ type, id }));
 }
 
 /** Validate the ordered Volume Coverage of a new edition (≥ 1 row). */

@@ -90,9 +90,7 @@ export async function alreadyHandled(
   if (!proposal) return false;
   if (proposal.state === "inReview") return true;
   if (proposal.state === "rejected") {
-    return (
-      (await snapshotStoredAt(ctx, observation)) <= (proposal.decidedAt ?? 0)
-    );
+    return (await snapshotStoredAt(ctx, observation)) <= (proposal.decidedAt ?? 0);
   }
   return false;
 }
@@ -149,9 +147,7 @@ export async function ensurePublisher(
   const existing = await publisherBySlug(ctx, wanted.slug);
   if (existing) return { id: existing._id, slug: existing.slug, created: false };
   const parent =
-    wanted.parentSlug !== undefined
-      ? await publisherBySlug(ctx, wanted.parentSlug)
-      : null;
+    wanted.parentSlug !== undefined ? await publisherBySlug(ctx, wanted.parentSlug) : null;
   const id = await ctx.db.insert("publishers", {
     status: "active",
     name: wanted.name,
@@ -213,11 +209,15 @@ export async function findPublisherByName(
 
 // ---------- the series half of rung ① ----------
 
+/** The synthetic series-link snapshot: the source's series title, page, and blurb. */
+type SeriesLinkSnapshot = { kind: "series"; title: string; url?: string; synopsis?: string };
+
 /**
  * Upsert the synthetic series-link observation (`series:{key}`) and point it
  * at the canonical Series if not linked yet. The key is the source's own
  * series identity (its slug or record id), making a later series rename a
- * rung-① field conflict instead of a failed match.
+ * rung-① field conflict instead of a failed match. A feed without series
+ * text (Kodansha's calendar) keeps the synopsis another feed stored.
  */
 export async function linkSeriesObservation(
   ctx: MutationCtx,
@@ -226,14 +226,25 @@ export async function linkSeriesObservation(
     seriesKey: string;
     title: string;
     url?: string;
+    synopsis?: string;
     seriesId: Id<"series">;
     now: number;
   },
 ): Promise<Id<"sourceObservations">> {
+  const sourceRecordId = `series:${args.seriesKey}`;
+  const stored = (await getObservation(ctx, args.sourceKey, sourceRecordId))?.snapshot as
+    | SeriesLinkSnapshot
+    | undefined;
+  const synopsis = args.synopsis ?? stored?.synopsis;
   const { observation } = await upsertObservation(ctx, {
     sourceKey: args.sourceKey,
-    sourceRecordId: `series:${args.seriesKey}`,
-    snapshot: { kind: "series", title: args.title, url: args.url },
+    sourceRecordId,
+    snapshot: {
+      kind: "series",
+      title: args.title,
+      url: args.url,
+      ...(synopsis !== undefined ? { synopsis } : {}),
+    },
     now: args.now,
   });
   if (!observation.recordRef) {
@@ -245,10 +256,12 @@ export async function linkSeriesObservation(
 }
 
 /**
- * Reconcile the linked Series' title with the source's current one — a
- * series rename at the source is a field conflict routed through the same
- * authority rules as any other field (spec §6 rung ①, never a failed
- * match). Returns the linked series, if any, for the creation boundaries.
+ * Reconcile the linked Series' title — and its synopsis, when the source
+ * offers one — with the source's current values: a series rename at the
+ * source is a field conflict routed through the same authority rules as any
+ * other field (spec §6 rung ①, never a failed match). An offered synopsis
+ * is also stored on the series observation. Returns the linked series, if
+ * any, for the creation boundaries.
  */
 export async function reconcileLinkedSeries(
   ctx: MutationCtx,
@@ -256,15 +269,12 @@ export async function reconcileLinkedSeries(
     sourceKey: string;
     seriesKey: string;
     offeredTitle: string;
+    offeredSynopsis?: string;
     citation: { sourceName: string; url: string };
     now: number;
   },
 ): Promise<{ seriesId: Id<"series"> | null; changed: boolean }> {
-  const seriesObs = await getObservation(
-    ctx,
-    args.sourceKey,
-    `series:${args.seriesKey}`,
-  );
+  let seriesObs = await getObservation(ctx, args.sourceKey, `series:${args.seriesKey}`);
   if (seriesObs?.recordRef?.type !== "series") {
     return { seriesId: null, changed: false };
   }
@@ -275,14 +285,28 @@ export async function reconcileLinkedSeries(
     return { seriesId: null, changed: false };
   }
   if (series._id !== linked?._id) {
-    await ctx.db.patch(seriesObs._id, { recordRef: { type: "series", id: series._id } });
+    await ctx.db.patch(seriesObs._id, {
+      recordRef: { type: "series", id: series._id },
+    });
+  }
+  const snapshot = seriesObs.snapshot as SeriesLinkSnapshot;
+  if (args.offeredSynopsis !== undefined && snapshot.synopsis !== args.offeredSynopsis) {
+    ({ observation: seriesObs } = await upsertObservation(ctx, {
+      sourceKey: args.sourceKey,
+      sourceRecordId: seriesObs.sourceRecordId,
+      snapshot: { ...snapshot, synopsis: args.offeredSynopsis },
+      now: args.now,
+    }));
   }
   if (series.locked) return { seriesId: series._id, changed: false };
   const result = await reconcileFields(ctx, {
     sourceKey: args.sourceKey,
     ref: { type: "series", id: series._id },
     doc: series,
-    offered: { title: args.offeredTitle },
+    offered: {
+      title: args.offeredTitle,
+      ...(args.offeredSynopsis !== undefined ? { synopsis: args.offeredSynopsis } : {}),
+    },
     observation: seriesObs,
     citation: args.citation,
     now: args.now,
@@ -305,9 +329,7 @@ export function creationGates(args: {
   return [
     ...(args.seriesId === null ? ["a brand-new Series"] : []),
     ...(args.multiVolume ? ["multi-Volume Coverage"] : []),
-    ...(args.editionLineHint
-      ? ["an Edition Line (deluxe/omnibus/box-set packaging)"]
-      : []),
+    ...(args.editionLineHint ? ["an Edition Line (deluxe/omnibus/box-set packaging)"] : []),
   ];
 }
 
@@ -419,6 +441,8 @@ export type ReleasePayload = {
   isbn10?: string;
   pubDate?: PartialDate;
   price?: { amountCents: number; currency: string };
+  /** The publisher's blurb for this book (a Release Description). */
+  description?: string;
 };
 
 type PublisherRef = { name: string; slug: string; parentSlug?: string };
@@ -432,6 +456,8 @@ export type CreationArgs = {
   seriesId: Id<"series"> | null;
   seriesTitle: string;
   seriesAltTitles?: string[];
+  /** The source's series blurb, for a brand-new Series and its series link. */
+  seriesSynopsis?: string;
   /** Source-side series identity for the rung-① series link. */
   seriesKey?: string;
   seriesUrl?: string;
@@ -460,13 +486,7 @@ export type CreationArgs = {
 type CreatedRecord = {
   ref: {
     type:
-      | "publisher"
-      | "series"
-      | "volume"
-      | "editionLine"
-      | "edition"
-      | "release"
-      | "releaseBundle";
+      "publisher" | "series" | "volume" | "editionLine" | "edition" | "release" | "releaseBundle";
     id: string;
   };
   table: string;
@@ -504,9 +524,7 @@ export function volumePositionFor(
       : NaN;
   if (Number.isFinite(numeric) && !taken.has(numeric)) return numeric;
   if (!Number.isFinite(numeric) && taken.size === 0) return 1;
-  const base = Number.isFinite(numeric)
-    ? numeric
-    : Math.floor(Math.max(0, ...taken));
+  const base = Number.isFinite(numeric) ? numeric : Math.floor(Math.max(0, ...taken));
   for (let k = 1; k <= 40; k++) {
     const candidate = base + 1 - 2 ** -k;
     if (!taken.has(candidate)) return candidate;
@@ -613,9 +631,7 @@ async function findSiblingEdition(
     if (rows.length !== volumeIds.length) continue;
     const matches = rows
       .sort((a, b) => a.order - b.order)
-      .every(
-        (row, i) => row.volumeId === volumeIds[i] && row.extent === "complete",
-      );
+      .every((row, i) => row.volumeId === volumeIds[i] && row.extent === "complete");
     if (matches) return edition._id;
   }
   return null;
@@ -752,14 +768,19 @@ export async function createCanonicalRecords(
     });
     if (removed?.kind === "hidden") {
       await recordUnplaced(ctx, args.observation, removed.reason, now);
-      return { seriesId: removed.series._id, volumeIds: [], changed: false, blocked: removed.reason };
+      return {
+        seriesId: removed.series._id,
+        volumeIds: [],
+        changed: false,
+        blocked: removed.reason,
+      };
     }
     if (removed?.kind === "merged") seriesId = removed.survivor._id;
   }
   if (seriesId === null) {
     const publicId = await allocatePublicId(ctx, "series");
     const altTitles = args.seriesAltTitles ?? [];
-    const fields = { title: args.seriesTitle, altTitles };
+    const fields = { title: args.seriesTitle, altTitles, synopsis: args.seriesSynopsis };
     seriesId = await ctx.db.insert("series", {
       status: "active",
       ...tag,
@@ -767,7 +788,11 @@ export async function createCanonicalRecords(
       ...fields,
       searchText: [args.seriesTitle, ...altTitles].join(" "),
     });
-    created.push({ ref: { type: "series", id: seriesId }, table: "series", fields });
+    created.push({
+      ref: { type: "series", id: seriesId },
+      table: "series",
+      fields,
+    });
     if (args.seriesKey !== undefined) {
       evidence.push(
         await linkSeriesObservation(ctx, {
@@ -775,6 +800,7 @@ export async function createCanonicalRecords(
           seriesKey: args.seriesKey,
           title: args.seriesTitle,
           url: args.seriesUrl,
+          synopsis: args.seriesSynopsis,
           seriesId,
           now,
         }),
@@ -809,7 +835,12 @@ export async function createCanonicalRecords(
         ? {
             id: await ensureEditionLine(
               ctx,
-              { seriesId, publisherId: publisher.id, name: args.editionLine.name, tag },
+              {
+                seriesId,
+                publisherId: publisher.id,
+                name: args.editionLine.name,
+                tag,
+              },
               created,
             ),
             position: args.editionLine.position,
@@ -824,9 +855,7 @@ export async function createCanonicalRecords(
         ...tag,
         publicId: editionPublicId,
         publisherId: publisher.id,
-        ...(line
-          ? { editionLineId: line.id, linePosition: line.position ?? undefined }
-          : {}),
+        ...(line ? { editionLineId: line.id, linePosition: line.position ?? undefined } : {}),
       });
       for (const [i, volumeId] of volumeIds.entries()) {
         await ctx.db.insert("volumeCoverages", {
@@ -858,6 +887,7 @@ export async function createCanonicalRecords(
       isbn10: args.release.isbn10,
       pubDate: args.release.pubDate,
       price: args.release.price,
+      description: args.release.description,
     };
     releaseId = await ctx.db.insert("releases", {
       status: "active",
@@ -924,7 +954,11 @@ export type BundleArgs = {
 export async function createReleaseBundle(
   ctx: MutationCtx,
   args: BundleArgs,
-): Promise<{ bundleId: Id<"releaseBundles">; members: number; created: boolean }> {
+): Promise<{
+  bundleId: Id<"releaseBundles">;
+  members: number;
+  created: boolean;
+}> {
   const existing =
     args.release.isbn13 !== undefined
       ? await ctx.db
@@ -956,9 +990,7 @@ export async function createReleaseBundle(
     .collect();
   const memberIds: Id<"releases">[] = [];
   for (const label of args.labels) {
-    const volume = volumes.find(
-      (vol) => vol.status === "active" && labelsEqual(vol.label, label),
-    );
+    const volume = volumes.find((vol) => vol.status === "active" && labelsEqual(vol.label, label));
     if (!volume) continue;
     const coverages = await ctx.db
       .query("volumeCoverages")
@@ -980,10 +1012,7 @@ export async function createReleaseBundle(
           .query("releases")
           .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
           .collect()
-      ).find(
-        (release) =>
-          release.status === "active" && release.format === args.release.format,
-      );
+      ).find((release) => release.status === "active" && release.format === args.release.format);
       if (member) {
         memberIds.push(member._id);
         break;
@@ -999,6 +1028,7 @@ export async function createReleaseBundle(
     isbn10: args.release.isbn10,
     pubDate: args.release.pubDate,
     price: args.release.price,
+    description: args.release.description,
   };
   const bundleId = await ctx.db.insert("releaseBundles", {
     status: "active",
@@ -1008,7 +1038,11 @@ export async function createReleaseBundle(
     ...fields,
   });
   for (const [i, releaseId] of memberIds.entries()) {
-    await ctx.db.insert("bundleMemberships", { bundleId, releaseId, order: i + 1 });
+    await ctx.db.insert("bundleMemberships", {
+      bundleId,
+      releaseId,
+      order: i + 1,
+    });
   }
   created.push({
     ref: { type: "releaseBundle", id: bundleId },
@@ -1098,16 +1132,37 @@ export async function queueCreationProposal(
       },
     });
   }
-  const volumeTempIds: string[] = [];
+  const volumeRefs: string[] = [];
+  const existingVolumes =
+    args.seriesId === null
+      ? []
+      : await ctx.db
+          .query("volumes")
+          .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId!))
+          .collect();
   const volumeLabels: Array<string | undefined> =
-    args.labels.length > 0
-      ? args.labels.map(canonicalLabel)
-      : args.seriesOnly
-        ? []
-        : [undefined];
+    args.labels.length > 0 ? args.labels.map(canonicalLabel) : args.seriesOnly ? [] : [undefined];
   for (const [i, label] of volumeLabels.entries()) {
+    const sameLabel = existingVolumes.filter((volume) => labelsEqual(volume.label, label ?? null));
+    let existing = sameLabel.find((volume) => volume.status === "active");
+    if (!existing) {
+      for (const volume of sameLabel) {
+        const survivor = await survivorOf<"volumes">(ctx, volume);
+        if (survivor?.status === "active" && survivor.seriesId === args.seriesId) {
+          existing = survivor;
+          break;
+        }
+      }
+    }
+    if (existing) {
+      if (!volumeRefs.includes(existing._id)) volumeRefs.push(existing._id);
+      continue;
+    }
+    // Canonical labels can repeat in a source range. One Volume and one
+    // coverage row represent that content, including within this proposal.
+    if (volumeLabels.slice(0, i).some((previous) => labelsEqual(previous, label ?? null))) continue;
     const tempId = `volume-${i + 1}`;
-    volumeTempIds.push(tempId);
+    volumeRefs.push(tempId);
     ops.push({
       kind: "create",
       table: "volumes",
@@ -1123,8 +1178,8 @@ export async function queueCreationProposal(
       fields: {
         publisherSlug: args.release.publisherSlug,
         ...(args.linePosition !== undefined ? { linePosition: args.linePosition } : {}),
-        volumeCoverage: volumeTempIds.map((tempId, i) => ({
-          volume: tempId,
+        volumeCoverage: volumeRefs.map((volume, i) => ({
+          volume,
           order: i + 1,
           extent: "complete",
         })),
@@ -1143,6 +1198,7 @@ export async function queueCreationProposal(
         isbn10: args.release.isbn10,
         pubDate: args.release.pubDate,
         price: args.release.price,
+        description: args.release.description,
       },
     });
   }

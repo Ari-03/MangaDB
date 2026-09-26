@@ -20,10 +20,11 @@ function dumpLine(edition: Record<string, unknown>): string {
 function stubDump(editions: Array<Record<string, unknown>>) {
   const body = editions.map(dumpLine).join("\n") + "\n";
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url === DUMP_URL) {
-      return new Response(body, { headers: { "content-type": "text/plain" } });
+      return new Response(body, {
+        headers: { "content-type": "text/plain" },
+      });
     }
     return new Response("not found", { status: 404 });
   });
@@ -47,8 +48,7 @@ async function seedRegistry(t: TestT) {
   await t.mutation(internal.importSources.seedRegistry, {});
 }
 
-const sync = (t: TestT, args: object = {}) =>
-  t.action(internal.openLibrary.sync, { ...args });
+const sync = (t: TestT, args: object = {}) => t.action(internal.openLibrary.sync, { ...args });
 
 /** The ANN-built skeleton + a VIZ publisher row: series, volumes 1-2, and
  * (optionally) an existing ISBN-less release covering volume 1. */
@@ -115,6 +115,51 @@ const CHAINSAW_22 = {
 };
 
 describe("openLibrary.sync — configuration", () => {
+  it.each([0, -1, 1.5, 20001])(
+    "rejects unsafe line limit %s before starting a run",
+    async (maxLines) => {
+      const t = makeT();
+      await seedRegistry(t);
+      await expect(sync(t, { maxLines })).rejects.toThrow("maxLines must be an integer");
+      await t.run(async (ctx) => {
+        expect(await ctx.db.query("importRuns").collect()).toHaveLength(0);
+      });
+    },
+  );
+
+  it("records malformed lines as a failed run while processing valid records", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    vi.stubGlobal("fetch", async () => new Response(`not a dump\n${dumpLine(CHAINSAW_22)}\n`));
+    expect(await sync(t)).toMatchObject({
+      recordsSeen: 1,
+      recordsChanged: 1,
+      failed: true,
+      errorCount: 1,
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))?.isbn13).toBe("9781974766512");
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("failed");
+      // 0-based, matching the startLine an operator would resume from.
+      expect(run?.errors?.[0]).toContain("dump line 0");
+    });
+  });
+
+  it("skips a title-less edition line without failing the run", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: true });
+    const { title: _title, ...untitled } = CHAINSAW_22;
+    stubDump([untitled, CHAINSAW_22]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("succeeded");
+    });
+  });
+
   it("skips as unconfigured without a dump URL", async () => {
     vi.stubEnv("OPENLIBRARY_DUMP_URL", "");
     const t = makeT();
@@ -190,6 +235,47 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
       const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
       expect(obs.conflicts![0]!).toMatchObject({ field: "pubDate" });
       expect(obs.conflicts![0]!.reason).toContain("lower authority");
+    });
+  });
+
+  it("fills a blank description from the edition's blurb, never over a publisher's", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    const blurb = { type: "/type/text", value: "Denji&#39;s <b>back</b>." };
+    stubDump([{ ...CHAINSAW_22, description: blurb }]);
+    await sync(t);
+    const description = async () =>
+      await t.run(async (ctx) => (await ctx.db.get(releaseId!))!.description);
+    expect(await description()).toBe("Denji's back.");
+
+    // A publisher feed (authoritative) replaced it; OL's rewrite stays on
+    // its observation.
+    await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "sevenseas" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: releaseId! } as never,
+        seq: 10,
+        proposalId,
+        author: { kind: "source", sourceKey: "sevenseas" },
+        changes: [{ field: "description", after: "The publisher's copy." }],
+        comment: "Imported from Seven Seas Entertainment.",
+      });
+      await ctx.db.patch(releaseId!, { description: "The publisher's copy." });
+    });
+    stubDump([{ ...CHAINSAW_22, description: "A rewritten OL blurb." }]);
+    await sync(t);
+    expect(await description()).toBe("The publisher's copy.");
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
+      expect(obs.conflicts?.find((c) => c.field === "description")).toMatchObject({
+        offered: "A rewritten OL blurb.",
+        reason: expect.stringContaining("lower authority"),
+      });
     });
   });
 

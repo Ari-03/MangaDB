@@ -77,6 +77,64 @@ describe("importSources.seedRegistry", () => {
   });
 });
 
+describe("importSources.backfillFieldAuthority", () => {
+  it("adds default categories a stored row lacks, never changing a set one", async () => {
+    const t = convexTest(schema);
+    await t.mutation(internal.importSources.seedRegistry, {});
+    // A deployment seeded before the description column existed, plus an
+    // Administrator who already chose ANN's description authority.
+    await t.run(async (ctx) => {
+      for (const source of await ctx.db.query("approvedSources").collect()) {
+        const { description: _, ...rest } = source.fieldAuthority;
+        await ctx.db.patch(source._id, {
+          fieldAuthority: source.key === "ann" ? { ...rest, description: "standard" } : rest,
+        });
+      }
+    });
+
+    const { added } = await t.mutation(internal.importSources.backfillFieldAuthority, {});
+    expect(added).toContainEqual({
+      key: "kodansha",
+      category: "description",
+      level: "authoritative",
+    });
+    expect(added).toContainEqual({ key: "prh", category: "description", level: "standard" });
+    expect(added.some((row) => row.key === "ann")).toBe(false);
+    expect(added.every((row) => row.category === "description")).toBe(true);
+
+    const sources = await t.run((ctx) => ctx.db.query("approvedSources").collect());
+    const byKey = new Map(sources.map((s) => [s.key, s.fieldAuthority]));
+    expect(byKey.get("kodansha")).toMatchObject({
+      description: "authoritative",
+      date: "authoritative",
+    });
+    expect(byKey.get("ann")?.description).toBe("standard");
+
+    // Idempotent: a second run has nothing left to add.
+    const again = await t.mutation(internal.importSources.backfillFieldAuthority, {});
+    expect(again.added).toEqual([]);
+  });
+
+  it("keeps a weak description an Administrator already set", async () => {
+    const t = convexTest(schema);
+    await t.mutation(internal.importSources.seedRegistry, {});
+    await t.run(async (ctx) => {
+      const kodansha = (await ctx.db.query("approvedSources").collect()).find(
+        (s) => s.key === "kodansha",
+      )!;
+      await ctx.db.patch(kodansha._id, { fieldAuthority: { date: "weak", description: "weak" } });
+    });
+    const { added } = await t.mutation(internal.importSources.backfillFieldAuthority, {});
+    expect(added.filter((row) => row.key === "kodansha").map((row) => row.category).sort()).toEqual(
+      ["creators", "format", "isbn", "price", "titles"],
+    );
+    const kodansha = await t.run(async (ctx) =>
+      (await ctx.db.query("approvedSources").collect()).find((s) => s.key === "kodansha"),
+    );
+    expect(kodansha?.fieldAuthority).toMatchObject({ date: "weak", description: "weak" });
+  });
+});
+
 describe("importSources.upsert — registry rows are data", () => {
   it("adds a brand-new source with no code change", async () => {
     const t = convexTest(schema);

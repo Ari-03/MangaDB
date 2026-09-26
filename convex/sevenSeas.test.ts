@@ -9,6 +9,7 @@ import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
+import { MIN_COVER_BYTES } from "./lib/covers";
 import schema from "./schema";
 
 const BASE = "https://sevenseasentertainment.com";
@@ -25,13 +26,18 @@ type FixtureBook = {
   category?: string;
   isbn?: string;
   cover?: boolean;
+  /** The cover's file under uploads/covers (default `{slug}.jpg`); an .svg is a placeholder. */
+  coverFile?: string;
+  /** The listing's `content.rendered` blurb HTML. */
+  blurb?: string;
 };
 
 function bookPageHtml(b: FixtureBook): string {
+  const file = b.coverFile ?? `${b.slug}.jpg`;
   const cover =
     b.cover === false
       ? ""
-      : `<img src="${BASE}/wp-content/uploads/covers/${b.slug}.jpg" title="${b.title}" alt="${b.title}">`;
+      : `<img src="${BASE}/wp-content/uploads/covers/${file}" title="${b.title}" alt="${b.title}">`;
   const series = b.seriesSlug
     ? `<b>Series: </b><span> <a href="${BASE}/series/${b.seriesSlug}/">${b.seriesTitle ?? b.title}</a></span>`
     : "";
@@ -42,6 +48,9 @@ function bookPageHtml(b: FixtureBook): string {
   }</p>${b.isbn ? `<p><b>ISBN:</b> ${b.isbn}</p>` : ""}</div></body></html>`;
 }
 
+/** Cover-image URLs the stubbed site served, cleared after each test. */
+const imageRequests: string[] = [];
+
 /** Stub global fetch with a fixture site serving the live wire shapes. */
 function stubSite(books: FixtureBook[]) {
   const listing = books.map((b) => ({
@@ -51,18 +60,15 @@ function stubSite(books: FixtureBook[]) {
     link: `${BASE}/books/${b.slug}/`,
     title: { rendered: b.title },
     modified_gmt: b.modified ?? "2026-08-01T00:00:00",
-    content: { rendered: "" },
+    content: { rendered: b.blurb ?? "" },
   }));
-  const pages = new Map(
-    books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]),
-  );
+  const pages = new Map(books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]));
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url.startsWith(`${BASE}/wp-json/wp/v2/books`)) {
       return new Response(JSON.stringify(listing), {
         headers: {
-          "x-wp-totalpages": "1",
+          "x-wp-totalpages": books.length === 0 ? "0" : "1",
           "content-type": "application/json",
         },
       });
@@ -72,9 +78,14 @@ function stubSite(books: FixtureBook[]) {
       return new Response(page, { headers: { "content-type": "text/html" } });
     }
     if (url.includes("/wp-content/uploads/")) {
-      return new Response(new Blob([new Uint8Array([0xff, 0xd8, 0xff])]), {
-        headers: { "content-type": "image/jpeg" },
-      });
+      imageRequests.push(url);
+      return url.endsWith(".svg")
+        ? new Response("<svg xmlns='http://www.w3.org/2000/svg'/>", {
+            headers: { "content-type": "image/svg+xml" },
+          })
+        : new Response(new Blob([new Uint8Array(MIN_COVER_BYTES + 1).fill(0xff)]), {
+            headers: { "content-type": "image/jpeg" },
+          });
     }
     return new Response("not found", { status: 404 });
   });
@@ -82,12 +93,10 @@ function stubSite(books: FixtureBook[]) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  imageRequests.length = 0;
 });
 
-async function seedRegistry(
-  t: ReturnType<typeof convexTest>,
-  bootstrap: boolean,
-) {
+async function seedRegistry(t: ReturnType<typeof convexTest>, bootstrap: boolean) {
   await t.mutation(internal.importSources.seedRegistry, {});
   await t.mutation(internal.importSources.setBootstrapModeInternal, {
     on: bootstrap,
@@ -107,6 +116,7 @@ const ALPHA_1: FixtureBook = {
   date: "January 6, 2026",
   price: "$14.99",
   isbn: "978-1-9990001-0-3",
+  blurb: "<p>Alpha&#8217;s <em>first</em>\n adventure.</p>\n",
 };
 
 const ALPHA_2: FixtureBook = {
@@ -179,13 +189,15 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
         // Vol. 1 created the Series → steady state would have queued it.
         bootstrapUnreviewed: true,
       });
-      // Marketing copy is never imported into canonical records (spec §6).
-      expect(vol1Release.description).toBeUndefined();
+      // The listing blurb becomes the Release Description, cleaned to text;
+      // a book without one gets none (never "").
+      expect(vol1Release.description).toBe("Alpha’s first adventure.");
 
       // Vol. 2 landed under an already-linked Series — steady state would
       // have auto-created it, so it carries no bootstrap tag.
       const vol2Release = releases.find((r) => r.isbn13 === "9781999000110")!;
       expect(vol2Release.bootstrapUnreviewed).toBeUndefined();
+      expect(vol2Release.description).toBeUndefined();
 
       // Covers in file storage with source URL + attribution.
       expect(vol1Release.coverImage).toMatchObject({
@@ -211,9 +223,9 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
         },
       });
       expect(revisions[0]!.approvedBy).toBeUndefined();
-      expect(
-        revisions[0]!.changes.map((c) => c.field).sort(),
-      ).toContain("pubDate");
+      expect(revisions[0]!.changes.map((c) => c.field)).toEqual(
+        expect.arrayContaining(["pubDate", "description"]),
+      );
 
       // The immediately approved system Proposal behind Vol. 1's creation.
       const proposal = await ctx.db.get(revisions[0]!.proposalId);
@@ -240,7 +252,10 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
           q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "series:alpha-manga"),
         )
         .unique();
-      expect(seriesObs?.recordRef).toEqual({ type: "series", id: series[0]!._id });
+      expect(seriesObs?.recordRef).toEqual({
+        type: "series",
+        id: series[0]!._id,
+      });
 
       // The Import Run log.
       const runs = await ctx.db.query("importRuns").collect();
@@ -292,9 +307,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     stubSite([ALPHA_1]);
     await sync(t);
     const before = await t.run(async (ctx) =>
-      (await ctx.db.query("sourceObservations").collect()).find(
-        (o) => o.sourceRecordId === "101",
-      ),
+      (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === "101"),
     );
     await new Promise((r) => setTimeout(r, 5));
 
@@ -312,6 +325,37 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     });
   });
 
+  it("the next sync fills a blurb the Release predates, even with the listing unchanged", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    // A Release imported before descriptions existed: no text, same listing.
+    const clear = () =>
+      t.run(async (ctx) => {
+        const release = (await ctx.db.query("releases").collect())[0]!;
+        await ctx.db.patch(release._id, { description: undefined });
+      });
+    await clear();
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      expect(release.description).toBe("Alpha’s first adventure.");
+    });
+    // With the text in place the unchanged short-circuit is back.
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    // A description a human cleared stays cleared: no re-read for it.
+    await clear();
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      await ctx.db.patch(release._id, { overriddenFields: ["description"] });
+    });
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("releases").collect())[0]!.description).toBeUndefined();
+    });
+  });
+
   it("keeps append-only history and auto-updates authoritative fields on change", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);
@@ -319,22 +363,23 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     await sync(t);
 
     // The source moves the date: modified_gmt bumps, the page changes.
-    stubSite([
-      { ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" },
-    ]);
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
     const result = await sync(t);
     expect(result).toMatchObject({ recordsChanged: 1 });
 
     await t.run(async (ctx) => {
       const history = await ctx.db.query("observationSnapshots").collect();
       expect(history).toHaveLength(1);
-      expect(
-        (history[0]!.snapshot as { releaseDate: { month: number } }).releaseDate
-          .month,
-      ).toBe(1); // the superseded snapshot, retained append-only
+      expect((history[0]!.snapshot as { releaseDate: { month: number } }).releaseDate.month).toBe(
+        1,
+      ); // the superseded snapshot, retained append-only
 
       const release = (await ctx.db.query("releases").collect())[0]!;
-      expect(release.pubDate).toMatchObject({ month: 2, day: 3, sort: 20260203 });
+      expect(release.pubDate).toMatchObject({
+        month: 2,
+        day: 3,
+        sort: 20260203,
+      });
 
       const revisions = await ctx.db
         .query("revisions")
@@ -365,9 +410,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
       await ctx.db.patch(release._id, { overriddenFields: ["pubDate"] });
     });
 
-    stubSite([
-      { ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" },
-    ]);
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
     await sync(t);
     await t.run(async (ctx) => {
       const release = (await ctx.db.query("releases").collect())[0]!;
@@ -377,9 +420,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "101",
       )!;
-      expect(
-        (obs.snapshot as { releaseDate: { month: number } }).releaseDate.month,
-      ).toBe(2);
+      expect((obs.snapshot as { releaseDate: { month: number } }).releaseDate.month).toBe(2);
       const revisions = await ctx.db.query("revisions").collect();
       expect(revisions.filter((r) => r.ref.type === "release")).toHaveLength(1);
     });
@@ -407,6 +448,61 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
   });
 });
 
+describe("sevenSeas.sync — covers", () => {
+  const cover = (t: ReturnType<typeof convexTest>) =>
+    t.run(async (ctx) => (await ctx.db.query("releases").collect())[0]!.coverImage ?? null);
+
+  it("keeps a current cover and replaces one whose URL changed, deleting its blob", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    const first = (await cover(t))!;
+
+    // Re-read with the same art: nothing is downloaded or replaced.
+    imageRequests.length = 0;
+    await sync(t, { force: true });
+    expect(imageRequests).toEqual([]);
+    expect(await cover(t)).toEqual(first);
+
+    // New art under a new URL replaces the stored cover.
+    const moved = `${BASE}/wp-content/uploads/covers/alpha-manga-vol-1-new.jpg`;
+    stubSite([
+      { ...ALPHA_1, modified: "2026-08-10T00:00:00", coverFile: "alpha-manga-vol-1-new.jpg" },
+    ]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(imageRequests).toEqual([moved]);
+    const second = (await cover(t))!;
+    expect(second.sourceUrl).toBe(moved);
+    expect(second.storageId).not.toBe(first.storageId);
+    await t.run(async (ctx) => {
+      expect(await ctx.storage.getUrl(first.storageId)).toBeNull();
+    });
+  });
+
+  it("records an SVG placeholder on the Release instead of storing or refetching it", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...ALPHA_1, coverFile: "no-cover.svg" }]);
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsChanged: 1, errorCount: 1 });
+    expect((result as { failed?: boolean }).failed).toBeUndefined();
+    expect(await cover(t)).toEqual({
+      sourceUrl: expect.stringContaining("no-cover.svg"),
+      attribution: expect.any(String),
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(0);
+      const run = (await ctx.db.query("importRuns").collect())[0]!;
+      expect(run.errors[0]).toContain("placeholder, not stored (image/svg+xml");
+    });
+    // A forced re-read fetches nothing for it until the URL changes.
+    imageRequests.length = 0;
+    expect(await sync(t, { force: true })).toMatchObject({ errorCount: 0 });
+    expect(imageRequests).toEqual([]);
+  });
+});
+
 describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
   it("queues a pre-filled In-Review proposal for a brand-new series, once", async () => {
     const t = convexTest(schema);
@@ -426,12 +522,7 @@ describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
           author: { kind: "source", sourceKey: "sevenseas" },
         });
         const version = (await ctx.db.query("proposalVersions").collect())[0]!;
-        expect(version.ops.map((op) => op.kind)).toEqual([
-          "create",
-          "create",
-          "create",
-          "create",
-        ]);
+        expect(version.ops.map((op) => op.kind)).toEqual(["create", "create", "create", "create"]);
         expect(version.evidence[0]?.kind).toBe("observation");
         const obs = (await ctx.db.query("sourceObservations").collect()).find(
           (o) => o.sourceRecordId === "101",
@@ -462,19 +553,14 @@ describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
       const vol2 = releases.find((r) => r.isbn13 === "9781999000110")!;
       expect(vol2.bootstrapUnreviewed).toBeUndefined();
       expect(
-        (await ctx.db.query("proposals").collect()).filter(
-          (p) => p.state === "inReview",
-        ),
+        (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview"),
       ).toHaveLength(0);
     });
   });
 });
 
 describe("sevenSeas.sync — ISBN matching rung", () => {
-  const insertCatalogRelease = async (
-    t: ReturnType<typeof convexTest>,
-    seriesTitle: string,
-  ) =>
+  const insertCatalogRelease = async (t: ReturnType<typeof convexTest>, seriesTitle: string) =>
     await t.run(async (ctx) => {
       const publisherId = await ctx.db.insert("publishers", {
         status: "active",
@@ -552,13 +638,186 @@ describe("sevenSeas.sync — ISBN matching rung", () => {
 });
 
 describe("sevenSeas.sync — failure handling", () => {
+  it("does not withdraw a listed book when its title becomes out of scope", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      for (const observation of await ctx.db.query("sourceObservations").collect()) {
+        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+      }
+    });
+    stubSite([{ ...ALPHA_1, title: "Alpha Adventures (Light Novel) Vol. 1" }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const observation = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "101"),
+        )
+        .unique();
+      expect(observation?.withdrawn).toBe(false);
+    });
+  });
+
+  it.each(["missing pagination", "malformed book", "unexpected empty page"])(
+    "does not withdraw existing observations after %s",
+    async (failure) => {
+      const t = convexTest(schema);
+      await seedRegistry(t, true);
+      stubSite([ALPHA_1]);
+      await sync(t);
+      await t.run(async (ctx) => {
+        for (const observation of await ctx.db.query("sourceObservations").collect()) {
+          await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+        }
+      });
+      vi.stubGlobal(
+        "fetch",
+        async () =>
+          new Response(JSON.stringify(failure === "malformed book" ? [{ id: 101 }] : []), {
+            headers: failure === "missing pagination" ? {} : { "x-wp-totalpages": "1" },
+          }),
+      );
+      expect(await sync(t)).toMatchObject({
+        failed: true,
+        completeSweep: false,
+      });
+      await t.run(async (ctx) => {
+        const observation = await ctx.db
+          .query("sourceObservations")
+          .withIndex("by_source_record", (q) =>
+            q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "101"),
+          )
+          .unique();
+        expect(observation?.withdrawn).toBe(false);
+      });
+    },
+  );
+
+  it("skips an invalid listing item, imports the rest, and fails without withdrawing", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, ALPHA_2]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      for (const observation of await ctx.db.query("sourceObservations").collect()) {
+        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+      }
+    });
+
+    // Vol. 2's rendered title comes back empty; Vol. 1 is still listed after it.
+    stubSite([ALPHA_1]);
+    const siteFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const res = await siteFetch(input);
+      if (!String(input).includes("/wp-json/")) return res;
+      const items = (await res.json()) as unknown[];
+      const blank = { id: 102, status: "publish", slug: "x", link: "x", title: { rendered: "" } };
+      return new Response(JSON.stringify([blank, ...items]), { headers: res.headers });
+    });
+    expect(await sync(t)).toMatchObject({
+      failed: true,
+      completeSweep: false,
+      recordsSeen: 1,
+      errorCount: 1,
+    });
+    await t.run(async (ctx) => {
+      const run = (await ctx.db.query("importRuns").collect())[1]!;
+      expect(run.status).toBe("failed");
+      expect(run.errors).toEqual(["listing page 1: invalid book item"]);
+      const observations = await ctx.db.query("sourceObservations").collect();
+      const byId = new Map(observations.map((o) => [o.sourceRecordId, o]));
+      // Vol. 1 was processed after the bad item; Vol. 2 was not withdrawn.
+      expect(byId.get("101")?.lastSeenAt).toBeGreaterThan(1);
+      expect(byId.get("102")?.withdrawn).toBe(false);
+    });
+  });
+
+  it("fails an empty listing and withdraws nothing", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      for (const observation of await ctx.db.query("sourceObservations").collect()) {
+        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+      }
+    });
+    stubSite([]); // X-WP-TotalPages: 0 and an empty first page
+    expect(await sync(t)).toMatchObject({ failed: true, completeSweep: false });
+    await t.run(async (ctx) => {
+      const run = (await ctx.db.query("importRuns").collect())[1]!;
+      expect(run.errors[0]).toContain("listing was empty");
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.every((o) => o.withdrawn === false)).toBe(true);
+    });
+  });
+
+  it("notes a removed book page (HTTP 404) without failing the run", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, ALPHA_2]);
+    const siteFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).includes("/books/alpha-manga-vol-2/")) {
+        return new Response("gone", { status: 404 });
+      }
+      return siteFetch(input);
+    });
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsSeen: 2, recordsChanged: 1, errorCount: 1 });
+    expect((result as { failed?: boolean }).failed).toBeUndefined();
+    await t.run(async (ctx) => {
+      const run = (await ctx.db.query("importRuns").collect())[0]!;
+      expect(run.status).toBe("succeeded");
+      expect(run.errors[0]).toContain("HTTP 404");
+      // The missing book stays unobserved (retried while listed); Vol. 1 imported.
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId).sort()).toEqual([
+        "101",
+        "series:alpha-manga",
+      ]);
+      const source = await ctx.db
+        .query("approvedSources")
+        .withIndex("by_key", (q) => q.eq("key", "sevenseas"))
+        .unique();
+      expect(source?.consecutiveFailures).toBe(0);
+    });
+  });
+
+  it("records a failed detail run without creating a book from an HTTP 200 error page", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    const siteFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).includes("/books/")) {
+        return new Response("<html>Just a moment...</html>");
+      }
+      return siteFetch(input);
+    });
+    expect(await sync(t)).toMatchObject({
+      failed: true,
+      recordsChanged: 0,
+      errorCount: 1,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+      expect(await ctx.db.query("sourceObservations").collect()).toHaveLength(0);
+      const source = await ctx.db
+        .query("approvedSources")
+        .withIndex("by_key", (q) => q.eq("key", "sevenseas"))
+        .unique();
+      expect(source?.consecutiveFailures).toBe(1);
+    });
+  });
+
   it("logs a failed run and counts toward source health", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);
-    vi.stubGlobal(
-      "fetch",
-      async () => new Response("gone", { status: 404 }),
-    );
+    vi.stubGlobal("fetch", async () => new Response("gone", { status: 404 }));
     const result = (await sync(t)) as { failed?: boolean };
     expect(result.failed).toBe(true);
     await t.run(async (ctx) => {

@@ -10,6 +10,13 @@
 // The imprint-scoped path is mandatory: the flat /titles endpoint silently
 // ignores its `imprint` and `onsaleFrom` query params (verified live
 // 2026-08 and 2026-09), so date filtering happens client-side in the sync.
+// The sync adds the content zoom
+// (`zoom=https://api.penguinrandomhouse.com/title/titles/content/definition`),
+// which embeds each title's marketing copy in the same response
+// (`_embeds[].content`: `flapcopy`, `positioning`, `jacketquotes`… as HTML
+// with entities and `<br>`; verified live 2026-09-26,
+// __fixtures__/prh/titles-page-zoom.json). The flap copy (else the one-line
+// positioning) is the snapshot's `description` — PRH's Release Description.
 //
 // The parser is deliberately tolerant of shape drift (nested vs flat
 // imprint/format fields, string vs number ISBNs) — verified against the
@@ -31,6 +38,7 @@
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
 import { catalogTitleFields } from "./catalogTitle";
+import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -63,7 +71,9 @@ function asIsbn13(raw: unknown): string | undefined {
 }
 
 function asIsbn10(raw: unknown): string | undefined {
-  const chars = String(raw ?? "").replace(/[^0-9Xx]/g, "").toUpperCase();
+  const chars = String(raw ?? "")
+    .replace(/[^0-9Xx]/g, "")
+    .toUpperCase();
   return /^\d{9}[\dX]$/.test(chars) ? chars : undefined;
 }
 
@@ -87,6 +97,27 @@ function priceCents(entry: Record<string, unknown>): number | undefined {
       if (p.currencyCode === "USD" && typeof p.amount === "number" && p.amount > 0) {
         return Math.round(p.amount * 100);
       }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The title's blurb from the content zoom (`_embeds[].content`): the flap
+ * copy, else the one-line positioning. An embed naming another EAN is
+ * ignored.
+ */
+function flapCopy(entry: Record<string, unknown>, isbn13: string): string | undefined {
+  const contents = (Array.isArray(entry._embeds) ? entry._embeds : []).flatMap((embed) => {
+    const content = (embed as { content?: unknown } | null)?.content;
+    if (typeof content !== "object" || content === null) return [];
+    const fields = content as Record<string, unknown>;
+    return fields.ean === undefined || String(fields.ean) === isbn13 ? [fields] : [];
+  });
+  for (const key of ["flapcopy", "positioning"]) {
+    for (const content of contents) {
+      const text = cleanBlurb(content[key]);
+      if (text !== undefined) return text;
     }
   }
   return undefined;
@@ -128,7 +159,9 @@ export function prhScopeReason(
   if (PROSE_CATEGORY.test(category)) return "novel";
   const codes = Array.isArray(entry.subjects)
     ? entry.subjects.flatMap((subject) =>
-        typeof subject === "object" && subject !== null && "code" in subject &&
+        typeof subject === "object" &&
+        subject !== null &&
+        "code" in subject &&
         typeof subject.code === "string"
           ? [subject.code]
           : [],
@@ -164,8 +197,7 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   if (language !== undefined && !/^(?:e|en|eng|english)$/i.test(language)) return null;
 
   // Format family: audio is out of catalog scope entirely (spec §1).
-  const formatText =
-    described(entry.format) ?? described(entry.formatFamily) ?? "";
+  const formatText = described(entry.format) ?? described(entry.formatFamily) ?? "";
   if (AUDIO.test(formatText)) return null;
   const digital = DIGITAL.test(formatText);
   const binding = !digital
@@ -207,27 +239,46 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
     binding,
     imprint,
     priceCents: priceCents(entry),
+    description: flapCopy(entry, isbn13),
   };
 }
 
-/** The title-list envelope → its parsed titles + the total record count. */
+/**
+ * The title-list envelope → its parsed titles + the total record count.
+ * Verified live 2026-09-26 (__fixtures__/prh/titles-page.json): every page
+ * carries `status` ("ok", or "warning" with the data intact), a root
+ * `recordCount`, and `data.titles`; a page past the end or an unknown
+ * imprint is an HTTP 404, never an empty page. So the count is required —
+ * without it an empty page is no evidence the imprint is empty, and a
+ * missing `titles` array is tolerated only with an explicit recordCount 0.
+ */
 export function parseTitleList(raw: unknown): {
   titles: PrhTitleSnapshot[];
-  recordCount?: number;
+  recordCount: number;
+  /** Upstream page size, before scope filtering. */
+  rawCount: number;
 } {
   const root = raw as Record<string, unknown> | null;
-  const data = (root?.data ?? root) as Record<string, unknown> | null;
-  const list = data?.titles;
-  const titles: PrhTitleSnapshot[] = [];
-  if (Array.isArray(list)) {
-    for (const entry of list) {
-      const parsed = parseTitle(entry);
-      if (parsed) titles.push(parsed);
-    }
+  const envelope = typeof root?.data === "object" && root.data !== null;
+  const data = (envelope ? root.data : root) as Record<string, unknown> | null;
+  const status = root?.status;
+  if (typeof status === "string" && status !== "ok" && status !== "warning") {
+    throw new Error(`PRH response status is ${status}`);
   }
   const count = root?.recordCount ?? data?.recordCount;
-  return {
-    titles,
-    recordCount: typeof count === "number" ? count : undefined,
-  };
+  if (typeof count !== "number") throw new Error("PRH response is missing its recordCount");
+  const recordCount = count;
+  const list = data?.titles;
+  if (!Array.isArray(list)) {
+    if (list == null && recordCount === 0) {
+      return { titles: [], rawCount: 0, recordCount };
+    }
+    throw new Error("PRH response is missing its titles array");
+  }
+  const titles: PrhTitleSnapshot[] = [];
+  for (const entry of list) {
+    const parsed = parseTitle(entry);
+    if (parsed) titles.push(parsed);
+  }
+  return { titles, rawCount: list.length, recordCount };
 }

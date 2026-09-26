@@ -10,10 +10,12 @@
 // *into* the existing skeleton and never define Series structure. The
 // parser accordingly normalizes exactly the fields the authority table lets
 // OpenLibrary offer — ISBNs (standard), dates (weak), format/binding
-// (standard) — plus the title/publisher keys matching needs.
+// (standard), the edition's `description` blurb (weak) — plus the
+// title/publisher keys matching needs.
 
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
+import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -42,6 +44,8 @@ export const olEditionValidator = v.object({
   isbn10: v.optional(v.string()),
   format: v.union(v.literal("physical"), v.literal("digital")),
   binding: v.optional(v.string()),
+  /** The edition's blurb, cleaned to one paragraph. */
+  description: v.optional(v.string()),
 });
 
 export type OlEditionSnapshot = Infer<typeof olEditionValidator>;
@@ -49,9 +53,28 @@ export type OlEditionSnapshot = Infer<typeof olEditionValidator>;
 // ---------- dates ----------
 
 const MONTHS: Record<string, number> = {
-  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
 };
+
+function calendarDate(year: number, month: number, day?: number) {
+  if (month < 1 || month > 12) return { year };
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day !== undefined && day >= 1 && day <= days[month - 1]!
+    ? { year, month, day }
+    : { year, month };
+}
 
 /**
  * OpenLibrary publish_date styles → a partial-precision date: "Oct 13,
@@ -67,9 +90,7 @@ export function parseOlDate(
     const year = Number(m[1]);
     const month = Number(m[2]);
     const day = m[3] !== undefined ? Number(m[3]) : undefined;
-    if (month < 1 || month > 12) return { year };
-    if (day === undefined) return { year, month };
-    return day >= 1 && day <= 31 ? { year, month, day } : { year, month };
+    return calendarDate(year, month, day);
   }
   m = /^([A-Za-z]+)\.?\s+(?:(\d{1,2})(?:st|nd|rd|th)?,?\s+)?(\d{4})$/.exec(text);
   if (m) {
@@ -77,8 +98,7 @@ export function parseOlDate(
     const year = Number(m[3]);
     if (month === undefined) return { year };
     const day = m[2] !== undefined ? Number(m[2]) : undefined;
-    if (day === undefined) return { year, month };
-    return day >= 1 && day <= 31 ? { year, month, day } : { year, month };
+    return calendarDate(year, month, day);
   }
   m = /^(\d{4})$/.exec(text);
   if (m) return { year: Number(m[1]) };
@@ -90,15 +110,17 @@ export function parseOlDate(
 function isbn13s(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((value) => String(value).replace(/[^0-9]/g, ""))
-    .filter((digits) => /^\d{13}$/.test(digits) && isbn13CheckOk(digits));
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.replace(/[\s-]/g, ""))
+    .filter((digits) => /^(?:978|979)\d{10}$/.test(digits) && isbn13CheckOk(digits));
 }
 
 function isbn10s(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((value) => String(value).replace(/[^0-9Xx]/g, "").toUpperCase())
-    .filter((chars) => /^\d{9}[\dX]$/.test(chars));
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.replace(/[\s-]/g, "").toUpperCase())
+    .filter((chars) => /^\d{9}[\dX]$/.test(chars) && toIsbn13(chars) !== undefined);
 }
 
 function isbn13CheckOk(isbn13: string): boolean {
@@ -122,12 +144,9 @@ export function isbn10To13(isbn10: string): string {
 export function toIsbn13(raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
   const chars = raw.replace(/[\s-]/g, "").toUpperCase();
-  if (/^\d{13}$/.test(chars)) return isbn13CheckOk(chars) ? chars : undefined;
+  if (/^(?:978|979)\d{10}$/.test(chars)) return isbn13CheckOk(chars) ? chars : undefined;
   if (/^\d{9}[\dX]$/.test(chars)) {
-    const sum = [...chars].reduce(
-      (acc, c, i) => acc + (c === "X" ? 10 : Number(c)) * (10 - i),
-      0,
-    );
+    const sum = [...chars].reduce((acc, c, i) => acc + (c === "X" ? 10 : Number(c)) * (10 - i), 0);
     return sum % 11 === 0 ? isbn10To13(chars) : undefined;
   }
   return undefined;
@@ -138,10 +157,7 @@ export function toIsbn13(raw: string | undefined): string | undefined {
  * derived from an ISBN-10), plus an ISBN-10 only when it is that same book —
  * OpenLibrary arrays can mix printings, and a 979 ISBN has no ISBN-10.
  */
-export function isbnPair(
-  raw13: unknown,
-  raw10: unknown,
-): { isbn13?: string; isbn10?: string } {
+export function isbnPair(raw13: unknown, raw10: unknown): { isbn13?: string; isbn10?: string } {
   const tens = isbn10s(raw10);
   const isbn13 = isbn13s(raw13)[0] ?? (tens[0] !== undefined ? isbn10To13(tens[0]) : undefined);
   if (isbn13 === undefined) return {};
@@ -174,6 +190,12 @@ export function isEnglishEdition(languages: unknown, isbn13: string | undefined)
 
 const DIGITAL_FORMAT = /e-?book|electronic|kindle|digital/i;
 
+/** An edition `description`: a bare string or a `{type: "/type/text", value}` object. */
+function descriptionOf(raw: unknown): string | undefined {
+  const text = typeof raw === "object" && raw !== null ? (raw as { value?: unknown }).value : raw;
+  return cleanBlurb(text);
+}
+
 /** One edition JSON object → a snapshot, or null when out of scope. */
 export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -182,8 +204,7 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   if (typeof key !== "string" || !key.startsWith("/books/")) return null;
   const title = typeof edition.title === "string" ? edition.title.trim() : "";
   if (title === "") return null;
-  const subtitle =
-    typeof edition.subtitle === "string" ? edition.subtitle : undefined;
+  const subtitle = typeof edition.subtitle === "string" ? edition.subtitle : undefined;
 
   // English-only scope (spec §1): a declared non-English language, a
   // non-English ISBN group, or no language and no English-market ISBN.
@@ -193,9 +214,10 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   if (outOfScopeReason(`${title}${subtitle ? ` (${subtitle})` : ""}`) !== null) return null;
 
   const physicalFormat =
-    typeof edition.physical_format === "string"
-      ? edition.physical_format.trim()
-      : "";
+    typeof edition.physical_format === "string" ? edition.physical_format.trim() : "";
+  // Audio metadata often lives only in physical_format, not the title.
+  // An audiobook must never become a physical manga Release.
+  if (/audio|cassette|mp3/i.test(physicalFormat)) return null;
   const digital = DIGITAL_FORMAT.test(physicalFormat);
   const binding = !digital
     ? /hardcover/i.test(physicalFormat)
@@ -231,23 +253,35 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     packaging: parsed.packaging ?? undefined,
     publishers,
     publishDate:
-      typeof edition.publish_date === "string"
-        ? parseOlDate(edition.publish_date)
-        : undefined,
+      typeof edition.publish_date === "string" ? parseOlDate(edition.publish_date) : undefined,
     ...isbns,
     format: digital ? "digital" : "physical",
     binding,
+    description: descriptionOf(edition.description),
   };
 }
 
-/** One dump line (type\tkey\trevision\tlast_modified\tjson) → a snapshot. */
+/**
+ * One dump line (type\tkey\trevision\tlast_modified\tjson) → a snapshot.
+ * A malformed envelope (column count, JSON, or an edition key that is not
+ * the line's key) throws; a sparse edition — no title, say, which the
+ * offline filter keeps since it selects by publisher and ISBN only — is
+ * simply skipped by parseEditionJson.
+ */
 export function parseDumpLine(line: string): OlEditionSnapshot | null {
   const columns = line.split("\t");
-  if (columns.length < 5) return null;
+  if (columns.length !== 5) throw new Error("Invalid Open Library dump envelope");
   if (columns[0] !== "/type/edition") return null;
-  try {
-    return parseEditionJson(JSON.parse(columns.slice(4).join("\t")));
-  } catch {
-    return null;
+  const edition: unknown = JSON.parse(columns[4]!);
+  if (
+    typeof edition !== "object" ||
+    edition === null ||
+    !("key" in edition) ||
+    typeof edition.key !== "string" ||
+    !/^\/books\/OL\d+M$/.test(edition.key) ||
+    edition.key !== columns[1]
+  ) {
+    throw new Error("Invalid Open Library edition identity");
   }
+  return parseEditionJson(edition);
 }

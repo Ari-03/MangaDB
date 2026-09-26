@@ -10,12 +10,13 @@
 // batches (Convex actions are time-limited) and schedules itself to
 // continue, carrying the Import Run and counters; the run closes — and the
 // post-sweep withdrawal pass fires — only when the final link of the chain
-// reaches the end of the report. A completed mirror then chains the
-// release-page pass (below).
+// reaches the end of the report. A finished mirror — error-free or not —
+// then chains the release-page pass (below); only an aborted one does not.
 //
 // What the mirror writes:
 // - one manga entry = one Series (linked via the manga observation itself;
-//   a title change at ANN is a rung-① field conflict at standard authority)
+//   a title change at ANN is a rung-① field conflict at standard authority,
+//   and its Plot Summary is offered as the synopsis at weak authority)
 // - "(GN n)" / "(eBook n)" designators define the Volume backbone; missing
 //   Volumes are created under the linked Series (spec §6 allows creating
 //   the Volume of a single-volume release under a linked Series); brand-new
@@ -54,7 +55,6 @@ import type { MutationCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import {
   annMangaValidator,
-  mangaUrl,
   parseApiResponse,
   parseReleasePage,
   parseReport,
@@ -80,8 +80,7 @@ import {
 import { reconcileFields } from "./lib/reconcile";
 
 export const SOURCE_KEY = "ann";
-const REPORT_URL =
-  "https://www.animenewsnetwork.com/encyclopedia/reports.xml?id=155&type=manga";
+const REPORT_URL = "https://www.animenewsnetwork.com/encyclopedia/reports.xml?id=155&type=manga";
 const API_URL = "https://cdn.animenewsnetwork.com/encyclopedia/api.xml";
 const IMPORT_COMMENT = "Imported from the Anime News Network Encyclopedia.";
 
@@ -120,7 +119,7 @@ export const sync = internalAction({
     politeDelayMs: v.optional(v.number()),
     /** Detail batches (50 manga each) per invocation before continuing. */
     maxBatches: v.optional(v.number()),
-    /** Chain the release-page pass after a completed mirror (default true). */
+    /** Chain the release-page pass after a finished mirror (default true). */
     releasePages: v.optional(v.boolean()),
     // ----- continuation state (never passed by callers) -----
     nskip: v.optional(v.number()),
@@ -129,6 +128,8 @@ export const sync = internalAction({
     seen: v.optional(v.number()),
     changed: v.optional(v.number()),
     errors: v.optional(v.array(v.string())),
+    /** An earlier link got a real detail document: the detail API is up. */
+    detailsReached: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<SyncResult> => {
     // Explicit annotations break the type cycle with imports.ts's adapter map.
@@ -138,7 +139,7 @@ export const sync = internalAction({
     );
     if (!source) {
       throw new Error(
-        'The approved-source registry has no "ann" row. Run: npx convex run importSources:seedRegistry \'{}\'',
+        "The approved-source registry has no \"ann\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
     const runId = await runToContinue(ctx, source, args);
@@ -150,6 +151,7 @@ export const sync = internalAction({
     let seen = args.seen ?? 0;
     let changed = args.changed ?? 0;
     let nskip = args.nskip ?? 0;
+    let detailsReached = args.detailsReached ?? false;
 
     try {
       let batchesDone = 0;
@@ -162,12 +164,21 @@ export const sync = internalAction({
         );
         const reportXml = await reportRes.text();
         // Paging and the end-of-enumeration signal follow the page's RAW
-        // <item> count: parseReport filters non-manga rows, so its length
-        // under-counts the page and would end the mirror at the first page
-        // containing any filtered row (and desync nskip).
-        const rawCount = (reportXml.match(/<item>/g) ?? []).length;
-        const ids = parseReport(reportXml).map((item) => item.id);
+        // <item> count: parseReport filters non-manga and malformed rows, so
+        // its item count under-counts the page and would end the mirror at
+        // the first page containing any filtered row (and desync nskip).
+        const report = parseReport(reportXml);
+        const rawCount = report.rawCount;
+        // A row without id/name is an entry this sweep cannot see: skipped
+        // so the enumeration goes on, reported so withdrawal stays off.
+        for (const at of report.malformed) {
+          errors.push(`report @${nskip + at}: item without id/name`);
+        }
+        const ids = report.items.map((item) => item.id);
         if (rawCount === 0) {
+          // A well-formed but empty FIRST page is not an empty catalog: the
+          // clean sweep would otherwise withdraw every ANN observation.
+          if (nskip === 0) throw new Error("ANN report enumeration was empty");
           reachedEnd = true;
           break;
         }
@@ -177,11 +188,25 @@ export const sync = internalAction({
         for (let offset = 0; offset < ids.length; offset += BATCH_SIZE) {
           const batch = ids.slice(offset, offset + BATCH_SIZE);
           try {
-            const apiRes = await politeFetch(
-              `${API_URL}?manga=${batch.join("/")}`,
-              delay,
-            );
-            for (const manga of parseApiResponse(await apiRes.text())) {
+            const apiRes = await politeFetch(`${API_URL}?manga=${batch.join("/")}`, delay);
+            const apiXml = await apiRes.text();
+            if (!/^\s*(?:<\?xml[^>]*>\s*)?<ann\b[^>]*>[\s\S]*<\/ann>\s*$/.test(apiXml)) {
+              throw new Error("ANN returned an invalid detail document");
+            }
+            // A real detail document, whatever it lists: the API is up.
+            detailsReached = true;
+            const records = parseApiResponse(apiXml);
+            const returnedIds = new Set(records.map((record) => record.id));
+            const missing = batch.filter((id) => !returnedIds.has(id));
+            if (missing.length > 0) {
+              throw new Error(`ANN detail response is missing manga ${missing.join(", ")}`);
+            }
+            if (records.length !== batch.length) {
+              throw new Error(
+                `ANN detail response has ${records.length} manga for ${batch.length} requested`,
+              );
+            }
+            for (const manga of records) {
               // Entries with no English book release contribute nothing to
               // the backbone (scope: all ENGLISH releases).
               if (manga.releases.length === 0) continue;
@@ -219,6 +244,7 @@ export const sync = internalAction({
           seen,
           changed,
           errors: errors.slice(0, MAX_CARRIED_ERRORS),
+          detailsReached,
         });
         return {
           runId,
@@ -229,24 +255,44 @@ export const sync = internalAction({
         };
       }
 
-      // The full mirror completed: entries the sweep no longer lists have
-      // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
-      await ctx.runMutation(internal.imports.markWithdrawn, {
-        sourceKey: SOURCE_KEY,
-        notSeenSince: runStartedAt,
-      });
+      // Missing details or a rejected observation make disappearance unknowable.
+      // Preserve prior observations until a complete, error-free sweep succeeds;
+      // an errored sweep finishes failed (visible on the dashboard) but is
+      // still a finished sweep, so the page pass below chains either way.
+      // No detail document at all: ANN's detail API is down (or the report
+      // listed nothing this sweep could fetch), so the sweep saw no entry
+      // and the page pass would only park lines for ERROR_RETRY_MS.
+      if (!detailsReached) {
+        errors.push("ANN detail API unreachable; release-page pass skipped");
+      }
+      const complete = errors.length === 0;
+      if (complete) {
+        // The full mirror completed: entries the sweep no longer lists have
+        // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
+        await ctx.runMutation(internal.imports.markWithdrawn, {
+          sourceKey: SOURCE_KEY,
+          notSeenSince: runStartedAt,
+        });
+      } else {
+        errors.push("ANN mirror was incomplete; withdrawal skipped");
+      }
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: "succeeded",
+        status: complete ? "succeeded" : "failed",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
       });
-      // The mirror refreshed every line: now place the unlinked ones.
-      if (args.releasePages !== false) {
+      // The mirror refreshed the lines it could: now place the unlinked
+      // ones. The page pass walks unlinked lines on its own and must not
+      // wait on a mirror one persistently failing entry would never let
+      // complete. It does not chain when ANN itself looks down: an aborted
+      // enumeration (the catch below) or no detail document at all.
+      if (detailsReached && args.releasePages !== false) {
         await ctx.runMutation(internal.ann.chainReleasePages, {
           afterRunId: runId,
           politeDelayMs: args.politeDelayMs,
+          ...(complete ? {} : { afterFailedMirror: true }),
         });
       }
       return {
@@ -255,6 +301,7 @@ export const sync = internalAction({
         recordsChanged: changed,
         continued: false,
         errorCount: errors.length,
+        ...(complete ? {} : { failed: true }),
       };
     } catch (e) {
       errors.push(errorMessage(e));
@@ -297,7 +344,11 @@ const pageStateValidator = v.object({
   distributor: v.optional(v.string()),
   distributorId: v.optional(v.string()),
   date: v.optional(
-    v.object({ year: v.number(), month: v.optional(v.number()), day: v.optional(v.number()) }),
+    v.object({
+      year: v.number(),
+      month: v.optional(v.number()),
+      day: v.optional(v.number()),
+    }),
   ),
   isbn13: v.optional(v.string()),
   isbn10: v.optional(v.string()),
@@ -547,7 +598,12 @@ export const applyManga = internalMutation({
             sourceKey: SOURCE_KEY,
             ref: { type: "series", id: series._id },
             doc: series,
-            offered: { title: snapshot.title },
+            // The Plot Summary fills a blank synopsis (weak authority): any
+            // publisher's text outranks it and stays.
+            offered: {
+              title: snapshot.title,
+              ...(snapshot.synopsis !== undefined ? { synopsis: snapshot.synopsis } : {}),
+            },
             observation,
             citation,
             now,
@@ -612,6 +668,7 @@ export const applyManga = internalMutation({
         seriesId: null,
         seriesTitle: snapshot.title,
         seriesAltTitles: snapshot.altTitles,
+        seriesSynopsis: snapshot.synopsis,
         labels: labels.filter((l): l is string => l !== undefined),
         // Omnibus-only entries evidence no single Volume: no placeholder.
         seriesOnly: packagingOnly(snapshot),
@@ -747,7 +804,11 @@ function needsFetch(page: PageState | undefined, now: number): boolean {
  * lines drop out, so a later pass only touches new or still-unplaced ones.
  */
 export const releasePageCandidates = internalQuery({
-  args: { cursor: v.union(v.string(), v.null()), numItems: v.number(), now: v.number() },
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.number(),
+    now: v.number(),
+  },
   handler: async (ctx, { cursor, numItems, now }) => {
     const result = await ctx.db
       .query("sourceObservations")
@@ -765,7 +826,11 @@ export const releasePageCandidates = internalQuery({
       if (!/^\d+$/.test(snapshot.annId)) return [];
       return [{ annId: snapshot.annId, fetch: needsFetch(snapshot.page, now) }];
     });
-    return { candidates, continueCursor: result.continueCursor, isDone: result.isDone };
+    return {
+      candidates,
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
+    };
   },
 });
 
@@ -787,10 +852,19 @@ type PageSyncResult =
  * make the dispatcher skip ANN until someone repaired it).
  */
 export const chainReleasePages = internalMutation({
-  args: { afterRunId: v.id("importRuns"), politeDelayMs: v.optional(v.number()) },
-  handler: async (ctx, { afterRunId, politeDelayMs }) => {
+  args: {
+    afterRunId: v.id("importRuns"),
+    politeDelayMs: v.optional(v.number()),
+    /** The mirror finished failed: the page pass's success must not reset source health. */
+    afterFailedMirror: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { afterRunId, politeDelayMs, afterFailedMirror }) => {
     const runId = await openFollowOnRun(ctx, afterRunId, SOURCE_KEY);
-    await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, { politeDelayMs, runId });
+    await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
+      politeDelayMs,
+      runId,
+      ...(afterFailedMirror ? { afterFailedMirror: true } : {}),
+    });
   },
 });
 
@@ -799,7 +873,8 @@ export const chainReleasePages = internalMutation({
  * Encyclopedia page once (1 req/s), and places it (`applyReleasePage`).
  * Lines whose page is already stored are re-placed without a fetch — a
  * newly seeded publisher or Volume can unblock them. Chained after each
- * completed mirror; self-continues across the action time limit.
+ * finished mirror, complete or errored; self-continues across the action
+ * time limit.
  *
  *   npx convex run ann:syncReleasePages '{}'
  */
@@ -815,6 +890,8 @@ export const syncReleasePages = internalAction({
     changed: v.optional(v.number()),
     fetched: v.optional(v.number()),
     errors: v.optional(v.array(v.string())),
+    /** Set by chainReleasePages after a failed mirror (see imports.finishRun). */
+    afterFailedMirror: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<PageSyncResult> => {
     const source: Doc<"approvedSources"> | null = await ctx.runQuery(
@@ -850,6 +927,11 @@ export const syncReleasePages = internalAction({
           let state: PageState | undefined;
           if (candidate.fetch) {
             state = await fetchReleasePage(candidate.annId, delay);
+            if (state.status === "error" || state.status === "unparsed") {
+              errors.push(
+                `release ${candidate.annId}: ${state.error ?? "unrecognized release page"}`,
+              );
+            }
             fetchedHere++;
             fetchedTotal++;
           }
@@ -877,6 +959,7 @@ export const syncReleasePages = internalAction({
           changed,
           fetched: fetchedTotal,
           errors: errors.slice(0, MAX_CARRIED_ERRORS),
+          afterFailedMirror: args.afterFailedMirror,
         });
         return {
           runId,
@@ -887,12 +970,14 @@ export const syncReleasePages = internalAction({
           errorCount: errors.length,
         };
       }
+      if (errors.length > 0) throw new Error("ANN release-page pass was incomplete");
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
         status: "succeeded",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
+        healthNeutral: args.afterFailedMirror,
       });
       return {
         runId,

@@ -10,6 +10,8 @@ import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { MIN_COVER_BYTES } from "./lib/covers";
 import schema from "./schema";
 
 const BASE = "https://kodansha.us";
@@ -20,6 +22,8 @@ type FixtureVolume = {
   volume: number;
   date: string;
   formats: string[];
+  /** The calendar's `image`; defaults to one URL per volume. */
+  image?: string;
 };
 
 function calendarPayload(volumes: FixtureVolume[]) {
@@ -37,7 +41,8 @@ function calendarPayload(volumes: FixtureVolume[]) {
         title: `Volume ${vol.volume}`,
         series_name: vol.series,
         creators: "By Someone",
-        image: `https://production.image.azuki.co/${vol.seriesSlug}-${vol.volume}/800.webp`,
+        image:
+          vol.image ?? `https://production.image.azuki.co/${vol.seriesSlug}-${vol.volume}/800.webp`,
         volume_url: `${BASE}/series/${vol.seriesSlug}/volume-${vol.volume}/`,
         formats: vol.formats,
       })),
@@ -45,10 +50,25 @@ function calendarPayload(volumes: FixtureVolume[]) {
   };
 }
 
-function stubSite(volumes: FixtureVolume[]) {
+/** Every URL the stubbed site was asked for, cleared after each test. */
+const requested: string[] = [];
+
+/**
+ * Cover art from the image CDN: a real-sized WebP, except that a URL
+ * containing "tiny" serves a 3-byte file, the kind of placeholder never stored.
+ */
+function coverImage(url: string): Response {
+  const size = url.includes("tiny") ? 3 : MIN_COVER_BYTES + 1;
+  return new Response(new Blob([new Uint8Array(size).fill(0xff)]), {
+    headers: { "content-type": "image/webp" },
+  });
+}
+
+/** The stubbed kodansha.us; `art` answers the image CDN. */
+function stubSite(volumes: FixtureVolume[], art: (url: string) => Response = coverImage) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
+    requested.push(url);
     if (url.startsWith(`${BASE}/wp-json/kodansha/v1/release-calendar`)) {
       return new Response(JSON.stringify(calendarPayload(volumes)), {
         headers: { "content-type": "application/json" },
@@ -59,17 +79,14 @@ function stubSite(volumes: FixtureVolume[]) {
         headers: { "content-type": "application/json" },
       });
     }
-    if (url.includes("azuki.co")) {
-      return new Response(new Blob([new Uint8Array([0xff, 0xd8, 0xff])]), {
-        headers: { "content-type": "image/jpeg" },
-      });
-    }
+    if (url.includes("azuki.co")) return art(url);
     return new Response("not found", { status: 404 });
   });
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  requested.length = 0;
 });
 
 function makeT() {
@@ -84,8 +101,7 @@ async function seedRegistry(t: TestT, bootstrap: boolean) {
   });
 }
 
-const sync = (t: TestT) =>
-  t.action(internal.kodansha.sync, { politeDelayMs: 0 });
+const sync = (t: TestT) => t.action(internal.kodansha.sync, { politeDelayMs: 0 });
 
 const IRUMA: FixtureVolume = {
   series: "Welcome to Demon School! Iruma-kun",
@@ -125,9 +141,7 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
       expect(editions).toHaveLength(1);
       const releases = await ctx.db.query("releases").collect();
       expect(releases).toHaveLength(2);
-      expect(new Set(releases.map((r) => r.format))).toEqual(
-        new Set(["physical", "digital"]),
-      );
+      expect(new Set(releases.map((r) => r.format))).toEqual(new Set(["physical", "digital"]));
       for (const release of releases) {
         expect(release.editionId).toBe(editions[0]!._id);
         expect(release.pubDate).toEqual({
@@ -139,12 +153,18 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
         expect(release.coverImage).toBeDefined();
         expect(release.coverImage!.attribution).toContain("Kodansha");
       }
+      // Both formats show the calendar's one image: fetched and stored once.
+      expect(releases[0]!.coverImage!.storageId).toBe(releases[1]!.coverImage!.storageId);
+      expect(requested.filter((u) => u.includes("azuki.co"))).toHaveLength(1);
       // Importer-authored public Revisions cite source name + record URL.
       const revisions = await ctx.db.query("revisions").collect();
       const releaseRevisions = revisions.filter((r) => r.ref.type === "release");
       expect(releaseRevisions.length).toBe(2);
       for (const revision of releaseRevisions) {
-        expect(revision.author).toEqual({ kind: "source", sourceKey: "kodansha" });
+        expect(revision.author).toEqual({
+          kind: "source",
+          sourceKey: "kodansha",
+        });
         expect(revision.citation).toMatchObject({
           sourceName: "Kodansha USA",
           url: `${BASE}/series/welcome-to-demon-school-iruma-kun/volume-21/`,
@@ -152,13 +172,21 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
       }
       // Observations linked per (volume, format).
       const observations = await ctx.db.query("sourceObservations").collect();
-      const volumeObs = observations.filter((o) =>
-        o.sourceRecordId.includes("#"),
-      );
+      const volumeObs = observations.filter((o) => o.sourceRecordId.includes("#"));
       expect(volumeObs).toHaveLength(2);
       expect(volumeObs.every((o) => o.recordRef?.type === "release")).toBe(true);
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 2 });
+    });
+  });
+
+  it("marks a failed API envelope as a failed run, not an empty success", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ success: false, data: [] })));
+    expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("importRuns").collect())[0]?.status).toBe("failed");
     });
   });
 
@@ -168,7 +196,10 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
     stubSite([IRUMA]);
     await sync(t);
     const before = await t.run((ctx) => ctx.db.query("revisions").collect());
+    requested.length = 0;
     await sync(t);
+    // The stored cover is current: no image is fetched again.
+    expect(requested.some((u) => u.includes("azuki.co"))).toBe(false);
     await t.run(async (ctx) => {
       const after = await ctx.db.query("revisions").collect();
       expect(after).toHaveLength(before.length);
@@ -192,9 +223,7 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
         expect(release.pubDate!.sort).toBe(20260811);
       }
       // The prior snapshot is retained append-only (one per format).
-      expect(
-        await ctx.db.query("observationSnapshots").collect(),
-      ).toHaveLength(2);
+      expect(await ctx.db.query("observationSnapshots").collect()).toHaveLength(2);
     });
   });
 });
@@ -216,9 +245,7 @@ describe("kodansha.sync — steady state", () => {
       });
       const versions = await ctx.db.query("proposalVersions").collect();
       expect(versions).toHaveLength(1);
-      const tables = versions[0]!.ops.map((op) =>
-        op.kind === "create" ? op.table : op.kind,
-      );
+      const tables = versions[0]!.ops.map((op) => (op.kind === "create" ? op.table : op.kind));
       expect(tables).toEqual(["series", "volumes", "editions", "releases"]);
     });
   });
@@ -333,7 +360,9 @@ describe("kodansha.sync — series resolution and publishers", () => {
     await t.run(async (ctx) => {
       expect((await ctx.db.query("series").collect()).map((s) => s._id)).toEqual([spaceBrothers]);
       const volumes = await ctx.db.query("volumes").collect();
-      expect(volumes.find((v) => v.label === "46")).toMatchObject({ position: 46 });
+      expect(volumes.find((v) => v.label === "46")).toMatchObject({
+        position: 46,
+      });
     });
   });
 
@@ -388,7 +417,10 @@ describe("kodansha.sync — series resolution and publishers", () => {
   it("files a Vertical Series' new volume under Vertical, not Kodansha", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await backbone(t, "Kirio Fan Club", ["1", "2"], { name: "Vertical", slug: "vertical" });
+    await backbone(t, "Kirio Fan Club", ["1", "2"], {
+      name: "Vertical",
+      slug: "vertical",
+    });
     stubSite([
       {
         series: "Kirio Fan Club",
@@ -416,20 +448,331 @@ describe("kodansha.sync — series resolution and publishers", () => {
   });
 });
 
+describe("kodansha covers — stored once, kept current", () => {
+  const coverOf = (t: TestT, format: "physical" | "digital") =>
+    t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      return releases.find((r) => r.format === format)!.coverImage!;
+    });
+
+  it("replaces art whose URL changed and deletes the old blob once unused", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([IRUMA]);
+    await sync(t);
+    const old = (await coverOf(t, "physical")).storageId!;
+
+    const moved = "https://production.image.azuki.co/iruma-21-new/800.webp";
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 0 }); // unchanged: no fetch
+    stubSite([{ ...IRUMA, image: moved }]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([moved]);
+
+    const print = await coverOf(t, "physical");
+    expect(print).toMatchObject({ sourceUrl: moved });
+    expect(print.storageId).not.toBe(old);
+    expect(await coverOf(t, "digital")).toEqual(print);
+    await t.run(async (ctx) => {
+      expect(await ctx.storage.getUrl(old)).toBeNull();
+      expect(await ctx.storage.getUrl(print.storageId!)).not.toBeNull();
+    });
+  });
+
+  it("attachCover shares a sibling's blob and never deletes one still in use", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([IRUMA]);
+    await sync(t);
+    const [print, digital] = await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      return ["physical", "digital"].map((f) => releases.find((r) => r.format === f)!);
+    });
+    const old = print!.coverImage!.storageId!;
+    const art = new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/webp" });
+    const upload = () => t.run((ctx) => ctx.storage.store(art));
+    const attach = (releaseId: Id<"releases">, storageId: Id<"_storage">, sourceUrl: string) =>
+      t.mutation(internal.imports.attachCover, {
+        releaseId,
+        storageId,
+        sourceUrl,
+        attribution: "Kodansha",
+      });
+    const exists = (id: Id<"_storage">) =>
+      t.run(async (ctx) => (await ctx.storage.getUrl(id)) !== null);
+
+    // The same URL again is a no-op; the redundant upload is deleted.
+    const again = await upload();
+    expect(await attach(print!._id, again, print!.coverImage!.sourceUrl!)).toEqual({
+      attached: false,
+      held: old,
+    });
+    expect(await exists(again)).toBe(false);
+
+    // New art on print only: digital still shows the old blob, so it stays.
+    const fresh = await upload();
+    expect(await attach(print!._id, fresh, "https://img.example/new.webp")).toEqual({
+      attached: true,
+      held: fresh,
+    });
+    expect(await exists(old)).toBe(true);
+
+    // Digital catches up: it reuses print's blob, the duplicate upload and
+    // the now-unused old blob are deleted.
+    const duplicate = await upload();
+    expect(await attach(digital!._id, duplicate, "https://img.example/new.webp")).toEqual({
+      attached: true,
+      held: fresh,
+    });
+    expect(await exists(duplicate)).toBe(false);
+    expect(await exists(old)).toBe(false);
+    expect(await exists(fresh)).toBe(true);
+
+    // A locked Release is left alone; the offered blob goes.
+    await t.run((ctx) => ctx.db.patch(print!._id, { locked: true }));
+    const offered = await upload();
+    expect(await attach(print!._id, offered, "https://img.example/locked.webp")).toEqual({
+      attached: false,
+      held: null,
+    });
+    expect(await exists(offered)).toBe(false);
+    await t.run((ctx) => ctx.db.patch(print!._id, { locked: false }));
+
+    // A blob an overlapping run has since deleted is never attached.
+    const gone = await upload();
+    await t.run((ctx) => ctx.storage.delete(gone));
+    expect(await attach(digital!._id, gone, "https://img.example/gone.webp")).toEqual({
+      attached: false,
+      held: null,
+      stale: true,
+    });
+
+    // Digital split off into its own Edition still shows `fresh`, so new art
+    // on print cannot delete it; a Bundle made from print holds a blob too.
+    await t.run(async (ctx) => {
+      const edition = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 9,
+        publisherId: print!.publisherId,
+      });
+      await ctx.db.patch(digital!._id, { editionId: edition });
+    });
+    const split = await upload();
+    expect(await attach(print!._id, split, "https://img.example/split.webp")).toEqual({
+      attached: true,
+      held: split,
+    });
+    expect(await exists(fresh)).toBe(true);
+    await t.run((ctx) =>
+      ctx.db.insert("releaseBundles", {
+        status: "active",
+        publicId: 9,
+        name: "Box",
+        publisherId: print!.publisherId,
+        coverImage: { storageId: split },
+      }),
+    );
+    const boxed = await upload();
+    expect(await attach(print!._id, boxed, "https://img.example/boxed.webp")).toEqual({
+      attached: true,
+      held: boxed,
+    });
+    expect(await exists(split)).toBe(true);
+
+    // A hidden Release offered the very blob it alone holds keeps it; a
+    // Release that vanished frees a blob nothing else shows.
+    await t.run((ctx) => ctx.db.patch(digital!._id, { status: "hidden" }));
+    expect(await attach(digital!._id, fresh, "https://img.example/other.webp")).toEqual({
+      attached: false,
+      held: null,
+    });
+    expect(await exists(fresh)).toBe(true);
+    await t.run((ctx) => ctx.db.delete(digital!._id));
+    expect(await attach(digital!._id, fresh, "https://img.example/other.webp")).toEqual({
+      attached: false,
+      held: null,
+    });
+    expect(await exists(fresh)).toBe(false);
+  });
+
+  it("a placeholder at a new URL keeps the art already shown and is not fetched again", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([IRUMA]);
+    await sync(t);
+    const before = await coverOf(t, "physical");
+
+    const tiny = "https://production.image.azuki.co/tiny/800.webp";
+    stubSite([{ ...IRUMA, image: tiny }]);
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 1 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([tiny]);
+    const after = await coverOf(t, "physical");
+    expect(after).toEqual({ ...before, sourceUrl: tiny });
+    expect(await coverOf(t, "digital")).toEqual(after);
+    await t.run(async (ctx) => {
+      expect(await ctx.storage.getUrl(before.storageId!)).not.toBeNull();
+    });
+
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([]);
+  });
+
+  it("trusts the bytes when the image comes without a usable content type", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const jpeg = new Uint8Array(MIN_COVER_BYTES + 1).fill(0xff);
+    jpeg[1] = 0xd8; // FF D8 FF: a JPEG, served with no Content-Type at all
+    const vol22: FixtureVolume = { ...IRUMA, volume: 22 };
+    stubSite([IRUMA, vol22], (url) =>
+      url.includes("-22/")
+        ? new Response("<html>not an image</html>", { headers: { "content-type": "text/html" } })
+        : new Response(jpeg),
+    );
+    expect(await sync(t)).toMatchObject({ errorCount: 2 });
+    await t.run(async (ctx) => {
+      // Volume 21's jacket is stored under the sniffed type. Volume 22's page
+      // is an error, not a placeholder: nothing recorded, one notice per format.
+      const files = await ctx.db.system.query("_storage").collect();
+      expect(files).toHaveLength(1);
+      expect((await ctx.storage.get(files[0]!._id))?.type).toBe("image/jpeg");
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.filter((r) => r.coverImage?.storageId === files[0]!._id)).toHaveLength(2);
+      expect(releases.filter((r) => r.coverImage === undefined)).toHaveLength(2);
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.errors).toHaveLength(2);
+      expect(run!.errors[0]).toContain("not an image (text/html");
+    });
+
+    // The page clears up: the next run stores the jacket.
+    stubSite([IRUMA, vol22], () => new Response(jpeg));
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(2);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.every((r) => r.coverImage?.storageId !== undefined)).toBe(true);
+    });
+  });
+
+  it("rejects markup behind an image header and a cover URL off the public web", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const vol22: FixtureVolume = { ...IRUMA, volume: 22, image: "http://127.0.0.1/cover.webp" };
+    const challenge = "<!DOCTYPE html><html>checking your browser</html>".padEnd(MIN_COVER_BYTES + 1);
+    stubSite([IRUMA, vol22], () =>
+      new Response(challenge, { headers: { "content-type": "image/webp" } }),
+    );
+    expect(await sync(t)).toMatchObject({ errorCount: 4 });
+    expect(requested.some((u) => u.includes("127.0.0.1"))).toBe(false);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(0);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.every((r) => r.coverImage === undefined)).toBe(true);
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.errors.filter((e) => e.includes("not an image (image/webp"))).toHaveLength(2);
+      expect(run!.errors.filter((e) => e.includes("refused URL"))).toHaveLength(2);
+    });
+  });
+
+  it("shares a blob within an Edition only, so one Edition's new art cannot strand another's", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // Two volumes (two Editions) whose calendar items name the same jacket.
+    const shared = "https://production.image.azuki.co/coming-soon/800.webp";
+    const vol22: FixtureVolume = { ...IRUMA, volume: 22, image: shared };
+    stubSite([{ ...IRUMA, image: shared }, vol22]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    // One download per Edition: attachCover only knows about sharing within one.
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([shared, shared]);
+    const blobsByEdition = () =>
+      t.run(async (ctx) => {
+        const byEdition = new Map<Id<"editions">, Set<Id<"_storage">>>();
+        for (const r of await ctx.db.query("releases").collect()) {
+          byEdition.set(
+            r.editionId,
+            (byEdition.get(r.editionId) ?? new Set()).add(r.coverImage!.storageId!),
+          );
+        }
+        return [...byEdition.values()].map((ids) => [...ids]);
+      });
+    const [a, b] = await blobsByEdition();
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    expect(a![0]).not.toBe(b![0]);
+
+    // Volume 21's real jacket arrives; volume 22's Releases still show a live blob.
+    stubSite([{ ...IRUMA, image: "https://production.image.azuki.co/iruma-21-real/800.webp" }, vol22]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query("releases").collect()) {
+        expect(await ctx.storage.getUrl(r.coverImage!.storageId!)).not.toBeNull();
+      }
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(2);
+    });
+  });
+
+  it("records a placeholder image on the Release instead of storing or refetching it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const tiny = "https://production.image.azuki.co/tiny/800.webp";
+    stubSite([{ ...IRUMA, image: tiny }]);
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsChanged: 2, errorCount: 1 });
+    expect((result as { failed?: boolean }).failed).toBeUndefined();
+    await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      // Both formats remember the URL, with nothing to show for it.
+      expect(releases.map((r) => r.coverImage)).toEqual([
+        { sourceUrl: tiny, attribution: expect.stringContaining("Kodansha") },
+        { sourceUrl: tiny, attribution: expect.stringContaining("Kodansha") },
+      ]);
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(0);
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "succeeded" });
+      // One notice for the Edition, not a failure.
+      expect(run!.errors).toEqual([
+        expect.stringContaining("placeholder, not stored (image/webp, 3 bytes)"),
+      ]);
+    });
+    // Tomorrow: nothing to fetch and nothing to report until the URL changes.
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0, errorCount: 0 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([]);
+  });
+});
+
 // ---------- the backlist crawl ----------
 
 const fixture = (name: string) =>
   readFileSync(new URL(`./lib/__fixtures__/kodansha/${name}`, import.meta.url), "utf8");
 
-type ListedSeries = { slug: string; name: string; type?: string; stamp?: string };
+type ListedSeries = {
+  slug: string;
+  name: string;
+  type?: string;
+  stamp?: string;
+  /** The listing's `short_description`. */
+  blurb?: string;
+};
 
 const BLUE_LOCK: ListedSeries = { slug: "blue-lock", name: "Blue Lock" };
-const NEEDLES: ListedSeries = { slug: "7-billion-needles", name: "7 Billion Needles" };
-const OMNIBUS: ListedSeries = { slug: "blue-lock-omnibus", name: "Blue Lock Omnibus" };
-const NOVEL: ListedSeries = { slug: "a-cops-eyes", name: "A Cop's Eyes", type: "novel" };
+const NEEDLES: ListedSeries = {
+  slug: "7-billion-needles",
+  name: "7 Billion Needles",
+};
+const OMNIBUS: ListedSeries = {
+  slug: "blue-lock-omnibus",
+  name: "Blue Lock Omnibus",
+};
+const NOVEL: ListedSeries = {
+  slug: "a-cops-eyes",
+  name: "A Cop's Eyes",
+  type: "novel",
+};
 
-/** A series page in the live shape: JSON-LD hasPart only. */
-function seriesPage(slug: string, name: string, volumes: string[]): string {
+/** A series page in the live shape: JSON-LD hasPart and, optionally, a description. */
+function seriesPage(slug: string, name: string, volumes: string[], description?: string): string {
   const hasPart = volumes.map((volume) => ({
     "@type": "Book",
     url: `${BASE}/series/${slug}/${volume}/`,
@@ -438,16 +781,15 @@ function seriesPage(slug: string, name: string, volumes: string[]): string {
     "@context": "https://schema.org",
     "@type": "ComicSeries",
     name,
+    description,
     hasPart,
   })}</script></head><body></body></html>`;
 }
 
-const requested: string[] = [];
-
 /**
  * A stubbed kodansha.us for the crawl: the paged search-series listing,
- * series pages, and volume pages; everything else 404s. `pages` maps a
- * path ("series/blue-lock/volume-1/") to its HTML.
+ * series pages, volume pages, and the image CDN; everything else 404s.
+ * `pages` maps a path ("series/blue-lock/volume-1/") to its HTML.
  */
 function stubBacklist(listed: ListedSeries[], pages: Record<string, string>) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
@@ -464,10 +806,17 @@ function stubBacklist(listed: ListedSeries[], pages: Record<string, string>) {
           slug: row.slug,
           name: row.name,
           type: row.type ?? "comic",
+          short_description: row.blurb ?? "",
           last_updated_at: row.stamp ?? "2026-02-06T09:53:10+00:00",
         }));
-      return Response.json({ success: true, data: rows, count: rows.length, total_count: listed.length });
+      return Response.json({
+        success: true,
+        data: rows,
+        count: rows.length,
+        total_count: listed.length,
+      });
     }
+    if (url.includes("azuki.co")) return coverImage(url);
     const html = pages[url.slice(`${BASE}/`.length)];
     return html !== undefined
       ? new Response(html, { headers: { "content-type": "text/html" } })
@@ -494,12 +843,8 @@ async function seedBacklist(t: TestT, bootstrap: boolean) {
 const backlist = (t: TestT, args: object = {}) =>
   t.action(internal.kodansha.backlistSync, { politeDelayMs: 0, ...args });
 
-afterEach(() => {
-  requested.length = 0;
-});
-
 describe("kodansha.backlistSync — the crawl", () => {
-  it("creates ISBN'd print + digital Releases from volume pages, never novels or covers", async () => {
+  it("creates ISBN'd print + digital Releases from volume pages, never novels", async () => {
     const t = makeT();
     await seedBacklist(t, true);
     stubBacklist([BLUE_LOCK, NEEDLES, NOVEL], BACKLIST_PAGES);
@@ -508,12 +853,13 @@ describe("kodansha.backlistSync — the crawl", () => {
     expect(result).toMatchObject({
       continued: false,
       seriesCrawled: 2,
-      // 2 series pages + Blue Lock 1, 40 + Needles 1–4.
-      fetched: 8,
+      // 2 series pages + Blue Lock 1, 40 + Needles 1–4, and 2 cover images
+      // (Blue Lock 1's print and digital share one; Blue Lock 40 has none).
+      fetched: 10,
       recordsSeen: 4,
     });
     expect(requested.some((u) => u.includes("a-cops-eyes"))).toBe(false);
-    expect(requested.some((u) => u.includes("azuki.co"))).toBe(false);
+    expect(requested.filter((u) => u.includes("azuki.co"))).toHaveLength(2);
 
     await t.run(async (ctx) => {
       const releases = await ctx.db.query("releases").collect();
@@ -531,9 +877,18 @@ describe("kodansha.backlistSync — the crawl", () => {
         pubDate: { year: 2022, month: 6, day: 21, sort: 20220621 },
         price: { amountCents: 1299, currency: "USD" },
       });
-      // Print and digital of one volume share one Edition (spec §2).
-      expect(byIsbn.get("9781636990033")!.editionId).toBe(print.editionId);
-      expect(releases.every((r) => r.coverImage === undefined)).toBe(true);
+      // Print and digital of one volume share one Edition (spec §2) and
+      // one stored copy of the volume page's JSON-LD image.
+      const digital = byIsbn.get("9781636990033")!;
+      expect(digital.editionId).toBe(print.editionId);
+      expect(print.coverImage).toMatchObject({
+        sourceUrl:
+          "https://production.image.azuki.co/a5dd87dd-6148-4cf3-917b-2f54a576854c/800.webp",
+        attribution: expect.stringContaining("Kodansha"),
+      });
+      expect(digital.coverImage?.storageId).toBe(print.coverImage!.storageId);
+      expect(byIsbn.get("9781939130242")!.coverImage).toBeDefined();
+      expect(byIsbn.get("9798898303303")!.coverImage).toBeUndefined();
       const series = await ctx.db.query("series").collect();
       expect(series.map((s) => s.title).sort()).toEqual(["7 Billion Needles", "Blue Lock"]);
 
@@ -551,7 +906,10 @@ describe("kodansha.backlistSync — the crawl", () => {
       expect(bySlug.get("7-billion-needles")).toMatchObject({ recheck: [] });
 
       const [run] = await ctx.db.query("importRuns").collect();
-      expect(run).toMatchObject({ sourceKey: "kodansha-backlist", status: "succeeded" });
+      expect(run).toMatchObject({
+        sourceKey: "kodansha-backlist",
+        status: "failed", // fixture includes three missing volume pages
+      });
       expect(run!.errors.filter((e) => e.includes("HTTP 404"))).toHaveLength(3);
     });
   });
@@ -584,7 +942,12 @@ describe("kodansha.backlistSync — the crawl", () => {
         publicId: 1,
         publisherId: kodansha!._id,
       });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+      await ctx.db.insert("volumeCoverages", {
+        editionId,
+        volumeId,
+        order: 1,
+        extent: "complete",
+      });
       return await ctx.db.insert("releases", {
         status: "active",
         editionId,
@@ -611,7 +974,10 @@ describe("kodansha.backlistSync — the crawl", () => {
         price: { amountCents: 1299, currency: "USD" },
       });
       const digital = releases.find((r) => r._id !== printId)!;
-      expect(digital).toMatchObject({ format: "digital", isbn13: "9781636990033" });
+      expect(digital).toMatchObject({
+        format: "digital",
+        isbn13: "9781636990033",
+      });
       expect(digital.editionId).toBe(print.editionId);
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "blue-lock/volume-1#physical",
@@ -655,7 +1021,121 @@ describe("kodansha.backlistSync — the crawl", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "blue-lock/volume-40#digital",
       );
-      expect(obs?.snapshot).toMatchObject({ isbn13: "9798898303303", title: "Blue Lock Volume 40" });
+      expect(obs?.snapshot).toMatchObject({
+        isbn13: "9798898303303",
+        title: "Blue Lock Volume 40",
+      });
+    });
+  });
+
+  it("the calendar stores the volume page's art, never its own size of the jacket", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], {
+      ...BACKLIST_PAGES,
+      "series/blue-lock/": seriesPage("blue-lock", "Blue Lock", ["volume-1"]),
+    });
+    await backlist(t);
+    const page = "https://production.image.azuki.co/a5dd87dd-6148-4cf3-917b-2f54a576854c/800.webp";
+    const calendar = page.replace("800.webp", "600.webp");
+    const volume1: FixtureVolume = {
+      series: "Blue Lock",
+      seriesSlug: "blue-lock",
+      volume: 1,
+      date: "2022-06-21",
+      formats: ["digital", "print"],
+      image: calendar,
+    };
+    const covers = () =>
+      t.run(async (ctx) => (await ctx.db.query("releases").collect()).map((r) => r.coverImage!));
+
+    // Art already from the page: the calendar's other size fetches nothing.
+    vi.unstubAllGlobals();
+    requested.length = 0;
+    stubSite([volume1]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(requested.some((u) => u.includes("azuki.co"))).toBe(false);
+    expect((await covers()).every((c) => c.sourceUrl === page)).toBe(true);
+
+    // Art from the calendar (stored before the crawl carried covers): the
+    // page's URL is what the daily feed fetches and attaches, once for both
+    // formats, rather than re-downloading its own URL to be refused.
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query("releases").collect()) {
+        await ctx.db.patch(r._id, { coverImage: { ...r.coverImage!, sourceUrl: calendar } });
+      }
+    });
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([page]);
+    const after = await covers();
+    expect(after).toHaveLength(2);
+    expect(after.every((c) => c.sourceUrl === page)).toBe(true);
+    expect(after[0]!.storageId).toBe(after[1]!.storageId);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(1);
+    });
+  });
+
+  it("offers the series blurb as the Series synopsis, and the calendar never erases it", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    // The series page's full description wins over the listing's short one;
+    // Blue Lock's page has none, so its listing blurb stands in.
+    stubBacklist(
+      [
+        { ...BLUE_LOCK, blurb: "<p>Listing &amp; blurb.</p>" },
+        { ...NEEDLES, blurb: "Short listing blurb." },
+      ],
+      BACKLIST_PAGES,
+    );
+    await backlist(t);
+    const synopses = async () =>
+      await t.run(async (ctx) => {
+        const series = await ctx.db.query("series").collect();
+        return Object.fromEntries(series.map((s) => [s.title, s.synopsis]));
+      });
+    expect(await synopses()).toEqual({
+      "Blue Lock": "Listing & blurb.",
+      "7 Billion Needles": expect.stringMatching(/^Hikaru Takabe may not be the most social/),
+    });
+
+    // The daily calendar has no series text: it keeps the crawl's.
+    vi.unstubAllGlobals();
+    stubSite([
+      {
+        series: "Blue Lock",
+        seriesSlug: "blue-lock",
+        volume: 40,
+        date: "2026-11-24",
+        formats: ["digital"],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      const volume = observations.find((o) => o.sourceRecordId === "blue-lock/volume-40#digital");
+      expect(volume?.snapshot).toMatchObject({ seriesSynopsis: "Listing & blurb." });
+      const link = observations.find((o) => o.sourceRecordId === "series:blue-lock");
+      expect(link?.snapshot).toMatchObject({ kind: "series", synopsis: "Listing & blurb." });
+    });
+
+    // Kodansha rewrites the blurb on its own page: its own fact, updated.
+    vi.unstubAllGlobals();
+    stubBacklist([{ ...BLUE_LOCK, stamp: "2026-10-01T00:00:00+00:00" }], {
+      ...BACKLIST_PAGES,
+      "series/blue-lock/": seriesPage(
+        "blue-lock",
+        "Blue Lock",
+        ["volume-1", "volume-40"],
+        "The full page blurb.",
+      ),
+    });
+    await backlist(t);
+    expect((await synopses())["Blue Lock"]).toBe("The full page blurb.");
+    await t.run(async (ctx) => {
+      const proposals = await ctx.db.query("proposals").collect();
+      expect(proposals.filter((p) => p.state === "inReview")).toHaveLength(0);
     });
   });
 
@@ -679,7 +1159,7 @@ describe("kodansha.backlistSync — the crawl", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "blue-lock/volume-40#digital",
       );
-      return (obs?.snapshot as { releaseDate?: unknown }).releaseDate;
+      return (obs?.snapshot as { releaseDate?: unknown } | undefined)?.releaseDate;
     });
     expect(pageDate).toBeDefined();
     // The calendar files the book under another day; the page's date stands.
@@ -689,7 +1169,9 @@ describe("kodansha.backlistSync — the crawl", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "blue-lock/volume-40#digital",
       );
-      expect((obs?.snapshot as { releaseDate?: unknown }).releaseDate).toEqual(pageDate);
+      expect((obs?.snapshot as { releaseDate?: unknown } | undefined)?.releaseDate).toEqual(
+        pageDate,
+      );
       const releases = await ctx.db.query("releases").collect();
       expect(releases.some((r) => r.pubDate?.sort === 20261130)).toBe(false);
     });
@@ -709,8 +1191,13 @@ describe("kodansha.backlistSync — the crawl", () => {
     await sync(t);
     // Meanwhile another source created the same book under its ISBN.
     const otherId = await t.run(async (ctx) => {
-      const { _id, _creationTime, ...calendarRelease } = (await ctx.db.query("releases").collect())[0]!;
-      return await ctx.db.insert("releases", { ...calendarRelease, isbn13: "9798898303303" });
+      const { _id, _creationTime, ...calendarRelease } = (
+        await ctx.db.query("releases").collect()
+      )[0]!;
+      return await ctx.db.insert("releases", {
+        ...calendarRelease,
+        isbn13: "9798898303303",
+      });
     });
     vi.unstubAllGlobals();
     stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
@@ -843,12 +1330,18 @@ describe("Kodansha scope gate — both feeds", () => {
         searchText: "Cells at Work! Picture Book",
       });
     });
-    const listed = { slug: "cells-at-work-picture-book", name: "Cells at Work! Picture Book" };
+    const listed = {
+      slug: "cells-at-work-picture-book",
+      name: "Cells at Work! Picture Book",
+    };
     stubBacklist([listed], {
       "series/cells-at-work-picture-book/": seriesPage(listed.slug, listed.name, ["volume-5"]),
       "series/cells-at-work-picture-book/volume-5/": PICTURE_BOOK,
     });
-    expect(await backlist(t)).toMatchObject({ recordsSeen: 2, seriesCrawled: 1 });
+    expect(await backlist(t)).toMatchObject({
+      recordsSeen: 2,
+      seriesCrawled: 1,
+    });
     await t.run(async (ctx) => {
       const series = await ctx.db.query("series").collect();
       expect(series.map((s) => s.status)).toEqual(["hidden"]);
@@ -888,7 +1381,11 @@ describe("Kodansha scope gate — both feeds", () => {
         altTitles: [],
         searchText: "Cells at Work! Picture Book",
       });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 1, publisherId });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 1,
+        publisherId,
+      });
       const id = await ctx.db.insert("releases", {
         status: "active",
         editionId,
@@ -918,6 +1415,117 @@ describe("Kodansha scope gate — both feeds", () => {
 });
 
 describe("kodansha.backlistSync — incremental and resumable", () => {
+  it("reports series and volume fetch failures even after a continuation", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([NEEDLES, BLUE_LOCK, OMNIBUS], {
+      "series/blue-lock/": BACKLIST_PAGES["series/blue-lock/"]!,
+      "series/blue-lock-omnibus/": seriesPage("blue-lock-omnibus", "Blue Lock Omnibus", []),
+    });
+    expect(await backlist(t, { maxFetches: 1 })).toMatchObject({
+      continued: true,
+    });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("failed");
+      expect(run?.errors?.some((error) => error.startsWith("series "))).toBe(true);
+      expect(run?.errors?.some((error) => error.startsWith("page "))).toBe(true);
+    });
+  });
+
+  it("fails an incomplete listing instead of silently truncating it at the page cap", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    vi.stubGlobal("fetch", async () =>
+      Response.json({
+        success: true,
+        data: [{ slug: "blue-lock", name: "Blue Lock", type: "comic" }],
+        total_count: 10000,
+      }),
+    );
+    expect(await backlist(t)).toMatchObject({ failed: true, seriesCrawled: 0 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("failed");
+      expect(run?.errors?.[0]).toContain("listing is incomplete");
+    });
+  });
+
+  it("keeps the full-crawl date through weekly rechecks and refreshes old volumes", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
+    await backlist(t);
+    const day = 24 * 60 * 60 * 1000;
+    const fullCrawledAt = Date.now() - 179 * day;
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceKey === "kodansha-backlist",
+      )!;
+      await ctx.db.patch(obs._id, {
+        lastSeenAt: Date.now() - 7 * day,
+        snapshot: { ...(obs.snapshot as object), fullCrawledAt },
+      });
+    });
+    requested.length = 0;
+    await backlist(t);
+    expect(requested).not.toContain(`${BASE}/series/blue-lock/volume-1/`);
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceKey === "kodansha-backlist",
+      )!;
+      expect(obs.snapshot).toMatchObject({ fullCrawledAt });
+      await ctx.db.patch(obs._id, {
+        snapshot: {
+          ...(obs.snapshot as object),
+          fullCrawledAt: Date.now() - 181 * day,
+        },
+      });
+    });
+    requested.length = 0;
+    await backlist(t);
+    expect(requested).toContain(`${BASE}/series/blue-lock/volume-1/`);
+  });
+
+  it("a no-change full re-crawl advances fullCrawledAt without a history row", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
+    await backlist(t);
+    const day = 24 * 60 * 60 * 1000;
+    const staleFull = Date.now() - 181 * day;
+    const crawlObs = async () =>
+      (await t.run((ctx) => ctx.db.query("sourceObservations").collect())).find(
+        (o) => o.sourceKey === "kodansha-backlist",
+      )!;
+    const historyRows = async (observationId: Id<"sourceObservations">) =>
+      (await t.run((ctx) => ctx.db.query("observationSnapshots").collect())).filter(
+        (row) => row.observationId === observationId,
+      );
+    let obs = await crawlObs();
+    await t.run(async (ctx) => {
+      await ctx.db.patch(obs._id, {
+        lastSeenAt: staleFull,
+        snapshot: { ...(obs.snapshot as object), fullCrawledAt: staleFull },
+      });
+    });
+
+    // Due for a full refresh; every page is re-read, but nothing about the series changed.
+    requested.length = 0;
+    expect(await backlist(t)).toMatchObject({ fetched: 3, seriesCrawled: 1 });
+    obs = await crawlObs();
+    expect((obs.snapshot as { fullCrawledAt: number }).fullCrawledAt).toBeGreaterThan(staleFull);
+    expect(await historyRows(obs._id)).toHaveLength(0);
+
+    // A changed listing stamp is a real change: the prior state goes to history.
+    stubBacklist([{ ...BLUE_LOCK, stamp: "2026-09-01T00:00:00+00:00" }], BACKLIST_PAGES);
+    expect(await backlist(t)).toMatchObject({ seriesCrawled: 1 });
+    expect(await historyRows(obs._id)).toHaveLength(1);
+  });
+
   it("skips fresh series, re-checks moving volumes a week on, and chains under one run", async () => {
     const t = makeT();
     await seedBacklist(t, true);
@@ -932,7 +1540,7 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs).toHaveLength(1);
-      expect(runs[0]).toMatchObject({ status: "succeeded", recordsSeen: 4 });
+      expect(runs[0]).toMatchObject({ status: "failed", recordsSeen: 4 });
       expect(await ctx.db.query("releases").collect()).toHaveLength(4);
     });
 
@@ -946,7 +1554,9 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     await t.run(async (ctx) => {
       for (const obs of await ctx.db.query("sourceObservations").collect()) {
         if (obs.sourceKey === "kodansha-backlist") {
-          await ctx.db.patch(obs._id, { lastSeenAt: obs.lastSeenAt - 7 * 24 * 60 * 60 * 1000 });
+          await ctx.db.patch(obs._id, {
+            lastSeenAt: obs.lastSeenAt - 7 * 24 * 60 * 60 * 1000,
+          });
         }
       }
     });
@@ -971,20 +1581,25 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     expect(requested).toHaveLength(0);
   });
 
-  it("disabling the row stops a scheduled crawl as \"stopped\"; a forced one finishes", async () => {
+  it('disabling the row stops a scheduled crawl as "stopped"; a forced one finishes', async () => {
     const drain = async (t: TestT) => {
       vi.useFakeTimers();
       await t.finishAllScheduledFunctions(vi.runAllTimers);
       vi.useRealTimers();
     };
     const off = (t: TestT) =>
-      t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha-backlist", enabled: false });
+      t.mutation(internal.importSources.setEnabledInternal, {
+        key: "kodansha-backlist",
+        enabled: false,
+      });
 
     // Scheduled: the first link crawls one series, then the row is disabled.
     const scheduled = makeT();
     await seedBacklist(scheduled, true);
     stubBacklist([BLUE_LOCK, NEEDLES], BACKLIST_PAGES);
-    expect(await backlist(scheduled, { maxFetches: 1 })).toMatchObject({ continued: true });
+    expect(await backlist(scheduled, { maxFetches: 1 })).toMatchObject({
+      continued: true,
+    });
     await off(scheduled);
     await drain(scheduled);
     await scheduled.run(async (ctx) => {
@@ -998,20 +1613,28 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     await seedBacklist(forced, true);
     await off(forced);
     stubBacklist([BLUE_LOCK, NEEDLES], BACKLIST_PAGES);
-    const runId = await forced.mutation(internal.imports.startRun, { sourceKey: "kodansha-backlist" });
+    const runId = await forced.mutation(internal.imports.startRun, {
+      sourceKey: "kodansha-backlist",
+    });
     await backlist(forced, { runId, maxFetches: 1 });
     await drain(forced);
     await forced.run(async (ctx) => {
-      expect((await ctx.db.get(runId))?.status).toBe("succeeded");
+      expect((await ctx.db.get(runId))?.status).toBe("failed");
     });
   });
 
   it("runs on its own row: a disabled daily window does not stop the crawl", async () => {
     const t = makeT();
     await seedBacklist(t, true);
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha", enabled: false });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "kodansha",
+      enabled: false,
+    });
     stubBacklist([NEEDLES], BACKLIST_PAGES);
-    expect(await backlist(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+    expect(await backlist(t)).toMatchObject({
+      recordsSeen: 1,
+      recordsChanged: 1,
+    });
     expect(await sync(t)).toEqual({ skipped: "disabled" });
   });
 });

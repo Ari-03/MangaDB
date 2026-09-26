@@ -1,6 +1,7 @@
 // Cover art for Releases with an ISBN-13, served from our own domain
 // (`/covers/{isbn13}.jpg`) so the shelves never depend on a third party at
-// render time and Convex file storage carries no images at all.
+// render time; Convex file storage holds only publisher-served art
+// (Kodansha, Seven Seas), fetched once per Edition and image URL.
 //
 // Flow: edge cache → R2 bucket → upstream fetch. The first upstream is the
 // distribution CDN Penguin Random House runs for the publishers it carries,

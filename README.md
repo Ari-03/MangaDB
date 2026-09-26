@@ -54,8 +54,13 @@ in order, drawing cloth after the last 404, including one that failed before
 hydration. Series shelves store one ISBN per Series (`seriesStats.coverIsbn`,
 and `seriesCover` for the home shelf), picked by `seriesCoverIsbn`: physical,
 already published, earliest Volume, standard run before an Edition Line. The
-few stored covers (Kodansha imports) win where they exist, and
-`convex/lib/covers.ts` hides the blank SVG some importers stored.
+few stored covers (Kodansha and Seven Seas imports) win where they exist, and
+`convex/lib/covers.ts` hides the blank SVG some importers once stored. That
+publisher art is stored once per Edition and image URL, shared by print and
+digital, and refreshed when the publisher's image URL changes. A placeholder
+image (an SVG or a tiny file) is recorded on the Release instead, keeping any
+art already shown, and not fetched again until its URL changes; a response
+that is no image at all is an error, tried again next run.
 
 Coverage, measured September 2026 on a 627-ISBN sample stratified by
 publisher × format × date (weighted to the 17,169 active Releases with an
@@ -633,6 +638,15 @@ deployment seeded before ticket #36, flip the four newer rows on via
 `importSources.upsert` or the dashboard (`seedRegistry` never overwrites an
 existing row).
 
+When the defaults gain an authority column (the `description` category for
+publisher blurbs, 2026-09), backfill it onto a deployment seeded earlier. It
+adds only the categories a stored row lacks and never changes one already
+set, so an Administrator's edit stands:
+
+```sh
+npx convex run importSources:backfillFieldAuthority '{}'
+```
+
 **Source Observations** (`convex/lib/observations.ts`). External facts are
 observations, never direct writes: identity is (source, source-record-id),
 `snapshot` holds the latest normalized form read by reconciliation, and
@@ -666,7 +680,11 @@ normalizes, and reconciles each snapshot atomically:
   a system-authored, immediately approved Proposal creates
   Series → Volume → Edition (+ coverage) → Release, with one public
   importer-authored **Revision per record citing the source name + record
-  URL**. Marketing descriptions are never imported (spec §6).
+  URL**. Publisher blurbs import as the Release Description and the Series
+  synopsis under the `description` authority column: the publisher's own
+  catalog text wins, the distributor (PRH) comes next, and aggregators (ANN,
+  OpenLibrary) only fill a blank. A human's edit is never overwritten, and
+  the edit form lists every source's text for review.
 - **Steady state** auto-creates a single-volume Release under an
   already-linked Series; a brand-new Series, multi-volume coverage, or an
   Edition-Line-shaped release (deluxe/omnibus/box-set packaging) queues an

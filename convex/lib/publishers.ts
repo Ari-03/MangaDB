@@ -44,6 +44,7 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "Titan Manga", slug: "titan-manga" },
   { name: "ABLAZE", slug: "ablaze" },
   { name: "Ize Press", slug: "ize-press", parentSlug: "yen-press" },
+  { name: "JY", slug: "jy", parentSlug: "yen-press" },
   { name: "CMX", slug: "cmx", defunct: true },
   { name: "Digital Manga", slug: "digital-manga" },
   { name: "NETCOMICS", slug: "netcomics" },
@@ -193,10 +194,7 @@ const BY_SLUG = new Map(
   [...CANONICAL_PUBLISHERS, ...UNSEEDED_IMPRINTS].map((pub) => [pub.slug, pub]),
 );
 const BY_KEY = new Map(
-  [...CANONICAL_PUBLISHERS, ...UNSEEDED_IMPRINTS].map((pub) => [
-    publisherNameKey(pub.name),
-    pub,
-  ]),
+  [...CANONICAL_PUBLISHERS, ...UNSEEDED_IMPRINTS].map((pub) => [publisherNameKey(pub.name), pub]),
 );
 
 /**
@@ -213,8 +211,6 @@ export function canonicalPublisherFor(name: string): CanonicalPublisher | null {
 }
 
 /** The canonical entry for a slug (following duplicate slugs), if known. */
-export function canonicalPublisherBySlug(
-  slug: string,
-): CanonicalPublisher | null {
+export function canonicalPublisherBySlug(slug: string): CanonicalPublisher | null {
   return BY_SLUG.get(DUPLICATE_SLUGS[slug] ?? slug) ?? null;
 }

@@ -1,12 +1,15 @@
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { QueryCtx } from "../_generated/server";
+import type { ActionCtx, QueryCtx } from "../_generated/server";
 import { todaySortKey } from "./dates";
+import { politeFetch } from "./http";
 
 // Some publishers serve a generic "no cover yet" SVG where the artwork would
-// be, and the importers stored those as cover images. Real cover art is
+// be, and the importers once stored those as cover images. Real cover art is
 // always a raster image, so an SVG (or a tiny file) is treated as no cover:
 // the site draws its cloth placeholder instead of a blank white rectangle.
-const MIN_COVER_BYTES = 2048;
+// `storeCover` applies the same rule before storing anything.
+export const MIN_COVER_BYTES = 2048;
 
 /** Public URL for a stored cover, or null when the file is only a placeholder. */
 export async function coverUrl(
@@ -20,6 +23,141 @@ export async function coverUrl(
     return null;
   }
   return await ctx.storage.getUrl(storageId);
+}
+
+/**
+ * Art an apply mutation asks its action to store: the Release, its Edition,
+ * and the URL the source names for it. The mutation decides the URL (a
+ * Kodansha calendar item defers to the volume page's) so the action never
+ * downloads one the Release already has.
+ */
+export type CoverRequest = {
+  releaseId: Id<"releases">;
+  editionId: Id<"editions">;
+  sourceUrl: string;
+};
+
+/**
+ * The cover to store on `release` from `coverUrl`, or undefined when there
+ * is none to fetch or the Release's cover already came from that URL (art,
+ * or a placeholder it recorded).
+ */
+export function coverRequest(
+  release: Pick<Doc<"releases">, "_id" | "editionId" | "coverImage">,
+  coverUrl: string | undefined,
+): CoverRequest | undefined {
+  if (coverUrl === undefined || release.coverImage?.sourceUrl === coverUrl) return undefined;
+  return { releaseId: release._id, editionId: release.editionId, sourceUrl: coverUrl };
+}
+
+/**
+ * What one action invocation found at each cover, by `coverKey`: the blob it
+ * stored, or "placeholder", so a second format of the same Edition neither
+ * downloads nor reports it again. Keyed per Edition, not per URL alone:
+ * `imports.attachCover` only knows about sharing within an Edition, so a
+ * blob must never be handed to another one.
+ */
+export type StoredCovers = Map<string, Id<"_storage"> | "placeholder">;
+
+export function coverKey(cover: Pick<CoverRequest, "editionId" | "sourceUrl">): string {
+  return `${cover.editionId} ${cover.sourceUrl}`;
+}
+
+/** Whether a body is markup (HTML, XML, SVG) whatever its header claims: the first non-blank byte is `<`. */
+function looksLikeMarkup(bytes: Uint8Array): boolean {
+  let i = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  while (i < bytes.length && (bytes[i] === 0x20 || (bytes[i]! >= 0x09 && bytes[i]! <= 0x0d))) i++;
+  return bytes[i] === 0x3c;
+}
+
+/**
+ * Whether a cover may be fetched from `url`: publisher pages are untrusted
+ * input, so only a public https host, never a loopback, private or IP-literal
+ * destination, may be asked for art.
+ */
+function publicHttps(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== "https:" || host === "" || host.startsWith("[")) return false;
+  if (/^[\d.]+$/.test(host)) return false;
+  return !["localhost", "local", "internal", "localdomain"].some(
+    (tld) => host === tld || host.endsWith(`.${tld}`),
+  );
+}
+
+/** The raster format a jacket comes in, from the file's leading bytes; null for anything else. */
+function rasterType(bytes: Uint8Array): string | null {
+  const ascii = (offset: number, text: string) =>
+    [...text].every((ch, i) => bytes[offset + i] === ch.charCodeAt(0));
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes[0] === 0x89 && ascii(1, "PNG")) return "image/png";
+  if (ascii(0, "GIF8")) return "image/gif";
+  if (ascii(0, "RIFF") && ascii(8, "WEBP")) return "image/webp";
+  return null;
+}
+
+/**
+ * Download publisher art (Kodansha, Seven Seas) into file storage and attach
+ * it to a Release through `imports.attachCover`, which keeps one blob per
+ * Edition and URL. A cover this invocation already handled for the Edition
+ * is not fetched again: callers charging downloads to a budget check
+ * `stored.has(coverKey(cover))` first. A placeholder image (an SVG, or
+ * under MIN_COVER_BYTES) is recorded on the Release without storing
+ * anything, and returns a notice the first time this invocation meets it;
+ * art is stored and returns null. A URL off the public https web, a failed
+ * download, or a body that is no image at all (markup behind a 200 or even
+ * behind an image header; otherwise judged by header, or by its bytes when
+ * the header is unusable) throws: nothing is recorded and the cover is
+ * tried again next run.
+ */
+export async function storeCover(
+  ctx: ActionCtx,
+  stored: StoredCovers,
+  args: CoverRequest & { attribution: string; delayMs: number },
+): Promise<string | null> {
+  const key = coverKey(args);
+  const cached = stored.get(key);
+  let held = cached;
+  let notice: string | null = null;
+  if (held === undefined) {
+    if (!publicHttps(args.sourceUrl)) {
+      throw new Error(`refused URL, not a public https host (${args.sourceUrl})`);
+    }
+    const res = await politeFetch(args.sourceUrl, args.delayMs);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const header = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+    const image = header.startsWith("image/") && (header === "image/svg+xml" || !looksLikeMarkup(bytes));
+    const type = image ? header : rasterType(bytes);
+    if (type === null) {
+      throw new Error(`not an image (${header || "no type"}, ${bytes.length} bytes)`);
+    }
+    if (type === "image/svg+xml" || bytes.length < MIN_COVER_BYTES) {
+      notice = `placeholder, not stored (${type}, ${bytes.length} bytes)`;
+      held = "placeholder";
+    } else {
+      held = await ctx.storage.store(new Blob([bytes], { type }));
+    }
+  }
+  const result: { held: Id<"_storage"> | "placeholder" | null; stale?: true } =
+    await ctx.runMutation(internal.imports.attachCover, {
+      releaseId: args.releaseId,
+      storageId: held === "placeholder" ? undefined : held,
+      sourceUrl: args.sourceUrl,
+      attribution: args.attribution,
+    });
+  if (result.stale) {
+    // An overlapping run replaced the blob this one remembered: forget it and fetch afresh.
+    stored.delete(key);
+    return cached === undefined ? notice : await storeCover(ctx, stored, args);
+  }
+  if (result.held === null) stored.delete(key);
+  else stored.set(key, result.held);
+  return notice;
 }
 
 /**

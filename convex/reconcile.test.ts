@@ -26,6 +26,8 @@ type FixtureBook = {
   date?: string;
   price?: string;
   isbn?: string;
+  /** The listing's `content.rendered` blurb HTML. */
+  blurb?: string;
 };
 
 function bookPageHtml(b: FixtureBook): string {
@@ -47,17 +49,17 @@ function stubSite(books: FixtureBook[]) {
     link: `${BASE}/books/${b.slug}/`,
     title: { rendered: b.title },
     modified_gmt: b.modified ?? "2026-08-01T00:00:00",
-    content: { rendered: "" },
+    content: { rendered: b.blurb ?? "" },
   }));
-  const pages = new Map(
-    books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]),
-  );
+  const pages = new Map(books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]));
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url.startsWith(`${BASE}/wp-json/wp/v2/books`)) {
       return new Response(JSON.stringify(listing), {
-        headers: { "x-wp-totalpages": "1", "content-type": "application/json" },
+        headers: {
+          "x-wp-totalpages": books.length === 0 ? "0" : "1",
+          "content-type": "application/json",
+        },
       });
     }
     const page = pages.get(url);
@@ -107,13 +109,11 @@ async function seedRegistry(t: TestT, bootstrap: boolean) {
 }
 
 async function setupModerator(t: TestT) {
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.users.claimUsername, { username: "alice" });
-  await t
-    .withIdentity({ subject: MOD })
-    .mutation(api.users.claimUsername, { username: "bob" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
+  await t.withIdentity({ subject: ADMIN }).mutation(api.users.claimUsername, { username: "alice" });
+  await t.withIdentity({ subject: MOD }).mutation(api.users.claimUsername, { username: "bob" });
+  await t.mutation(internal.roles.bootstrapAdministrator, {
+    username: "alice",
+  });
   await t
     .withIdentity({ subject: ADMIN })
     .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
@@ -128,47 +128,82 @@ const theRelease = async (t: TestT) =>
 
 const inReviewProposals = async (t: TestT) =>
   await t.run(async (ctx) =>
-    (await ctx.db.query("proposals").collect()).filter(
-      (p) => p.state === "inReview",
-    ),
+    (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview"),
   );
 
-const versionOf = async (
-  t: TestT,
-  proposal: Doc<"proposals">,
-) =>
+const versionOf = async (t: TestT, proposal: Doc<"proposals">) =>
   await t.run(async (ctx) =>
     (await ctx.db.query("proposalVersions").collect()).find(
       (v) => v.proposalId === proposal._id && v.versionNo === proposal.currentVersionNo,
     ),
   );
 
-/** Fabricate provenance: the release's pubDate was last set by `sourceKey`. */
-async function fabricateIncumbent(
+/** Fabricate provenance: the release's field was last set by `sourceKey`. */
+async function fabricateRevision(
   t: TestT,
   sourceKey: string,
-  pubDate: { year: number; month?: number; day?: number; sort: number },
+  patch:
+    | { pubDate: { year: number; month?: number; day?: number; sort: number } }
+    | { description: string },
 ) {
   await t.run(async (ctx) => {
     const release = (await ctx.db.query("releases").collect())[0]!;
+    const history = await ctx.db
+      .query("revisions")
+      .withIndex("by_record", (q) =>
+        q.eq("ref.type", "release").eq("ref.id", release._id as never),
+      )
+      .collect();
     const proposalId = await ctx.db.insert("proposals", {
       author: { kind: "source", sourceKey },
       state: "approved",
       currentVersionNo: 1,
     });
+    const [field, after] = Object.entries(patch)[0]!;
     await ctx.db.insert("revisions", {
       ref: { type: "release", id: release._id } as never,
-      seq: 2,
+      seq: history.length + 1,
       proposalId,
       author: { kind: "source", sourceKey },
-      changes: [{ field: "pubDate", before: release.pubDate, after: pubDate }],
+      changes: [
+        { field, before: "pubDate" in patch ? release.pubDate : release.description, after },
+      ],
       comment: `Imported from ${sourceKey}.`,
     });
-    await ctx.db.patch(release._id, { pubDate });
+    await ctx.db.patch(release._id, patch);
   });
 }
 
+const fabricateIncumbent = (
+  t: TestT,
+  sourceKey: string,
+  pubDate: { year: number; month?: number; day?: number; sort: number },
+) => fabricateRevision(t, sourceKey, { pubDate });
+
 describe("authority rules — sticky Human Overrides and suppression", () => {
+  it("withdraws a stale conflict when the source returns to the approved value", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      await ctx.db.patch(release._id, { overriddenFields: ["pubDate"] });
+    });
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
+    await sync(t);
+    const [conflict] = await inReviewProposals(t);
+    expect(conflict).toBeDefined();
+
+    stubSite([{ ...ALPHA_1, modified: "2026-08-11T00:00:00" }]);
+    await sync(t);
+    expect(await inReviewProposals(t)).toHaveLength(0);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(conflict!._id))?.state).toBe("withdrawn");
+    });
+    expect((await theRelease(t)).pubDate?.sort).toBe(20260106);
+  });
+
   it("queues on an overridden field, never overwrites; rejection suppresses that exact offer; a new value re-queues", async () => {
     const t = makeT();
     await seedRegistry(t, true);
@@ -192,7 +227,10 @@ describe("authority rules — sticky Human Overrides and suppression", () => {
     expect(version?.ops[0]).toMatchObject({
       kind: "update",
       changes: [
-        { field: "pubDate", after: { year: 2026, month: 2, day: 3, sort: 20260203 } },
+        {
+          field: "pubDate",
+          after: { year: 2026, month: 2, day: 3, sort: 20260203 },
+        },
       ],
     });
     await t.run(async (ctx) => {
@@ -264,7 +302,10 @@ describe("authority rules — sticky Human Overrides and suppression", () => {
     const requeued = await versionOf(t, open[0]!);
     expect(requeued?.ops[0]).toMatchObject({
       changes: [
-        { field: "pubDate", after: { year: 2026, month: 3, day: 1, sort: 20260301 } },
+        {
+          field: "pubDate",
+          after: { year: 2026, month: 3, day: 1, sort: 20260301 },
+        },
       ],
     });
     expect(release.pubDate?.sort).toBe(20260106);
@@ -291,9 +332,7 @@ describe("authority rules — the conflict table between sources", () => {
     expect(release.pubDate?.sort).toBe(20260501); // untouched
     const open = await inReviewProposals(t);
     expect(open).toHaveLength(1);
-    expect((await versionOf(t, open[0]!))?.changeComment).toContain(
-      "equal authority",
-    );
+    expect((await versionOf(t, open[0]!))?.changeComment).toContain("equal authority");
   });
 
   it("lower authority records the disagreement on the observation only", async () => {
@@ -370,7 +409,11 @@ describe("authority rules — the conflict table between sources", () => {
     stubSite([ALPHA_1]);
     await sync(t);
     // Kodansha knows only "January 2026".
-    await fabricateIncumbent(t, "kodansha", { year: 2026, month: 1, sort: 20260100 });
+    await fabricateIncumbent(t, "kodansha", {
+      year: 2026,
+      month: 1,
+      sort: 20260100,
+    });
 
     // Seven Seas offers the consistent full date → refines, no queue.
     stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00" }]);
@@ -381,12 +424,62 @@ describe("authority rules — the conflict table between sources", () => {
   });
 });
 
+describe("publisher blurbs — the Release Description", () => {
+  it("fills a blank, follows the same book's new text, and queues against a human edit", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBeUndefined();
+
+    // The book gains a blurb: filling a blank field is not a disagreement.
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", blurb: "<p>First &amp; best.</p>" }]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBe("First & best.");
+
+    // Seven Seas rewrites it: the same record revising its own fact.
+    stubSite([{ ...ALPHA_1, modified: "2026-08-11T00:00:00", blurb: "<p>Rewritten.</p>" }]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBe("Rewritten.");
+    expect(await inReviewProposals(t)).toHaveLength(0);
+
+    // An Editor's text is a sticky Human Override: a new blurb queues.
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      await ctx.db.patch(release._id, {
+        description: "Editor's text.",
+        overriddenFields: ["description"],
+      });
+    });
+    stubSite([{ ...ALPHA_1, modified: "2026-08-12T00:00:00", blurb: "<p>Third take.</p>" }]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBe("Editor's text.");
+    const open = await inReviewProposals(t);
+    expect(open).toHaveLength(1);
+    expect((await versionOf(t, open[0]!))?.ops[0]).toMatchObject({
+      kind: "update",
+      changes: [{ field: "description", after: "Third take." }],
+    });
+  });
+
+  it("the publisher's own text replaces a distributor's; the distributor never replaces it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    // PRH (standard for descriptions) filled the blurb first.
+    await fabricateRevision(t, "prh", { description: "Distributor flap copy." });
+
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", blurb: "<p>Publisher copy.</p>" }]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBe("Publisher copy.");
+    expect(await inReviewProposals(t)).toHaveLength(0);
+  });
+});
+
 describe("matching ladder rungs ③/④ in the apply path", () => {
   // A human-built catalog entry with no ISBN and no source link.
-  async function prebuildCatalog(
-    t: TestT,
-    publisherSlug = "seven-seas",
-  ) {
+  async function prebuildCatalog(t: TestT, publisherSlug = "seven-seas") {
     return await t.run(async (ctx) => {
       const existing = await ctx.db
         .query("publishers")
@@ -478,9 +571,7 @@ describe("matching ladder rungs ③/④ in the apply path", () => {
     });
     const open = await inReviewProposals(t);
     expect(open).toHaveLength(1);
-    expect((await versionOf(t, open[0]!))?.changeComment).toContain(
-      "plausible candidates",
-    );
+    expect((await versionOf(t, open[0]!))?.changeComment).toContain("plausible candidates");
   });
 
   it("rung ④: a title-only candidate always reviews", async () => {
@@ -505,7 +596,9 @@ describe("steady-state creation boundaries", () => {
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t); // bootstrap links the series
-    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    await t.mutation(internal.importSources.setBootstrapModeInternal, {
+      on: false,
+    });
 
     stubSite([
       ALPHA_1,
@@ -588,7 +681,17 @@ describe("withdrawal lifts suppressions", () => {
     });
     await new Promise((r) => setTimeout(r, 5));
 
-    stubSite([]); // the book disappears; the sweep is still complete
+    // Volume 1 disappears while another book keeps the listing non-empty
+    // (an empty listing is rejected, never treated as a complete sweep).
+    stubSite([
+      {
+        ...ALPHA_1,
+        id: 102,
+        slug: "alpha-manga-vol-2",
+        title: "Alpha Adventures (Manga) Vol. 2",
+        isbn: "978-1-9990001-1-0",
+      },
+    ]);
     await sync(t);
     await t.run(async (ctx) => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(

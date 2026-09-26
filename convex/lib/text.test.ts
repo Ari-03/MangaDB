@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { cleanTitleText, decodeEntities, stripHtml } from "./text";
+import { cleanBlurb, cleanTitleText, decodeEntities, MAX_BLURB, stripHtml } from "./text";
 
 describe("decodeEntities", () => {
   it("decodes ANN's double-escaped numeric entities to a fixpoint", () => {
@@ -65,5 +65,29 @@ describe("cleanTitleText", () => {
 describe("stripHtml", () => {
   it("strips tags and decodes", () => {
     expect(stripHtml("<p>One &amp; <b>two</b></p>")).toBe("One & two");
+  });
+});
+
+describe("cleanBlurb", () => {
+  it("flattens blurb HTML to one paragraph", () => {
+    expect(cleanBlurb("<p>Welcome to Neo&#8211;Tokyo.<br><br>\n  It&#8217;s   big.</p>")).toBe(
+      "Welcome to Neo–Tokyo. It’s big.",
+    );
+    // Inline tags vanish without leaving a space before punctuation.
+    expect(cleanBlurb("<p>Read <i>Akira</i>, then <a href='/x'>more</a>.</p><p>Next</p>")).toBe(
+      "Read Akira, then more. Next",
+    );
+  });
+
+  it("offers nothing for empty or non-string input", () => {
+    expect(cleanBlurb("  <p> &nbsp; </p>\n")).toBeUndefined();
+    expect(cleanBlurb(null)).toBeUndefined();
+    expect(cleanBlurb({ value: "text" })).toBeUndefined();
+  });
+
+  it("caps a runaway blurb on a word boundary", () => {
+    const long = cleanBlurb("word ".repeat(2000))!;
+    expect(long.length).toBeLessThanOrEqual(MAX_BLURB);
+    expect(long.endsWith("word…")).toBe(true);
   });
 });

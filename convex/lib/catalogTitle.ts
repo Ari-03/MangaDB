@@ -55,6 +55,8 @@ export const catalogTitleFields = {
   /** The imprint = the publisher brand (e.g. "Kodansha Comics"). */
   imprint: v.optional(v.string()),
   priceCents: v.optional(v.number()),
+  /** The book's blurb (PRH flap copy, Yen's page text) — the Release Description. */
+  description: v.optional(v.string()),
 };
 
 const catalogTitleValidator = v.object(catalogTitleFields);
@@ -85,13 +87,14 @@ function offeredReleaseFields(snapshot: CatalogTitle): Record<string, unknown> {
     offered.price = { amountCents: snapshot.priceCents, currency: "USD" };
   }
   if (snapshot.binding !== undefined) offered.binding = snapshot.binding;
+  if (snapshot.description !== undefined) offered.description = snapshot.description;
   return offered;
 }
 
 /**
  * Reconcile one catalog title into the canonical catalog: ISBN matching
  * links it to the existing skeleton record, then the source's dates/ISBNs/
- * prices and titles/format reconcile in at its registry authority.
+ * prices, titles/format, and blurb reconcile in at its registry authority.
  * Unmatched titles follow the standard creation boundaries under the
  * imprint's publisher. A disabled source applies nothing (the kill switch
  * for an in-flight sync).
@@ -196,6 +199,7 @@ export async function applyCatalogTitle(
       snapshot.priceCents !== undefined
         ? { amountCents: snapshot.priceCents, currency: "USD" }
         : undefined,
+    description: snapshot.description,
   };
   const bootstrap = await getBootstrapMode(ctx);
 

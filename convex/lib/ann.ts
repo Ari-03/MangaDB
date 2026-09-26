@@ -6,7 +6,8 @@
 //   every manga entry (`<item><id>…</id><name>…</name></item>`), paged.
 // - `api.xml?manga=ID1/ID2/…` — batch details, up to 50 ids per request
 //   (ANN etiquette: 1 request per second). Each `<manga>` carries the Main
-//   title, Alternative titles, staff, and one `<release date="YYYY-MM-DD"
+//   title, Alternative titles, a Plot Summary (the Series synopsis ANN
+//   offers at weak authority), staff, and one `<release date="YYYY-MM-DD"
 //   href="…releases.php?id=NNN">Title (GN 14)</release>` per North American
 //   release — future dates included, month precision possible
 //   ("2024-11-00"), eBook lines for digital.
@@ -22,7 +23,7 @@
 
 import { v, type Infer } from "convex/values";
 import { toIsbn13 } from "./openLibrary";
-import { cleanTitleText, decodeEntities, stripHtml } from "./text";
+import { cleanBlurb, cleanTitleText, decodeEntities, stripHtml } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -35,6 +36,8 @@ export const annMangaValidator = v.object({
   url: v.string(),
   title: v.string(),
   altTitles: v.array(v.string()),
+  /** The entry's Plot Summary, cleaned to one paragraph. */
+  synopsis: v.optional(v.string()),
   staff: v.array(v.string()),
   releases: v.array(
     v.object({
@@ -63,19 +66,49 @@ export type AnnMangaSnapshot = Infer<typeof annMangaValidator>;
 
 export type AnnReportItem = { id: string; name: string };
 
-/** One reports.xml page → its manga items (id + name). */
-export function parseReport(xml: string): AnnReportItem[] {
+export type AnnReport = {
+  /** The page's manga items (non-manga and malformed rows excluded). */
+  items: AnnReportItem[];
+  /** Page-relative positions of rows missing an id or name — skipped, but
+   * the caller must report them: an unknown entry makes withdrawal unsafe. */
+  malformed: number[];
+  /** Every `<item>` on the page, whatever its shape: what paging counts. */
+  rawCount: number;
+};
+
+/**
+ * One reports.xml page → its manga items. Throws when the page itself is
+ * untrustworthy (not a report document, `listed` disagreeing with the item
+ * count, a truncated item); a single malformed row only lands in `malformed`
+ * so the enumeration can go on.
+ */
+export function parseReport(xml: string): AnnReport {
+  if (!/^\s*(?:<\?xml[^>]*>\s*)?<report\b[^>]*>[\s\S]*<\/report>\s*$/.test(xml)) {
+    throw new Error("ANN returned an invalid report document");
+  }
+  const rawCount = (xml.match(/<item>/g) ?? []).length;
+  const listed = /<report\b[^>]*\blisted="(\d+)"/.exec(xml)?.[1];
+  if (listed !== undefined && Number(listed) !== rawCount) {
+    throw new Error("ANN report item count does not match its listed count");
+  }
   const items: AnnReportItem[] = [];
+  const malformed: number[] = [];
+  let parsedCount = 0;
   for (const m of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+    const at = parsedCount++;
     const body = m[1]!;
     const id = /<id>(\d+)<\/id>/.exec(body)?.[1];
     const type = /<type>([^<]*)<\/type>/.exec(body)?.[1];
     const name = /<name>([\s\S]*?)<\/name>/.exec(body)?.[1];
-    if (id === undefined || name === undefined) continue;
+    if (id === undefined || name === undefined) {
+      malformed.push(at);
+      continue;
+    }
     if (type !== undefined && type !== "manga") continue;
     items.push({ id, name: cleanTitleText(name) });
   }
-  return items;
+  if (parsedCount !== rawCount) throw new Error("ANN report contains an incomplete item");
+  return { items, malformed, rawCount };
 }
 
 // ---------- release lines ----------
@@ -125,8 +158,7 @@ export function parseAnnDate(
 // always mean packaging; in the line's own title ("Berserk Deluxe Edition
 // (GN 1)", "Summer Ghost: The Complete Manga Collection (GN)") only when
 // the entry's name does not itself contain them.
-const DESIGNATOR_PACKAGING =
-  /\b(omnibus|box(?:ed)?(?: set)?|deluxe|collector'?s|hardcover)\b/i;
+const DESIGNATOR_PACKAGING = /\b(omnibus|box(?:ed)?(?: set)?|deluxe|collector'?s|hardcover)\b/i;
 const TITLE_PACKAGING =
   /\b(omnibus|box(?:ed)? set|deluxe|collector['’]?s|perfect edition|\d-in-1|complete (?:manga )?collection)\b/i;
 
@@ -140,7 +172,10 @@ const TITLE_PACKAGING =
  * manga's own title) lets packaging words in the line title count only when
  * they are not part of the series name.
  */
-export function splitReleaseTitle(text: string, entryName = ""): {
+export function splitReleaseTitle(
+  text: string,
+  entryName = "",
+): {
   title: string;
   label?: string;
   multi: boolean;
@@ -160,8 +195,7 @@ export function splitReleaseTitle(text: string, entryName = ""): {
   const editionLineHint =
     DESIGNATOR_PACKAGING.test(designator) ||
     (titleWord !== undefined && !entryName.toLowerCase().includes(titleWord.toLowerCase()));
-  const range =
-    /(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
+  const range = /(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
   const single = /(\d+(?:\.\d+)?)/.exec(designator) ?? undefined;
   return {
     title,
@@ -178,15 +212,14 @@ export type AnnManga = {
   id: string;
   title: string;
   altTitles: string[];
+  synopsis?: string;
   staff: string[];
   releases: AnnRelease[];
 };
 
-function parseReleases(body: string, entryName: string): AnnRelease[] {
+function parseReleases(body: string, entryName: string, mangaId: string): AnnRelease[] {
   const releases: AnnRelease[] = [];
-  for (const m of body.matchAll(
-    /<release\s+([^>]*)>([\s\S]*?)<\/release>/g,
-  )) {
+  for (const m of body.matchAll(/<release\s+([^>]*)>([\s\S]*?)<\/release>/g)) {
     const attrs = m[1]!;
     const text = decodeEntities(m[2]!).trim();
     const split = splitReleaseTitle(text, entryName);
@@ -196,10 +229,11 @@ function parseReleases(body: string, entryName: string): AnnRelease[] {
     const annId = href !== undefined ? /[?&]id=(\d+)/.exec(href)?.[1] : undefined;
     const isbn13 = toIsbn13(/\bean="([^"]*)"/.exec(attrs)?.[1]);
     releases.push({
-      // A missing href falls back to a content-derived identity.
+      // Scope fallback identities to the manga and full designator so unrelated
+      // entries and different omnibus ranges cannot overwrite one observation.
       annId:
         annId ??
-        `${split.format}:${split.label ?? (split.multi ? "multi" : "oneshot")}:${dateAttr ?? ""}`,
+        `${mangaId}:${split.format}:${encodeURIComponent(text)}:${isbn13 ?? dateAttr ?? ""}`,
       date: dateAttr !== undefined ? parseAnnDate(dateAttr) : undefined,
       title: split.title,
       label: split.label,
@@ -218,23 +252,22 @@ const MAX_ALT_TITLES = 12;
 
 /**
  * One api.xml batch response → its manga records. Tolerant: `<warning>`
- * elements ("no result for manga=…") and malformed blocks are skipped.
+ * elements ("no result for manga=…") and malformed blocks are skipped. The
+ * title is the Main title, or the block's `name` attribute when that is
+ * absent or empty after cleaning. The Plot Summary is decoded before tags
+ * are stripped: ANN's XML escapes the text (sometimes twice).
  */
 export function parseApiResponse(xml: string): AnnManga[] {
   const records: AnnManga[] = [];
-  for (const m of xml.matchAll(
-    /<manga\s+([^>]*)>([\s\S]*?)<\/manga>/g,
-  )) {
+  for (const m of xml.matchAll(/<manga\s+([^>]*)>([\s\S]*?)<\/manga>/g)) {
     const attrs = m[1]!;
     const body = m[2]!;
     const id = /\bid="(\d+)"/.exec(attrs)?.[1];
     if (id === undefined) continue;
 
-    const mainTitle = /<info[^>]*type="Main title"[^>]*>([\s\S]*?)<\/info>/.exec(
-      body,
-    )?.[1];
+    const mainTitle = /<info[^>]*type="Main title"[^>]*>([\s\S]*?)<\/info>/.exec(body)?.[1];
     const nameAttr = /\bname="([^"]*)"/.exec(attrs)?.[1];
-    const title = cleanTitleText(mainTitle ?? nameAttr ?? "");
+    const title = cleanTitleText(mainTitle ?? "") || cleanTitleText(nameAttr ?? "");
     if (title === "") continue;
 
     const altTitles: string[] = [];
@@ -255,7 +288,16 @@ export function parseApiResponse(xml: string): AnnManga[] {
       if (name !== "" && !staff.includes(name)) staff.push(name);
     }
 
-    records.push({ id, title, altTitles, staff, releases: parseReleases(body, title) });
+    const plot = /<info[^>]*type="Plot Summary"[^>]*>([\s\S]*?)<\/info>/.exec(body)?.[1];
+
+    records.push({
+      id,
+      title,
+      altTitles,
+      synopsis: plot !== undefined ? cleanBlurb(decodeEntities(plot)) : undefined,
+      staff,
+      releases: parseReleases(body, title, id),
+    });
   }
   return records;
 }
@@ -286,9 +328,7 @@ export type AnnReleasePage = {
 /** One labelled field's raw HTML: `<b>Label:</b> …` up to the next break. */
 function pageField(html: string, label: string): string | undefined {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`<b>${escaped}:</b>([\\s\\S]*?)(?:<br\\s*/?>|</p>|<p\\b)`, "i").exec(
-    html,
-  )?.[1];
+  return new RegExp(`<b>${escaped}:</b>([\\s\\S]*?)(?:<br\\s*/?>|</p>|<p\\b)`, "i").exec(html)?.[1];
 }
 
 /**
@@ -303,9 +343,7 @@ export function parseReleasePage(html: string): AnnReleasePage | null {
 
   const distributorHtml = pageField(html, "Distributor");
   const distributorId =
-    distributorHtml !== undefined
-      ? /company\.php\?id=(\d+)/.exec(distributorHtml)?.[1]
-      : undefined;
+    distributorHtml !== undefined ? /company\.php\?id=(\d+)/.exec(distributorHtml)?.[1] : undefined;
   const dateText = text(pageField(html, "Release date"));
   const price = /\$\s*(\d+(?:\.\d{1,2})?)/.exec(
     pageField(html, "Suggested retail price") ?? "",
@@ -317,8 +355,8 @@ export function parseReleasePage(html: string): AnnReleasePage | null {
     const runs = raw.match(width === 13 ? /\d{13}/g : /\d{9}[\dX]/g) ?? [];
     return runs.find((run) => toIsbn13(run) !== undefined);
   };
-  const isbn13 = toIsbn13(isbnIn("ISBN-13", 13));
   const isbn10 = isbnIn("ISBN-10", 10);
+  const isbn13 = toIsbn13(isbnIn("ISBN-13", 13)) ?? toIsbn13(isbn10);
 
   return {
     title: text(titleHtml),
@@ -354,6 +392,7 @@ export function toSnapshot(manga: AnnManga): AnnMangaSnapshot {
     url: mangaUrl(manga.id),
     title: manga.title,
     altTitles: manga.altTitles,
+    synopsis: manga.synopsis,
     staff: manga.staff,
     releases: manga.releases,
   };

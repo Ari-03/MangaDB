@@ -5,16 +5,19 @@
 //
 // - `GET /sitemap.xml` — one flat urlset listing every title page as
 //   `/titles/{isbn13}-{slug}` (~15.7k URLs: the print and the digital ISBN
-//   of one book are two URLs with the same slug and the same page), plus
+//   of one book often share a page, but some expose only one format), plus
 //   series/news/genre pages the adapter ignores. No lastmod.
-// - `GET /titles/{isbn13}-{slug}` — the book page: an `<h1>` title, one
-//   format tab per edition ("Paperback", "Hardback", "Digital"), a price
-//   block per tab, and a "full details" block per tab in the same order
-//   (Series, Page Count, ISBN, Release Date, Imprint), plus the category
-//   of its genre labels (manga, comics, light-novels, audio-books).
+// - `GET /titles/{isbn13}-{slug}` — the book page: an `<h1>` title, the
+//   blurb (`.content-heading-txt`: a tagline `<h2>`, then the paragraph —
+//   the Release Description of every format; `<meta name="description">`
+//   is a truncated copy), one format tab per edition ("Paperback",
+//   "Hardback", "Digital"), a price block per tab, and a "full details"
+//   block per tab in the same order (Series, Page Count, ISBN, Release
+//   Date, Imprint), plus the category of its genre labels (manga, comics,
+//   light-novels, audio-books).
 //
-// Scope (spec §1): Yen On (light novels), Yen Audio, and JY (middle-grade
-// prose and western comics) never enter; neither do the light-novel/audio
+// Scope (spec §1): Yen On (light novels) and Yen Audio never enter;
+// JY manga is allowed. Neither do the light-novel/audio
 // categories (which is how J-Novel Club's novels, distributed by Yen, stay
 // out while its print manga comes in), single digital chapters
 // ("…, Chapter 22 (v-scroll)"), or Yen's western "comics" — except Ize
@@ -26,7 +29,7 @@ import { v, type Infer } from "convex/values";
 import { outOfScopeReason, parseBookTitle, type ParsedBookTitle } from "./bookTitle";
 import { catalogTitleFields } from "./catalogTitle";
 import { toIsbn13 } from "./openLibrary";
-import { cleanTitleText, stripHtml } from "./text";
+import { cleanBlurb, cleanTitleText, stripHtml } from "./text";
 
 export const yenTitleValidator = v.object({
   kind: v.literal("yenTitle"),
@@ -88,6 +91,8 @@ export type YenFormat = {
 export type YenTitlePage = {
   title: string;
   category?: string;
+  /** The page's blurb, shared by every format. */
+  description?: string;
   formats: YenFormat[];
 };
 
@@ -115,7 +120,15 @@ export function parseYenDate(
   const month = MONTHS[m[1]!.toLowerCase()];
   const day = Number(m[2]);
   if (month === undefined || day < 1 || day > 31) return undefined;
-  return { year: Number(m[3]), month, day };
+  const year = Number(m[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  )
+    return undefined;
+  return { year, month, day };
 }
 
 /** One "full details" block's labelled fields ("ISBN" → "979…"). */
@@ -130,9 +143,19 @@ function detailFields(block: string): Record<string, string> {
 }
 
 /**
- * One title page → its title, category, and per-format facts, or null when
- * the page is not a book page (no `<h1>` or no details). Format tabs,
- * price blocks, and detail blocks line up by position.
+ * The blurb paragraph(s) of `.content-heading-txt`, without the tagline
+ * `<h2>`. The live markup may leave the `<p>` unclosed before `</div>`, so
+ * the block runs to its `</div>`.
+ */
+function blurbOf(html: string): string | undefined {
+  const block = /<div class="content-heading-txt">([\s\S]*?)<\/div>/.exec(html)?.[1];
+  return cleanBlurb(block?.replace(/<h2\b[\s\S]*?<\/h2>/g, ""));
+}
+
+/**
+ * One title page → its title, category, blurb, and per-format facts, or
+ * null when the page is not a book page (no `<h1>` or no details). Format
+ * tabs, price blocks, and detail blocks line up by position.
  */
 export function parseTitlePage(html: string): YenTitlePage | null {
   const h1 = /<h1 class="heading[^"]*desktop-only[^"]*"[^>]*>([\s\S]*?)<\/h1>/.exec(html)?.[1];
@@ -164,14 +187,14 @@ export function parseTitlePage(html: string): YenTitlePage | null {
       seriesName: fields.Series,
     };
   });
-  return { title, category, formats };
+  return { title, category, description: blurbOf(html), formats };
 }
 
 // ---------- snapshots ----------
 
 // Prose/audio imprints. J-Novel Club is not here: Yen distributes its
 // print manga too, and the page category tells them from its novels.
-const DENIED_IMPRINTS = /^(?:yen on|yen audio|jy)$/i;
+const DENIED_IMPRINTS = /^(?:yen on|yen audio)$/i;
 
 // Yen titles append a volume subtitle after the designator: "A Misanthrope
 // Teaches a Class for Demi-Humans, Vol. 4 (manga): Mr. Hitoma, …". The
@@ -204,6 +227,11 @@ function scopeReason(
     return "single chapter";
   }
   const category = page.category;
+  // JY mixes manga with prose: its page must not label itself something
+  // else. A page without genre labels falls through, as for any imprint.
+  if (/^jy$/i.test(imprint ?? "") && category !== undefined && category !== "manga") {
+    return "JY non-manga";
+  }
   if (category === "light-novels" || category === "audio-books") return `category ${category}`;
   if (category === "comics" && !/^ize press$/i.test(imprint ?? "")) return "western comics";
   return outOfScopeReason(page.title);
@@ -243,6 +271,7 @@ export function toSnapshots(page: YenTitlePage, url: string): YenTitleSnapshot[]
       binding: format?.binding,
       imprint: entry.imprint,
       priceCents: entry.priceCents,
+      description: page.description,
       seriesName: entry.seriesName,
       category: page.category,
       outOfScope: reason ?? undefined,

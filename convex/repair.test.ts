@@ -326,6 +326,25 @@ describe("field repairs and scope", () => {
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
   });
 
+  it("clears a recorded placeholder cover", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    const before = { sourceUrl: "https://img.example/no-cover.svg", attribution: "Kodansha" };
+    await t.run(async (ctx) => ctx.db.patch(s.r1.releaseId, { coverImage: before }));
+    const entry: RepairEntry = {
+      kind: "updateFields",
+      key: "c",
+      reason: "placeholder",
+      table: "releases",
+      id: s.r1.releaseId,
+      changes: [{ field: "coverImage", before, after: null }],
+      evidenceObservationId: null,
+    };
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    expect((await t.run(async (ctx) => ctx.db.get(s.r1.releaseId)))?.coverImage).toBeUndefined();
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
   it("withdraws an untouched importer Proposal, and a dry run leaves it open", async () => {
     const t = makeT();
     await seed(t);

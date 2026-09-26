@@ -19,8 +19,8 @@ import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitl
 // ---------- the normalized snapshot ----------
 
 // What reconciliation reads (spec §6): the latest normalized form of one
-// source record. `description` stays observation-only — marketing copy is
-// never imported into canonical description fields in v1 (#13).
+// source record. `description` is the listing's blurb (`content.rendered`),
+// offered as the Release Description at Seven Seas' own-catalog authority.
 export const bookSnapshotValidator = v.object({
   kind: v.literal("book"),
   url: v.string(),
@@ -39,9 +39,7 @@ export const bookSnapshotValidator = v.object({
   /** Seven Seas' own category line ("Manga", "Light Novel", …). */
   category: v.optional(v.string()),
   binding: v.optional(v.string()),
-  releaseDate: v.optional(
-    v.object({ year: v.number(), month: v.number(), day: v.number() }),
-  ),
+  releaseDate: v.optional(v.object({ year: v.number(), month: v.number(), day: v.number() })),
   priceCents: v.optional(v.number()),
   currency: v.optional(v.string()),
   isbn13: v.optional(v.string()),
@@ -56,7 +54,7 @@ export type BookSnapshot = Infer<typeof bookSnapshotValidator>;
 // Shared with the other adapters' parsers; re-exported to keep this module
 // the one import site for Seven Seas parsing.
 export { decodeEntities, stripHtml } from "./text";
-import { decodeEntities, stripHtml } from "./text";
+import { cleanBlurb, decodeEntities, stripHtml } from "./text";
 
 // ---------- WP REST listing ----------
 
@@ -78,7 +76,7 @@ export type BookListing = {
 export function parseBookListing(raw: unknown): BookListing | null {
   if (typeof raw !== "object" || raw === null) return null;
   const item = raw as Record<string, unknown>;
-  if (typeof item.id !== "number") return null;
+  if (typeof item.id !== "number" || !Number.isSafeInteger(item.id) || item.id <= 0) return null;
   if (item.status !== undefined && item.status !== "publish") return null;
   const link = item.link;
   const slug = item.slug;
@@ -93,10 +91,7 @@ export function parseBookListing(raw: unknown): BookListing | null {
     typeof item.content === "object" && item.content !== null
       ? (item.content as Record<string, unknown>).rendered
       : undefined;
-  const description =
-    typeof content === "string" && content.trim() !== ""
-      ? stripHtml(content)
-      : undefined;
+  const description = cleanBlurb(content);
   return {
     sourceRecordId: String(item.id),
     slug,
@@ -147,6 +142,14 @@ export function parseUsDate(
   const day = Number(m[2]);
   const year = Number(m[3]);
   if (!month || day < 1 || day > 31) return undefined;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
   return { year, month, day };
 }
 
@@ -160,25 +163,25 @@ function metaLine(html: string, label: string): string | undefined {
 
 /**
  * Extract the volume-meta facts from a Seven Seas book page. Verified
- * against the live page shape on 2026-08-19; every field is optional so a
- * partial page yields a partial (but usable) snapshot.
+ * against the live page shape on 2026-08-19. The metadata block must exist;
+ * individual facts remain optional. Error pages must never become books.
  */
 export function parseBookPage(html: string): BookPageDetails {
+  const meta = /\bid\s*=\s*["']volume-meta["']/i.exec(html);
+  if (!meta) {
+    throw new Error("Seven Seas book page is missing volume-meta");
+  }
   const details: BookPageDetails = { creators: [] };
 
   const series =
-    /<b>\s*Series:\s*<\/b>.*?<a\s+href="([^"]*\/series\/([^/"]+)\/?)"[^>]*>(.*?)<\/a>/is.exec(
-      html,
-    );
+    /<b>\s*Series:\s*<\/b>.*?<a\s+href="([^"]*\/series\/([^/"]+)\/?)"[^>]*>(.*?)<\/a>/is.exec(html);
   if (series) {
     details.seriesUrl = series[1];
     details.seriesSlug = series[2]!;
     details.seriesTitle = stripHtml(series[3]!);
   }
 
-  for (const m of html.matchAll(
-    /<span class="creator"><a[^>]*>(.*?)<\/a><\/span>/gis,
-  )) {
+  for (const m of html.matchAll(/<span class="creator"><a[^>]*>(.*?)<\/a><\/span>/gis)) {
     const name = stripHtml(m[1]!);
     if (name !== "") details.creators.push(name);
   }
@@ -204,12 +207,9 @@ export function parseBookPage(html: string): BookPageDetails {
   }
 
   // The cover is the last uploads image before the volume-meta block.
-  const metaIdx = html.indexOf('id="volume-meta"');
-  const head = metaIdx >= 0 ? html.slice(0, metaIdx) : html;
+  const head = html.slice(0, meta.index);
   let coverUrl: string | undefined;
-  for (const m of head.matchAll(
-    /<img[^>]+src="([^"]*\/wp-content\/uploads\/[^"]+)"/gi,
-  )) {
+  for (const m of head.matchAll(/<img[^>]+src="([^"]*\/wp-content\/uploads\/[^"]+)"/gi)) {
     coverUrl = m[1]!;
   }
   details.coverUrl = coverUrl;
@@ -225,10 +225,7 @@ export function parseBookPage(html: string): BookPageDetails {
 // rules are the fallback when the line is missing.
 const NON_MANGA = /(?<!graphic\s)\bnovels?\b|audio\s?books?|\bprose\b/i;
 
-export function isMangaBook(args: {
-  category?: string;
-  title: string;
-}): boolean {
+export function isMangaBook(args: { category?: string; title: string }): boolean {
   if (args.category !== undefined) return !NON_MANGA.test(args.category);
   return outOfScopeReason(args.title) === null;
 }
@@ -238,10 +235,7 @@ export function isMangaBook(args: {
  * observation. Binding: Seven Seas' standard print books are paperbacks;
  * hardcover editions say so in the title or category.
  */
-export function normalizeBook(
-  listing: BookListing,
-  page: BookPageDetails,
-): BookSnapshot {
+export function normalizeBook(listing: BookListing, page: BookPageDetails): BookSnapshot {
   const parsed = parseBookTitle(listing.title);
   // The page's own series link is the better name, minus "(Manga)" and
   // packaging words; the title's parse is the fallback.

@@ -20,21 +20,21 @@
 //       in Bootstrap Mode those records are created directly and tagged
 //       bootstrap-unreviewed (spec §7).
 //
-// Covers land in Convex file storage as {storageId, sourceUrl, attribution}.
+// Covers land in Convex file storage as {storageId, sourceUrl, attribution}
+// through the shared attach path (lib/covers.ts `storeCover`), and are
+// replaced when the book's cover URL changes. A placeholder image is recorded
+// on the Release instead, keeping any art already shown, and not fetched again
+// until its URL changes.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
+import { coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { rangeLabels } from "./lib/bookTitle";
-import {
-  candidateSeries,
-  matchRelease,
-  type MatchOutcome,
-  type ReleaseFact,
-} from "./lib/matching";
+import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
@@ -103,21 +103,24 @@ export const sync = internalAction({
     );
     if (!source) {
       throw new Error(
-        'The approved-source registry has no "sevenseas" row. Run: npx convex run importSources:seedRegistry \'{}\'',
+        "The approved-source registry has no \"sevenseas\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
     if (!source.enabled) return { skipped: "disabled" as const };
 
-    const runId: Id<"importRuns"> = await ctx.runMutation(
-      internal.imports.startRun,
-      { sourceKey: SOURCE_KEY },
-    );
+    const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
+      sourceKey: SOURCE_KEY,
+    });
     const runStartedAt = Date.now();
     const delay = args.politeDelayMs ?? 350;
     const errors: string[] = [];
     let seen = 0;
     let changed = 0;
     let completeSweep = true;
+    // Invalid listing items plus detail fetch/parse failures: any of them
+    // fails the run so source health notices a recurring problem.
+    let failures = 0;
+    const covers: StoredCovers = new Map();
 
     try {
       let page = 1;
@@ -133,22 +136,47 @@ export const sync = internalAction({
           `${BASE_URL}/wp-json/wp/v2/books?per_page=100&page=${page}&orderby=modified&order=desc`,
           delay,
         );
-        totalPages = Number(res.headers.get("x-wp-totalpages")) || totalPages;
-        const items = (await res.json()) as unknown[];
+        const pageCount = res.headers.get("x-wp-totalpages");
+        if (pageCount === null || !/^\d+$/.test(pageCount)) {
+          throw new Error("Seven Seas listing is missing valid X-WP-TotalPages");
+        }
+        totalPages = Number(pageCount);
+        if (!Number.isSafeInteger(totalPages)) {
+          throw new Error("Seven Seas listing has an invalid page count");
+        }
+        const items: unknown = await res.json();
+        if (!Array.isArray(items) || (items.length > 0 && totalPages < page)) {
+          throw new Error("Seven Seas listing has an invalid collection shape");
+        }
+        if (items.length === 0 && totalPages >= page) {
+          throw new Error("Seven Seas listing ended before its declared page count");
+        }
+        // A catalog of 6,000+ books never legitimately empties: an empty
+        // listing would otherwise pass as a complete sweep and withdraw all.
+        if (page === 1 && items.length === 0) {
+          throw new Error("Seven Seas listing was empty");
+        }
 
         for (const raw of items) {
           const listing = parseBookListing(raw);
-          if (!listing) continue;
-          // Cheap out-of-catalog filter (light novels, audiobooks) on the
-          // title discriminator; the page's Format line is the backstop.
-          if (!isMangaBook({ title: listing.title })) continue;
-          seen++;
-
+          if (!listing) {
+            // One bad item never aborts the sweep, but it may hide a book,
+            // so absence is not evidence this run.
+            failures++;
+            completeSweep = false;
+            errors.push(`listing page ${page}: invalid book item`);
+            continue;
+          }
           const note = await ctx.runMutation(internal.sevenSeas.noteListing, {
             sourceRecordId: listing.sourceRecordId,
             modifiedGmt: listing.modifiedGmt,
             force: args.force ?? false,
+            offersBlurb: listing.description !== undefined,
           });
+          // Presence remains evidence even if the source recategorizes a
+          // previously imported book as prose. Scope changes are not deletion.
+          if (!isMangaBook({ title: listing.title })) continue;
+          seen++;
           if (!note.needsDetail) continue;
           if (detailBudget <= 0) {
             completeSweep = false;
@@ -160,7 +188,12 @@ export const sync = internalAction({
             const pageRes = await politeFetch(listing.url, delay);
             const details = parseBookPage(await pageRes.text());
             const snapshot = normalizeBook(listing, details);
-            if (!isMangaBook({ category: snapshot.category, title: snapshot.title })) {
+            if (
+              !isMangaBook({
+                category: snapshot.category,
+                title: snapshot.title,
+              })
+            ) {
               continue;
             }
 
@@ -173,22 +206,26 @@ export const sync = internalAction({
               errors.push(`review ${listing.slug}: ${result.reason ?? "conflict"}`);
             }
 
-            if (result.coverNeeded && result.releaseId && snapshot.coverUrl) {
+            if (result.cover) {
               try {
-                const imgRes = await politeFetch(snapshot.coverUrl, delay);
-                const storageId = await ctx.storage.store(await imgRes.blob());
-                await ctx.runMutation(internal.sevenSeas.attachCover, {
-                  releaseId: result.releaseId,
-                  storageId,
-                  sourceUrl: snapshot.coverUrl,
+                const notice = await storeCover(ctx, covers, {
+                  ...result.cover,
                   attribution: source.attribution ?? PUBLISHER.name,
+                  delayMs: delay,
                 });
+                if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
               } catch (e) {
                 errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
               }
             }
           } catch (e) {
-            errors.push(`book ${listing.slug}: ${errorMessage(e)}`);
+            // A removed page (404) is a notice, not a failure: the book stays
+            // unobserved and is simply retried while it remains listed.
+            // Other transport errors and a page without volume-meta (likely
+            // a challenge page) are failures.
+            const message = errorMessage(e);
+            if (!message.startsWith("HTTP 404")) failures++;
+            errors.push(`book ${listing.slug}: ${message}`);
           }
         }
         page++;
@@ -206,7 +243,7 @@ export const sync = internalAction({
 
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: "succeeded",
+        status: failures > 0 ? "failed" : "succeeded",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
@@ -217,6 +254,7 @@ export const sync = internalAction({
         recordsChanged: changed,
         completeSweep,
         errorCount: errors.length,
+        ...(failures > 0 ? { failed: true } : {}),
       };
     } catch (e) {
       errors.push(errorMessage(e));
@@ -251,17 +289,38 @@ export const noteListing = internalMutation({
     sourceRecordId: v.string(),
     modifiedGmt: v.string(),
     force: v.boolean(),
+    /** The listing carries a blurb (`content.rendered`). */
+    offersBlurb: v.boolean(),
   },
-  handler: async (ctx, { sourceRecordId, modifiedGmt, force }) => {
+  handler: async (ctx, { sourceRecordId, modifiedGmt, force, offersBlurb }) => {
     const obs = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
     if (!obs) return { needsDetail: true };
     await ctx.db.patch(obs._id, { lastSeenAt: Date.now(), withdrawn: false });
     const stored = (obs.snapshot as Partial<BookSnapshot> | null)?.modifiedGmt;
-    return { needsDetail: force || stored !== modifiedGmt };
+    if (force || stored !== modifiedGmt) return { needsDetail: true };
+    // Descriptions predate their import: a linked Release still without one
+    // is re-read while the listing offers a blurb, paced by the detail
+    // budget, so the backfill needs no forced run. A human's cleared
+    // description is theirs to keep (`blurbPending` in applyBook agrees).
+    if (offersBlurb && obs.recordRef?.type === "release") {
+      const release = await ctx.db.get(obs.recordRef.id);
+      return { needsDetail: release !== null && blurbWanted(release) };
+    }
+    return { needsDetail: false };
   },
 });
 
 // ---------- applying one book ----------
+
+/** An active, unlocked Release with no description and no human override of it. */
+function blurbWanted(release: Doc<"releases">): boolean {
+  return (
+    release.status === "active" &&
+    !release.locked &&
+    release.description === undefined &&
+    !release.overriddenFields?.includes("description")
+  );
+}
 
 type ApplyResult = {
   status:
@@ -275,7 +334,8 @@ type ApplyResult = {
     | "recordOnly";
   changed: boolean;
   releaseId?: Id<"releases">;
-  coverNeeded?: boolean;
+  /** Art the action should store on the Release (lib/covers.ts `storeCover`). */
+  cover?: CoverRequest;
   reason?: string;
 };
 
@@ -290,6 +350,7 @@ function offeredReleaseFields(snapshot: BookSnapshot): Record<string, unknown> {
       currency: snapshot.currency ?? "USD",
     };
   }
+  if (snapshot.description !== undefined) offered.description = snapshot.description;
   return offered;
 }
 
@@ -337,7 +398,13 @@ export const applyBook = internalMutation({
       if (!release || release.status !== "active" || release.locked) {
         return { status: "recordOnly", changed: false };
       }
-      if (!changed && release.coverImage) {
+      // An unchanged snapshot is done unless its art moved to a new URL.
+      // An unchanged listing still reconciles once while it carries a blurb
+      // the Release lacks: descriptions predate their import, so the first
+      // sync after that change must not skip already-linked books.
+      const blurbPending = snapshot.description !== undefined && blurbWanted(release);
+      const cover = coverRequest(release, snapshot.coverUrl);
+      if (!changed && !blurbPending && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
       const seriesResult = await reconcileSeries(ctx, snapshot, citation, now);
@@ -359,7 +426,7 @@ export const applyBook = internalMutation({
               : "recordOnly",
         changed: result.changed || seriesResult.changed,
         releaseId: release._id,
-        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+        cover,
       };
     }
 
@@ -407,8 +474,7 @@ export const applyBook = internalMutation({
       multiVolume: packaging !== null,
       format: "physical",
       isbn13: snapshot.isbn13,
-      publisherId:
-        publisher && publisher.status === "active" ? publisher._id : null,
+      publisherId: publisher && publisher.status === "active" ? publisher._id : null,
     };
     // A box set is never a Release: it skips the ladder for the bundle path.
     const match: MatchOutcome = snapshot.isBox
@@ -446,7 +512,7 @@ export const applyBook = internalMutation({
         status: "linked",
         changed: true,
         releaseId: release._id,
-        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+        cover: coverRequest(release, snapshot.coverUrl),
       };
     }
 
@@ -457,8 +523,12 @@ export const applyBook = internalMutation({
       pubDate: snapshot.releaseDate ? toPartialDate(snapshot.releaseDate) : undefined,
       price:
         snapshot.priceCents !== undefined
-          ? { amountCents: snapshot.priceCents, currency: snapshot.currency ?? "USD" }
+          ? {
+              amountCents: snapshot.priceCents,
+              currency: snapshot.currency ?? "USD",
+            }
           : undefined,
+      description: snapshot.description,
     };
 
     const bootstrap = await getBootstrapMode(ctx);
@@ -497,7 +567,11 @@ export const applyBook = internalMutation({
         `"${snapshot.title}" is packaging whose covered Volumes the title does not state — an Editor maps it.`,
         now,
       );
-      return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
+      return {
+        status: "recordOnly",
+        changed: false,
+        reason: "packaging without coverage",
+      };
     }
     const editionLine =
       packaging?.lineName != null
@@ -574,48 +648,12 @@ export const applyBook = internalMutation({
       tagBootstrapUnreviewed: bootstrap && gates.length > 0,
       now,
     });
+    const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
     return {
       status: "created",
       changed: true,
       releaseId: creation.releaseId,
-      coverNeeded: snapshot.coverUrl !== undefined,
+      cover: created ? coverRequest(created, snapshot.coverUrl) : undefined,
     };
-  },
-});
-
-// ---------- covers ----------
-
-/**
- * Attach a stored cover: {storageId, sourceUrl, attribution} per spec §6.
- * A racing duplicate or vanished release deletes the fresh blob instead of
- * orphaning it; replacing an outdated source cover deletes the old blob.
- */
-export const attachCover = internalMutation({
-  args: {
-    releaseId: v.id("releases"),
-    storageId: v.id("_storage"),
-    sourceUrl: v.string(),
-    attribution: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const release = await ctx.db.get(args.releaseId);
-    if (!release || release.status !== "active") {
-      await ctx.storage.delete(args.storageId);
-      return { attached: false };
-    }
-    const current = release.coverImage;
-    if (current?.sourceUrl === args.sourceUrl) {
-      await ctx.storage.delete(args.storageId);
-      return { attached: false };
-    }
-    if (current) await ctx.storage.delete(current.storageId);
-    await ctx.db.patch(args.releaseId, {
-      coverImage: {
-        storageId: args.storageId,
-        sourceUrl: args.sourceUrl,
-        attribution: args.attribution,
-      },
-    });
-    return { attached: true };
   },
 });

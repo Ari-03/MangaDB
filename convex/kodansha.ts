@@ -13,8 +13,10 @@
 //   digital ISBNs, per-format dates, list prices — at 1 req/s. The ISBN
 //   drives the ladder (rung ② first), so the crawl links PRH/ANN records
 //   and fills ISBNs on calendar-created Releases; unmatched volumes follow
-//   the standard creation boundaries. It never downloads covers: with an
-//   ISBN, the site's cover lookup finds the art (README "Covers").
+//   the standard creation boundaries. The JSON-LD `image` is stored as the
+//   cover like the calendar's, each download charged to the fetch budget. The
+//   series blurb (series page, else listing) rides on each volume snapshot
+//   and is offered as the Series synopsis; the calendar keeps it.
 //
 // The backlist is incremental and resumable. Each series' crawl state is an
 // observation of its own under "kodansha-backlist" (lib/kodansha.ts
@@ -23,6 +25,11 @@
 // upcoming/recent/undated volumes (plus new ones) on the weekly check. A
 // run spends a bounded number of fetches per action invocation and chains
 // itself under one Import Run (cursor = the last series handled).
+//
+// Both feeds store Kodansha's art (lib/covers.ts `storeCover`): one blob per
+// Edition and image URL, shared by print and digital, and replaced when the
+// URL changes. A placeholder image is recorded on the Release instead, keeping
+// any art already shown, and not fetched again until its URL changes.
 //
 // Both feeds share one scope gate: a novel, children's picture book, or
 // other non-manga volume (lib/kodansha.ts `outOfScope`) is observed and
@@ -41,6 +48,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
+import { coverKey, coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { runToContinue } from "./lib/importRuns";
 import {
@@ -52,6 +60,7 @@ import {
   parseNewReleases,
   parseSeriesListing,
   parseSeriesPage,
+  parseSeriesSynopsis,
   parseVolumePage,
   seriesCrawlValidator,
   sourceRecordId,
@@ -79,13 +88,18 @@ import {
 } from "./lib/pipeline";
 import type { CanonicalPublisher } from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
+import { sameValue } from "./lib/values";
 
 export const SOURCE_KEY = "kodansha";
 /** The backlist crawl's registry row: its runs, cadence, health, and crawl state. */
 export const BACKLIST_KEY = "kodansha-backlist";
 const BASE_URL = "https://kodansha.us";
 const PUBLISHER: CanonicalPublisher = { name: "Kodansha", slug: "kodansha" };
-const VERTICAL: CanonicalPublisher = { name: "Vertical", slug: "vertical", parentSlug: "kodansha" };
+const VERTICAL: CanonicalPublisher = {
+  name: "Vertical",
+  slug: "vertical",
+  parentSlug: "kodansha",
+};
 const IMPORT_COMMENT = "Imported from Kodansha.";
 
 /** One request per second, like ANN and Yen Press. */
@@ -130,19 +144,19 @@ export const sync = internalAction({
     );
     if (!source) {
       throw new Error(
-        'The approved-source registry has no "kodansha" row. Run: npx convex run importSources:seedRegistry \'{}\'',
+        "The approved-source registry has no \"kodansha\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
     if (!source.enabled) return { skipped: "disabled" as const };
 
-    const runId: Id<"importRuns"> = await ctx.runMutation(
-      internal.imports.startRun,
-      { sourceKey: SOURCE_KEY },
-    );
+    const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
+      sourceKey: SOURCE_KEY,
+    });
     const delay = args.politeDelayMs ?? 350;
     const errors: string[] = [];
     let seen = 0;
     let changed = 0;
+    let failures = 0;
 
     try {
       // Merge the two endpoints keyed by (volume, format): the calendar has
@@ -152,7 +166,10 @@ export const sync = internalAction({
       const ingest = (list: KodanshaItem[]) => {
         for (const item of list) {
           for (const snapshot of toSnapshots(item)) {
-            items.set(sourceRecordId(item, snapshot.format), { item, snapshot });
+            items.set(sourceRecordId(item, snapshot.format), {
+              item,
+              snapshot,
+            });
           }
         }
       };
@@ -161,12 +178,10 @@ export const sync = internalAction({
         delay,
       );
       ingest(parseCalendar(await calendarRes.json()));
-      const newRes = await politeFetch(
-        `${BASE_URL}/wp-json/kodansha/v1/new-releases`,
-        delay,
-      );
+      const newRes = await politeFetch(`${BASE_URL}/wp-json/kodansha/v1/new-releases`, delay);
       ingest(parseNewReleases(await newRes.json()));
 
+      const covers: StoredCovers = new Map();
       for (const [recordId, { snapshot }] of items) {
         seen++;
         try {
@@ -178,33 +193,38 @@ export const sync = internalAction({
           if (result.status === "needsReview") {
             errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
           }
-          if (result.coverNeeded && result.releaseId && snapshot.coverUrl) {
+          if (result.cover) {
             try {
-              const imgRes = await politeFetch(snapshot.coverUrl, delay);
-              const storageId = await ctx.storage.store(await imgRes.blob());
-              await ctx.runMutation(internal.imports.attachCover, {
-                releaseId: result.releaseId,
-                storageId,
-                sourceUrl: snapshot.coverUrl,
+              const notice = await storeCover(ctx, covers, {
+                ...result.cover,
                 attribution: source.attribution ?? PUBLISHER.name,
+                delayMs: delay,
               });
+              if (notice) errors.push(`cover ${recordId}: ${notice}`);
             } catch (e) {
               errors.push(`cover ${recordId}: ${errorMessage(e)}`);
             }
           }
         } catch (e) {
+          failures++;
           errors.push(`volume ${recordId}: ${errorMessage(e)}`);
         }
       }
 
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: "succeeded",
+        status: failures > 0 ? "failed" : "succeeded",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
       });
-      return { runId, recordsSeen: seen, recordsChanged: changed, errorCount: errors.length };
+      return {
+        runId,
+        recordsSeen: seen,
+        recordsChanged: changed,
+        errorCount: errors.length,
+        ...(failures > 0 ? { failed: true } : {}),
+      };
     } catch (e) {
       errors.push(errorMessage(e));
       await ctx.runMutation(internal.imports.finishRun, {
@@ -237,28 +257,55 @@ export const backlistPlan = internalQuery({
     now: v.number(),
   },
   handler: async (ctx, { entries, now }) => {
-    const due: Array<{ slug: string; mode: "full" | "recheck"; state: SeriesCrawl | null }> = [];
+    const due: Array<{
+      slug: string;
+      mode: "full" | "recheck";
+      state: SeriesCrawl | null;
+    }> = [];
     for (const entry of entries) {
       const obs = await getObservation(ctx, BACKLIST_KEY, entry.slug);
       const state = obs
         ? { snapshot: obs.snapshot as SeriesCrawl, crawledAt: obs.lastSeenAt }
         : null;
       const mode = crawlMode(entry, state, now);
-      if (mode !== null) due.push({ slug: entry.slug, mode, state: state?.snapshot ?? null });
+      if (mode !== null) {
+        due.push({
+          slug: entry.slug,
+          mode,
+          state: state
+            ? {
+                ...state.snapshot,
+                fullCrawledAt: state.snapshot.fullCrawledAt ?? state.crawledAt,
+              }
+            : null,
+        });
+      }
     }
     return due;
   },
 });
 
-/** Remember one finished series crawl; the observation's lastSeenAt is the crawl time. */
+/**
+ * Remember one finished series crawl; the observation's lastSeenAt is the
+ * crawl time. `fullCrawledAt` is bookkeeping, not a fact about the series:
+ * a crawl that found nothing else changed patches it in place, so a routine
+ * full refresh never writes a snapshot-history row.
+ */
 export const recordSeriesCrawl = internalMutation({
   args: { slug: v.string(), crawl: seriesCrawlValidator },
   handler: async (ctx, { slug, crawl }) => {
+    const now = Date.now();
+    const existing = await getObservation(ctx, BACKLIST_KEY, slug);
+    const stored = existing?.snapshot as SeriesCrawl | undefined;
+    if (existing && sameValue({ ...stored, fullCrawledAt: crawl.fullCrawledAt }, crawl)) {
+      await ctx.db.patch(existing._id, { snapshot: crawl, lastSeenAt: now, withdrawn: false });
+      return;
+    }
     await upsertObservation(ctx, {
       sourceKey: BACKLIST_KEY,
       sourceRecordId: slug,
       snapshot: crawl,
-      now: Date.now(),
+      now,
     });
   },
 });
@@ -278,9 +325,14 @@ async function fetchListing(delay: number): Promise<SeriesListingEntry[]> {
     }
     for (const entry of entries) bySlug.set(entry.slug, entry);
     offset += pageLength;
-    if (pageLength === 0 || (total !== undefined && offset >= total)) break;
+    if ((total !== undefined && offset >= total) || (total === undefined && pageLength === 0)) {
+      return [...bySlug.values()].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+    }
+    if (pageLength === 0) {
+      throw new Error(`search-series ended at ${offset} before its total ${total}`);
+    }
   }
-  return [...bySlug.values()].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  throw new Error(`search-series exceeded ${MAX_LISTING_PAGES} pages; listing is incomplete`);
 }
 
 type BacklistResult =
@@ -318,6 +370,7 @@ export const backlistSync = internalAction({
     seriesCrawled: v.optional(v.number()),
     fetched: v.optional(v.number()),
     errors: v.optional(v.array(v.string())),
+    failures: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<BacklistResult> => {
     // Explicit annotations break the type cycle with imports.ts's adapter map.
@@ -327,7 +380,7 @@ export const backlistSync = internalAction({
     );
     if (!source) {
       throw new Error(
-        'The approved-source registry has no "kodansha-backlist" row. Run: npx convex run importSources:seedRegistry \'{}\'',
+        "The approved-source registry has no \"kodansha-backlist\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
     // The shared gate: disabling the row stops a scheduled crawl at its next
@@ -337,12 +390,14 @@ export const backlistSync = internalAction({
     const delay = args.politeDelayMs ?? BACKLIST_DELAY_MS;
     const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
     const errors = [...(args.errors ?? [])];
+    let failures = args.failures ?? 0;
     let seen = args.seen ?? 0;
     let changed = args.changed ?? 0;
     let seriesCrawled = args.seriesCrawled ?? 0;
     let fetchedTotal = args.fetched ?? 0;
     let fetchedHere = 0;
     let lastSlug = args.afterSlug;
+    const covers: StoredCovers = new Map();
 
     const finish = async (status: "succeeded" | "failed"): Promise<BacklistResult> => {
       await ctx.runMutation(internal.imports.finishRun, {
@@ -372,11 +427,17 @@ export const backlistSync = internalAction({
       let budgetSpent = false;
       for (let offset = 0; offset < listing.length && !budgetSpent; offset += PLAN_CHUNK) {
         const chunk = listing.slice(offset, offset + PLAN_CHUNK);
-        const due: Array<{ slug: string; mode: "full" | "recheck"; state: SeriesCrawl | null }> =
-          await ctx.runQuery(internal.kodansha.backlistPlan, {
-            entries: chunk.map(({ slug, lastUpdatedAt }) => ({ slug, lastUpdatedAt })),
-            now: Date.now(),
-          });
+        const due: Array<{
+          slug: string;
+          mode: "full" | "recheck";
+          state: SeriesCrawl | null;
+        }> = await ctx.runQuery(internal.kodansha.backlistPlan, {
+          entries: chunk.map(({ slug, lastUpdatedAt }) => ({
+            slug,
+            lastUpdatedAt,
+          })),
+          now: Date.now(),
+        });
         const plans = new Map(due.map((plan) => [plan.slug, plan]));
 
         for (const entry of chunk) {
@@ -390,15 +451,19 @@ export const backlistSync = internalAction({
             break;
           }
 
-          // The series page: its volume list.
+          // The series page: its volume list and blurb.
           const seriesUrl = `${BASE_URL}/series/${entry.slug}/`;
           fetchedHere++;
           fetchedTotal++;
           let volumes: string[];
+          let synopsis: string | undefined;
           try {
-            volumes = parseSeriesPage(await (await politeFetch(seriesUrl, delay)).text(), entry.slug);
+            const html = await (await politeFetch(seriesUrl, delay)).text();
+            volumes = parseSeriesPage(html, entry.slug);
+            synopsis = parseSeriesSynopsis(html) ?? entry.synopsis;
           } catch (e) {
             // Unrecorded, so the series stays due and is retried next run.
+            failures++;
             errors.push(`series ${entry.slug}: ${errorMessage(e)}`);
             lastSlug = entry.slug;
             continue;
@@ -414,7 +479,10 @@ export const backlistSync = internalAction({
               const page = parseVolumePage(await (await politeFetch(url, delay)).text(), url);
               if (page === null || needsRecheck(page.offers, Date.now())) recheck.push(volumeSlug);
               if (page === null) continue;
-              for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(page)) {
+              for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(
+                page,
+                synopsis,
+              )) {
                 seen++;
                 try {
                   const result = await ctx.runMutation(internal.kodansha.applyVolume, {
@@ -425,9 +493,28 @@ export const backlistSync = internalAction({
                   if (result.status === "needsReview") {
                     errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
                   }
+                  if (result.cover) {
+                    // A download counts against the budget; a failed one is a
+                    // notice, retried when the volume is next applied.
+                    if (!covers.has(coverKey(result.cover))) {
+                      fetchedHere++;
+                      fetchedTotal++;
+                    }
+                    try {
+                      const notice = await storeCover(ctx, covers, {
+                        ...result.cover,
+                        attribution: source.attribution ?? PUBLISHER.name,
+                        delayMs: delay,
+                      });
+                      if (notice) errors.push(`cover ${recordId}: ${notice}`);
+                    } catch (e) {
+                      errors.push(`cover ${recordId}: ${errorMessage(e)}`);
+                    }
+                  }
                 } catch (e) {
                   // Retried at the next weekly check, not the 180-day refresh.
                   if (!recheck.includes(volumeSlug)) recheck.push(volumeSlug);
+                  failures++;
                   errors.push(`volume ${recordId}: ${errorMessage(e)}`);
                 }
               }
@@ -436,6 +523,7 @@ export const backlistSync = internalAction({
               // A dead link (404) waits for the next full crawl; anything
               // else is retried at the next weekly check.
               if (!message.startsWith("HTTP 404")) recheck.push(volumeSlug);
+              failures++;
               errors.push(`page ${url}: ${message}`);
             }
           }
@@ -449,6 +537,7 @@ export const backlistSync = internalAction({
               lastUpdatedAt: entry.lastUpdatedAt,
               volumes,
               recheck,
+              fullCrawledAt: plan.mode === "full" ? Date.now() : plan.state?.fullCrawledAt,
             },
           });
           seriesCrawled++;
@@ -467,6 +556,7 @@ export const backlistSync = internalAction({
           seriesCrawled,
           fetched: fetchedTotal,
           errors: errors.slice(0, MAX_CARRIED_ERRORS),
+          failures,
         });
         return {
           runId,
@@ -476,9 +566,10 @@ export const backlistSync = internalAction({
           fetched: fetchedTotal,
           continued: true,
           errorCount: errors.length,
+          ...(failures > 0 ? { failed: true } : {}),
         };
       }
-      return await finish("succeeded");
+      return await finish(failures > 0 ? "failed" : "succeeded");
     } catch (e) {
       errors.push(errorMessage(e));
       return await finish("failed");
@@ -500,7 +591,8 @@ type ApplyResult = {
     | "recordOnly";
   changed: boolean;
   releaseId?: Id<"releases">;
-  coverNeeded?: boolean;
+  /** Art the action should store on the Release (lib/covers.ts `storeCover`). */
+  cover?: CoverRequest;
   reason?: string;
 };
 
@@ -517,10 +609,11 @@ function offeredReleaseFields(snapshot: KodanshaSnapshot): Record<string, unknow
 }
 
 /**
- * The calendar never carries ISBNs or prices, and its date is the calendar
- * bucket's: when a volume page already gave this record its ISBN, a calendar
- * snapshot keeps the page's facts (title, ISBN, binding, price, per-format
- * date) instead of erasing them, so the two feeds never flip-flop.
+ * The calendar never carries ISBNs, prices, or series blurbs, and its date
+ * is the calendar bucket's: when a volume page already gave this record its
+ * ISBN, a calendar snapshot keeps the page's facts (title, ISBN, binding,
+ * price, per-format date, series synopsis) instead of erasing them, so the
+ * two feeds never flip-flop.
  */
 async function withPageFacts(
   ctx: MutationCtx,
@@ -529,8 +622,7 @@ async function withPageFacts(
 ): Promise<KodanshaSnapshot> {
   if (snapshot.isbn13 !== undefined) return snapshot;
   const stored = (await getObservation(ctx, SOURCE_KEY, recordId))?.snapshot as
-    | KodanshaSnapshot
-    | undefined;
+    KodanshaSnapshot | undefined;
   if (stored?.isbn13 === undefined) return snapshot;
   return {
     ...snapshot,
@@ -539,6 +631,10 @@ async function withPageFacts(
     binding: stored.binding,
     priceCents: stored.priceCents,
     releaseDate: stored.releaseDate ?? snapshot.releaseDate,
+    seriesSynopsis: snapshot.seriesSynopsis ?? stored.seriesSynopsis,
+    // The page's art stays too: the calendar can name the same jacket at
+    // another size, and alternating URLs would re-store the cover each day.
+    coverUrl: stored.coverUrl ?? snapshot.coverUrl,
   };
 }
 
@@ -580,13 +676,16 @@ export const applyVolume = internalMutation({
       if (!release || release.status !== "active" || release.locked) {
         return { status: "recordOnly", changed: false };
       }
-      if (!changed && release.coverImage) {
+      // An unchanged snapshot is done unless its art moved to a new URL.
+      const cover = coverRequest(release, snapshot.coverUrl);
+      if (!changed && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
       const seriesResult = await reconcileLinkedSeries(ctx, {
         sourceKey: SOURCE_KEY,
         seriesKey: snapshot.seriesSlug,
         offeredTitle: snapshot.seriesTitle,
+        offeredSynopsis: snapshot.seriesSynopsis,
         citation,
         now,
       });
@@ -612,7 +711,7 @@ export const applyVolume = internalMutation({
               : "recordOnly",
         changed: result.changed || seriesResult.changed,
         releaseId: release._id,
-        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+        cover,
       };
     }
 
@@ -620,6 +719,7 @@ export const applyVolume = internalMutation({
       sourceKey: SOURCE_KEY,
       seriesKey: snapshot.seriesSlug,
       offeredTitle: snapshot.seriesTitle,
+      offeredSynopsis: snapshot.seriesSynopsis,
       citation,
       now,
     });
@@ -636,6 +736,7 @@ export const applyVolume = internalMutation({
           seriesKey: snapshot.seriesSlug,
           title: snapshot.seriesTitle,
           url: snapshot.seriesUrl,
+          synopsis: snapshot.seriesSynopsis,
           seriesId,
           now,
         });
@@ -672,6 +773,7 @@ export const applyVolume = internalMutation({
           seriesKey: snapshot.seriesSlug,
           title: snapshot.seriesTitle,
           url: snapshot.seriesUrl,
+          synopsis: snapshot.seriesSynopsis,
           seriesId: firstSeriesId,
           now,
         });
@@ -689,7 +791,7 @@ export const applyVolume = internalMutation({
         status: "linked",
         changed: true,
         releaseId: release._id,
-        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+        cover: coverRequest(release, snapshot.coverUrl),
       };
     }
 
@@ -700,7 +802,11 @@ export const applyVolume = internalMutation({
         `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
         now,
       );
-      return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
+      return {
+        status: "recordOnly",
+        changed: false,
+        reason: "packaging without coverage",
+      };
     }
 
     const releasePayload = {
@@ -717,9 +823,7 @@ export const applyVolume = internalMutation({
 
     if (match.kind === "review" || ambiguousSeries > 0) {
       const reason =
-        match.kind === "review"
-          ? match.reason
-          : `${ambiguousSeries} same-titled Series`;
+        match.kind === "review" ? match.reason : `${ambiguousSeries} same-titled Series`;
       if (await alreadyHandled(ctx, observation)) {
         return { status: "alreadyQueued", changed: false, reason };
       }
@@ -762,7 +866,11 @@ export const applyVolume = internalMutation({
         });
         if (removed?.kind === "hidden") {
           await recordUnplaced(ctx, observation, removed.reason, now);
-          return { status: "recordOnly", changed: false, reason: "hidden series" };
+          return {
+            status: "recordOnly",
+            changed: false,
+            reason: "hidden series",
+          };
         }
       }
       await queueCreationProposal(ctx, {
@@ -787,6 +895,7 @@ export const applyVolume = internalMutation({
       seriesTitle: snapshot.seriesTitle,
       seriesKey: snapshot.seriesSlug,
       seriesUrl: snapshot.seriesUrl,
+      seriesSynopsis: snapshot.seriesSynopsis,
       labels,
       release: { ...releasePayload, publisher: publisherRef },
       tagBootstrapUnreviewed: bootstrap && gates.length > 0,
@@ -795,11 +904,12 @@ export const applyVolume = internalMutation({
     if (creation.blocked !== undefined) {
       return { status: "recordOnly", changed: false, reason: "hidden series" };
     }
+    const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
     return {
       status: "created",
       changed: true,
       releaseId: creation.releaseId,
-      coverNeeded: snapshot.coverUrl !== undefined,
+      cover: created ? coverRequest(created, snapshot.coverUrl) : undefined,
     };
   },
 });

@@ -13,6 +13,7 @@ import { api } from "./_generated/api";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
+import { queueCreationProposal } from "./lib/pipeline";
 import { MAX_OPS_PER_PROPOSAL } from "./proposals";
 
 const ADMIN = "user_admin";
@@ -533,6 +534,73 @@ describe("proposals — stale-base detection and explicit rebase", () => {
     await expect(
       asEditor.mutation(api.proposals.submitProposal, { proposalId }),
     ).rejects.toMatchObject({ data: { code: "stale" } });
+  });
+
+  it("flags an importer creation proposal stale when a reused Volume is merged away", async () => {
+    const t = makeT();
+    await setup(t);
+    const seriesId = await addSeries(t);
+    await addPublisher(t);
+    const asMod = t.withIdentity({ subject: MOD });
+    const addVolume = (label: string, publicId: number) =>
+      t.run((ctx) =>
+        ctx.db.insert("volumes", { status: "active", publicId, seriesId, position: 1, label }),
+      );
+    // The importer's real path: coverage over the existing Volume 1 by ID,
+    // a temp-ID create for the missing Volume 2.
+    const queue = (sourceRecordId: string) =>
+      t.run(async (ctx) => {
+        const observationId = await ctx.db.insert("sourceObservations", {
+          sourceKey: "sevenseas",
+          sourceRecordId,
+          snapshot: { url: `https://sevenseasentertainment.com/books/${sourceRecordId}` },
+          lastSeenAt: 1,
+          withdrawn: false,
+        });
+        return await queueCreationProposal(ctx, {
+          sourceKey: "sevenseas",
+          observation: (await ctx.db.get(observationId))!,
+          seriesId,
+          seriesTitle: "Alpha",
+          labels: ["1", "2"],
+          release: { format: "physical", publisherSlug: "seven-seas" },
+          comment: "Omnibus 1-2 — creation gate.",
+          now: 1,
+        });
+      });
+
+    const volumeId = await addVolume("1", 1);
+    const proposalId = await queue("alpha-omnibus");
+    // A moderator merges Volume 1 into a duplicate row before review.
+    const survivorId = await addVolume("1", 2);
+    await t.run((ctx) =>
+      ctx.db.patch(volumeId, { status: "merged", mergedIntoId: survivorId }),
+    );
+
+    const result = await asMod.mutation(api.proposals.approveProposal, { proposalId });
+    expect(result.status).toBe("stale");
+    expect(result.stale).toEqual([{ type: "volume", id: volumeId, reason: "unavailable" }]);
+    // Nothing applied, proposal flagged, still in review.
+    expect(await t.run((ctx) => ctx.db.get(proposalId))).toMatchObject({
+      state: "inReview",
+      stale: true,
+    });
+    expect(await t.run((ctx) => ctx.db.query("editions").collect())).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.query("volumes").collect())).toHaveLength(2);
+
+    // Re-queued from the next crawl, the proposal reuses the survivor and applies.
+    const requeued = await queue("alpha-omnibus-2");
+    const approved = await asMod.mutation(api.proposals.approveProposal, {
+      proposalId: requeued,
+    });
+    expect(approved.status).toBe("approved");
+    const volumes = await t.run((ctx) => ctx.db.query("volumes").collect());
+    expect(volumes.filter((v) => v.status === "active").map((v) => v.label)).toEqual(["1", "2"]);
+    const coverage = await t.run((ctx) => ctx.db.query("volumeCoverages").collect());
+    expect(coverage.map((row) => row.volumeId)).toEqual([
+      survivorId,
+      volumes.find((v) => v.label === "2")!._id,
+    ]);
   });
 });
 

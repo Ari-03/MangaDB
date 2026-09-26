@@ -14,14 +14,21 @@
 //
 // The backlist crawl (verified live 2026-09-25; robots.txt allows both):
 // - `GET /wp-json/kodansha/v1/search-series?offset=N&count=100` — every
-//   series (~1,170: ~860 comic, ~310 novel), alphabetical, with its `type`
-//   and a `last_updated_at` stamp. `count` tops out at 100.
+//   series (~1,170: ~860 comic, ~310 novel), alphabetical, with its `type`,
+//   a `last_updated_at` stamp, and a `short_description` blurb. `count`
+//   tops out at 100.
 // - `GET /series/{slug}/` — the series page: JSON-LD `ComicSeries.hasPart`
 //   lists the volume pages (packaging pages omit it, so the page's own
-//   volume links count too).
+//   volume links count too); its `description` is the full series blurb.
 // - `GET /series/{slug}/{volume}/` — the volume page: a JSON-LD `Book` whose
 //   `workExample` has one entry per format (EBook / Paperback / Hardcover)
-//   with its ISBN, `datePublished`, and USD list price.
+//   with its ISBN, `datePublished`, and USD list price. The Book carries no
+//   `description`, so Kodansha offers no per-volume blurb.
+//
+// The series blurb (page description, else the listing's short one) rides
+// on every volume snapshot of the crawl as `seriesSynopsis` and is offered
+// as the Series synopsis. A packaging line's page describes the line ("a
+// new 3-in-1 omnibus edition"), not the work, so its volumes carry none.
 //
 // One volume yields one snapshot PER FORMAT: print and digital are distinct
 // Releases of one Edition (spec §2), so each gets its own observation
@@ -41,6 +48,7 @@ import {
   type Packaging,
 } from "./bookTitle";
 import { toIsbn13 } from "./openLibrary";
+import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -61,15 +69,15 @@ export const kodanshaSnapshotValidator = v.object({
   packaging: v.optional(packagingValidator),
   format: v.union(v.literal("physical"), v.literal("digital")),
   creators: v.array(v.string()),
-  releaseDate: v.optional(
-    v.object({ year: v.number(), month: v.number(), day: v.number() }),
-  ),
+  releaseDate: v.optional(v.object({ year: v.number(), month: v.number(), day: v.number() })),
   coverUrl: v.optional(v.string()),
   // Volume pages only (the backlist crawl): this format's ISBN-13, binding,
   // and USD list price. The calendar never carries them.
   isbn13: v.optional(v.string()),
   binding: v.optional(v.string()),
   priceCents: v.optional(v.number()),
+  /** The crawl's series blurb (the Series synopsis); never on packaging lines. */
+  seriesSynopsis: v.optional(v.string()),
   /** Why the volume is outside the manga catalog (bookTitle ScopeReason); absent = in scope. */
   outOfScope: v.optional(v.string()),
 });
@@ -100,9 +108,7 @@ export type KodanshaItem = {
 // ---------- small parsers ----------
 
 /** "https://kodansha.us/series/{seriesSlug}/{volumeSlug}/" → its two slugs. */
-export function parseVolumeUrl(
-  url: string,
-): { seriesSlug: string; volumeSlug: string } | null {
+export function parseVolumeUrl(url: string): { seriesSlug: string; volumeSlug: string } | null {
   const m = /\/series\/([^/]+)\/([^/]+)\/?$/.exec(url);
   if (!m) return null;
   return { seriesSlug: m[1]!, volumeSlug: m[2]! };
@@ -130,15 +136,23 @@ export function parseCreators(byline: unknown): string[] {
     .filter((name) => name !== "");
 }
 
-/** "2026-08-04" or "2026-08-18T04:00:00+00:00" → a full-precision date. */
+/**
+ * "2026-08-04" or "2026-08-18T04:00:00+00:00" → a full-precision date. The
+ * calendar day must exist; whatever follows a `T` or space separator (time,
+ * any zone shape, none at all) is ignored, since only the day is kept.
+ */
 export function parseIsoDate(text: unknown): Ymd | undefined {
   if (typeof text !== "string") return undefined;
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/.exec(text);
   if (!m) return undefined;
   const year = Number(m[1]);
   const month = Number(m[2]);
   const day = Number(m[3]);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1]!) {
+    return undefined;
+  }
   return { year, month, day };
 }
 
@@ -207,9 +221,7 @@ function itemFrom(args: {
   if (!slugs) return null;
   if (args.formats.length === 0) return null;
   const volumeTitle =
-    typeof args.volumeTitle === "string"
-      ? args.volumeTitle.replace(/ /g, " ").trim()
-      : "";
+    typeof args.volumeTitle === "string" ? args.volumeTitle.replace(/ /g, " ").trim() : "";
   const seriesName = args.seriesTitle.trim();
   const series = parseSeriesName(seriesName);
   // Novels, picture books, and other non-manga are out of catalog scope
@@ -247,13 +259,33 @@ function parseFormats(raw: unknown): Array<"physical" | "digital"> {
 }
 
 /**
+ * A feed's envelope: its data array and, on paged feeds, the reported total.
+ * A broken envelope must fail the run instead of reporting a healthy empty feed.
+ */
+function feedEnvelope(raw: unknown): { data: unknown[]; totalCount: number | undefined } {
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    !("data" in raw) ||
+    !Array.isArray(raw.data) ||
+    ("success" in raw && raw.success === false)
+  ) {
+    throw new Error("Kodansha feed failed or changed shape: expected a data array");
+  }
+  return {
+    data: raw.data,
+    totalCount:
+      "total_count" in raw && typeof raw.total_count === "number" ? raw.total_count : undefined,
+  };
+}
+
+/**
  * The release-calendar payload → items, tolerant of malformed entries (a bad
  * item is skipped, never fatal). Each weekly bucket's `tue_key` is the
  * release date of every item in it.
  */
 export function parseCalendar(raw: unknown): KodanshaItem[] {
-  const data = (raw as { data?: unknown } | null)?.data;
-  if (!Array.isArray(data)) return [];
+  const { data } = feedEnvelope(raw);
   const items: KodanshaItem[] = [];
   for (const bucket of data) {
     if (typeof bucket !== "object" || bucket === null) continue;
@@ -285,8 +317,7 @@ export function parseCalendar(raw: unknown): KodanshaItem[] {
  * (the digital storefront flag).
  */
 export function parseNewReleases(raw: unknown): KodanshaItem[] {
-  const data = (raw as { data?: unknown } | null)?.data;
-  if (!Array.isArray(data)) return [];
+  const { data } = feedEnvelope(raw);
   const items: KodanshaItem[] = [];
   for (const entry of data) {
     if (typeof entry !== "object" || entry === null) continue;
@@ -303,9 +334,7 @@ export function parseNewReleases(raw: unknown): KodanshaItem[] {
       releaseDate: parseIsoDate(e.release_date),
       coverUrl: e.image,
       outOfScope:
-        typeof e.series_type === "string" && e.series_type !== "comic"
-          ? e.series_type
-          : undefined,
+        typeof e.series_type === "string" && e.series_type !== "comic" ? e.series_type : undefined,
     });
     if (item) items.push(item);
   }
@@ -333,8 +362,7 @@ function snapshotFor(
     kind: "kodanshaVolume" as const,
     url: item.url,
     title:
-      title ??
-      `${item.seriesName} ${position !== null ? `Volume ${position}` : item.volumeSlug}`,
+      title ?? `${item.seriesName} ${position !== null ? `Volume ${position}` : item.volumeSlug}`,
     seriesTitle: item.seriesTitle,
     seriesSlug: item.seriesSlug,
     seriesUrl: `https://kodansha.us/series/${item.seriesSlug}/`,
@@ -360,6 +388,8 @@ export type SeriesListingEntry = {
   name: string;
   /** Kodansha's `last_updated_at` stamp — the crawl's change signal. */
   lastUpdatedAt: string;
+  /** The listing's `short_description` blurb; the series page's is fuller. */
+  synopsis?: string;
 };
 
 /** Series per search-series request; the endpoint caps `count` at 100. */
@@ -374,8 +404,7 @@ export function parseSeriesListing(raw: unknown): {
   pageLength: number;
   total: number | undefined;
 } {
-  const body = (raw ?? {}) as { data?: unknown; total_count?: unknown };
-  const data = Array.isArray(body.data) ? body.data : [];
+  const { data, totalCount: total } = feedEnvelope(raw);
   const entries: SeriesListingEntry[] = [];
   for (const row of data) {
     if (typeof row !== "object" || row === null) continue;
@@ -388,12 +417,13 @@ export function parseSeriesListing(raw: unknown): {
       slug: r.slug,
       name: r.name.trim(),
       lastUpdatedAt: typeof r.last_updated_at === "string" ? r.last_updated_at : "",
+      synopsis: cleanBlurb(r.short_description),
     });
   }
   return {
     entries,
     pageLength: data.length,
-    total: typeof body.total_count === "number" ? body.total_count : undefined,
+    total,
   };
 }
 
@@ -452,6 +482,12 @@ export function parseSeriesPage(html: string, seriesSlug: string): string[] {
     own(m[1]);
   }
   return [...slugs].sort(volumeOrder);
+}
+
+/** A series page → its JSON-LD `ComicSeries.description` blurb, cleaned. */
+export function parseSeriesSynopsis(html: string): string | undefined {
+  const series = jsonLdObjects(html).find((obj) => obj["@type"] === "ComicSeries");
+  return cleanBlurb(series?.description);
 }
 
 /** One format of a volume page: its own ISBN, date, and list price. */
@@ -513,7 +549,10 @@ export function parseVolumePage(html: string, pageUrl: string): KodanshaVolumePa
     const isbn13 = toIsbn13(typeof e.isbn === "string" ? e.isbn : undefined);
     if (!format || isbn13 === undefined || isbns.has(isbn13)) continue;
     isbns.add(isbn13);
-    const offer = (e.offers ?? {}) as { price?: unknown; priceCurrency?: unknown };
+    const offer = (e.offers ?? {}) as {
+      price?: unknown;
+      priceCurrency?: unknown;
+    };
     const price = typeof offer.price === "number" ? offer.price : Number(offer.price);
     offers.push({
       ...format,
@@ -541,10 +580,12 @@ export function parseVolumePage(html: string, pageUrl: string): KodanshaVolumePa
 /**
  * A parsed volume page → one (record id, snapshot) per format. A second
  * ISBN of the same format (a paperback and a hardcover) is a Release of its
- * own, keyed by its ISBN.
+ * own, keyed by its ISBN. `seriesSynopsis` is the series page's blurb,
+ * dropped for a packaging line's volumes (it describes the line).
  */
 export function toBacklistSnapshots(
   page: KodanshaVolumePage,
+  seriesSynopsis?: string,
 ): Array<{ sourceRecordId: string; snapshot: KodanshaSnapshot }> {
   const taken = new Set<string>();
   return page.offers.map((offer) => {
@@ -559,6 +600,7 @@ export function toBacklistSnapshots(
         isbn13: offer.isbn13,
         binding: offer.binding,
         priceCents: offer.priceCents,
+        seriesSynopsis: page.item.packaging ? undefined : seriesSynopsis,
       },
     };
   });
@@ -588,6 +630,8 @@ export const seriesCrawlValidator = v.object({
   volumes: v.array(v.string()),
   /** Upcoming, recent, or undated volumes, and pages whose fetch failed. */
   recheck: v.array(v.string()),
+  /** Last complete crawl, independent of weekly rechecks. Optional for older observations. */
+  fullCrawledAt: v.optional(v.number()),
 });
 
 export type SeriesCrawl = Infer<typeof seriesCrawlValidator>;
@@ -607,7 +651,8 @@ export function crawlMode(
 ): CrawlMode | null {
   if (state === null) return "full";
   const age = now - state.crawledAt;
-  if (age > FULL_REFRESH_MS || state.snapshot.lastUpdatedAt !== entry.lastUpdatedAt) {
+  const fullAge = now - (state.snapshot.fullCrawledAt ?? state.crawledAt);
+  if (fullAge > FULL_REFRESH_MS || state.snapshot.lastUpdatedAt !== entry.lastUpdatedAt) {
     return "full";
   }
   if (state.snapshot.recheck.length > 0 && age > RECHECK_MS) return "recheck";
@@ -632,7 +677,6 @@ export function needsRecheck(offers: VolumeOffer[], now: number): boolean {
   return offers.some(
     (o) =>
       o.releaseDate === undefined ||
-      Date.UTC(o.releaseDate.year, o.releaseDate.month - 1, o.releaseDate.day) >=
-        now - RECENT_MS,
+      Date.UTC(o.releaseDate.year, o.releaseDate.month - 1, o.releaseDate.day) >= now - RECENT_MS,
   );
 }

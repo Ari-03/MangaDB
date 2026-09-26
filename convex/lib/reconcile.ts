@@ -22,6 +22,7 @@ import { getSourceByKey } from "../importSources";
 import {
   authorityRank,
   decideField,
+  latestTouch,
   type FieldDecision,
   type Incumbent,
 } from "./authority";
@@ -29,8 +30,7 @@ import { sameValue, valueHash } from "./values";
 
 /** The record types imports reconcile field-level today. */
 export type ReconcileRef =
-  | { type: "release"; id: Id<"releases"> }
-  | { type: "series"; id: Id<"series"> };
+  { type: "release"; id: Id<"releases"> } | { type: "series"; id: Id<"series"> };
 
 type FieldChange = { field: string; before: unknown; after: unknown };
 
@@ -43,15 +43,10 @@ export type ReconcileResult = {
   suppressed: string[];
 };
 
-async function revisionsOf(
-  ctx: MutationCtx,
-  ref: ReconcileRef,
-): Promise<Doc<"revisions">[]> {
+async function revisionsOf(ctx: MutationCtx, ref: ReconcileRef): Promise<Doc<"revisions">[]> {
   return await ctx.db
     .query("revisions")
-    .withIndex("by_record", (q) =>
-      q.eq("ref.type", ref.type).eq("ref.id", ref.id as never),
-    )
+    .withIndex("by_record", (q) => q.eq("ref.type", ref.type).eq("ref.id", ref.id as never))
     .order("desc")
     .collect();
 }
@@ -101,9 +96,7 @@ async function openProposalMatches(
   if ((op.baseRevisionId ?? null) !== latestRevisionId) return false;
   if (op.changes.length !== changes.length) return false;
   const want = new Map(changes.map((c) => [c.field, c.after]));
-  return op.changes.every(
-    (c) => want.has(c.field) && sameValue(c.after, want.get(c.field)),
-  );
+  return op.changes.every((c) => want.has(c.field) && sameValue(c.after, want.get(c.field)));
 }
 
 /**
@@ -173,21 +166,19 @@ export async function reconcileFields(
   const recordOnly: Array<{ field: string; offered: unknown; reason: string }> = [];
   for (const [field, offeredValue] of Object.entries(args.offered)) {
     const current = (doc as Record<string, unknown>)[field];
-    const latestTouch = history.find((rev) =>
-      rev.changes.some((change) => change.field === field),
-    );
+    const touch = latestTouch(history, field);
     let incumbent: Incumbent;
-    if (!latestTouch) {
+    if (!touch) {
       incumbent = current === undefined ? { kind: "none" } : { kind: "unattributed" };
-    } else if (latestTouch.author.kind === "user") {
+    } else if (touch.author.kind === "user") {
       incumbent = { kind: "human" };
     } else {
-      const key = latestTouch.author.sourceKey;
+      const key = touch.author.sourceKey;
       incumbent = {
         kind: "source",
         sourceKey: key,
         rank: authorityRank((await registryRow(key))?.fieldAuthority, field),
-        observationIds: await evidenceOf(latestTouch),
+        observationIds: await evidenceOf(touch),
       };
     }
     const decision = decideField({
@@ -204,7 +195,11 @@ export async function reconcileFields(
     if (decision.action === "auto") auto.push(change);
     else if (decision.action === "queue") queue.push(change);
     else if (decision.action === "recordOnly") {
-      recordOnly.push({ field, offered: offeredValue, reason: decision.reason });
+      recordOnly.push({
+        field,
+        offered: offeredValue,
+        reason: decision.reason,
+      });
     }
   }
 
@@ -294,9 +289,7 @@ export async function reconcileFields(
       if (open?.state === "inReview") {
         await ctx.db.patch(open._id, { state: "withdrawn", decidedAt: now });
       }
-      const reasons = unsuppressed
-        .map((c) => `${c.field} (${c.decision.reason})`)
-        .join("; ");
+      const reasons = unsuppressed.map((c) => `${c.field} (${c.decision.reason})`).join("; ");
       const proposalId = await ctx.db.insert("proposals", {
         author: { kind: "source", sourceKey: args.sourceKey },
         state: "inReview",
@@ -314,23 +307,40 @@ export async function reconcileFields(
             changes,
           },
         ],
-        evidence: [
-          { kind: "observation" as const, observationId: observation._id },
-        ],
+        evidence: [{ kind: "observation" as const, observationId: observation._id }],
         changeComment: `Import conflict from ${args.citation.sourceName}: ${reasons}. The importer never overwrites — approve to accept the source's value, reject to suppress this exact offer.`,
       });
       await ctx.db.patch(observation._id, { queuedProposalId: proposalId });
       result.queued = changes.map((c) => c.field);
       result.changed = true;
     }
+  } else if (observation.queuedProposalId) {
+    const open = await ctx.db.get(observation.queuedProposalId);
+    if (
+      open?.state === "inReview" &&
+      open.author.kind === "source" &&
+      open.author.sourceKey === args.sourceKey
+    ) {
+      const version = await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) =>
+          q.eq("proposalId", open._id).eq("versionNo", open.currentVersionNo),
+        )
+        .unique();
+      const op = version?.ops.length === 1 ? version.ops[0] : undefined;
+      // Only retire this record's field correction. Creation and cancellation
+      // proposals may share the observation and have their own review rules.
+      if (op?.kind === "update" && op.ref.type === ref.type && op.ref.id === ref.id) {
+        await ctx.db.patch(open._id, { state: "withdrawn", decidedAt: now });
+        result.changed = true;
+      }
+    }
   }
 
   // ----- recordOnly bucket: on the observation, nothing canonical -----
   if (recordOnly.length > 0) {
     const replaced = new Set(recordOnly.map((c) => c.field));
-    const kept = (observation.conflicts ?? []).filter(
-      (c) => !replaced.has(c.field),
-    );
+    const kept = (observation.conflicts ?? []).filter((c) => !replaced.has(c.field));
     await ctx.db.patch(observation._id, {
       conflicts: [
         ...kept,

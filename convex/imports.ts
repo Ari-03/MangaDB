@@ -8,7 +8,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { FunctionReference } from "convex/server";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalAction,
   internalMutation,
@@ -82,6 +82,13 @@ export const finishRun = internalMutation({
     recordsSeen: v.number(),
     recordsChanged: v.number(),
     errors: v.array(v.string()),
+    /**
+     * A success that must not reset the source's failure streak: a follow-on
+     * run chained after a failed parent (ANN's page pass after an incomplete
+     * mirror) would otherwise hide the parent's recurring failure from the
+     * unhealthy alert. A failure still counts.
+     */
+    healthNeutral: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
@@ -93,6 +100,7 @@ export const finishRun = internalMutation({
       recordsChanged: args.recordsChanged,
       errors: args.errors.slice(0, MAX_RUN_ERRORS),
     });
+    if (args.healthNeutral && args.status === "succeeded") return;
     await recordSourceOutcome(
       ctx,
       run.sourceKey,
@@ -313,33 +321,82 @@ export const runScheduled = internalAction({
 // ---------- covers (spec §6) ----------
 
 /**
- * Attach a stored cover: {storageId, sourceUrl, attribution} per spec §6.
- * Source-agnostic; adapters only attach when the release has no cover yet
- * (the publisher's own art wins over a re-import from elsewhere). A racing
- * duplicate or vanished release deletes the fresh blob instead of orphaning
- * it; replacing an outdated same-URL-family cover deletes the old blob.
+ * Attach a cover {storageId, sourceUrl, attribution} (spec §6), the one
+ * attach path for publisher art (lib/covers.ts `storeCover`). Without a
+ * `storageId` the art at `sourceUrl` was a placeholder: the Release records
+ * the URL, keeps any art it already shows, and is not fetched again until
+ * the URL changes. Refused for a missing, inactive, or locked Release, one
+ * whose cover already came from `sourceUrl`, or an incoming blob that no
+ * longer exists (an overlapping run replaced it: `stale`). Otherwise the
+ * Release takes the blob of an active sibling in its Edition with the same
+ * `sourceUrl` (print and digital share one file), else the incoming one,
+ * replacing art the publisher has since changed. A blob nothing shows any
+ * more, the incoming one or the replaced one, is deleted; one another
+ * Release or a Bundle still shows is kept, wherever a split or merge has
+ * moved it (`by_cover`). Returns what the Release now holds for
+ * `sourceUrl`: its blob, "placeholder", or null when nothing.
  */
 export const attachCover = internalMutation({
   args: {
     releaseId: v.id("releases"),
-    storageId: v.id("_storage"),
+    storageId: v.optional(v.id("_storage")),
     sourceUrl: v.string(),
     attribution: v.string(),
   },
-  handler: async (ctx, args) => {
-    const release = await ctx.db.get(args.releaseId);
-    if (!release || release.status !== "active" || release.coverImage) {
-      await ctx.storage.delete(args.storageId);
-      return { attached: false };
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ attached: boolean; held: Id<"_storage"> | "placeholder" | null; stale?: true }> => {
+    const incoming = args.storageId;
+    // Shown by any Release but this one, or by a Bundle made from a Release.
+    const shown = async (id: Id<"_storage">) => {
+      const releases = await ctx.db
+        .query("releases")
+        .withIndex("by_cover", (q) => q.eq("coverImage.storageId", id))
+        .collect();
+      if (releases.some((r) => r._id !== args.releaseId)) return true;
+      const bundle = await ctx.db
+        .query("releaseBundles")
+        .withIndex("by_cover", (q) => q.eq("coverImage.storageId", id))
+        .first();
+      return bundle !== null;
+    };
+    // Delete `id` unless it is `keep` or something still shows it.
+    const drop = async (id: Id<"_storage"> | undefined, keep: Id<"_storage"> | undefined) => {
+      if (id !== undefined && id !== keep && !(await shown(id))) await ctx.storage.delete(id);
+    };
+
+    if (incoming !== undefined && (await ctx.db.system.get(incoming)) === null) {
+      return { attached: false, held: null, stale: true };
     }
-    await ctx.db.patch(args.releaseId, {
-      coverImage: {
-        storageId: args.storageId,
-        sourceUrl: args.sourceUrl,
-        attribution: args.attribution,
-      },
+    const release = await ctx.db.get(args.releaseId);
+    if (!release) {
+      await drop(incoming, undefined);
+      return { attached: false, held: null };
+    }
+    const current = release.coverImage;
+    const same = current !== undefined && current.sourceUrl === args.sourceUrl;
+    const frozen = release.status !== "active" || release.locked === true;
+    if (frozen || same) {
+      await drop(incoming, current?.storageId);
+      return { attached: false, held: same && !frozen ? (current.storageId ?? "placeholder") : null };
+    }
+    const siblings = await ctx.db
+      .query("releases")
+      .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
+      .collect();
+    const storageId =
+      siblings.find(
+        (r) => r._id !== release._id && r.status === "active" && r.coverImage?.sourceUrl === args.sourceUrl,
+      )?.coverImage?.storageId ??
+      incoming ??
+      current?.storageId;
+    await ctx.db.patch(release._id, {
+      coverImage: { storageId, sourceUrl: args.sourceUrl, attribution: args.attribution },
     });
-    return { attached: true };
+    await drop(incoming, storageId);
+    await drop(current?.storageId, storageId);
+    return { attached: true, held: storageId ?? "placeholder" };
   },
 });
 

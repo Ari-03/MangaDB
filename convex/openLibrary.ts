@@ -5,7 +5,8 @@
 //
 // - a matched record (stored link, ISBN, or the full publisher+title+label+
 //   format key) reconciles in what the authority table allows — ISBN fill
-//   at standard rank, dates at weak, format/binding at standard
+//   at standard rank, dates at weak, format/binding at standard, and the
+//   edition's description blurb at weak (fills a blank; publisher text outranks it)
 // - an unmatched record may create at most a LEAF: a Release (+ its Edition
 //   packaging) under a Series, Volume, and Publisher that all already exist
 //   — how VIZ releases (whose site is never scraped and who is not
@@ -96,7 +97,7 @@ export const sync = internalAction({
     );
     if (!source) {
       throw new Error(
-        'The approved-source registry has no "openlibrary" row. Run: npx convex run importSources:seedRegistry \'{}\'',
+        "The approved-source registry has no \"openlibrary\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
     if (!source.enabled && args.runId === undefined) {
@@ -110,16 +111,21 @@ export const sync = internalAction({
       return { skipped: "unconfigured" as const };
     }
 
+    const maxLines = args.maxLines ?? DEFAULT_MAX_LINES;
+    if (!Number.isSafeInteger(maxLines) || maxLines < 1 || maxLines > DEFAULT_MAX_LINES) {
+      throw new Error(`maxLines must be an integer between 1 and ${DEFAULT_MAX_LINES}`);
+    }
     const runId = await runToContinue(ctx, source, args);
     if (runId === null) return { skipped: "disabled" as const };
     const startLine = args.startLine ?? 0;
-    const maxLines = args.maxLines ?? DEFAULT_MAX_LINES;
     const errors = [...(args.errors ?? [])];
     let seen = args.seen ?? 0;
     let changed = args.changed ?? 0;
 
     try {
-      const res = await fetch(dumpUrl, { headers: { "User-Agent": USER_AGENT } });
+      const res = await fetch(dumpUrl, {
+        headers: { "User-Agent": USER_AGENT },
+      });
       if (!res.ok || !res.body) {
         throw new Error(`HTTP ${res.status} for the dump at ${dumpUrl}`);
       }
@@ -142,20 +148,21 @@ export const sync = internalAction({
       let done = false;
 
       const handleLine = async (line: string) => {
-        const isTarget = lineNo >= startLine;
-        lineNo++;
-        if (!isTarget) return;
+        // 0-based, like startLine/nextLine: an error's line number is the
+        // startLine an operator passes to reprocess it.
+        const index = lineNo++;
+        if (index < startLine) return;
         processed++;
-        const snapshot = parseDumpLine(line);
-        if (!snapshot) return;
-        seen++;
         try {
+          const snapshot = parseDumpLine(line);
+          if (!snapshot) return;
+          seen++;
           const result = await ctx.runMutation(internal.openLibrary.applyEdition, {
             snapshot,
           });
           if (result.changed) changed++;
         } catch (e) {
-          errors.push(`edition ${snapshot.key}: ${errorMessage(e)}`);
+          errors.push(`dump line ${index}: ${errorMessage(e)}`);
         }
       };
 
@@ -199,7 +206,7 @@ export const sync = internalAction({
 
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: "succeeded",
+        status: errors.length > 0 ? "failed" : "succeeded",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
@@ -211,6 +218,7 @@ export const sync = internalAction({
         continued: false,
         nextLine: done ? undefined : startLine + processed,
         errorCount: errors.length,
+        failed: errors.length > 0 ? true : undefined,
       };
     } catch (e) {
       errors.push(errorMessage(e));
@@ -270,7 +278,6 @@ type ApplyResult = {
   releaseId?: Id<"releases">;
 };
 
-/** The fields this source offers on a linked Release, per its authority row. */
 /**
  * Why another source that keys its records by ISBN (Yen Press) holds this
  * book out of scope, or null. PRH drops such titles before observing them,
@@ -282,12 +289,14 @@ async function outOfScopeElsewhere(ctx: MutationCtx, isbn13: string): Promise<st
   return reason !== undefined ? `Yen Press (${reason})` : null;
 }
 
+/** The fields this source offers on a linked Release, per its authority row. */
 function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unknown> {
   const offered: Record<string, unknown> = {};
   if (snapshot.isbn13 !== undefined) offered.isbn13 = snapshot.isbn13;
   if (snapshot.isbn10 !== undefined) offered.isbn10 = snapshot.isbn10;
   if (snapshot.publishDate) offered.pubDate = toPartialDate(snapshot.publishDate);
   if (snapshot.binding !== undefined) offered.binding = snapshot.binding;
+  if (snapshot.description !== undefined) offered.description = snapshot.description;
   return offered;
 }
 
@@ -412,9 +421,7 @@ export const applyEdition = internalMutation({
       .withIndex("by_series", (q) => q.eq("seriesId", series._id))
       .collect();
     const volume = volumes.find(
-      (vol) =>
-        vol.status === "active" &&
-        labelsEqual(vol.label, snapshot.volumeLabel ?? null),
+      (vol) => vol.status === "active" && labelsEqual(vol.label, snapshot.volumeLabel ?? null),
     );
     if (!volume) return { status: "recordOnly", changed: false };
 
@@ -437,7 +444,8 @@ export const applyEdition = internalMutation({
     // A publisher feed that knows this ISBN outranks OpenLibrary's scope
     // guess: Yen Press records its light novels and audio (by ISBN) as out of
     // scope, and OpenLibrary titles rarely say "light novel".
-    const scopedOut = snapshot.isbn13 !== undefined ? await outOfScopeElsewhere(ctx, snapshot.isbn13) : null;
+    const scopedOut =
+      snapshot.isbn13 !== undefined ? await outOfScopeElsewhere(ctx, snapshot.isbn13) : null;
     if (scopedOut) {
       await recordUnplaced(ctx, observation, `Out of scope per ${scopedOut}.`, now);
       return { status: "recordOnly", changed: false };
@@ -456,9 +464,8 @@ export const applyEdition = internalMutation({
         binding: snapshot.binding,
         isbn13: snapshot.isbn13,
         isbn10: snapshot.isbn10,
-        pubDate: snapshot.publishDate
-          ? toPartialDate(snapshot.publishDate)
-          : undefined,
+        pubDate: snapshot.publishDate ? toPartialDate(snapshot.publishDate) : undefined,
+        description: snapshot.description,
         publisher: { name: publisher.name, slug: publisher.slug },
       },
       tagBootstrapUnreviewed: false,

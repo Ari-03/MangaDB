@@ -50,6 +50,11 @@ export const FIELD_CATEGORY: Record<string, string> = {
   format: "format",
   binding: "format",
   price: "price",
+  // Publisher blurbs: a Release Description and a Series synopsis. Own-catalog
+  // publishers are authoritative, the distributor standard, aggregators weak,
+  // so a publisher's own text replaces a summary that filled the blank first.
+  description: "description",
+  synopsis: "description",
 };
 
 /**
@@ -122,6 +127,18 @@ export type Incumbent =
       /** The observations the incumbent value was imported from (its evidence). */
       observationIds: string[];
     };
+
+/**
+ * The Revision that authored a field's current value: the newest one in
+ * `revisionsNewestFirst` that touched it (creations list every initial
+ * field). Absent when no Revision ever touched the field.
+ */
+export function latestTouch<Revision extends { changes: Array<{ field: string }> }>(
+  revisionsNewestFirst: Revision[],
+  field: string,
+): Revision | undefined {
+  return revisionsNewestFirst.find((rev) => rev.changes.some((change) => change.field === field));
+}
 
 export type FieldDecision = {
   action: "auto" | "queue" | "recordOnly" | "skip";

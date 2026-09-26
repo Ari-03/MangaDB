@@ -125,11 +125,37 @@ export function decodeEntities(text: string): string {
   return current;
 }
 
-/** Strip tags and collapse whitespace — for blurbs kept on the observation. */
+/** Strip tags, decode entities, and collapse whitespace to one line of text. */
 export function stripHtml(html: string): string {
   return decodeEntities(html.replace(/<[^>]*>/g, " "))
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** The longest blurb kept; publisher copy runs 300–2,000 characters. */
+export const MAX_BLURB = 4000;
+
+// Tags that break text: they become a space, while inline tags (<i>, <b>,
+// <a>…) vanish so "<i>Akira</i>," stays "Akira,".
+const BREAKING_TAG = /<\/?(?:p|br|div|li|ul|ol|h[1-6]|blockquote|table|tr|td|th|section)\b[^>]*>/gi;
+
+/**
+ * A source's blurb (HTML or plain text) → one clean paragraph for a Release
+ * Description or Series synopsis: tags stripped, entities decoded,
+ * whitespace collapsed, capped at MAX_BLURB on a word boundary so snapshots
+ * stay small. Anything empty or non-string is undefined: an adapter offers
+ * nothing rather than "".
+ */
+export function cleanBlurb(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const text = decodeEntities(raw.replace(BREAKING_TAG, " ").replace(/<[^>]*>/g, ""))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text === "") return undefined;
+  if (text.length <= MAX_BLURB) return text;
+  const cut = text.slice(0, MAX_BLURB - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > MAX_BLURB * 0.8 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
 // Inline markup ANN leaks into titles. Only these known tag names are

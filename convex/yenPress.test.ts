@@ -1,9 +1,11 @@
 // Yen Press tests: the sitemap/title-page parsers against trimmed copies of
 // live pages (fetched 2026-09-25: the header, format tabs, prices, and the
 // "full details" section; a site-nav genre link stays in front to prove the
-// category is read from the book's own labels), and the adapter run
-// against a stubbed yenpress.com — no network.
+// category is read from the book's own labels; little-witch-academia-3,
+// fetched 2026-09-26, also keeps the `.content-heading-txt` blurb), and the
+// adapter run against a stubbed yenpress.com — no network.
 
+import { readFileSync } from "node:fs";
 import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -16,6 +18,10 @@ import {
   toSnapshots,
 } from "./lib/yenPress";
 import schema from "./schema";
+
+// Trimmed first-party HTML fetched 2026-09-26; only fields used by the parser.
+const liveFixture = (name: string) =>
+  readFileSync(new URL(`./lib/__fixtures__/yenPress/${name}.html`, import.meta.url), "utf8");
 
 const MANGA_PAGE = `<html><body><div class="nav"><a href="/genres?category=light-novels&genre=comedy">LN</a></div><h1 class="heading title-52 bold white desktop-only fade-el">A Misanthrope Teaches a Class for Demi-Humans, Vol. 4 (manga): Mr. Hitoma, Won’t You Teach Us About Humans…?</h1><div class="buy-info"><div class="tabs"> <span class="deliver active" data-id="">Paperback</span> <span class="deliver" data-id="">Digital</span> </div><div class="deliver-info"><p class="book-price">$13.00 US / $17.00 CAN</p></div><div class="deliver-info"><p class="book-price">$6.99 US / $8.99 CAN</p></div></div><section class="book-details wrapper-1410 prel fade-in-container"> <div class="detail active"> <div class="txt-hold fade-el "> <h3 class="upper heading">full details</h3> <div class="detail-labels mobile-only"> <a href="/genres?category=manga&genre=slice-of-life" class="white-label">Slice-of-Life</a> <a href="/genres?category=manga&genre=comedy" class="white-label">Comedy</a> <a href="/genres?category=manga&genre=drama" class="white-label">Drama</a> </div> <div class="detail-labels desktop-only fade-el"> <a href="/genres?category=manga&genre=slice-of-life" class="white-label">Slice-of-Life</a> <a href="/genres?category=manga&genre=comedy" class="white-label">Comedy</a> <a href="/genres?category=manga&genre=drama" class="white-label">Drama</a> </div> </div> <!-- Main --> <div class="detail-info fade-el"> <div> <div class="detail-box"> <span class="type paragraph fs-15">Series</span> <p class="info">A Misanthrope Teaches a Class for Demi-Humans (manga)</p> </div> <div class="detail-box"> <span class="type paragraph fs-15">Trim Size</span> <p class="info"> 5"x7.5" </p> </div> </div> <div> <div class="detail-box"> <span class="type paragraph fs-15">Page Count</span> <p class="info">272 pages</p> </div> <div class="detail-box"> <span class="type paragraph fs-15">ISBN</span> <p class="info">9798855438611</p> </div> </div> <div> <div class="detail-box"> <span class="type paragraph fs-15">Release Date</span> <p class="info">Jan 26, 2027</p> </div> <div class="detail-box"> <span>Age Rating</span> <p class="info">T (Teen)</p> </div> </div> <div> <span class="type paragraph fs-15">Imprint</span> <p class="info">Yen Press</p> </div> </div> </div> <div class="detail"> <div class="txt-hold"> <h3 class="upper heading">full details</h3> <div class="detail-labels mobile-only fade-el"> <a href="/genres?category=manga&genre=comedy" class="white-label">Comedy</a> <a href="/genres?category=manga&genre=drama" class="white-label">Drama</a> <a href="/genres?category=manga&genre=slice-of-life" class="white-label">Slice-of-Life</a> </div> <div class="detail-labels desktop-only fade-el"> <a href="/genres?category=manga&genre=comedy" class="white-label">Comedy</a> <a href="/genres?category=manga&genre=drama" class="white-label">Drama</a> <a href="/genres?category=manga&genre=slice-of-life" class="white-label">Slice-of-Life</a> </div> </div> <!-- Digital --> <div class="detail-info fade-el"> <div> <div class="detail-box"> <span class="type paragraph fs-15">Series</span> <p class="info">A Misanthrope Teaches a Class for Demi-Humans (manga)</p> </div> <div class="detail-box"> <span class="type paragraph fs-15">Page Count</span> <p class="info">272 pages</p> </div> </div> <div> <div class="detail-box"> <span class="type paragraph fs-15">ISBN</span> <p class="info">9798855438628</p> </div> <div class="detail-box"> <span class="type paragraph fs-15">Release Date</span> <p class="info">Jan 26, 2027</p> </div> </div> <div> <div class="detail-box"> <span>Age Rating</span> <p class="info">T (Teen)</p> </div> <div class="detail-box"> <span class="type paragraph fs-15">Imprint</span> <p class="info">Yen Press</p> </div> </div> </div> </div> </section></body></html>`;
 
@@ -68,7 +74,11 @@ describe("parseSitemap / skipsWithoutFetch", () => {
 
 describe("parseTitlePage / toSnapshots", () => {
   it("reads one snapshot per format, cutting the volume subtitle off the title", () => {
-    expect(parseYenDate("Jan 26, 2027")).toEqual({ year: 2027, month: 1, day: 26 });
+    expect(parseYenDate("Jan 26, 2027")).toEqual({
+      year: 2027,
+      month: 1,
+      day: 26,
+    });
     const page = parseTitlePage(MANGA_PAGE)!;
     expect(page.category).toBe("manga");
     const [print, digital] = toSnapshots(page, MANGA_URL);
@@ -83,7 +93,11 @@ describe("parseTitlePage / toSnapshots", () => {
       imprint: "Yen Press",
       outOfScope: undefined,
     });
-    expect(digital).toMatchObject({ isbn13: "9798855438628", format: "digital", priceCents: 699 });
+    expect(digital).toMatchObject({
+      isbn13: "9798855438628",
+      format: "digital",
+      priceCents: 699,
+    });
   });
 
   it("keeps packaging as packaging and hardbacks as hardcover", () => {
@@ -101,7 +115,11 @@ describe("parseTitlePage / toSnapshots", () => {
     // J-Novel Club's novels are out by category (its print manga is in).
     expect(novel!.outOfScope).toBe("category light-novels");
     const [ize] = toSnapshots(parseTitlePage(IZE_BOX_PAGE)!, IZE_URL);
-    expect(ize).toMatchObject({ imprint: "Ize Press", category: "comics", isBox: true });
+    expect(ize).toMatchObject({
+      imprint: "Ize Press",
+      category: "comics",
+      isBox: true,
+    });
     expect(ize!.outOfScope).toBeUndefined();
   });
 
@@ -118,6 +136,54 @@ describe("parseTitlePage / toSnapshots", () => {
     expect(toSnapshots(parseTitlePage(arc)!, MANGA_URL)[0]).toMatchObject({
       volumeLabel: "2",
       outOfScope: undefined,
+    });
+  });
+
+  it("admits JY manga while keeping JY prose out", () => {
+    const page = parseTitlePage(liveFixture("little-witch-academia"))!;
+    expect(page.category).toBe("manga");
+    const snapshots = toSnapshots(
+      page,
+      "https://yenpress.com/titles/9781975327453-little-witch-academia-vol-1-manga",
+    );
+    expect(snapshots.map((s) => s.isbn13)).toEqual(["9781975327453", "9781975382469"]);
+    expect(snapshots.every((s) => s.outOfScope === undefined)).toBe(true);
+    expect(
+      toSnapshots({ ...page, category: "light-novels" }, "https://yenpress.com")[0]!.outOfScope,
+    ).toBeDefined();
+    // No genre labels at all: JY falls through to the title rules like any imprint.
+    expect(
+      toSnapshots({ ...page, category: undefined }, "https://yenpress.com")[0]!.outOfScope,
+    ).toBeUndefined();
+  });
+
+  it("reads the blurb paragraph, not the tagline, onto every format's snapshot", () => {
+    const html = liveFixture("little-witch-academia-3");
+    const page = parseTitlePage(html)!;
+    expect(page.description).toMatch(
+      /^The curtain rises ono an interschool broom race .* final volume of Little Witch Academia!$/,
+    );
+    expect(page.description).not.toContain("give up");
+    const snapshots = toSnapshots(
+      page,
+      "https://yenpress.com/titles/9781975357429-little-witch-academia-vol-3-manga",
+    );
+    expect(snapshots.map((s) => s.isbn13)).toEqual(["9781975357429", "9781975357436"]);
+    expect(snapshots.every((s) => s.description === page.description)).toBe(true);
+    // The live markup sometimes leaves the <p> unclosed before </div>.
+    const unclosed = html.replace(/<\/p>\s*<\/div>/, "\n</div>");
+    expect(parseTitlePage(unclosed)!.description).toBe(page.description);
+    // A page without the block offers no description at all.
+    expect(parseTitlePage(liveFixture("little-witch-academia"))!.description).toBeUndefined();
+  });
+
+  it("rejects impossible calendar dates", () => {
+    expect(parseYenDate("Feb 29, 2025")).toBeUndefined();
+    expect(parseYenDate("Apr 31, 2026")).toBeUndefined();
+    expect(parseYenDate("Feb 29, 2024")).toEqual({
+      year: 2024,
+      month: 2,
+      day: 29,
     });
   });
 
@@ -154,7 +220,9 @@ afterEach(() => {
 
 async function seed(t: ReturnType<typeof convexTest>) {
   await t.mutation(internal.importSources.seedRegistry, {});
-  await t.mutation(internal.importSources.setBootstrapModeInternal, { on: true });
+  await t.mutation(internal.importSources.setBootstrapModeInternal, {
+    on: true,
+  });
   await t.mutation(internal.launch.seedPublishers, {});
 }
 
@@ -191,9 +259,19 @@ describe("yenPress.sync — disabling a source", () => {
   it("stops a scheduled run at its next link once the source is disabled", async () => {
     const t = convexTest(schema);
     await seed(t);
-    stubYen({ [MANGA_URL]: MANGA_PAGE, [DELUXE_URL]: DELUXE_PAGE, [IZE_URL]: IZE_BOX_PAGE });
-    expect(await sync(t, { maxFetches: 1 })).toMatchObject({ continued: true, fetched: 1 });
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled: false });
+    stubYen({
+      [MANGA_URL]: MANGA_PAGE,
+      [DELUXE_URL]: DELUXE_PAGE,
+      [IZE_URL]: IZE_BOX_PAGE,
+    });
+    expect(await sync(t, { maxFetches: 1 })).toMatchObject({
+      continued: true,
+      fetched: 1,
+    });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "yenpress",
+      enabled: false,
+    });
     await drain(t);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();
@@ -207,10 +285,21 @@ describe("yenPress.sync — disabling a source", () => {
   it("finishes a run an operator forced on the disabled source", async () => {
     const t = convexTest(schema);
     await seed(t);
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled: false });
-    stubYen({ [MANGA_URL]: MANGA_PAGE, [DELUXE_URL]: DELUXE_PAGE, [IZE_URL]: IZE_BOX_PAGE });
-    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "yenpress" });
-    expect(await sync(t, { runId, maxFetches: 1 })).toMatchObject({ continued: true });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "yenpress",
+      enabled: false,
+    });
+    stubYen({
+      [MANGA_URL]: MANGA_PAGE,
+      [DELUXE_URL]: DELUXE_PAGE,
+      [IZE_URL]: IZE_BOX_PAGE,
+    });
+    const runId = await t.mutation(internal.imports.startRun, {
+      sourceKey: "yenpress",
+    });
+    expect(await sync(t, { runId, maxFetches: 1 })).toMatchObject({
+      continued: true,
+    });
     await drain(t);
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
@@ -222,10 +311,125 @@ describe("yenPress.sync — disabling a source", () => {
 });
 
 describe("yenPress.sync", () => {
+  it.each([1, 300])(
+    "fetches separate format pages sharing a slug with a budget of %i",
+    async (maxFetches) => {
+      const t = convexTest(schema);
+      await seed(t);
+      const printUrl = "https://yenpress.com/titles/9780759528598-nightschool-vol-1";
+      const digitalUrl = "https://yenpress.com/titles/9780316213691-nightschool-vol-1";
+      const pages: Record<string, string> = {
+        [printUrl]: liveFixture("nightschool-print"),
+        [digitalUrl]: liveFixture("nightschool-digital"),
+      };
+      vi.stubGlobal("fetch", async (input: string) => {
+        requested.push(input);
+        return new Response(
+          input.endsWith("/sitemap.xml") ? sitemap(Object.keys(pages)) : pages[input],
+        );
+      });
+      await sync(t, { maxFetches });
+      vi.useFakeTimers();
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      vi.useRealTimers();
+      expect(requested.filter((url) => url.includes("/titles/")).sort()).toEqual(
+        [digitalUrl, printUrl].sort(),
+      );
+      await t.run(async (ctx) => {
+        const observations = await ctx.db.query("sourceObservations").collect();
+        expect(observations.map((o) => o.sourceRecordId).sort()).toEqual([
+          "9780316213691",
+          "9780759528598",
+        ]);
+      });
+    },
+  );
+
+  it("carries page failure through continuation", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    stubYen({ [MANGA_URL]: "<html>Broken template</html>", [DELUXE_URL]: DELUXE_PAGE });
+    await sync(t, { maxFetches: 1 });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.status).toBe("failed");
+      expect(run!.errors.some((error) => error.includes("not a title page"))).toBe(true);
+    });
+  });
+
+  it("notes a removed title page (HTTP 404) without failing the run", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    // The manga's digital URL is in the sitemap but its page is gone.
+    stubYen({ [DELUXE_URL]: DELUXE_PAGE });
+    const result = await sync(t);
+    expect(result).toMatchObject({ continued: false, fetched: 2, errorCount: 1 });
+    expect((result as { failed?: boolean }).failed).toBeUndefined();
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.status).toBe("succeeded");
+      expect(run!.errors[0]).toContain("HTTP 404");
+    });
+  });
+
+  it("fails a sitemap response that silently lost its titles", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    vi.stubGlobal("fetch", async () => new Response("<html>Temporarily unavailable</html>"));
+    expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
+  });
+
+  it("creates JY manga releases under its own imprint", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const url = "https://yenpress.com/titles/9781975327453-little-witch-academia-vol-1-manga";
+    const snapshots = toSnapshots(parseTitlePage(liveFixture("little-witch-academia"))!, url);
+    for (const snapshot of snapshots) await t.mutation(internal.yenPress.applyTitle, { snapshot });
+    await t.run(async (ctx) => {
+      const publisher = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "jy"))
+        .unique();
+      expect(publisher!.parentPublisherId).toBeDefined();
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases).toHaveLength(2);
+      expect(releases.every((release) => release.publisherId === publisher!._id)).toBe(true);
+    });
+  });
+
+  it("carries the blurb into new Releases and fills it on linked ones", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const url = "https://yenpress.com/titles/9781975357429-little-witch-academia-vol-3-manga";
+    const page = parseTitlePage(liveFixture("little-witch-academia-3"))!;
+    // First seen without a blurb, then with one: the linked Releases fill.
+    for (const snapshot of toSnapshots({ ...page, description: undefined }, url)) {
+      await t.mutation(internal.yenPress.applyTitle, { snapshot });
+    }
+    const descriptions = async () =>
+      await t.run(async (ctx) =>
+        (await ctx.db.query("releases").collect()).map((r) => r.description ?? null),
+      );
+    expect(await descriptions()).toEqual([null, null]);
+    for (const snapshot of toSnapshots(page, url)) {
+      expect(await t.mutation(internal.yenPress.applyTitle, { snapshot })).toMatchObject({
+        status: "updated",
+      });
+    }
+    expect(await descriptions()).toEqual([page.description, page.description]);
+  });
+
   it("creates in-scope books under Yen's publisher rows, once per page, never novels", async () => {
     const t = convexTest(schema);
     await seed(t);
-    stubYen({ [MANGA_URL]: MANGA_PAGE, [DELUXE_URL]: DELUXE_PAGE, [IZE_URL]: IZE_BOX_PAGE });
+    stubYen({
+      [MANGA_URL]: MANGA_PAGE,
+      [DELUXE_URL]: DELUXE_PAGE,
+      [IZE_URL]: IZE_BOX_PAGE,
+    });
 
     const result = await sync(t);
     expect(result).toMatchObject({ continued: false, fetched: 3 });
@@ -256,7 +460,11 @@ describe("yenPress.sync", () => {
   it("is incremental: fresh books are not refetched, and a small budget chains", async () => {
     const t = convexTest(schema);
     await seed(t);
-    stubYen({ [MANGA_URL]: MANGA_PAGE, [DELUXE_URL]: DELUXE_PAGE, [IZE_URL]: IZE_BOX_PAGE });
+    stubYen({
+      [MANGA_URL]: MANGA_PAGE,
+      [DELUXE_URL]: DELUXE_PAGE,
+      [IZE_URL]: IZE_BOX_PAGE,
+    });
 
     const first = await sync(t, { maxFetches: 1 });
     expect(first).toMatchObject({ continued: true, fetched: 1 });
