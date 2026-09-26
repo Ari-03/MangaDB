@@ -152,20 +152,30 @@ describe("prh.sync — configuration", () => {
     });
   });
 
-  it("fails malformed list responses without withdrawing existing observations", async () => {
-    const t = makeT();
-    await seedRegistry(t, true);
-    stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
-    await sync(t);
-    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "upstream error" })));
-    const result = await sync(t);
-    expect(result).toMatchObject({ failed: true, completeSweep: false });
-    await t.run(async (ctx) => {
-      const observations = await ctx.db.query("sourceObservations").collect();
-      expect(observations).toHaveLength(1);
-      expect(observations[0]!.withdrawn).not.toBe(true);
-    });
-  });
+  it.each([
+    { error: "upstream error" },
+    { data: {} },
+    { data: { titles: null } },
+    { data: { error: "upstream unavailable" } },
+  ])(
+    "fails malformed list responses without withdrawing existing observations: %j",
+    async (body) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
+      await sync(t);
+      vi.stubGlobal("fetch", async () => new Response(JSON.stringify(body)));
+      const result = await sync(t);
+      expect(result).toMatchObject({ failed: true, completeSweep: false });
+      await t.run(async (ctx) => {
+        if (!("runId" in result)) throw new Error("Expected an import run");
+        expect((await ctx.db.get(result.runId))?.status).toBe("failed");
+        const observations = await ctx.db.query("sourceObservations").collect();
+        expect(observations).toHaveLength(1);
+        expect(observations[0]!.withdrawn).not.toBe(true);
+      });
+    },
+  );
 
   it("does not call a prematurely empty upstream page a complete sweep", async () => {
     const t = makeT();

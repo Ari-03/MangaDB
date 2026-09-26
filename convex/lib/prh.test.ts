@@ -252,6 +252,9 @@ describe("parseTitleList", () => {
     null,
     {},
     { error: "unauthorized" },
+    { data: {} },
+    { data: { titles: null } },
+    { data: { error: "upstream unavailable" } },
     { recordCount: 5, data: {} },
     { recordCount: 3, data: { titles: null } },
     { data: { titles: "nope" } },
@@ -259,15 +262,11 @@ describe("parseTitleList", () => {
     expect(() => parseTitleList(raw)).toThrow("titles array"),
   );
 
-  // The real empty-imprint envelope is unverified (live probe was a 403), so
-  // a missing titles array reads as an empty page whenever no records are
-  // reported.
+  // A missing titles array requires an explicit zero count, not an absent count.
   it.each([
     { recordCount: 0 },
     { recordCount: 0, data: {} },
     { data: { recordCount: 0, titles: null } },
-    { data: {} },
-    { data: { titles: null } },
   ])("tolerates a zero-record envelope without titles: %j", (raw) =>
     expect(parseTitleList(raw)).toMatchObject({ titles: [], rawCount: 0 }),
   );

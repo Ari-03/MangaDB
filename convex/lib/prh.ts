@@ -215,11 +215,9 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
 
 /**
  * The title-list envelope → its parsed titles + the total record count.
- * The zero-record envelope is unverified (the live probe was a 403), so a
- * missing `titles` is tolerated as an empty page when the envelope reports
- * no records — recordCount 0, or a `data` object with no count. A missing
- * `titles` under a positive recordCount is a truncated page, and a body
- * with neither `data` nor a count (an error object) is no title list at all.
+ * A missing `titles` array is tolerated only with an explicit recordCount 0.
+ * An absent count provides no evidence that the catalog is empty; rejecting
+ * that response prevents an incomplete sweep from withdrawing observations.
  */
 export function parseTitleList(raw: unknown): {
   titles: PrhTitleSnapshot[];
@@ -234,7 +232,7 @@ export function parseTitleList(raw: unknown): {
   const recordCount = typeof count === "number" ? count : undefined;
   const list = data?.titles;
   if (!Array.isArray(list)) {
-    if (list == null && (recordCount === 0 || (recordCount === undefined && envelope))) {
+    if (list == null && recordCount === 0) {
       return { titles: [], rawCount: 0, recordCount };
     }
     throw new Error("PRH response is missing its titles array");
