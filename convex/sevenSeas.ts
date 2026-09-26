@@ -20,13 +20,16 @@
 //       in Bootstrap Mode those records are created directly and tagged
 //       bootstrap-unreviewed (spec §7).
 //
-// Covers land in Convex file storage as {storageId, sourceUrl, attribution}.
+// Covers land in Convex file storage as {storageId, sourceUrl, attribution}
+// through the shared attach path (lib/covers.ts `storeCover`), and are
+// replaced when the book's cover URL changes.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
+import { coverOutdated, storeCover, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { rangeLabels } from "./lib/bookTitle";
 import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
@@ -115,6 +118,7 @@ export const sync = internalAction({
     // Invalid listing items plus detail fetch/parse failures: any of them
     // fails the run so source health notices a recurring problem.
     let failures = 0;
+    const covers: StoredCovers = new Map();
 
     try {
       let page = 1;
@@ -201,13 +205,11 @@ export const sync = internalAction({
 
             if (result.coverNeeded && result.releaseId && snapshot.coverUrl) {
               try {
-                const imgRes = await politeFetch(snapshot.coverUrl, delay);
-                const storageId = await ctx.storage.store(await imgRes.blob());
-                await ctx.runMutation(internal.sevenSeas.attachCover, {
+                await storeCover(ctx, covers, {
                   releaseId: result.releaseId,
-                  storageId,
                   sourceUrl: snapshot.coverUrl,
                   attribution: source.attribution ?? PUBLISHER.name,
+                  delayMs: delay,
                 });
               } catch (e) {
                 errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
@@ -371,7 +373,12 @@ export const applyBook = internalMutation({
       if (!release || release.status !== "active" || release.locked) {
         return { status: "recordOnly", changed: false };
       }
-      if (!changed && release.coverImage) {
+      // An unchanged snapshot is done unless its art moved to a new URL.
+      // An unchanged listing still reconciles once while it carries a blurb
+      // the Release lacks: descriptions predate their import, so the first
+      // sync after that change must not skip already-linked books.
+      const blurbPending = snapshot.description !== undefined && release.description === undefined;
+      if (!changed && !blurbPending && !coverOutdated(release.coverImage, snapshot.coverUrl)) {
         return { status: "unchanged", changed: false };
       }
       const seriesResult = await reconcileSeries(ctx, snapshot, citation, now);
@@ -393,7 +400,7 @@ export const applyBook = internalMutation({
               : "recordOnly",
         changed: result.changed || seriesResult.changed,
         releaseId: release._id,
-        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+        coverNeeded: coverOutdated(release.coverImage, snapshot.coverUrl),
       };
     }
 
@@ -479,7 +486,7 @@ export const applyBook = internalMutation({
         status: "linked",
         changed: true,
         releaseId: release._id,
-        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+        coverNeeded: coverOutdated(release.coverImage, snapshot.coverUrl),
       };
     }
 
@@ -621,42 +628,5 @@ export const applyBook = internalMutation({
       releaseId: creation.releaseId,
       coverNeeded: snapshot.coverUrl !== undefined,
     };
-  },
-});
-
-// ---------- covers ----------
-
-/**
- * Attach a stored cover: {storageId, sourceUrl, attribution} per spec §6.
- * A racing duplicate or vanished release deletes the fresh blob instead of
- * orphaning it; replacing an outdated source cover deletes the old blob.
- */
-export const attachCover = internalMutation({
-  args: {
-    releaseId: v.id("releases"),
-    storageId: v.id("_storage"),
-    sourceUrl: v.string(),
-    attribution: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const release = await ctx.db.get(args.releaseId);
-    if (!release || release.status !== "active") {
-      await ctx.storage.delete(args.storageId);
-      return { attached: false };
-    }
-    const current = release.coverImage;
-    if (current?.sourceUrl === args.sourceUrl) {
-      await ctx.storage.delete(args.storageId);
-      return { attached: false };
-    }
-    if (current) await ctx.storage.delete(current.storageId);
-    await ctx.db.patch(args.releaseId, {
-      coverImage: {
-        storageId: args.storageId,
-        sourceUrl: args.sourceUrl,
-        attribution: args.attribution,
-      },
-    });
-    return { attached: true };
   },
 });

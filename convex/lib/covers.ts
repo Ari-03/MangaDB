@@ -1,11 +1,14 @@
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { QueryCtx } from "../_generated/server";
+import type { ActionCtx, QueryCtx } from "../_generated/server";
+import { politeFetch } from "./http";
 
 // Some publishers serve a generic "no cover yet" SVG where the artwork would
-// be, and the importers stored those as cover images. Real cover art is
+// be, and the importers once stored those as cover images. Real cover art is
 // always a raster image, so an SVG (or a tiny file) is treated as no cover:
 // the site draws its cloth placeholder instead of a blank white rectangle.
-const MIN_COVER_BYTES = 2048;
+// `storeCover` applies the same rule before storing anything.
+export const MIN_COVER_BYTES = 2048;
 
 /** Public URL for a stored cover, or null when the file is only a placeholder. */
 export async function coverUrl(
@@ -19,6 +22,55 @@ export async function coverUrl(
     return null;
   }
   return await ctx.storage.getUrl(storageId);
+}
+
+/**
+ * Whether a source's art at `coverUrl` should be (re)stored on a Release:
+ * none on file yet, or the publisher now serves it from a different URL.
+ */
+export function coverOutdated(
+  coverImage: Doc<"releases">["coverImage"],
+  coverUrl: string | undefined,
+): boolean {
+  return coverUrl !== undefined && coverImage?.sourceUrl !== coverUrl;
+}
+
+/** Blobs one action invocation stored, by source URL, so a second format reuses the first. */
+export type StoredCovers = Map<string, Id<"_storage">>;
+
+/**
+ * Download publisher art (Kodansha, Seven Seas) into file storage and attach
+ * it to a Release through `imports.attachCover`, which keeps one blob per
+ * Edition and URL. A URL this invocation already stored is not fetched
+ * again: callers charging downloads to a budget check `stored.has(url)`
+ * first. Throws on a failed download or on a placeholder (not a raster
+ * image, or under MIN_COVER_BYTES), which then never reaches storage.
+ */
+export async function storeCover(
+  ctx: ActionCtx,
+  stored: StoredCovers,
+  args: { releaseId: Id<"releases">; sourceUrl: string; attribution: string; delayMs: number },
+): Promise<void> {
+  let storageId = stored.get(args.sourceUrl);
+  if (storageId === undefined) {
+    const blob = await (await politeFetch(args.sourceUrl, args.delayMs)).blob();
+    const type = blob.type.split(";")[0]!.trim().toLowerCase();
+    if (!type.startsWith("image/") || type === "image/svg+xml" || blob.size < MIN_COVER_BYTES) {
+      throw new Error(`placeholder, not stored (${type || "no type"}, ${blob.size} bytes)`);
+    }
+    storageId = await ctx.storage.store(blob);
+  }
+  const result: { storageId: Id<"_storage"> | null } = await ctx.runMutation(
+    internal.imports.attachCover,
+    {
+      releaseId: args.releaseId,
+      storageId,
+      sourceUrl: args.sourceUrl,
+      attribution: args.attribution,
+    },
+  );
+  if (result.storageId) stored.set(args.sourceUrl, result.storageId);
+  else stored.delete(args.sourceUrl);
 }
 
 /**

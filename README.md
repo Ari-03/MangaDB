@@ -54,8 +54,10 @@ in order, drawing cloth after the last 404, including one that failed before
 hydration. Series shelves store one ISBN per Series (`seriesStats.coverIsbn`,
 and `seriesCover` for the home shelf), picked by `seriesCoverIsbn`: physical,
 already published, earliest Volume, standard run before an Edition Line. The
-few stored covers (Kodansha imports) win where they exist, and
-`convex/lib/covers.ts` hides the blank SVG some importers stored.
+few stored covers (Kodansha and Seven Seas imports) win where they exist, and
+`convex/lib/covers.ts` hides the blank SVG some importers once stored. That
+publisher art is stored once per Edition and image URL, shared by print and
+digital, and refreshed when the publisher's image URL changes.
 
 Coverage, measured September 2026 on a 627-ISBN sample stratified by
 publisher × format × date (weighted to the 17,169 active Releases with an

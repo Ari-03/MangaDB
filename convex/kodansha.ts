@@ -13,8 +13,8 @@
 //   digital ISBNs, per-format dates, list prices — at 1 req/s. The ISBN
 //   drives the ladder (rung ② first), so the crawl links PRH/ANN records
 //   and fills ISBNs on calendar-created Releases; unmatched volumes follow
-//   the standard creation boundaries. It never downloads covers: with an
-//   ISBN, the site's cover lookup finds the art (README "Covers"). The
+//   the standard creation boundaries. The JSON-LD `image` is stored as the
+//   cover like the calendar's, each download charged to the fetch budget. The
 //   series blurb (series page, else listing) rides on each volume snapshot
 //   and is offered as the Series synopsis; the calendar keeps it.
 //
@@ -25,6 +25,10 @@
 // upcoming/recent/undated volumes (plus new ones) on the weekly check. A
 // run spends a bounded number of fetches per action invocation and chains
 // itself under one Import Run (cursor = the last series handled).
+//
+// Both feeds store Kodansha's art (lib/covers.ts `storeCover`): one blob per
+// Edition and image URL, shared by print and digital, and replaced when the
+// URL changes.
 //
 // Both feeds share one scope gate: a novel, children's picture book, or
 // other non-manga volume (lib/kodansha.ts `outOfScope`) is observed and
@@ -43,6 +47,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
+import { coverOutdated, storeCover, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { runToContinue } from "./lib/importRuns";
 import {
@@ -175,6 +180,7 @@ export const sync = internalAction({
       const newRes = await politeFetch(`${BASE_URL}/wp-json/kodansha/v1/new-releases`, delay);
       ingest(parseNewReleases(await newRes.json()));
 
+      const covers: StoredCovers = new Map();
       for (const [recordId, { snapshot }] of items) {
         seen++;
         try {
@@ -188,13 +194,11 @@ export const sync = internalAction({
           }
           if (result.coverNeeded && result.releaseId && snapshot.coverUrl) {
             try {
-              const imgRes = await politeFetch(snapshot.coverUrl, delay);
-              const storageId = await ctx.storage.store(await imgRes.blob());
-              await ctx.runMutation(internal.imports.attachCover, {
+              await storeCover(ctx, covers, {
                 releaseId: result.releaseId,
-                storageId,
                 sourceUrl: snapshot.coverUrl,
                 attribution: source.attribution ?? PUBLISHER.name,
+                delayMs: delay,
               });
             } catch (e) {
               errors.push(`cover ${recordId}: ${errorMessage(e)}`);
@@ -392,6 +396,7 @@ export const backlistSync = internalAction({
     let fetchedTotal = args.fetched ?? 0;
     let fetchedHere = 0;
     let lastSlug = args.afterSlug;
+    const covers: StoredCovers = new Map();
 
     const finish = async (status: "succeeded" | "failed"): Promise<BacklistResult> => {
       await ctx.runMutation(internal.imports.finishRun, {
@@ -486,6 +491,25 @@ export const backlistSync = internalAction({
                   if (result.changed) changed++;
                   if (result.status === "needsReview") {
                     errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
+                  }
+                  const coverUrl = snapshot.coverUrl;
+                  if (result.coverNeeded && result.releaseId && coverUrl) {
+                    // A download counts against the budget; a failed one is a
+                    // notice, retried when the volume is next applied.
+                    if (!covers.has(coverUrl)) {
+                      fetchedHere++;
+                      fetchedTotal++;
+                    }
+                    try {
+                      await storeCover(ctx, covers, {
+                        releaseId: result.releaseId,
+                        sourceUrl: coverUrl,
+                        attribution: source.attribution ?? PUBLISHER.name,
+                        delayMs: delay,
+                      });
+                    } catch (e) {
+                      errors.push(`cover ${recordId}: ${errorMessage(e)}`);
+                    }
                   }
                 } catch (e) {
                   // Retried at the next weekly check, not the 180-day refresh.
@@ -607,6 +631,9 @@ async function withPageFacts(
     priceCents: stored.priceCents,
     releaseDate: stored.releaseDate ?? snapshot.releaseDate,
     seriesSynopsis: snapshot.seriesSynopsis ?? stored.seriesSynopsis,
+    // The page's art stays too: the calendar can name the same jacket at
+    // another size, and alternating URLs would re-store the cover each day.
+    coverUrl: stored.coverUrl ?? snapshot.coverUrl,
   };
 }
 
@@ -648,7 +675,8 @@ export const applyVolume = internalMutation({
       if (!release || release.status !== "active" || release.locked) {
         return { status: "recordOnly", changed: false };
       }
-      if (!changed && release.coverImage) {
+      // An unchanged snapshot is done unless its art moved to a new URL.
+      if (!changed && !coverOutdated(release.coverImage, snapshot.coverUrl)) {
         return { status: "unchanged", changed: false };
       }
       const seriesResult = await reconcileLinkedSeries(ctx, {
@@ -681,7 +709,7 @@ export const applyVolume = internalMutation({
               : "recordOnly",
         changed: result.changed || seriesResult.changed,
         releaseId: release._id,
-        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+        coverNeeded: coverOutdated(release.coverImage, snapshot.coverUrl),
       };
     }
 
@@ -761,7 +789,7 @@ export const applyVolume = internalMutation({
         status: "linked",
         changed: true,
         releaseId: release._id,
-        coverNeeded: !release.coverImage && snapshot.coverUrl !== undefined,
+        coverNeeded: coverOutdated(release.coverImage, snapshot.coverUrl),
       };
     }
 

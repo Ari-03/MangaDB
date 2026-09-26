@@ -9,6 +9,7 @@ import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
+import { MIN_COVER_BYTES } from "./lib/covers";
 import schema from "./schema";
 
 const BASE = "https://sevenseasentertainment.com";
@@ -25,15 +26,18 @@ type FixtureBook = {
   category?: string;
   isbn?: string;
   cover?: boolean;
+  /** The cover's file under uploads/covers (default `{slug}.jpg`); an .svg is a placeholder. */
+  coverFile?: string;
   /** The listing's `content.rendered` blurb HTML. */
   blurb?: string;
 };
 
 function bookPageHtml(b: FixtureBook): string {
+  const file = b.coverFile ?? `${b.slug}.jpg`;
   const cover =
     b.cover === false
       ? ""
-      : `<img src="${BASE}/wp-content/uploads/covers/${b.slug}.jpg" title="${b.title}" alt="${b.title}">`;
+      : `<img src="${BASE}/wp-content/uploads/covers/${file}" title="${b.title}" alt="${b.title}">`;
   const series = b.seriesSlug
     ? `<b>Series: </b><span> <a href="${BASE}/series/${b.seriesSlug}/">${b.seriesTitle ?? b.title}</a></span>`
     : "";
@@ -43,6 +47,9 @@ function bookPageHtml(b: FixtureBook): string {
     b.category ?? "Manga"
   }</p>${b.isbn ? `<p><b>ISBN:</b> ${b.isbn}</p>` : ""}</div></body></html>`;
 }
+
+/** Cover-image URLs the stubbed site served, cleared after each test. */
+const imageRequests: string[] = [];
 
 /** Stub global fetch with a fixture site serving the live wire shapes. */
 function stubSite(books: FixtureBook[]) {
@@ -71,9 +78,14 @@ function stubSite(books: FixtureBook[]) {
       return new Response(page, { headers: { "content-type": "text/html" } });
     }
     if (url.includes("/wp-content/uploads/")) {
-      return new Response(new Blob([new Uint8Array([0xff, 0xd8, 0xff])]), {
-        headers: { "content-type": "image/jpeg" },
-      });
+      imageRequests.push(url);
+      return url.endsWith(".svg")
+        ? new Response("<svg xmlns='http://www.w3.org/2000/svg'/>", {
+            headers: { "content-type": "image/svg+xml" },
+          })
+        : new Response(new Blob([new Uint8Array(MIN_COVER_BYTES + 1).fill(0xff)]), {
+            headers: { "content-type": "image/jpeg" },
+          });
     }
     return new Response("not found", { status: 404 });
   });
@@ -81,6 +93,7 @@ function stubSite(books: FixtureBook[]) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  imageRequests.length = 0;
 });
 
 async function seedRegistry(t: ReturnType<typeof convexTest>, bootstrap: boolean) {
@@ -312,6 +325,26 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     });
   });
 
+  it("a forced re-read fills a blurb the Release predates, even with the listing unchanged", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    // A Release imported before descriptions existed: no text, same listing.
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      await ctx.db.patch(release._id, { description: undefined });
+    });
+    const forced = await sync(t, { force: true });
+    expect(forced).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      expect(release.description).toBe("Alpha’s first adventure.");
+    });
+    // With the text in place the unchanged short-circuit is back.
+    expect(await sync(t, { force: true })).toMatchObject({ recordsChanged: 0 });
+  });
+
   it("keeps append-only history and auto-updates authoritative fields on change", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);
@@ -400,6 +433,54 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
       expect(byId.get("series:alpha-manga")?.withdrawn).toBe(false);
       // Withdrawal retains everything — the canonical release stays.
       expect(await ctx.db.query("releases").collect()).toHaveLength(2);
+    });
+  });
+});
+
+describe("sevenSeas.sync — covers", () => {
+  const cover = (t: ReturnType<typeof convexTest>) =>
+    t.run(async (ctx) => (await ctx.db.query("releases").collect())[0]!.coverImage ?? null);
+
+  it("keeps a current cover and replaces one whose URL changed, deleting its blob", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    const first = (await cover(t))!;
+
+    // Re-read with the same art: nothing is downloaded or replaced.
+    imageRequests.length = 0;
+    await sync(t, { force: true });
+    expect(imageRequests).toEqual([]);
+    expect(await cover(t)).toEqual(first);
+
+    // New art under a new URL replaces the stored cover.
+    const moved = `${BASE}/wp-content/uploads/covers/alpha-manga-vol-1-new.jpg`;
+    stubSite([
+      { ...ALPHA_1, modified: "2026-08-10T00:00:00", coverFile: "alpha-manga-vol-1-new.jpg" },
+    ]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(imageRequests).toEqual([moved]);
+    const second = (await cover(t))!;
+    expect(second.sourceUrl).toBe(moved);
+    expect(second.storageId).not.toBe(first.storageId);
+    await t.run(async (ctx) => {
+      expect(await ctx.storage.getUrl(first.storageId)).toBeNull();
+    });
+  });
+
+  it("skips an SVG placeholder without storing it", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...ALPHA_1, coverFile: "no-cover.svg" }]);
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsChanged: 1, errorCount: 1 });
+    expect((result as { failed?: boolean }).failed).toBeUndefined();
+    expect(await cover(t)).toBeNull();
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(0);
+      const run = (await ctx.db.query("importRuns").collect())[0]!;
+      expect(run.errors[0]).toContain("placeholder, not stored (image/svg+xml");
     });
   });
 });

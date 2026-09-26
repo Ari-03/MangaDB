@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { MIN_COVER_BYTES } from "./lib/covers";
 import schema from "./schema";
 
 const BASE = "https://kodansha.us";
@@ -21,6 +22,8 @@ type FixtureVolume = {
   volume: number;
   date: string;
   formats: string[];
+  /** The calendar's `image`; defaults to one URL per volume. */
+  image?: string;
 };
 
 function calendarPayload(volumes: FixtureVolume[]) {
@@ -38,7 +41,8 @@ function calendarPayload(volumes: FixtureVolume[]) {
         title: `Volume ${vol.volume}`,
         series_name: vol.series,
         creators: "By Someone",
-        image: `https://production.image.azuki.co/${vol.seriesSlug}-${vol.volume}/800.webp`,
+        image:
+          vol.image ?? `https://production.image.azuki.co/${vol.seriesSlug}-${vol.volume}/800.webp`,
         volume_url: `${BASE}/series/${vol.seriesSlug}/volume-${vol.volume}/`,
         formats: vol.formats,
       })),
@@ -46,9 +50,24 @@ function calendarPayload(volumes: FixtureVolume[]) {
   };
 }
 
+/** Every URL the stubbed site was asked for, cleared after each test. */
+const requested: string[] = [];
+
+/**
+ * Cover art from the image CDN: a real-sized WebP, except that a URL
+ * containing "tiny" serves a 3-byte file, the kind of placeholder never stored.
+ */
+function coverImage(url: string): Response {
+  const size = url.includes("tiny") ? 3 : MIN_COVER_BYTES + 1;
+  return new Response(new Blob([new Uint8Array(size).fill(0xff)]), {
+    headers: { "content-type": "image/webp" },
+  });
+}
+
 function stubSite(volumes: FixtureVolume[]) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
     const url = typeof input === "object" && "url" in input ? input.url : String(input);
+    requested.push(url);
     if (url.startsWith(`${BASE}/wp-json/kodansha/v1/release-calendar`)) {
       return new Response(JSON.stringify(calendarPayload(volumes)), {
         headers: { "content-type": "application/json" },
@@ -59,17 +78,14 @@ function stubSite(volumes: FixtureVolume[]) {
         headers: { "content-type": "application/json" },
       });
     }
-    if (url.includes("azuki.co")) {
-      return new Response(new Blob([new Uint8Array([0xff, 0xd8, 0xff])]), {
-        headers: { "content-type": "image/jpeg" },
-      });
-    }
+    if (url.includes("azuki.co")) return coverImage(url);
     return new Response("not found", { status: 404 });
   });
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  requested.length = 0;
 });
 
 function makeT() {
@@ -136,6 +152,9 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
         expect(release.coverImage).toBeDefined();
         expect(release.coverImage!.attribution).toContain("Kodansha");
       }
+      // Both formats show the calendar's one image: fetched and stored once.
+      expect(releases[0]!.coverImage!.storageId).toBe(releases[1]!.coverImage!.storageId);
+      expect(requested.filter((u) => u.includes("azuki.co"))).toHaveLength(1);
       // Importer-authored public Revisions cite source name + record URL.
       const revisions = await ctx.db.query("revisions").collect();
       const releaseRevisions = revisions.filter((r) => r.ref.type === "release");
@@ -176,7 +195,10 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
     stubSite([IRUMA]);
     await sync(t);
     const before = await t.run((ctx) => ctx.db.query("revisions").collect());
+    requested.length = 0;
     await sync(t);
+    // The stored cover is current: no image is fetched again.
+    expect(requested.some((u) => u.includes("azuki.co"))).toBe(false);
     await t.run(async (ctx) => {
       const after = await ctx.db.query("revisions").collect();
       expect(after).toHaveLength(before.length);
@@ -425,6 +447,107 @@ describe("kodansha.sync — series resolution and publishers", () => {
   });
 });
 
+describe("kodansha covers — stored once, kept current", () => {
+  const coverOf = (t: TestT, format: "physical" | "digital") =>
+    t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      return releases.find((r) => r.format === format)!.coverImage!;
+    });
+
+  it("replaces art whose URL changed and deletes the old blob once unused", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([IRUMA]);
+    await sync(t);
+    const old = (await coverOf(t, "physical")).storageId;
+
+    const moved = "https://production.image.azuki.co/iruma-21-new/800.webp";
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 0 }); // unchanged: no fetch
+    stubSite([{ ...IRUMA, image: moved }]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([moved]);
+
+    const print = await coverOf(t, "physical");
+    expect(print).toMatchObject({ sourceUrl: moved });
+    expect(print.storageId).not.toBe(old);
+    expect(await coverOf(t, "digital")).toEqual(print);
+    await t.run(async (ctx) => {
+      expect(await ctx.storage.getUrl(old)).toBeNull();
+      expect(await ctx.storage.getUrl(print.storageId)).not.toBeNull();
+    });
+  });
+
+  it("attachCover shares a sibling's blob and never deletes one still in use", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([IRUMA]);
+    await sync(t);
+    const [print, digital] = await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      return ["physical", "digital"].map((f) => releases.find((r) => r.format === f)!);
+    });
+    const old = print!.coverImage!.storageId;
+    const art = new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/webp" });
+    const upload = () => t.run((ctx) => ctx.storage.store(art));
+    const attach = (releaseId: Id<"releases">, storageId: Id<"_storage">, sourceUrl: string) =>
+      t.mutation(internal.imports.attachCover, {
+        releaseId,
+        storageId,
+        sourceUrl,
+        attribution: "Kodansha",
+      });
+    const exists = (id: Id<"_storage">) =>
+      t.run(async (ctx) => (await ctx.storage.getUrl(id)) !== null);
+
+    // The same URL again is a no-op; the redundant upload is deleted.
+    const again = await upload();
+    expect(await attach(print!._id, again, print!.coverImage!.sourceUrl!)).toEqual({
+      attached: false,
+      storageId: old,
+    });
+    expect(await exists(again)).toBe(false);
+
+    // New art on print only: digital still shows the old blob, so it stays.
+    const fresh = await upload();
+    expect(await attach(print!._id, fresh, "https://img.example/new.webp")).toEqual({
+      attached: true,
+      storageId: fresh,
+    });
+    expect(await exists(old)).toBe(true);
+
+    // Digital catches up: it reuses print's blob, the duplicate upload and
+    // the now-unused old blob are deleted.
+    const duplicate = await upload();
+    expect(await attach(digital!._id, duplicate, "https://img.example/new.webp")).toEqual({
+      attached: true,
+      storageId: fresh,
+    });
+    expect(await exists(duplicate)).toBe(false);
+    expect(await exists(old)).toBe(false);
+    expect(await exists(fresh)).toBe(true);
+  });
+
+  it("never stores a placeholder image", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([{ ...IRUMA, image: "https://production.image.azuki.co/tiny/800.webp" }]);
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsChanged: 2 });
+    expect((result as { failed?: boolean }).failed).toBeUndefined();
+    await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.every((r) => r.coverImage === undefined)).toBe(true);
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(0);
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "succeeded" });
+      // One notice per format; neither is a failure.
+      expect(run!.errors).toHaveLength(2);
+      expect(run!.errors.every((e) => e.includes("placeholder, not stored"))).toBe(true);
+    });
+  });
+});
+
 // ---------- the backlist crawl ----------
 
 const fixture = (name: string) =>
@@ -469,12 +592,10 @@ function seriesPage(slug: string, name: string, volumes: string[], description?:
   })}</script></head><body></body></html>`;
 }
 
-const requested: string[] = [];
-
 /**
  * A stubbed kodansha.us for the crawl: the paged search-series listing,
- * series pages, and volume pages; everything else 404s. `pages` maps a
- * path ("series/blue-lock/volume-1/") to its HTML.
+ * series pages, volume pages, and the image CDN; everything else 404s.
+ * `pages` maps a path ("series/blue-lock/volume-1/") to its HTML.
  */
 function stubBacklist(listed: ListedSeries[], pages: Record<string, string>) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
@@ -501,6 +622,7 @@ function stubBacklist(listed: ListedSeries[], pages: Record<string, string>) {
         total_count: listed.length,
       });
     }
+    if (url.includes("azuki.co")) return coverImage(url);
     const html = pages[url.slice(`${BASE}/`.length)];
     return html !== undefined
       ? new Response(html, { headers: { "content-type": "text/html" } })
@@ -527,12 +649,8 @@ async function seedBacklist(t: TestT, bootstrap: boolean) {
 const backlist = (t: TestT, args: object = {}) =>
   t.action(internal.kodansha.backlistSync, { politeDelayMs: 0, ...args });
 
-afterEach(() => {
-  requested.length = 0;
-});
-
 describe("kodansha.backlistSync — the crawl", () => {
-  it("creates ISBN'd print + digital Releases from volume pages, never novels or covers", async () => {
+  it("creates ISBN'd print + digital Releases from volume pages, never novels", async () => {
     const t = makeT();
     await seedBacklist(t, true);
     stubBacklist([BLUE_LOCK, NEEDLES, NOVEL], BACKLIST_PAGES);
@@ -541,12 +659,13 @@ describe("kodansha.backlistSync — the crawl", () => {
     expect(result).toMatchObject({
       continued: false,
       seriesCrawled: 2,
-      // 2 series pages + Blue Lock 1, 40 + Needles 1–4.
-      fetched: 8,
+      // 2 series pages + Blue Lock 1, 40 + Needles 1–4, and 2 cover images
+      // (Blue Lock 1's print and digital share one; Blue Lock 40 has none).
+      fetched: 10,
       recordsSeen: 4,
     });
     expect(requested.some((u) => u.includes("a-cops-eyes"))).toBe(false);
-    expect(requested.some((u) => u.includes("azuki.co"))).toBe(false);
+    expect(requested.filter((u) => u.includes("azuki.co"))).toHaveLength(2);
 
     await t.run(async (ctx) => {
       const releases = await ctx.db.query("releases").collect();
@@ -564,9 +683,18 @@ describe("kodansha.backlistSync — the crawl", () => {
         pubDate: { year: 2022, month: 6, day: 21, sort: 20220621 },
         price: { amountCents: 1299, currency: "USD" },
       });
-      // Print and digital of one volume share one Edition (spec §2).
-      expect(byIsbn.get("9781636990033")!.editionId).toBe(print.editionId);
-      expect(releases.every((r) => r.coverImage === undefined)).toBe(true);
+      // Print and digital of one volume share one Edition (spec §2) and
+      // one stored copy of the volume page's JSON-LD image.
+      const digital = byIsbn.get("9781636990033")!;
+      expect(digital.editionId).toBe(print.editionId);
+      expect(print.coverImage).toMatchObject({
+        sourceUrl:
+          "https://production.image.azuki.co/a5dd87dd-6148-4cf3-917b-2f54a576854c/800.webp",
+        attribution: expect.stringContaining("Kodansha"),
+      });
+      expect(digital.coverImage?.storageId).toBe(print.coverImage!.storageId);
+      expect(byIsbn.get("9781939130242")!.coverImage).toBeDefined();
+      expect(byIsbn.get("9798898303303")!.coverImage).toBeUndefined();
       const series = await ctx.db.query("series").collect();
       expect(series.map((s) => s.title).sort()).toEqual(["7 Billion Needles", "Blue Lock"]);
 
