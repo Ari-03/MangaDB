@@ -17,9 +17,11 @@ export type SeriesBrowseArgs = Omit<
 /**
  * One page of the Series library (`/series`): filtered, then sorted,
  * cursor-paged, with the filtered total. Called by the route loader for the
- * first page and from the client as the shelf scrolls. A timing filter gets
- * today's date (UTC) from the server clock, since the Convex query is cached
- * and must not read one. Returns null when Convex is not configured.
+ * first page and from the client as the shelf scrolls. A timing filter that
+ * counts back from today gets today's date (UTC) from the server clock,
+ * since the Convex query is cached and must not read one; later pages keep
+ * the first page's day, which their cursor carries. Returns null when Convex
+ * is not configured.
  */
 export const fetchSeriesBrowse = createServerFn({ method: "GET" })
   .validator((args: SeriesBrowseArgs) => args)
@@ -28,9 +30,10 @@ export const fetchSeriesBrowse = createServerFn({ method: "GET" })
     if (!convex) return null;
     return await convex.query(api.seriesBrowse.browse, {
       ...data,
-      // Only the timing filters read it; leaving it off keeps other views'
-      // cache keys the same from day to day.
-      todaySort: data.timing ? todaySortKey() : undefined,
+      // Only the timings that count back from today read it ("upcoming"
+      // reads announced dates); leaving it off keeps every other view's
+      // cache key the same from day to day.
+      todaySort: data.timing && data.timing !== "upcoming" ? todaySortKey() : undefined,
     });
   });
 

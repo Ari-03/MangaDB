@@ -231,6 +231,38 @@ describe("catalog.search", () => {
     expect(typo.didYouMean.map((s) => s.title)).toEqual(["Seven Seeds"]);
   });
 
+  it("resolves a canonical alias to its Publisher", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    for (const [query, slug] of [
+      ["Shonen Jump", "viz-media"],
+      ["viz signature", "viz-media"],
+      ["Seven Seas Siren", "seven-seas"],
+    ]) {
+      const results = await t.query(api.catalog.search, { query });
+      expect(results.publishers.map((p) => p.slug)).toEqual([slug]);
+      expect(results.didYouMean).toEqual([]);
+    }
+  });
+
+  it("keeps typo help when the query is only a word inside a Publisher's name", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("publishers", { status: "active", name: "Titan Manga", slug: "titan-manga" });
+      await ctx.db.insert("series", {
+        status: "active",
+        publicId: 6,
+        title: "Mango Days",
+        altTitles: [],
+        searchText: "Mango Days",
+      });
+    });
+    const results = await t.query(api.catalog.search, { query: "manga" });
+    expect(results.publishers.map((p) => p.slug)).toEqual(["titan-manga"]);
+    expect(results.didYouMean.map((s) => s.title)).toEqual(["Mango Days"]);
+  });
+
   it("returns nothing for an empty or whitespace query", async () => {
     const t = convexTest(schema);
     await seed(t);
@@ -316,7 +348,7 @@ describe("catalog.suggest", () => {
     expect(chainsawman.didYouMean.map((s) => s.title)).toEqual(["Chainsaw Man"]);
   });
 
-  it("finds publishers by any part of their name, as search does", async () => {
+  it("finds publishers by the start of any word of their name, as search does", async () => {
     const t = convexTest(schema);
     await seed(t);
     const seven = [{ name: "Seven Seas Entertainment", slug: "seven-seas" }];
@@ -344,6 +376,47 @@ describe("catalog.suggest", () => {
     expect(results.publishers.map((p) => p.slug)).toEqual(["seven-seas"]);
     expect(results.didYouMean).toEqual([]);
     expect(results.series).toEqual([]);
+  });
+
+  it("does not match a Publisher mid-word", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("publishers", { status: "active", name: "ComicsOne", slug: "comicsone" });
+      await ctx.db.insert("publishers", {
+        status: "active",
+        name: "One Peace Books",
+        slug: "one-peace-books",
+      });
+    });
+    const results = await t.query(api.catalog.suggest, { query: "one" });
+    expect(results.publishers.map((p) => p.slug)).toEqual(["one-peace-books"]);
+  });
+
+  it("keeps typo help beside a Publisher the query only shares a word with", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("publishers", { status: "active", name: "Titan Manga", slug: "titan-manga" });
+      await ctx.db.insert("series", {
+        status: "active",
+        publicId: 6,
+        title: "Mango Days",
+        altTitles: [],
+        searchText: "Mango Days",
+      });
+    });
+    const results = await t.query(api.catalog.suggest, { query: "manga" });
+    expect(results.publishers.map((p) => p.slug)).toEqual(["titan-manga"]);
+    expect(results.didYouMean.map((s) => s.title)).toEqual(["Mango Days"]);
+  });
+
+  it("finds a Publisher through its canonical alias", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    expect(
+      (await t.query(api.catalog.suggest, { query: "shonen jump" })).publishers,
+    ).toEqual([{ name: "VIZ Media", slug: "viz-media" }]);
   });
 
   it("returns nothing for a blank query", async () => {

@@ -572,6 +572,66 @@ describe("publisher.monthBoard", () => {
     expect(cards.find((c) => c.publisher.slug === "seven-seas")?.newSeries).toBe(1);
   });
 
+  it("does not read a year-only date this year as an earlier Release", async () => {
+    const t = await board();
+    await t.run(async (ctx) => {
+      const [tokyopop] = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "tokyopop"))
+        .take(1);
+      if (!tokyopop) throw new Error("fixture has Tokyopop");
+      // Two Vol. 1 Editions printing this September, each with a digital
+      // sibling dated less precisely: "2026" (could be September) and
+      // "July 2026" (genuinely earlier).
+      const cases = [
+        { publicId: 910, sibling: { year: 2026, sort: 20260000 } },
+        { publicId: 920, sibling: { year: 2026, month: 7, sort: 20260700 } },
+      ];
+      for (const { publicId, sibling } of cases) {
+        const seriesId = await ctx.db.insert("series", {
+          status: "active",
+          publicId,
+          title: `Series ${publicId}`,
+          altTitles: [],
+          searchText: `Series ${publicId}`,
+        });
+        const volumeId = await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: publicId + 1,
+          seriesId,
+          position: 1,
+          label: "1",
+        });
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: publicId + 2,
+          publisherId: tokyopop._id,
+        });
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+        const base = {
+          status: "active" as const,
+          editionId,
+          language: "en",
+          publisherId: tokyopop._id,
+          seriesIds: [seriesId],
+        };
+        await ctx.db.insert("releases", {
+          ...base,
+          format: "physical",
+          pubDate: { year: 2026, month: 9, day: 16, sort: 20260916 },
+        });
+        await ctx.db.insert("releases", { ...base, format: "digital", pubDate: sibling });
+      }
+    });
+    const { board: cards } = await t.query(api.publisher.monthBoard, { year: 2026, month: 9 });
+    // Only the "2026" sibling's Series debuts; the July one is a backfill.
+    expect(cards.find((c) => c.publisher.slug === "tokyopop")).toMatchObject({
+      releases: 2,
+      series: 2,
+      newSeries: 1,
+    });
+  });
+
   it("reads a malformed month as an empty board, directory intact", async () => {
     const t = await board();
     const result = await t.query(api.publisher.monthBoard, { year: 2026, month: 13 });

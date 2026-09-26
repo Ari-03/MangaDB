@@ -293,10 +293,11 @@ function SeriesLibraryPage() {
 /**
  * The filter panel's working copy of the view. A control changes it at once
  * and navigates in place (replace, no scroll jump); title search navigates
- * after a pause in typing. Only a view the page did not ask for (a removed
- * chip, Clear all, back/forward) replaces the draft and drops a pending
- * search; views it asked for landing, in any order, never reset what is
- * being typed (`useUrlDraft`). The router drops a superseded navigation's
+ * after a pause in typing. Any navigation the page did not ask for (a
+ * removed chip, Clear all, a letter, back/forward), even one landing on the
+ * view already shown, replaces the draft and drops a pending search; views
+ * it asked for landing, even one a newer request has superseded, never
+ * reset what is being typed (`useUrlDraft`). The router drops a superseded navigation's
  * results, so a slow response for an older query never replaces a newer one.
  */
 function useLibraryDraft(search: LibrarySearch) {

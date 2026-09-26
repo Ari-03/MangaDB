@@ -60,13 +60,22 @@ export function memoize<K, V>(load: (key: K) => Promise<V>): (key: K) => Promise
 }
 
 /**
- * Memoized reads for joining Releases to the catalog: gets by ID plus an
- * Edition's ordered Coverage. Make one per query and pass it to every helper
- * that looks up the same rows (joinBrowseRows, the Publishers board), so
- * each document is read once.
+ * Memoized reads for joining Releases to the catalog: gets by ID, an
+ * Edition's ordered Coverage, and a Release's jacket art. Make one per query
+ * and pass it to every helper that looks up the same rows (joinBrowseRows,
+ * the Publishers board), so each document is read once.
  */
 export function browseCache(ctx: QueryCtx) {
   return {
+    // A Release's stored cover URL and the ISBN to fetch art by (lib/covers.ts),
+    // keyed by the Release doc itself: callers pass on the docs they read.
+    cover: memoize(async (release: Doc<"releases">) => {
+      const [url, isbn] = await Promise.all([
+        coverUrl(ctx, release.coverImage?.storageId),
+        coverIsbnForRelease(ctx, release),
+      ]);
+      return { coverUrl: url, coverIsbn: isbn };
+    }),
     publisher: memoize((id: Id<"publishers">) => ctx.db.get(id)),
     series: memoize((id: Id<"series">) => ctx.db.get(id)),
     volume: memoize((id: Id<"volumes">) => ctx.db.get(id)),
@@ -182,10 +191,9 @@ export async function joinBrowseRows(
         publisherDoc && publisherDoc.status === "active"
           ? { name: publisherDoc.name, slug: publisherDoc.slug }
           : null,
-      coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
-      // The ISBN to fetch jacket art by (own, or a sibling's — see
-      // lib/covers.ts); `isbn13` above stays the Release's own identity.
-      coverIsbn: await coverIsbnForRelease(ctx, release),
+      // `coverIsbn` is the ISBN to fetch jacket art by (own, or a sibling's —
+      // see lib/covers.ts); `isbn13` above stays the Release's own identity.
+      ...(await cache.cover(release)),
     });
   }
 

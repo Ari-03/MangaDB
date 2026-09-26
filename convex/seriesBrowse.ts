@@ -32,6 +32,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
+import { todaySortKey } from "./lib/dates";
 import { searchWords } from "./lib/searchMatch";
 
 export const SORTS = [
@@ -344,14 +345,6 @@ export function letterFor(titleSort: string): string {
   return c >= "a" && c <= "z" ? c : "#";
 }
 
-/**
- * yyyymmdd for `now` (UTC), the pubDate.sort shape. Only the rebuild uses the
- * clock; `browse` is a cached query, so its caller passes `todaySort`.
- */
-function todaySortKey(now: Date = new Date()): number {
-  return now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
-}
-
 /** True for a plausible yyyymmdd day key (month 1-12, day 1-31). */
 function isDayKey(key: number): boolean {
   const month = Math.floor(key / 100) % 100;
@@ -471,9 +464,9 @@ function monthsBefore(today: number, months: number): number {
  *   unknown today, so this is the English run's quiet end, finished or
  *   stalled; a Series whose final volume just came out reads as recent
  *   until a year has passed.
- * All but upcoming count back from `today`, the caller's `todaySort`: a
- * cached query must not read the clock, or a result from an earlier day
- * could keep serving an old cutoff.
+ * All but upcoming count back from `today`, the caller's `todaySort` (or the
+ * first page's, carried in the cursor): a cached query must not read the
+ * clock, or a result from an earlier day could keep serving an old cutoff.
  */
 function timingTest(timing: Timing, today: number | undefined): (entry: Entry) => boolean {
   if (timing === "upcoming") return (entry) => entry.nextReleaseSort > 0;
@@ -554,8 +547,10 @@ function card(row: StatsRow) {
 // index ends in, so a page resumes exactly where the previous one stopped
 // even when many rows share a value (every zero-follower Series, say). Both
 // paths use it, so a Series added or hidden between requests shifts nothing
-// already seen.
-type Cursor = { v: string | number; id: number };
+// already seen. A filtered page also carries the day its timing filter
+// counted from (`t`), so later pages filter the same set as the first even
+// when the view is paged across UTC midnight.
+type Cursor = { v: string | number; id: number; t?: number };
 
 // Base64url over UTF-8 with the web APIs the Convex runtime provides
 // (no Buffer there); titles in the cursor can be any script.
@@ -573,7 +568,7 @@ function decodeCursor(raw: string | null | undefined): Cursor | null {
     const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
     const c = JSON.parse(new TextDecoder().decode(bytes)) as Partial<Cursor>;
     if ((typeof c.v === "string" || typeof c.v === "number") && typeof c.id === "number") {
-      return { v: c.v, id: c.id };
+      return { v: c.v, id: c.id, t: typeof c.t === "number" ? c.t : undefined };
     }
   } catch {
     // a hand-edited cursor: start from the top
@@ -669,7 +664,9 @@ async function stillPublic(ctx: QueryCtx, row: StatsRow): Promise<boolean> {
  * filters match, or null for the unfiltered shelf (facets' total is that).
  * The total can include a Series hidden since the last rebuild; it is
  * skipped when a page reaches it. `todaySort` (today's yyyymmdd, UTC) is
- * required with the timings that count back from today (past-Nm, finished).
+ * required with the timings that count back from today (past-Nm, finished);
+ * a cursor from such a view brings the first page's day along, and the
+ * cursor's day wins over `todaySort`.
  */
 export const browse = query({
   args: {
@@ -685,7 +682,9 @@ export const browse = query({
     const pageSize = Math.max(1, Math.min(PAGE_MAX, Math.floor(args.pageSize ?? PAGE_DEFAULT)));
     const { field } = SORT_INDEX[args.sort];
     const keyOf = (row: StatsRow | Entry): Cursor => ({ v: row[field], id: row.publicId });
-    const test = matcher(args, args.todaySort);
+    const after = decodeCursor(args.cursor);
+    const today = after?.t ?? args.todaySort;
+    const test = matcher(args, today);
 
     if (test) {
       // Filters pick the set from the packs (the cost is in the header
@@ -698,7 +697,6 @@ export const browse = query({
         return order === "asc" ? cmp : -cmp;
       };
       entries.sort((a, b) => compare(keyOf(a), keyOf(b)));
-      const after = decodeCursor(args.cursor);
       const start = after ? entries.findIndex((entry) => compare(keyOf(entry), after) > 0) : 0;
       const items: Array<StatsRow> = [];
       let examined = start < 0 ? entries.length : start;
@@ -716,7 +714,8 @@ export const browse = query({
       const edge = entries[examined - 1];
       return {
         items: items.map(card),
-        nextCursor: examined < entries.length && edge ? encodeCursor(keyOf(edge)) : null,
+        nextCursor:
+          examined < entries.length && edge ? encodeCursor({ ...keyOf(edge), t: today }) : null,
         total: entries.length,
       };
     }
@@ -725,7 +724,7 @@ export const browse = query({
     // finding it is how we know there is a next page.
     const target = pageSize + 1;
     const items: Array<StatsRow> = [];
-    let cursor = decodeCursor(args.cursor);
+    let cursor = after;
     for (;;) {
       const want = target - items.length;
       const chunk = await readChunk(ctx, args.sort, order, cursor, want);

@@ -70,18 +70,43 @@ describe("matchNames", () => {
     { name: "Drawn & Quarterly" },
     { name: "Ize Press" },
     { name: "Press Start" },
+    { name: "One Peace Books" },
+    { name: "ComicsOne" },
+    { name: "Del Rey Manga" },
+    { name: "Titan Manga" },
+    { name: "Dark Horse" },
   ];
-  const names = (query: string) => matchNames(query, publishers).map((p) => p.name);
+  const names = (query: string) => matchNames(query, publishers).map((m) => m.item.name);
+  const opened = (query: string) =>
+    matchNames(query, publishers).flatMap((m) => (m.opens ? [m.item.name] : []));
 
-  it("finds a name from any part of it, not just its opening", () => {
+  it("finds a name by the start of any of its words", () => {
     expect(names("Seven Seas Entertainment")).toEqual(["Seven Seas Entertainment"]);
     expect(names("seven seas")).toEqual(["Seven Seas Entertainment"]);
     expect(names("seas")).toEqual(["Seven Seas Entertainment"]);
+    expect(names("seas seven")).toEqual(["Seven Seas Entertainment"]);
+  });
+
+  it("does not match inside a word", () => {
+    // "one" opens One Peace Books but sits mid-word in ComicsOne.
+    expect(names("one")).toEqual(["One Peace Books"]);
+    expect(names("ark")).toEqual([]);
+    expect(names("ma")).toEqual(["Del Rey Manga", "Titan Manga"]);
   });
 
   it("puts exact and opening matches first, then the rest A–Z", () => {
     expect(names("press")).toEqual(["Press Start", "Ize Press", "Yen Press"]);
     expect(names("yen press")).toEqual(["Yen Press"]);
+  });
+
+  it("marks only names the query opens as named", () => {
+    expect(opened("seven seas")).toEqual(["Seven Seas Entertainment"]);
+    expect(opened("one")).toEqual(["One Peace Books"]);
+    // A word deeper in the name only suggests the Publisher.
+    expect(names("manga")).toEqual(["Del Rey Manga", "Titan Manga"]);
+    expect(opened("manga")).toEqual([]);
+    expect(opened("seas")).toEqual([]);
+    expect(opened("press")).toEqual(["Press Start"]);
   });
 
   it("folds punctuation and '&' so spelling variants still match", () => {

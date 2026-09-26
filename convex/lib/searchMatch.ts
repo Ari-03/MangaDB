@@ -4,7 +4,8 @@
 // Berserk). The Convex search index only prefix-matches the last term and
 // has no fuzzy mode, so catalog.ts gathers a small candidate set through
 // `probePrefixes` and this module does the forgiving part in memory.
-// Publishers are matched by name here too (`matchNames`), over the small list.
+// Publishers are matched by name here too (`matchNames`), over the small list,
+// by the same word-prefix rule as titles.
 
 import { publisherNameKey } from "./publishers";
 
@@ -73,27 +74,40 @@ export function sortByTitleMatch<
     .map(({ item }) => item);
 }
 
+export type NameMatch<T> = {
+  item: T;
+  /**
+   * The query opens the name ("seven seas", "kodansha"), so it names this
+   * item rather than sharing a word deeper in it ("seas", "manga").
+   */
+  opens: boolean;
+};
+
 /**
- * The items whose name contains the query anywhere, compared as publisher-name
- * keys (case, accents, punctuation, and "&"/"and" folded), so "seas", "seven
- * seas", and "Seven Seas Entertainment" all find Seven Seas Entertainment.
- * An exact name leads, then names that open with the query, then the rest,
- * each A–Z. The one Publisher matcher behind both search and suggestions.
+ * The items whose name holds every query word as the start of one of its
+ * words — the rule Series titles follow (`matchesAllWords`) — compared as
+ * publisher-name keys (case, accents, punctuation, and "&"/"and" folded).
+ * "seas", "seven seas", and "Seven Seas Entertainment" all find Seven Seas
+ * Entertainment; "one" finds One Peace Books but not ComicsOne. An exact
+ * name leads, then names the query opens, then the rest, each A–Z. The one
+ * Publisher matcher behind both search and suggestions.
  */
 export function matchNames<T extends { name: string }>(
   query: string,
   items: ReadonlyArray<T>,
-): T[] {
+): Array<NameMatch<T>> {
   const q = publisherNameKey(query);
   if (q === "") return [];
+  const queryWords = q.split(" ");
   return items
     .flatMap((item) => {
       const key = publisherNameKey(item.name);
-      if (!key.includes(q)) return [];
+      const words = key.split(" ");
+      if (!queryWords.every((qw) => words.some((w) => w.startsWith(qw)))) return [];
       return [{ item, rank: key === q ? 0 : key.startsWith(q) ? 1 : 2 }];
     })
     .sort((a, b) => a.rank - b.rank || a.item.name.localeCompare(b.item.name))
-    .map(({ item }) => item);
+    .map(({ item, rank }) => ({ item, opens: rank < 2 }));
 }
 
 /**

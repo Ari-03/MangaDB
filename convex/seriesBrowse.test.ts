@@ -1,10 +1,9 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
-import { todaySortKey } from "../src/lib/month";
-
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { todaySortKey } from "./lib/dates";
 import schema from "./schema";
 import { letterFor, sortKeyFor } from "./seriesBrowse";
 
@@ -213,8 +212,7 @@ describe("seriesBrowse review follow-ups", () => {
 
   it("counts a month-precision date in the current month as upcoming", async () => {
     const t = convexTest(schema);
-    const now = new Date();
-    const ym = now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100;
+    const ym = Math.floor(todaySortKey() / 100) * 100;
     await t.run(async (ctx) => {
       const pub = await ctx.db.insert("publishers", { status: "active", name: "P", slug: "p" });
       const seriesId = await ctx.db.insert("series", { status: "active", publicId: 9, title: "Soon", altTitles: [], searchText: "Soon" });
@@ -255,8 +253,7 @@ describe("seriesBrowse review follow-ups", () => {
 /** A yyyymmdd key for the 15th of the month `n` months before now (UTC). */
 function monthsAgo(n: number): number {
   const now = new Date();
-  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - n, 15));
-  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + 15;
+  return todaySortKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - n, 15)));
 }
 
 type ShelfSpec = {
@@ -378,6 +375,21 @@ describe("seriesBrowse filters first, then the sort", () => {
     expect(await timing("upcoming")).toEqual(["Bravo"]);
     await expect(timing("past-3m")).rejects.toThrow(/todaySort/);
     await expect(timing("finished", 20261300)).rejects.toThrow(/todaySort/);
+  });
+
+  it("keeps paging a timing view from its first page's day", async () => {
+    const t = await shelf();
+    const args = { sort: "title" as const, timing: "past-6m" as const, pageSize: 1 };
+    const p1 = await t.query(api.seriesBrowse.browse, { ...args, todaySort: todaySortKey() });
+    expect([titles(p1), p1.total]).toEqual([["Alpha"], 2]);
+    // The next page is asked for after the day turned, three months on:
+    // Bravo (five months ago) would have aged out, but the cursor keeps the
+    // first page's cutoff, so the view ends as it began.
+    const p2 = await t.query(api.seriesBrowse.browse, { ...args, todaySort: monthsAgo(-3), cursor: p1.nextCursor });
+    expect([titles(p2), p2.total, p2.nextCursor]).toEqual([["Bravo"], 2, null]);
+    // A cursor from before this field existed falls back to todaySort.
+    const bare = await t.query(api.seriesBrowse.browse, { ...args, todaySort: monthsAgo(-3), cursor: btoa(JSON.stringify({ v: "alpha", id: 1 })) });
+    expect([titles(bare), bare.total]).toEqual([[], 1]);
   });
 
   it("sorts and pages a combined filter to the end, keeping the total", async () => {

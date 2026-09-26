@@ -43,17 +43,9 @@ export function currentMonth(now: Date = new Date()): YearMonth {
   return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
 }
 
-/**
- * yyyymmdd sort key for `now` (UTC) — the same shape as pubDate.sort (spec
- * §8), lower-bounding the Publisher Spotlight's upcoming lane (ticket #25).
- */
-export function todaySortKey(now: Date = new Date()): number {
-  return (
-    now.getUTCFullYear() * 10000 +
-    (now.getUTCMonth() + 1) * 100 +
-    now.getUTCDate()
-  );
-}
+// yyyymmdd for today (UTC), shared with the Convex side; it lower-bounds the
+// Publisher Spotlight's upcoming lane (ticket #25) among others.
+export { todaySortKey } from "../../convex/lib/dates";
 
 /** yyyymm99 sort key covering every day of a month — an upper window bound. */
 export function monthEndSortKey({ year, month }: YearMonth): number {

@@ -25,6 +25,7 @@ import type * as lib_authority from "../lib/authority.js";
 import type * as lib_bookTitle from "../lib/bookTitle.js";
 import type * as lib_catalogTitle from "../lib/catalogTitle.js";
 import type * as lib_covers from "../lib/covers.js";
+import type * as lib_dates from "../lib/dates.js";
 import type * as lib_editionGroups from "../lib/editionGroups.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_http from "../lib/http.js";
@@ -97,6 +98,7 @@ declare const fullApi: ApiFromModules<{
   "lib/bookTitle": typeof lib_bookTitle;
   "lib/catalogTitle": typeof lib_catalogTitle;
   "lib/covers": typeof lib_covers;
+  "lib/dates": typeof lib_dates;
   "lib/editionGroups": typeof lib_editionGroups;
   "lib/email": typeof lib_email;
   "lib/http": typeof lib_http;

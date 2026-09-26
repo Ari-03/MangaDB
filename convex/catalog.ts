@@ -10,6 +10,7 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCover } from "./lib/covers";
 import { groupEditions } from "./lib/editionGroups";
+import { canonicalPublisherFor } from "./lib/publishers";
 import {
   matchesAllWords,
   matchNames,
@@ -221,19 +222,35 @@ async function nearMisses(ctx: QueryCtx, query: string, seen: ReadonlyArray<Doc<
 }
 
 /**
- * Active Publishers whose name contains the query (`matchNames`: exact, then
- * opening, then anywhere in the name), read off the small publisher list —
- * one capped scan of PUBLISHER_SCAN_CAP rows. A merged row's old name finds
- * its survivor, so "Kodansha Comics" finds Kodansha. Shared by search and
- * suggest, so the dropdown and the page agree.
+ * Active Publishers the query finds, read off the small publisher list — one
+ * capped scan of PUBLISHER_SCAN_CAP rows — and whether it `names` one. A
+ * canonical alias (lib/publishers.ts `canonicalPublisherFor`: "Shonen Jump"
+ * → VIZ Media, "Seven Seas Siren" → Seven Seas) leads, then the name
+ * matches (`matchNames`: every query word opens a word of the name, exact
+ * and opening matches first). A merged row's old name finds its survivor
+ * ("Kodansha Comics" → Kodansha), which also covers moderator merges the
+ * alias table does not list.
+ *
+ * `names` is true for an alias or a name the query opens ("seven seas",
+ * "kodansha"): the reader is after that Publisher, so search skips typo
+ * help and suggest drops loose Series rows. A word deeper in a name
+ * ("manga", "press", "gasp") lists the Publishers but suppresses nothing.
+ * Shared by search and suggest, so the dropdown and the page agree.
  */
 async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
   const docs = await ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP);
   const byId = new Map(docs.map((doc) => [doc._id, doc]));
+  const alias = canonicalPublisherFor(query);
+  const aliased = alias ? docs.find((doc) => doc.slug === alias.slug) : undefined;
+  const matches = [
+    ...(aliased ? [{ item: aliased, opens: true }] : []),
+    ...matchNames(query, docs),
+  ];
   const hits = new Map<Id<"publishers">, { name: string; slug: string }>();
-  for (const doc of matchNames(query, docs)) {
+  let names = false;
+  for (const { item, opens } of matches) {
     // Follow merges within the list; the visited set guards a cycle.
-    let target: Doc<"publishers"> | undefined = doc;
+    let target: Doc<"publishers"> | undefined = item;
     const visited = new Set<Id<"publishers">>();
     while (target?.status === "merged" && target.mergedIntoId && !visited.has(target._id)) {
       visited.add(target._id);
@@ -241,9 +258,10 @@ async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
     }
     if (target?.status === "active") {
       hits.set(target._id, { name: target.name, slug: target.slug });
+      names ||= opens;
     }
   }
-  return [...hits.values()].slice(0, limit);
+  return { publishers: [...hits.values()].slice(0, limit), names };
 }
 
 /** The alt title a hit matched through, or null when its title matched. */
@@ -287,10 +305,10 @@ function nearMissCards(ctx: QueryCtx, misses: Awaited<ReturnType<typeof nearMiss
  * v1 search (spec §8): Series only, matched through the title + alt-titles
  * search index (`searchText` is both concatenated on write), hits containing
  * every typed word first, each with its jacket from the Series library;
- * Publishers whose name contains the query (`publisherHits`). When neither
- * a Series hit nor a Publisher contains the whole query, `didYouMean` offers
- * near-miss titles ("berzerk" → Berserk); "Seven Seas" names a Publisher, so
- * it gets no "Seven Seeds?". No Volume or Bundle search in v1.
+ * Publishers by name or alias (`publisherHits`). When no Series hit contains
+ * the whole query and it names no Publisher, `didYouMean` offers near-miss
+ * titles ("berzerk" → Berserk); "Seven Seas" names a Publisher, so it gets
+ * no "Seven Seeds?". No Volume or Bundle search in v1.
  * ISBN inputs never reach this query — the /search route recognizes them
  * first and redirects through `/isbn/{isbn}`.
  *
@@ -307,7 +325,7 @@ export const search = query({
     }
 
     // Overfetch so post-filtering hidden/merged docs can't starve the page.
-    const [hits, publishers] = await Promise.all([
+    const [hits, { publishers, names }] = await Promise.all([
       titleHits(ctx, trimmed, SEARCH_LIMIT * 2),
       publisherHits(ctx, trimmed, SEARCH_LIMIT),
     ]);
@@ -318,7 +336,7 @@ export const search = query({
     ].slice(0, SEARCH_LIMIT);
     const [series, didYouMean] = await Promise.all([
       Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
-      hits.whole.length === 0 && publishers.length === 0
+      hits.whole.length === 0 && !names
         ? nearMisses(ctx, trimmed, hits.active).then((misses) => nearMissCards(ctx, misses))
         : [],
     ]);
@@ -332,14 +350,14 @@ export const search = query({
  * by the reactive client, so every read is bounded: SUGGEST_TAKE search-index
  * hits, a `seriesStats` row per shown Series, the publisher list matched
  * exactly as search matches it (`publisherHits`, ~70 rows today, at most
- * PUBLISHER_SCAN_CAP), and — only when neither a Series hit nor a Publisher
- * contains every typed word — up to four typo-help probes of PROBE_TAKE
- * documents each: about 100 documents for a typical query, under 140 in the
- * worst case with today's publisher list.
+ * PUBLISHER_SCAN_CAP), and — only when no Series hit contains every typed
+ * word and the query names no Publisher — up to four typo-help probes of
+ * PROBE_TAKE documents each: about 100 documents for a typical query, under
+ * 140 in the worst case with today's publisher list.
  *
  * Series that share only some words with the query are noise next to a
- * "did you mean" or a Publisher hit, so they fill the list only when there
- * is nothing better.
+ * "did you mean" or a Publisher the query names, so they fill the list only
+ * when there is nothing better.
  */
 export const suggest = query({
   args: { query: v.string() },
@@ -347,15 +365,13 @@ export const suggest = query({
     const trimmed = rawQuery.trim();
     if (trimmed === "") return { series: [], didYouMean: [], publishers: [] };
 
-    const [hits, publishers] = await Promise.all([
+    const [hits, { publishers, names }] = await Promise.all([
       titleHits(ctx, trimmed, SUGGEST_TAKE),
       publisherHits(ctx, trimmed, SUGGEST_PUBLISHERS),
     ]);
     const misses =
-      hits.whole.length === 0 && publishers.length === 0
-        ? await nearMisses(ctx, trimmed, hits.active)
-        : [];
-    const better = hits.whole.length > 0 || misses.length > 0 || publishers.length > 0;
+      hits.whole.length === 0 && !names ? await nearMisses(ctx, trimmed, hits.active) : [];
+    const better = hits.whole.length > 0 || misses.length > 0 || names;
     const shown = better ? hits.whole : hits.active;
     const [series, didYouMean] = await Promise.all([
       Promise.all(

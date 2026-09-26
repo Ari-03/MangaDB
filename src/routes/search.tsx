@@ -67,8 +67,8 @@ function SearchPage() {
   // URL is replaced (the loader re-runs; the old results stay up meanwhile).
   // The route stays mounted, so focus and caret survive. A query arriving
   // from elsewhere (the header box, a "Did you mean" link) refills the box,
-  // but none this box asked for while typing carried on, whatever order
-  // they land in (`useUrlDraft`).
+  // but none this box asked for while typing carried on, even one a newer
+  // query has superseded (`useUrlDraft`).
   const { draft: text, setDraft: setText, request } = useUrlDraft(urlQuery, urlQuery);
   const settled = useDebounced(text, LIVE_DEBOUNCE_MS);
   useEffect(() => {

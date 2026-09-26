@@ -19,7 +19,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { COUNT_CAP, PUBLISHER_SCAN_CAP } from "./catalog";
 import { followMerges } from "./catalogPages";
-import { coverIsbnForRelease, coverUrl } from "./lib/covers";
 import {
   browseCache,
   joinBrowseRows,
@@ -259,7 +258,9 @@ export const monthBoard = query({
     // (no Edition Line, so not a Deluxe Vol. 1 repackaging) whose coverage
     // includes an active Volume at Position 1, and which has no active
     // Release dated before this month: a digital Release of a 2019 print
-    // Vol. 1 is a backfill, not a new series. Memoized per Edition; the
+    // Vol. 1 is a backfill, not a new series. A year-only date this year
+    // (yyyy0000) may well be this month, so it is no evidence of an earlier
+    // Release; an earlier month of this year is. Memoized per Edition; the
     // Release check reads only the few Vol. 1 Editions.
     const debutSeries = memoize(async (editionId: Id<"editions">) => {
       const edition = await cache.edition(editionId);
@@ -281,16 +282,19 @@ export const monthBoard = query({
         (doc) =>
           doc.status === "active" &&
           doc.pubDate !== undefined &&
-          doc.pubDate.sort < fromSort,
+          doc.pubDate.sort < fromSort &&
+          !(doc.pubDate.month === undefined && doc.pubDate.year === year),
       );
       return earlier ? null : seriesId;
     });
 
     // Whether a Release has jacket art the strip can show: a stored cover,
-    // or an ISBN to fetch it by — the same test joinBrowseRows' row gets.
-    const hasArt = async (release: Doc<"releases">) =>
-      (await coverUrl(ctx, release.coverImage?.storageId)) !== null ||
-      (await coverIsbnForRelease(ctx, release)) !== null;
+    // or an ISBN to fetch it by. Read through the cache, so joinBrowseRows
+    // reuses the lookup for the picks.
+    const hasArt = async (release: Doc<"releases">) => {
+      const cover = await cache.cover(release);
+      return cover.coverUrl !== null || cover.coverIsbn !== null;
+    };
 
     const cards = await Promise.all(
       [...current].map(async ([publisherId, rows]) => {
@@ -313,8 +317,9 @@ export const monthBoard = query({
         // (stored, or an ISBN to fetch it by), then new series, then physical
         // over digital (a shelf shows the jacket), else date then title order.
         // Candidates are ranked before any join: walk them in (new series,
-        // Format) order testing art, stop at BOARD_COVER_CAP Series with art,
-        // and fill from the best artless ones; only the picks get joined.
+        // Format) order testing art BOARD_COVER_CAP candidates at a time, in
+        // parallel; stop at BOARD_COVER_CAP Series with art, and fill from
+        // the best artless ones; only the picks get joined.
         const ranked = rows
           .map((row, index) => ({
             ...row,
@@ -329,14 +334,19 @@ export const monthBoard = query({
         const withArt: Array<Doc<"releases">> = [];
         const artless = new Map<Id<"series">, Doc<"releases">>();
         const artSeries = new Set<Id<"series">>();
-        for (const { release, series: [lead] } of ranked) {
+        for (let start = 0; start < ranked.length; start += BOARD_COVER_CAP) {
           if (withArt.length === BOARD_COVER_CAP) break;
-          if (!lead || artSeries.has(lead._id)) continue;
-          if (await hasArt(release)) {
-            artSeries.add(lead._id);
-            withArt.push(release);
-          } else if (!artless.has(lead._id)) {
-            artless.set(lead._id, release);
+          const batch = ranked.slice(start, start + BOARD_COVER_CAP);
+          const art = await Promise.all(batch.map(({ release }) => hasArt(release)));
+          for (const [i, { release, series: [lead] }] of batch.entries()) {
+            if (withArt.length === BOARD_COVER_CAP) break;
+            if (!lead || artSeries.has(lead._id)) continue;
+            if (art[i]) {
+              artSeries.add(lead._id);
+              withArt.push(release);
+            } else if (!artless.has(lead._id)) {
+              artless.set(lead._id, release);
+            }
           }
         }
         const picks = [
