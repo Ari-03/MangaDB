@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { LANE_CAP } from "./publisher";
@@ -630,6 +630,60 @@ describe("publisher.monthBoard", () => {
       series: 2,
       newSeries: 1,
     });
+  });
+
+  it("does not count a relaunched Vol. 1 of an established Series as new", async () => {
+    const t = await board();
+    await t.run(async (ctx) => {
+      const [tokyopop] = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "tokyopop"))
+        .take(1);
+      const [cmx] = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "cmx"))
+        .take(1);
+      if (!tokyopop || !cmx) throw new Error("fixture has Tokyopop and CMX");
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 930,
+        title: "Rescued",
+        altTitles: [],
+        searchText: "Rescued",
+      });
+      const volumeId = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 931,
+        seriesId,
+        position: 1,
+        label: "1",
+      });
+      // CMX's Vol. 1 in 2005, and Tokyopop's new standard Vol. 1 this month.
+      for (const [publicId, publisherId, sort] of [
+        [932, cmx._id, 20050412],
+        [933, tokyopop._id, 20260915],
+      ] as const) {
+        const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format: "physical",
+          language: "en",
+          pubDate: { year: Math.floor(sort / 10000), month: Math.floor(sort / 100) % 100, day: sort % 100, sort },
+          publisherId,
+          seriesIds: [seriesId],
+        });
+      }
+    });
+    const tokyopopCard = async () =>
+      (await t.query(api.publisher.monthBoard, { year: 2026, month: 9 })).board.find(
+        (c) => c.publisher.slug === "tokyopop",
+      );
+    // Until the stats rebuild sees the Series, nothing earlier is known.
+    expect(await tokyopopCard()).toMatchObject({ releases: 1, newSeries: 1 });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    expect(await tokyopopCard()).toMatchObject({ releases: 1, series: 1, newSeries: 0 });
   });
 
   it("reads a malformed month as an empty board, directory intact", async () => {

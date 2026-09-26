@@ -234,7 +234,8 @@ export default defineSchema({
   // per Series (seriesBrowse.browse). Block k holds the Series with
   // publicId in [k * PACK_SPAN, (k + 1) * PACK_SPAN), so a Series is always
   // in exactly one pack. Rewritten from seriesStats at the end of each
-  // rebuild; an entry is a few hundred bytes, a pack well under 1 MB.
+  // rebuild, and read only once appConfig.seriesPacksReady says a complete
+  // set exists; an entry is a few hundred bytes, a pack well under 1 MB.
   seriesStatsPacks: defineTable({
     block: v.number(),
     entries: v.array(
@@ -640,10 +641,6 @@ export default defineSchema({
     next: v.number(),
   }).index("by_entity", ["entity"]),
 
-  // Singleton. Bootstrap Mode (#15) is switched off permanently before launch.
-  // The launch bookkeeping (#40, spec §7) also lives here: the latest
-  // duplicate-sweep summary (QA gate ③) and the Administrator's attestation
-  // that the correction loop ran end-to-end for real (launch gate ④).
   // Exact active-record totals for the home page, refreshed by the Series
   // library rebuild (seriesBrowse.rebuild); one row.
   catalogCounts: defineTable({
@@ -655,8 +652,15 @@ export default defineSchema({
     countedAt: v.number(),
   }),
 
+  // Singleton. Bootstrap Mode (#15) is switched off permanently before launch.
+  // The launch bookkeeping (#40, spec §7) also lives here: the latest
+  // duplicate-sweep summary (QA gate ③) and the Administrator's attestation
+  // that the correction loop ran end-to-end for real (launch gate ④).
   appConfig: defineTable({
     bootstrapMode: v.boolean(),
+    // Set once the first rebuild has written a complete seriesStatsPacks set;
+    // until then the Series library filters from the seriesStats rows.
+    seriesPacksReady: v.optional(v.boolean()),
     duplicateSweep: v.optional(
       v.object({
         ranAt: v.number(),

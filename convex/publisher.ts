@@ -256,15 +256,19 @@ export const monthBoard = query({
 
     // The Series an Edition debuts, or null. A debut is a standard Edition
     // (no Edition Line, so not a Deluxe Vol. 1 repackaging) whose coverage
-    // includes an active Volume at Position 1, and which has no active
-    // Release dated before this month: a digital Release of a 2019 print
-    // Vol. 1 is a backfill, not a new series. A year-only date this year
-    // (yyyy0000) may well be this month, so it is no evidence of an earlier
-    // Release; an earlier month of this year is. Memoized per Edition; the
-    // Release check reads only the few Vol. 1 Editions.
+    // includes an active Volume at Position 1, with no active Release dated
+    // before this month in that Edition (a digital Release of a 2019 print
+    // Vol. 1 is a backfill) nor anywhere in the Series (a relaunch of a 2005
+    // Series is not new). The Series-wide check reads the rebuilt
+    // `seriesStats.firstReleaseSort`, so it lags by up to a rebuild; a Series
+    // without a stats row yet has no known earlier Release. A year-only date
+    // this year (yyyy0000) may well be this month, so it is no evidence of
+    // an earlier Release; an earlier month of this year is. Memoized per
+    // Edition; the Release checks read only the few Vol. 1 Editions.
     const debutSeries = memoize(async (editionId: Id<"editions">) => {
       const edition = await cache.edition(editionId);
       if (!edition || edition.editionLineId || fromSort === null) return null;
+      const earlier = (sort: number) => sort > 0 && sort < fromSort && sort !== year * 10000;
       let seriesId: Id<"series"> | null = null;
       for (const row of await cache.coverage(edition._id)) {
         const volume = await cache.volume(row.volumeId);
@@ -278,14 +282,14 @@ export const monthBoard = query({
         .query("releases")
         .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
         .take(EDITION_RELEASE_CAP);
-      const earlier = siblings.some(
-        (doc) =>
-          doc.status === "active" &&
-          doc.pubDate !== undefined &&
-          doc.pubDate.sort < fromSort &&
-          !(doc.pubDate.month === undefined && doc.pubDate.year === year),
-      );
-      return earlier ? null : seriesId;
+      if (siblings.some((doc) => doc.status === "active" && earlier(doc.pubDate?.sort ?? 0))) {
+        return null;
+      }
+      const stats = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+        .unique();
+      return earlier(stats?.firstReleaseSort ?? 0) ? null : seriesId;
     });
 
     // Whether a Release has jacket art the strip can show: a stored cover,

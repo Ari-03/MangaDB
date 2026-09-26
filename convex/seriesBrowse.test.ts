@@ -442,10 +442,35 @@ describe("seriesBrowse filters first, then the sort", () => {
     const t = await shelf();
     await t.run(async (ctx) => {
       for (const pack of await ctx.db.query("seriesStatsPacks").collect()) await ctx.db.delete(pack._id);
+      for (const config of await ctx.db.query("appConfig").collect()) await ctx.db.delete(config._id);
     });
     const page = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["viz", "yen"] });
     expect(titles(page)).toEqual(["Alpha", "Bravo", "Delta"]);
     expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(6);
+  });
+
+  it("falls back to the row scan while a first build's packs are partial", async () => {
+    const t = await shelf();
+    // Mid first rebuild: a pack holds only some Series, nothing published yet.
+    const truncate = () =>
+      t.run(async (ctx) => {
+        const [pack] = await ctx.db.query("seriesStatsPacks").collect();
+        await ctx.db.patch(pack!._id, { entries: pack!.entries.slice(0, 2) });
+      });
+    await t.run(async (ctx) => {
+      for (const config of await ctx.db.query("appConfig").collect()) await ctx.db.delete(config._id);
+    });
+    await truncate();
+    const page = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["viz", "yen"] });
+    expect([titles(page), page.total]).toEqual([["Alpha", "Bravo", "Delta"], 3]);
+    expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(6);
+    // The last pack of a run publishes the set; from then on readers trust it.
+    await t.mutation(internal.seriesBrowse.repackBlock, { block: 0 });
+    const config = await t.run((ctx) => ctx.db.query("appConfig").first());
+    expect(config).toMatchObject({ bootstrapMode: false, seriesPacksReady: true });
+    expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(6);
+    await truncate();
+    expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(2);
   });
 
   it("counts Series per publisher in the facets", async () => {

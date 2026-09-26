@@ -29,7 +29,8 @@ type Option =
   | { kind: "isbn"; href: string; isbn: string }
   | { kind: "all"; href: string; query: string };
 
-type Group = { label: string | null; options: Option[] };
+/** `stale` rows answer an earlier query: dimmed, and never highlighted. */
+type Group = { label: string | null; options: Option[]; stale: boolean };
 
 /** Characters typed before suggestions are fetched. */
 const MIN_QUERY = 2;
@@ -62,12 +63,13 @@ export function useDebounced<T>(value: T, ms: number): T {
 /**
  * The dropdown's rows, grouped: near misses first when the query looks like
  * a typo, then Series, then Publishers, and always a row into /search. A
- * valid ISBN offers only the jump to that book.
+ * valid ISBN offers only the jump to that book. `stale` marks `data` as the
+ * answer to an earlier query.
  */
-function suggestionGroups(query: string, data: Suggestions | null): Group[] {
+function suggestionGroups(query: string, data: Suggestions | null, stale: boolean): Group[] {
   const isbn = normalizeIsbn(query);
   if (isbn) {
-    return [{ label: null, options: [{ kind: "isbn", href: `/isbn/${isbn}`, isbn }] }];
+    return [{ label: null, options: [{ kind: "isbn", href: `/isbn/${isbn}`, isbn }], stale: false }];
   }
   const seriesOption = (card: SeriesCard): Option => ({
     kind: "series",
@@ -75,8 +77,8 @@ function suggestionGroups(query: string, data: Suggestions | null): Group[] {
     card,
   });
   const groups: Group[] = [
-    { label: "Did you mean", options: (data?.didYouMean ?? []).map(seriesOption) },
-    { label: "Series", options: (data?.series ?? []).map(seriesOption) },
+    { label: "Did you mean", options: (data?.didYouMean ?? []).map(seriesOption), stale },
+    { label: "Series", options: (data?.series ?? []).map(seriesOption), stale },
     {
       label: "Publishers",
       options: (data?.publishers ?? []).map((p) => ({
@@ -84,10 +86,12 @@ function suggestionGroups(query: string, data: Suggestions | null): Group[] {
         href: `/publisher/${p.slug}`,
         name: p.name,
       })),
+      stale,
     },
     {
       label: null,
       options: [{ kind: "all", href: `/search?q=${encodeURIComponent(query)}`, query }],
+      stale: false,
     },
   ];
   return groups.filter((group) => group.options.length > 0);
@@ -148,7 +152,10 @@ function OptionBody({ option }: { option: Option }) {
  * through the /search route exactly as before. While typing, a debounced
  * `catalog.suggest` subscription fills an ARIA combobox listbox: ArrowUp/
  * ArrowDown move the highlight, Enter opens it, Escape or leaving the box
- * closes it. `onNavigate` runs after any navigation (the drawer closes).
+ * closes it. Any edit clears the highlight, and rows still answering an
+ * earlier query stay in view dimmed but can't be highlighted, so Enter
+ * never opens a result for text no longer in the box. `onNavigate` runs
+ * after any navigation (the drawer closes).
  */
 export function SearchCombobox({
   mobile = false,
@@ -161,7 +168,9 @@ export function SearchCombobox({
   const listId = useId();
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(-1);
+  // The highlighted row, by href, so it stays on the same row as answers
+  // arrive and reorder the list.
+  const [active, setActive] = useState<string | null>(null);
 
   const query = text.trim();
   const debounced = useDebounced(query, SUGGEST_DEBOUNCE_MS);
@@ -170,26 +179,31 @@ export function SearchCombobox({
     debounced.length >= MIN_QUERY && !isbnInProgress(debounced) ? { query: debounced } : "skip",
   );
   // useQuery only ever answers the current query, so an older response can
-  // never land over a newer one; holding the last answer while the next is
-  // in flight keeps the list updating in place instead of flashing empty.
-  const [shown, setShown] = useState<Suggestions | null>(null);
+  // never land over a newer one; holding the last answer (and the query it
+  // answers) while the next is in flight keeps the list updating in place
+  // instead of flashing empty.
+  const [shown, setShown] = useState<{ query: string; data: Suggestions } | null>(null);
   useEffect(() => {
-    if (live !== undefined) setShown(live);
-  }, [live]);
+    if (live !== undefined) setShown({ query: debounced, data: live });
+  }, [live, debounced]);
+  const stale = shown !== null && shown.query !== query;
 
   const groups =
     query.length >= MIN_QUERY
-      ? suggestionGroups(query, isbnInProgress(query) ? null : shown)
+      ? suggestionGroups(query, isbnInProgress(query) ? null : (shown?.data ?? null), stale)
       : [];
   const options = groups.flatMap((group) => group.options);
+  // The rows the keyboard and pointer can highlight, in list order.
+  const reachable = groups.flatMap((group) => (group.stale ? [] : group.options));
   const expanded = open && options.length > 0;
   // Rows can vanish under the highlight when an answer arrives.
-  const highlighted = active < options.length ? active : -1;
+  const at = reachable.findIndex((option) => option.href === active);
+  const highlighted = reachable[at];
   const optionId = (index: number) => `${listId}-${index}`;
 
   const close = () => {
     setOpen(false);
-    setActive(-1);
+    setActive(null);
   };
 
   const follow = (option: Option) => {
@@ -214,14 +228,14 @@ export function SearchCombobox({
           setOpen(true);
           return;
         }
-        // Positions 1..n are the rows, 0 is "back in the input".
+        // Positions 1..n are the reachable rows, 0 is "back in the input".
         const step = event.key === "ArrowDown" ? 1 : -1;
-        const slots = options.length + 1;
-        setActive(((highlighted + 1 + step + slots) % slots) - 1);
+        const slots = reachable.length + 1;
+        setActive(reachable[((at + 1 + step + slots) % slots) - 1]?.href ?? null);
         return;
       }
       case "Enter": {
-        const option = expanded ? options[highlighted] : undefined;
+        const option = expanded ? highlighted : undefined;
         if (option) {
           event.preventDefault();
           follow(option);
@@ -281,19 +295,26 @@ export function SearchCombobox({
         aria-autocomplete="list"
         aria-expanded={expanded}
         aria-controls={listId}
-        aria-activedescendant={expanded && highlighted >= 0 ? optionId(highlighted) : undefined}
+        aria-activedescendant={expanded && highlighted ? optionId(options.indexOf(highlighted)) : undefined}
         value={text}
         onChange={(event) => {
           setText(event.target.value);
           if (event.target.value.trim().length < MIN_QUERY) setShown(null);
           setOpen(true);
-          setActive(-1);
+          setActive(null);
         }}
         onFocus={() => setOpen(true)}
         onBlur={close}
         onKeyDown={onKeyDown}
       />
-      <div className="suggest" id={listId} role="listbox" aria-label="Search suggestions" hidden={!expanded}>
+      <div
+        className="suggest"
+        id={listId}
+        role="listbox"
+        aria-label="Search suggestions"
+        aria-busy={stale}
+        hidden={!expanded}
+      >
         {placed.map((group) => {
           const rows = group.options.map((option, i) => {
             const at = group.start + i;
@@ -302,13 +323,15 @@ export function SearchCombobox({
                 key={option.href}
                 id={optionId(at)}
                 role="option"
-                aria-selected={at === highlighted}
+                aria-selected={option === highlighted}
                 className={option.kind === "all" || option.kind === "isbn" ? "suggest-row suggest-row--all" : "suggest-row"}
                 href={option.href}
                 tabIndex={-1}
                 // Keep focus in the input so the list doesn't close mid-click.
                 onMouseDown={(event) => event.preventDefault()}
-                onMouseMove={() => setActive(at)}
+                onMouseMove={() => {
+                  if (!group.stale) setActive(option.href);
+                }}
                 onClick={(event) => onOptionClick(event, option)}
               >
                 <OptionBody option={option} />
@@ -318,7 +341,12 @@ export function SearchCombobox({
           if (group.label === null) return rows;
           const headId = `${listId}-${group.label.replace(/ /g, "-")}`;
           return (
-            <div key={group.label} role="group" aria-labelledby={headId}>
+            <div
+              key={group.label}
+              role="group"
+              aria-labelledby={headId}
+              className={group.stale ? "suggest-stale" : undefined}
+            >
               <div className="suggest-head" id={headId}>
                 {group.label}
               </div>

@@ -234,6 +234,8 @@
 .suggest > .suggest-row--all:first-child { margin-top: 0; border-top: 0; border-radius: var(--r-sm); }
 .suggest-all { font-size: 0.88rem; font-weight: 700; color: var(--text-dim); }
 .suggest-row--all[aria-selected="true"] .suggest-all { color: var(--accent); }
+/* rows still answering the previous query while this one's are fetched */
+.suggest-stale { opacity: 0.5; transition: opacity 120ms ease 80ms; }
 /* a small jacket; cloth at this size carries no title (it is beside it) */
 .suggest-thumb { flex: none; width: 30px; }
 .suggest-thumb .cover { box-shadow: 0 2px 4px rgba(0, 0, 0, 0.45); }

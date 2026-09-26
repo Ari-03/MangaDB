@@ -11,13 +11,13 @@
 // total; only the page's own rows are then fetched for their cards.
 //
 // Those facts are packed about a thousand Series to a document
-// (`seriesStatsPacks`, written at the end of each rebuild) because reads
-// cost per document: scanning the 5,488 rows took ~2.2 s on the local
-// backend, the packs ~100-170 ms. Measured with getTransactionMetrics, a
-// filtered page reads 64 documents and 2.0 MB (8 packs, the largest ~380 KB
-// of the 1 MB document limit); per-query limits are 16 MiB and 32,000
-// documents (8 MiB / 16,384 on older Convex), so bytes are the ceiling, at
-// about 8x (4x) today's catalog.
+// (`seriesStatsPacks`, written at the end of each rebuild and read once a
+// complete set exists) because reads cost per document: scanning the 5,488
+// rows took ~2.2 s on the local backend, the packs ~100-170 ms. Measured
+// with getTransactionMetrics, a filtered page reads 65 documents and 2.0 MB
+// (8 packs, the largest ~380 KB of the 1 MB document limit); per-query
+// limits are 16 MiB and 32,000 documents (8 MiB / 16,384 on older Convex),
+// so bytes are the ceiling, at about 8x (4x) today's catalog.
 
 import { ConvexError, v, type Infer, type ObjectType } from "convex/values";
 
@@ -160,7 +160,10 @@ const MAX_PACKS = 100;
 /**
  * Rewrite pack `block` from the seriesStats rows in its publicId span,
  * dropping it when the span is empty. Returns whether any row lies past the
- * span; when none does, packs beyond it (a shrunken catalog) go too.
+ * span; when none does, packs beyond it (a shrunken catalog) go too, and the
+ * set is complete: the first time, this publishes it to readers
+ * (appConfig.seriesPacksReady). Later runs replace packs in place, so the
+ * set stays complete, if up to a rebuild stale.
  */
 export const repackBlock = internalMutation({
   args: { block: v.number() },
@@ -190,6 +193,9 @@ export const repackBlock = internalMutation({
         .withIndex("by_block", (q) => q.gt("block", block))
         .take(MAX_PACKS);
       for (const pack of beyond) await ctx.db.delete(pack._id);
+      const config = await ctx.db.query("appConfig").first();
+      if (!config) await ctx.db.insert("appConfig", { bootstrapMode: false, seriesPacksReady: true });
+      else if (!config.seriesPacksReady) await ctx.db.patch(config._id, { seriesPacksReady: true });
     }
     return more !== null;
   },
@@ -383,12 +389,16 @@ function entryOf(row: StatsRow): Entry {
 }
 
 /**
- * Every Series' entry: the packs, a handful of documents. Before the first
- * rebuild that writes packs, the rows themselves, one document each.
+ * Every Series' entry: the packs, a handful of documents. Until the first
+ * rebuild has finished writing them (a partial set would drop Series and
+ * shrink totals), the rows themselves, one document each.
  */
 async function allEntries(ctx: QueryCtx): Promise<Array<Entry>> {
-  const packs = await ctx.db.query("seriesStatsPacks").withIndex("by_block").take(MAX_PACKS);
-  if (packs.length > 0) return packs.flatMap((pack) => pack.entries);
+  const config = await ctx.db.query("appConfig").first();
+  if (config?.seriesPacksReady) {
+    const packs = await ctx.db.query("seriesStatsPacks").withIndex("by_block").take(MAX_PACKS);
+    return packs.flatMap((pack) => pack.entries);
+  }
   const entries: Array<Entry> = [];
   for await (const row of ctx.db.query("seriesStats")) entries.push(entryOf(row));
   return entries;
