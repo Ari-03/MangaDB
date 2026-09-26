@@ -44,15 +44,20 @@ async function resolvePublisher(
 }
 
 /**
- * Memoize an async lookup by key. The promise itself is cached, so lookups
+ * Memoize an async lookup by key: the argument itself, or `keyOf(arg)` when
+ * given (a document's `_id`). The promise itself is cached, so lookups
  * running in parallel (Promise.all) still read each key once.
  */
-export function memoize<K, V>(load: (key: K) => Promise<V>): (key: K) => Promise<V> {
-  const cache = new Map<K, Promise<V>>();
-  return (key) => {
+export function memoize<A, V>(
+  load: (arg: A) => Promise<V>,
+  keyOf: (arg: A) => unknown = (arg) => arg,
+): (arg: A) => Promise<V> {
+  const cache = new Map<unknown, Promise<V>>();
+  return (arg) => {
+    const key = keyOf(arg);
     let hit = cache.get(key);
     if (!hit) {
-      hit = load(key);
+      hit = load(arg);
       cache.set(key, hit);
     }
     return hit;
@@ -68,14 +73,17 @@ export function memoize<K, V>(load: (key: K) => Promise<V>): (key: K) => Promise
 export function browseCache(ctx: QueryCtx) {
   return {
     // A Release's stored cover URL and the ISBN to fetch art by (lib/covers.ts),
-    // keyed by the Release doc itself: callers pass on the docs they read.
-    cover: memoize(async (release: Doc<"releases">) => {
-      const [url, isbn] = await Promise.all([
-        coverUrl(ctx, release.coverImage?.storageId),
-        coverIsbnForRelease(ctx, release),
-      ]);
-      return { coverUrl: url, coverIsbn: isbn };
-    }),
+    // keyed by `_id`, so two reads of the same Release share one lookup.
+    cover: memoize(
+      async (release: Doc<"releases">) => {
+        const [url, isbn] = await Promise.all([
+          coverUrl(ctx, release.coverImage?.storageId),
+          coverIsbnForRelease(ctx, release),
+        ]);
+        return { coverUrl: url, coverIsbn: isbn };
+      },
+      (release) => release._id,
+    ),
     publisher: memoize((id: Id<"publishers">) => ctx.db.get(id)),
     series: memoize((id: Id<"series">) => ctx.db.get(id)),
     volume: memoize((id: Id<"volumes">) => ctx.db.get(id)),

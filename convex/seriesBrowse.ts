@@ -32,7 +32,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
-import { todaySortKey } from "./lib/dates";
+import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { searchWords } from "./lib/searchMatch";
 
 export const SORTS = [
@@ -464,12 +464,13 @@ function monthsBefore(today: number, months: number): number {
  *   unknown today, so this is the English run's quiet end, finished or
  *   stalled; a Series whose final volume just came out reads as recent
  *   until a year has passed.
- * All but upcoming count back from `today`, the caller's `todaySort` (or the
- * first page's, carried in the cursor): a cached query must not read the
- * clock, or a result from an earlier day could keep serving an old cutoff.
+ * All but upcoming count back from `today` (`timingNeedsToday`), the
+ * caller's `todaySort` (or the first page's, carried in the cursor): a
+ * cached query must not read the clock, or a result from an earlier day
+ * could keep serving an old cutoff.
  */
 function timingTest(timing: Timing, today: number | undefined): (entry: Entry) => boolean {
-  if (timing === "upcoming") return (entry) => entry.nextReleaseSort > 0;
+  if (!timingNeedsToday(timing)) return (entry) => entry.nextReleaseSort > 0;
   if (today === undefined || !isDayKey(today)) {
     throw new ConvexError({
       code: "invalidField",

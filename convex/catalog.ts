@@ -231,9 +231,10 @@ async function nearMisses(ctx: QueryCtx, query: string, seen: ReadonlyArray<Doc<
  * ("Kodansha Comics" → Kodansha), which also covers moderator merges the
  * alias table does not list.
  *
- * `names` is true for an alias or a name the query opens ("seven seas",
- * "kodansha"): the reader is after that Publisher, so search skips typo
- * help and suggest drops loose Series rows. A word deeper in a name
+ * `names` is true for an alias or a name whose leading words the query
+ * spells out whole ("seven seas", "kodansha", "digital"): the reader is
+ * after that Publisher, so search skips typo help and suggest drops loose
+ * Series rows. A partial word ("kod", "del") or a word deeper in a name
  * ("manga", "press", "gasp") lists the Publishers but suppresses nothing.
  * Shared by search and suggest, so the dropdown and the page agree.
  */
@@ -243,14 +244,14 @@ async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
   const alias = canonicalPublisherFor(query);
   const aliased = alias ? docs.find((doc) => doc.slug === alias.slug) : undefined;
   const matches = [
-    ...(aliased ? [{ item: aliased, opens: true }] : []),
+    ...(aliased ? [{ item: aliased, names: true }] : []),
     ...matchNames(query, docs),
   ];
   const hits = new Map<Id<"publishers">, { name: string; slug: string }>();
   let names = false;
-  for (const { item, opens } of matches) {
+  for (const match of matches) {
     // Follow merges within the list; the visited set guards a cycle.
-    let target: Doc<"publishers"> | undefined = item;
+    let target: Doc<"publishers"> | undefined = match.item;
     const visited = new Set<Id<"publishers">>();
     while (target?.status === "merged" && target.mergedIntoId && !visited.has(target._id)) {
       visited.add(target._id);
@@ -258,7 +259,7 @@ async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
     }
     if (target?.status === "active") {
       hits.set(target._id, { name: target.name, slug: target.slug });
-      names ||= opens;
+      names ||= match.names;
     }
   }
   return { publishers: [...hits.values()].slice(0, limit), names };

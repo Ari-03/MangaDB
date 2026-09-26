@@ -25,9 +25,7 @@ import { fetchSearchResults, type SearchResults } from "~/server/search";
  * set (spec §11), so they carry robots noindex.
  */
 export const Route = createFileRoute("/search")({
-  validateSearch: (search: Record<string, unknown>): { q: string } => ({
-    q: typeof search.q === "string" ? search.q : "",
-  }),
+  validateSearch,
   loaderDeps: ({ search }) => ({ q: search.q }),
   loader: async ({ deps }) => {
     const q = deps.q.trim();
@@ -51,6 +49,15 @@ export const Route = createFileRoute("/search")({
   component: SearchPage,
 });
 
+function validateSearch(search: Record<string, unknown>): { q: string } {
+  return { q: typeof search.q === "string" ? search.q : "" };
+}
+
+/** The page's view is its query. */
+function queryOf(search: { q: string }): string {
+  return search.q;
+}
+
 function emptyResults(): SearchResults {
   return { series: [], publishers: [], didYouMean: [] };
 }
@@ -60,16 +67,17 @@ const LIVE_DEBOUNCE_MS = 250;
 
 function SearchPage() {
   const { q, results } = Route.useLoaderData();
-  const { q: urlQuery } = Route.useSearch();
   const navigate = Route.useNavigate();
 
   // The box is controlled so results can follow it: once typing pauses, the
   // URL is replaced (the loader re-runs; the old results stay up meanwhile).
-  // The route stays mounted, so focus and caret survive. A query arriving
-  // from elsewhere (the header box, a "Did you mean" link) refills the box,
-  // but none this box asked for while typing carried on, even one a newer
-  // query has superseded (`useUrlDraft`).
-  const { draft: text, setDraft: setText, request } = useUrlDraft(urlQuery, urlQuery);
+  // The route stays mounted, so focus and caret survive. A navigation from
+  // elsewhere (the header box, a "Did you mean" link, back/forward), even
+  // to the query already shown, refills the box as it starts, and the text
+  // it replaces never settles into a search; the box's own navigations
+  // never touch what is being typed (`useUrlDraft`).
+  const { draft, setDraft, request } = useUrlDraft(Route.useSearch(), validateSearch, queryOf);
+  const text = draft.q;
   const settled = useDebounced(text, LIVE_DEBOUNCE_MS);
   useEffect(() => {
     // An ISBN being typed waits for Enter (the loader redirects valid ones).
@@ -90,8 +98,7 @@ function SearchPage() {
           method="get"
           onSubmit={(event) => {
             event.preventDefault();
-            request(text);
-            void navigate({ to: "/search", search: { q: text } });
+            if (request(text)) void navigate({ to: "/search", search: { q: text } });
           }}
         >
           <input
@@ -99,7 +106,7 @@ function SearchPage() {
             type="search"
             name="q"
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => setDraft({ q: event.target.value })}
             placeholder="Series title, publisher, or ISBN"
             aria-label="Search series, publishers, or an ISBN"
             autoFocus

@@ -32,6 +32,11 @@ function compact(text: string): string {
   return searchWords(text).join("");
 }
 
+/** True when every query word starts some word of `words`: the one match rule. */
+function everyWordOpens(queryWords: ReadonlyArray<string>, words: ReadonlyArray<string>): boolean {
+  return queryWords.every((q) => words.some((w) => w.startsWith(q)));
+}
+
 /**
  * True when every query word starts some word of `text`. The search index
  * returns documents matching any one term, so "one peice" finds every "One …"
@@ -40,9 +45,7 @@ function compact(text: string): string {
  */
 export function matchesAllWords(query: string, text: string): boolean {
   const queryWords = searchWords(query);
-  if (queryWords.length === 0) return false;
-  const words = searchWords(text);
-  return queryWords.every((q) => words.some((w) => w.startsWith(q)));
+  return queryWords.length > 0 && everyWordOpens(queryWords, searchWords(text));
 }
 
 /**
@@ -77,10 +80,12 @@ export function sortByTitleMatch<
 export type NameMatch<T> = {
   item: T;
   /**
-   * The query opens the name ("seven seas", "kodansha"), so it names this
-   * item rather than sharing a word deeper in it ("seas", "manga").
+   * The query names this item: its words are the name's leading words,
+   * whole ("seven seas", "kodansha", "digital" for Digital Manga). A
+   * partial last word ("kod", "del") or a word deeper in the name ("seas",
+   * "manga") only finds it.
    */
-  opens: boolean;
+  names: boolean;
 };
 
 /**
@@ -89,7 +94,7 @@ export type NameMatch<T> = {
  * publisher-name keys (case, accents, punctuation, and "&"/"and" folded).
  * "seas", "seven seas", and "Seven Seas Entertainment" all find Seven Seas
  * Entertainment; "one" finds One Peace Books but not ComicsOne. An exact
- * name leads, then names the query opens, then the rest, each A–Z. The one
+ * name leads, then names the query starts, then the rest, each A–Z. The one
  * Publisher matcher behind both search and suggestions.
  */
 export function matchNames<T extends { name: string }>(
@@ -103,11 +108,12 @@ export function matchNames<T extends { name: string }>(
     .flatMap((item) => {
       const key = publisherNameKey(item.name);
       const words = key.split(" ");
-      if (!queryWords.every((qw) => words.some((w) => w.startsWith(qw)))) return [];
-      return [{ item, rank: key === q ? 0 : key.startsWith(q) ? 1 : 2 }];
+      if (!everyWordOpens(queryWords, words)) return [];
+      const names = queryWords.every((qw, i) => words[i] === qw);
+      return [{ item, names, rank: key === q ? 0 : key.startsWith(q) ? 1 : 2 }];
     })
     .sort((a, b) => a.rank - b.rank || a.item.name.localeCompare(b.item.name))
-    .map(({ item, rank }) => ({ item, opens: rank < 2 }));
+    .map(({ item, names }) => ({ item, names }));
 }
 
 /**

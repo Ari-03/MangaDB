@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import type { FunctionArgs } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
-import { todaySortKey } from "~/lib/month";
+import { timingNeedsToday, todaySortKey } from "../../convex/lib/dates";
 import { convexServerClient } from "~/server/convex";
 
 // contract: `api.seriesBrowse.browse` / `api.seriesBrowse.facets` are the
@@ -17,23 +17,22 @@ export type SeriesBrowseArgs = Omit<
 /**
  * One page of the Series library (`/series`): filtered, then sorted,
  * cursor-paged, with the filtered total. Called by the route loader for the
- * first page and from the client as the shelf scrolls. A timing filter that
- * counts back from today gets today's date (UTC) from the server clock,
- * since the Convex query is cached and must not read one; later pages keep
- * the first page's day, which their cursor carries. Returns null when Convex
- * is not configured.
+ * first page and from the client as the shelf scrolls. A first page whose
+ * timing filter counts back from today (`timingNeedsToday`) gets today's
+ * date (UTC) from the server clock, since the Convex query is cached and
+ * must not read one. No other request sends it, so their cache keys stay the
+ * same from day to day: later pages filter by the first page's day, which
+ * their cursor carries. Returns null when Convex is not configured.
  */
 export const fetchSeriesBrowse = createServerFn({ method: "GET" })
   .validator((args: SeriesBrowseArgs) => args)
   .handler(async ({ data }) => {
     const convex = convexServerClient();
     if (!convex) return null;
+    const needsToday = !data.cursor && data.timing !== undefined && timingNeedsToday(data.timing);
     return await convex.query(api.seriesBrowse.browse, {
       ...data,
-      // Only the timings that count back from today read it ("upcoming"
-      // reads announced dates); leaving it off keeps every other view's
-      // cache key the same from day to day.
-      todaySort: data.timing && data.timing !== "upcoming" ? todaySortKey() : undefined,
+      todaySort: needsToday ? todaySortKey() : undefined,
     });
   });
 

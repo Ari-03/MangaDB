@@ -78,7 +78,7 @@ describe("matchNames", () => {
   ];
   const names = (query: string) => matchNames(query, publishers).map((m) => m.item.name);
   const opened = (query: string) =>
-    matchNames(query, publishers).flatMap((m) => (m.opens ? [m.item.name] : []));
+    matchNames(query, publishers).flatMap((m) => (m.names ? [m.item.name] : []));
 
   it("finds a name by the start of any of its words", () => {
     expect(names("Seven Seas Entertainment")).toEqual(["Seven Seas Entertainment"]);
@@ -99,14 +99,28 @@ describe("matchNames", () => {
     expect(names("yen press")).toEqual(["Yen Press"]);
   });
 
-  it("marks only names the query opens as named", () => {
+  it("marks a name as named only when the query spells its leading words whole", () => {
     expect(opened("seven seas")).toEqual(["Seven Seas Entertainment"]);
+    expect(opened("seven")).toEqual(["Seven Seas Entertainment"]);
     expect(opened("one")).toEqual(["One Peace Books"]);
+    expect(opened("del rey")).toEqual(["Del Rey Manga"]);
+    expect(opened("press")).toEqual(["Press Start"]);
     // A word deeper in the name only suggests the Publisher.
     expect(names("manga")).toEqual(["Del Rey Manga", "Titan Manga"]);
     expect(opened("manga")).toEqual([]);
     expect(opened("seas")).toEqual([]);
-    expect(opened("press")).toEqual(["Press Start"]);
+    expect(opened("seas seven")).toEqual([]);
+  });
+
+  it("lists a name a partial word starts without marking it named", () => {
+    for (const query of ["d", "de", "del r", "sev", "seven sea"]) {
+      expect(opened(query)).toEqual([]);
+    }
+    expect(names("de")).toEqual(["Del Rey Manga"]);
+    // "Del" is a whole word of Del Rey Manga, so it names it.
+    expect(opened("del")).toEqual(["Del Rey Manga"]);
+    expect(names("d")).toEqual(["Dark Horse", "Del Rey Manga", "Drawn & Quarterly"]);
+    expect(names("seven sea")).toEqual(["Seven Seas Entertainment"]);
   });
 
   it("folds punctuation and '&' so spelling variants still match", () => {

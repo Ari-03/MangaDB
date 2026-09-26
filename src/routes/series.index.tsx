@@ -293,18 +293,23 @@ function SeriesLibraryPage() {
 /**
  * The filter panel's working copy of the view. A control changes it at once
  * and navigates in place (replace, no scroll jump); title search navigates
- * after a pause in typing. Any navigation the page did not ask for (a
- * removed chip, Clear all, a letter, back/forward), even one landing on the
- * view already shown, replaces the draft and drops a pending search; views
- * it asked for landing, even one a newer request has superseded, never
- * reset what is being typed (`useUrlDraft`). The router drops a superseded navigation's
- * results, so a slow response for an older query never replaces a newer one.
+ * after a pause in typing. Any navigation the page did not ask for (a removed
+ * chip, Clear all, a letter, back/forward), even one to the view already
+ * shown, drops a pending search as it starts and replaces the draft with
+ * where it is going; the page's own navigations never touch what is being
+ * typed (`useUrlDraft`). The router drops a superseded navigation's results,
+ * so a slow response for an older query never replaces a newer one.
  */
 function useLibraryDraft(search: LibrarySearch) {
   const navigate = Route.useNavigate();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const cancelPending = useCallback(() => clearTimeout(timer.current), []);
-  const { draft, setDraft, request } = useUrlDraft(search, viewKey(search), cancelPending);
+  const { draft, setDraft, request } = useUrlDraft(
+    search,
+    validateLibrarySearch,
+    viewKey,
+    cancelPending,
+  );
   useEffect(() => cancelPending, [cancelPending]);
 
   const update = useCallback(

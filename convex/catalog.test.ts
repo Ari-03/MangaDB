@@ -245,6 +245,18 @@ describe("catalog.search", () => {
     }
   });
 
+  it("keeps typo help when the query only starts a word of a Publisher's name", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("publishers", { status: "active", name: "Witchery Press", slug: "witchery-press" });
+    });
+    // "witche" is a fragment of Witchery, not its name: listed, suppresses nothing.
+    const results = await t.query(api.catalog.search, { query: "witche" });
+    expect(results.publishers.map((p) => p.slug)).toEqual(["witchery-press"]);
+    expect(results.didYouMean.map((s) => s.title)).toEqual(["Witch Hat Atelier"]);
+  });
+
   it("keeps typo help when the query is only a word inside a Publisher's name", async () => {
     const t = convexTest(schema);
     await seed(t);
