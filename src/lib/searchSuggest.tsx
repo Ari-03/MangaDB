@@ -29,7 +29,7 @@ type Option =
   | { kind: "isbn"; href: string; isbn: string }
   | { kind: "all"; href: string; query: string };
 
-/** `stale` rows answer an earlier query: dimmed, and never highlighted. */
+/** `stale` rows answer an earlier query: dimmed, never highlighted or opened. */
 type Group = { label: string | null; options: Option[]; stale: boolean };
 
 /** Characters typed before suggestions are fetched. */
@@ -324,6 +324,7 @@ export function SearchCombobox({
                 id={optionId(at)}
                 role="option"
                 aria-selected={option === highlighted}
+                aria-disabled={group.stale || undefined}
                 className={option.kind === "all" || option.kind === "isbn" ? "suggest-row suggest-row--all" : "suggest-row"}
                 href={option.href}
                 tabIndex={-1}
@@ -332,7 +333,11 @@ export function SearchCombobox({
                 onMouseMove={() => {
                   if (!group.stale) setActive(option.href);
                 }}
-                onClick={(event) => onOptionClick(event, option)}
+                onClick={(event) => {
+                  // A row from an earlier query no longer matches the input.
+                  if (group.stale) event.preventDefault();
+                  else onOptionClick(event, option);
+                }}
               >
                 <OptionBody option={option} />
               </a>
