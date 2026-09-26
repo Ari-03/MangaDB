@@ -460,7 +460,7 @@ describe("kodansha covers — stored once, kept current", () => {
     await seedRegistry(t, true);
     stubSite([IRUMA]);
     await sync(t);
-    const old = (await coverOf(t, "physical")).storageId;
+    const old = (await coverOf(t, "physical")).storageId!;
 
     const moved = "https://production.image.azuki.co/iruma-21-new/800.webp";
     requested.length = 0;
@@ -475,7 +475,7 @@ describe("kodansha covers — stored once, kept current", () => {
     expect(await coverOf(t, "digital")).toEqual(print);
     await t.run(async (ctx) => {
       expect(await ctx.storage.getUrl(old)).toBeNull();
-      expect(await ctx.storage.getUrl(print.storageId)).not.toBeNull();
+      expect(await ctx.storage.getUrl(print.storageId!)).not.toBeNull();
     });
   });
 
@@ -488,7 +488,7 @@ describe("kodansha covers — stored once, kept current", () => {
       const releases = await ctx.db.query("releases").collect();
       return ["physical", "digital"].map((f) => releases.find((r) => r.format === f)!);
     });
-    const old = print!.coverImage!.storageId;
+    const old = print!.coverImage!.storageId!;
     const art = new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/webp" });
     const upload = () => t.run((ctx) => ctx.storage.store(art));
     const attach = (releaseId: Id<"releases">, storageId: Id<"_storage">, sourceUrl: string) =>
@@ -588,7 +588,7 @@ describe("kodansha covers — stored once, kept current", () => {
         for (const r of await ctx.db.query("releases").collect()) {
           byEdition.set(
             r.editionId,
-            (byEdition.get(r.editionId) ?? new Set()).add(r.coverImage!.storageId),
+            (byEdition.get(r.editionId) ?? new Set()).add(r.coverImage!.storageId!),
           );
         }
         return [...byEdition.values()].map((ids) => [...ids]);
@@ -603,7 +603,7 @@ describe("kodansha covers — stored once, kept current", () => {
     expect(await sync(t)).toMatchObject({ errorCount: 0 });
     await t.run(async (ctx) => {
       for (const r of await ctx.db.query("releases").collect()) {
-        expect(await ctx.storage.getUrl(r.coverImage!.storageId)).not.toBeNull();
+        expect(await ctx.storage.getUrl(r.coverImage!.storageId!)).not.toBeNull();
       }
       expect(await ctx.db.system.query("_storage").collect()).toHaveLength(2);
     });
