@@ -655,6 +655,26 @@ describe("kodansha covers — stored once, kept current", () => {
     });
   });
 
+  it("rejects markup behind an image header and a cover URL off the public web", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const vol22: FixtureVolume = { ...IRUMA, volume: 22, image: "http://127.0.0.1/cover.webp" };
+    const challenge = "<!DOCTYPE html><html>checking your browser</html>".padEnd(MIN_COVER_BYTES + 1);
+    stubSite([IRUMA, vol22], () =>
+      new Response(challenge, { headers: { "content-type": "image/webp" } }),
+    );
+    expect(await sync(t)).toMatchObject({ errorCount: 4 });
+    expect(requested.some((u) => u.includes("127.0.0.1"))).toBe(false);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(0);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.every((r) => r.coverImage === undefined)).toBe(true);
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.errors.filter((e) => e.includes("not an image (image/webp"))).toHaveLength(2);
+      expect(run!.errors.filter((e) => e.includes("refused URL"))).toHaveLength(2);
+    });
+  });
+
   it("shares a blob within an Edition only, so one Edition's new art cannot strand another's", async () => {
     const t = makeT();
     await seedRegistry(t, true);

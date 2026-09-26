@@ -63,6 +63,33 @@ export function coverKey(cover: Pick<CoverRequest, "editionId" | "sourceUrl">): 
   return `${cover.editionId} ${cover.sourceUrl}`;
 }
 
+/** Whether a body is markup (HTML, XML, SVG) whatever its header claims: the first non-blank byte is `<`. */
+function looksLikeMarkup(bytes: Uint8Array): boolean {
+  let i = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  while (i < bytes.length && (bytes[i] === 0x20 || (bytes[i]! >= 0x09 && bytes[i]! <= 0x0d))) i++;
+  return bytes[i] === 0x3c;
+}
+
+/**
+ * Whether a cover may be fetched from `url`: publisher pages are untrusted
+ * input, so only a public https host, never a loopback, private or IP-literal
+ * destination, may be asked for art.
+ */
+function publicHttps(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== "https:" || host === "" || host.startsWith("[")) return false;
+  if (/^[\d.]+$/.test(host)) return false;
+  return !["localhost", "local", "internal", "localdomain"].some(
+    (tld) => host === tld || host.endsWith(`.${tld}`),
+  );
+}
+
 /** The raster format a jacket comes in, from the file's leading bytes; null for anything else. */
 function rasterType(bytes: Uint8Array): string | null {
   const ascii = (offset: number, text: string) =>
@@ -82,10 +109,11 @@ function rasterType(bytes: Uint8Array): string | null {
  * `stored.has(coverKey(cover))` first. A placeholder image (an SVG, or
  * under MIN_COVER_BYTES) is recorded on the Release without storing
  * anything, and returns a notice the first time this invocation meets it;
- * art is stored and returns null. A failed download, or a body that is no
- * image at all by header or, failing a usable header, by its bytes (a
- * challenge page behind a 200), throws: nothing is recorded and the cover
- * is tried again next run.
+ * art is stored and returns null. A URL off the public https web, a failed
+ * download, or a body that is no image at all (markup behind a 200 or even
+ * behind an image header; otherwise judged by header, or by its bytes when
+ * the header is unusable) throws: nothing is recorded and the cover is
+ * tried again next run.
  */
 export async function storeCover(
   ctx: ActionCtx,
@@ -97,10 +125,14 @@ export async function storeCover(
   let held = cached;
   let notice: string | null = null;
   if (held === undefined) {
+    if (!publicHttps(args.sourceUrl)) {
+      throw new Error(`refused URL, not a public https host (${args.sourceUrl})`);
+    }
     const res = await politeFetch(args.sourceUrl, args.delayMs);
     const bytes = new Uint8Array(await res.arrayBuffer());
     const header = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-    const type = header.startsWith("image/") ? header : rasterType(bytes);
+    const image = header.startsWith("image/") && (header === "image/svg+xml" || !looksLikeMarkup(bytes));
+    const type = image ? header : rasterType(bytes);
     if (type === null) {
       throw new Error(`not an image (${header || "no type"}, ${bytes.length} bytes)`);
     }

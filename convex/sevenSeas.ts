@@ -171,6 +171,7 @@ export const sync = internalAction({
             sourceRecordId: listing.sourceRecordId,
             modifiedGmt: listing.modifiedGmt,
             force: args.force ?? false,
+            offersBlurb: listing.description !== undefined,
           });
           // Presence remains evidence even if the source recategorizes a
           // previously imported book as prose. Scope changes are not deletion.
@@ -288,17 +289,38 @@ export const noteListing = internalMutation({
     sourceRecordId: v.string(),
     modifiedGmt: v.string(),
     force: v.boolean(),
+    /** The listing carries a blurb (`content.rendered`). */
+    offersBlurb: v.boolean(),
   },
-  handler: async (ctx, { sourceRecordId, modifiedGmt, force }) => {
+  handler: async (ctx, { sourceRecordId, modifiedGmt, force, offersBlurb }) => {
     const obs = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
     if (!obs) return { needsDetail: true };
     await ctx.db.patch(obs._id, { lastSeenAt: Date.now(), withdrawn: false });
     const stored = (obs.snapshot as Partial<BookSnapshot> | null)?.modifiedGmt;
-    return { needsDetail: force || stored !== modifiedGmt };
+    if (force || stored !== modifiedGmt) return { needsDetail: true };
+    // Descriptions predate their import: a linked Release still without one
+    // is re-read while the listing offers a blurb, paced by the detail
+    // budget, so the backfill needs no forced run. A human's cleared
+    // description is theirs to keep (`blurbPending` in applyBook agrees).
+    if (offersBlurb && obs.recordRef?.type === "release") {
+      const release = await ctx.db.get(obs.recordRef.id);
+      return { needsDetail: release !== null && blurbWanted(release) };
+    }
+    return { needsDetail: false };
   },
 });
 
 // ---------- applying one book ----------
+
+/** An active, unlocked Release with no description and no human override of it. */
+function blurbWanted(release: Doc<"releases">): boolean {
+  return (
+    release.status === "active" &&
+    !release.locked &&
+    release.description === undefined &&
+    !release.overriddenFields?.includes("description")
+  );
+}
 
 type ApplyResult = {
   status:
@@ -380,7 +402,7 @@ export const applyBook = internalMutation({
       // An unchanged listing still reconciles once while it carries a blurb
       // the Release lacks: descriptions predate their import, so the first
       // sync after that change must not skip already-linked books.
-      const blurbPending = snapshot.description !== undefined && release.description === undefined;
+      const blurbPending = snapshot.description !== undefined && blurbWanted(release);
       const cover = coverRequest(release, snapshot.coverUrl);
       if (!changed && !blurbPending && cover === undefined) {
         return { status: "unchanged", changed: false };

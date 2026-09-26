@@ -325,24 +325,35 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     });
   });
 
-  it("a forced re-read fills a blurb the Release predates, even with the listing unchanged", async () => {
+  it("the next sync fills a blurb the Release predates, even with the listing unchanged", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
     // A Release imported before descriptions existed: no text, same listing.
-    await t.run(async (ctx) => {
-      const release = (await ctx.db.query("releases").collect())[0]!;
-      await ctx.db.patch(release._id, { description: undefined });
-    });
-    const forced = await sync(t, { force: true });
-    expect(forced).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+    const clear = () =>
+      t.run(async (ctx) => {
+        const release = (await ctx.db.query("releases").collect())[0]!;
+        await ctx.db.patch(release._id, { description: undefined });
+      });
+    await clear();
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
     await t.run(async (ctx) => {
       const release = (await ctx.db.query("releases").collect())[0]!;
       expect(release.description).toBe("Alpha’s first adventure.");
     });
     // With the text in place the unchanged short-circuit is back.
-    expect(await sync(t, { force: true })).toMatchObject({ recordsChanged: 0 });
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    // A description a human cleared stays cleared: no re-read for it.
+    await clear();
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      await ctx.db.patch(release._id, { overriddenFields: ["description"] });
+    });
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("releases").collect())[0]!.description).toBeUndefined();
+    });
   });
 
   it("keeps append-only history and auto-updates authoritative fields on change", async () => {
