@@ -63,11 +63,11 @@ export const Route = createFileRoute("/")({
   component: Home,
 });
 
+// The hero's headline counts. Editions and Releases stay out: to a reader
+// they restate Volumes in catalog jargon.
 const LABELS = [
   ["series", "Series"],
   ["volumes", "Volumes"],
-  ["editions", "Editions"],
-  ["releases", "Releases"],
   ["publishers", "Publishers"],
 ] as const;
 
@@ -115,10 +115,7 @@ function Home() {
             <div className="stat-row">
               {LABELS.map(([key, label]) => (
                 <div className="stat" key={key}>
-                  <div className="stat-num">
-                    {groupDigits(stats[key].count)}
-                    {stats[key].capped ? "+" : ""}
-                  </div>
+                  <div className="stat-num">{roundedCount(stats[key].count)}</div>
                   <div className="stat-label">{label}</div>
                 </div>
               ))}
@@ -532,6 +529,17 @@ function hasArt(release: BrowseRelease): boolean {
 }
 
 /** Thousands separators without a locale, so SSR and hydration agree. */
+/**
+ * A headline count rounded down to two significant figures, as a floor:
+ * 5,488 → "5,400+", 28,155 → "28,000+", 65 → "65+". The catalog grows daily,
+ * so exact figures would only be stale precision.
+ */
+function roundedCount(value: number): string {
+  if (value <= 0) return "0";
+  const step = 10 ** Math.max(0, Math.floor(Math.log10(value)) - 1);
+  return `${groupDigits(Math.floor(value / step) * step)}+`;
+}
+
 function groupDigits(value: number): string {
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
