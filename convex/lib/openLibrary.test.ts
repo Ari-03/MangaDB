@@ -29,10 +29,33 @@ const dumpLine = (json: unknown) =>
   `/type/edition\t/books/OL51694024M\t3\t2026-08-01T00:00:00\t${JSON.stringify(json)}`;
 
 describe("parseOlDate — precision preserved", () => {
+  it("drops impossible days while retaining the valid month", () => {
+    expect(parseOlDate("2026-02-31")).toEqual({ year: 2026, month: 2 });
+    expect(parseOlDate("April 31, 2026")).toEqual({ year: 2026, month: 4 });
+    expect(parseOlDate("Feb 29, 2024")).toEqual({
+      year: 2024,
+      month: 2,
+      day: 29,
+    });
+    expect(parseOlDate("1900-02-29")).toEqual({ year: 1900, month: 2 });
+    expect(parseOlDate("2000-02-29")).toEqual({
+      year: 2000,
+      month: 2,
+      day: 29,
+    });
+  });
   it("parses OL's date styles at their own precision", () => {
-    expect(parseOlDate("Oct 13, 2026")).toEqual({ year: 2026, month: 10, day: 13 });
+    expect(parseOlDate("Oct 13, 2026")).toEqual({
+      year: 2026,
+      month: 10,
+      day: 13,
+    });
     expect(parseOlDate("October 2026")).toEqual({ year: 2026, month: 10 });
-    expect(parseOlDate("2026-10-13")).toEqual({ year: 2026, month: 10, day: 13 });
+    expect(parseOlDate("2026-10-13")).toEqual({
+      year: 2026,
+      month: 10,
+      day: 13,
+    });
     expect(parseOlDate("2026-10")).toEqual({ year: 2026, month: 10 });
     expect(parseOlDate("2026")).toEqual({ year: 2026 });
     expect(parseOlDate("n.d.")).toBeUndefined();
@@ -67,7 +90,10 @@ describe("parseEditionJson — title splitting", () => {
       volumeLabel: "8",
     });
     // Bare trailing numbers are NOT labels for OL ("1984" is a title).
-    expect(titled("1984")).toMatchObject({ seriesTitle: "1984", multiVolume: false });
+    expect(titled("1984")).toMatchObject({
+      seriesTitle: "1984",
+      multiVolume: false,
+    });
     expect(titled("Naruto, Vol. 1-3")).toMatchObject({ multiVolume: true });
   });
 
@@ -88,13 +114,21 @@ describe("OpenLibrary scope", () => {
   it("rejects Japanese ISBNs, undeclared non-English-market ISBNs, and Spanish", () => {
     // Real OL records: a Kodansha JP tankōbon and a declared-Japanese edition.
     expect(
-      parseEditionJson({ ...EDITION, languages: undefined, isbn_13: ["9784065116173"], isbn_10: [] }),
+      parseEditionJson({
+        ...EDITION,
+        languages: undefined,
+        isbn_13: ["9784065116173"],
+        isbn_10: [],
+      }),
     ).toBeNull();
+    expect(parseEditionJson({ ...EDITION, isbn_13: ["9784065116173"], isbn_10: [] })).toBeNull();
     expect(
-      parseEditionJson({ ...EDITION, isbn_13: ["9784065116173"], isbn_10: [] }),
-    ).toBeNull();
-    expect(
-      parseEditionJson({ ...EDITION, languages: undefined, isbn_13: [], isbn_10: [] }),
+      parseEditionJson({
+        ...EDITION,
+        languages: undefined,
+        isbn_13: [],
+        isbn_10: [],
+      }),
     ).toBeNull();
     expect(parseEditionJson({ ...EDITION, languages: undefined })).toMatchObject({
       isbn13: "9781974766512",
@@ -108,9 +142,28 @@ describe("OpenLibrary scope", () => {
     expect(titled("Street Fighter : The Novel")).toBeNull();
     expect(titled("Hansel and Gretel: A Grimm Fable Coloring Book")).toBeNull();
   });
+
+  it.each(["Audio CD", "Audiobook", "MP3 CD", "Audio Cassette"])(
+    "excludes audio identified only by physical_format: %s",
+    (physical_format) => {
+      expect(parseEditionJson({ ...EDITION, physical_format })).toBeNull();
+    },
+  );
 });
 
 describe("isbnPair", () => {
+  it("does not manufacture valid identifiers from corrupt ISBNs", () => {
+    expect(isbnPair([], ["1974709931"])).toEqual({});
+    expect(isbnPair(["9781974709939"], ["1974709931"])).toEqual({
+      isbn13: "9781974709939",
+    });
+    expect(isbnPair(["4006381333931"], [])).toEqual({});
+    expect(isbnPair(["SKU9781974709939"], ["SKU1974709930"])).toEqual({});
+    expect(isbnPair([], ["1974709931", "1-9747-0993-0"])).toEqual({
+      isbn13: "9781974709939",
+      isbn10: "1974709930",
+    });
+  });
   it("keeps an ISBN-10 only when it is the same book as the ISBN-13", () => {
     expect(isbnPair(["9781974766512"], ["1974766519"])).toEqual({
       isbn13: "9781974766512",
@@ -148,36 +201,60 @@ describe("parseEditionJson / parseDumpLine", () => {
   });
 
   it("skips non-English editions and non-edition lines", () => {
-    expect(
-      parseEditionJson({ ...EDITION, languages: [{ key: "/languages/jpn" }] }),
-    ).toBeNull();
+    expect(parseEditionJson({ ...EDITION, languages: [{ key: "/languages/jpn" }] })).toBeNull();
     expect(parseDumpLine("/type/author\t/authors/OL1A\t1\t2026\t{}")).toBeNull();
-    expect(parseDumpLine("garbage")).toBeNull();
+    expect(() => parseDumpLine("garbage")).toThrow("dump envelope");
+    expect(() => parseDumpLine("/type/edition\t/books/OL1M\t1\t2026\t{")).toThrow();
+    expect(() => parseDumpLine(dumpLine({ ...EDITION, key: "/books/OL2M" }))).toThrow("identity");
+    expect(() => parseDumpLine(dumpLine({ ...EDITION, title: "" }))).toThrow("title");
   });
 
   it("classifies e-book physical_format as digital", () => {
-    expect(
-      parseEditionJson({ ...EDITION, physical_format: "E-book" }),
-    ).toMatchObject({ format: "digital", binding: undefined });
+    expect(parseEditionJson({ ...EDITION, physical_format: "E-book" })).toMatchObject({
+      format: "digital",
+      binding: undefined,
+    });
   });
 });
 
 describe("title + subtitle split across fields", () => {
   it("re-reads a subtitle that is the rest of the title plus the volume", () => {
     expect(
-      parseEditionJson({ ...EDITION, title: "Mashle", subtitle: "Magic and Muscles, Vol. 3" }),
-    ).toMatchObject({ seriesTitle: "Mashle: Magic and Muscles", volumeLabel: "3" });
+      parseEditionJson({
+        ...EDITION,
+        title: "Mashle",
+        subtitle: "Magic and Muscles, Vol. 3",
+      }),
+    ).toMatchObject({
+      seriesTitle: "Mashle: Magic and Muscles",
+      volumeLabel: "3",
+    });
     expect(
-      parseEditionJson({ ...EDITION, title: "Mission", subtitle: "Yozakura Family, Vol. 12" }),
-    ).toMatchObject({ seriesTitle: "Mission: Yozakura Family", volumeLabel: "12" });
+      parseEditionJson({
+        ...EDITION,
+        title: "Mission",
+        subtitle: "Yozakura Family, Vol. 12",
+      }),
+    ).toMatchObject({
+      seriesTitle: "Mission: Yozakura Family",
+      volumeLabel: "12",
+    });
   });
 
   it("keeps the split reading when the joined one finds nothing more", () => {
     expect(
-      parseEditionJson({ ...EDITION, title: "Chainsaw Man, Vol. 22", subtitle: "Something Sinister" }),
+      parseEditionJson({
+        ...EDITION,
+        title: "Chainsaw Man, Vol. 22",
+        subtitle: "Something Sinister",
+      }),
     ).toMatchObject({ seriesTitle: "Chainsaw Man", volumeLabel: "22" });
     expect(
-      parseEditionJson({ ...EDITION, title: "Honey Hunt", subtitle: "Shojo Beat edition" }),
+      parseEditionJson({
+        ...EDITION,
+        title: "Honey Hunt",
+        subtitle: "Shojo Beat edition",
+      }),
     ).toMatchObject({ seriesTitle: "Honey Hunt", volumeLabel: undefined });
   });
 });
@@ -188,6 +265,7 @@ describe("toIsbn13", () => {
     expect(toIsbn13("1591163269")).toBe("9781591163268");
     expect(toIsbn13("9781974766704")).toBeUndefined();
     expect(toIsbn13("CTFL-02")).toBeUndefined();
+    expect(toIsbn13("4006381333931")).toBeUndefined();
     expect(toIsbn13(undefined)).toBeUndefined();
   });
 });

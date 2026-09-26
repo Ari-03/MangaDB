@@ -42,7 +42,11 @@ describe("parseReport", () => {
 
 describe("parseAnnDate — ANN's month-precision convention", () => {
   it("keeps full, month, and year precision distinct", () => {
-    expect(parseAnnDate("2026-02-10")).toEqual({ year: 2026, month: 2, day: 10 });
+    expect(parseAnnDate("2026-02-10")).toEqual({
+      year: 2026,
+      month: 2,
+      day: 10,
+    });
     expect(parseAnnDate("2024-11-00")).toEqual({ year: 2024, month: 11 });
     expect(parseAnnDate("2027")).toEqual({ year: 2027 });
     expect(parseAnnDate("soon")).toBeUndefined();
@@ -52,7 +56,11 @@ describe("parseAnnDate — ANN's month-precision convention", () => {
     expect(parseAnnDate("2004-06-01")).toEqual({ year: 2004, month: 6 });
     expect(parseAnnDate("2009-12-01")).toEqual({ year: 2009, month: 12 });
     // Modern day-1 dates are real (159/178 agree with PRH).
-    expect(parseAnnDate("2024-10-01")).toEqual({ year: 2024, month: 10, day: 1 });
+    expect(parseAnnDate("2024-10-01")).toEqual({
+      year: 2024,
+      month: 10,
+      day: 1,
+    });
   });
 });
 
@@ -83,7 +91,9 @@ describe("splitReleaseTitle", () => {
       label: "2",
       format: "digital",
     });
-    expect(splitReleaseTitle("Frieren (GN 7.5)")).toMatchObject({ label: "7.5" });
+    expect(splitReleaseTitle("Frieren (GN 7.5)")).toMatchObject({
+      label: "7.5",
+    });
     expect(splitReleaseTitle("Oneshot Story (GN)")).toMatchObject({
       label: undefined,
       multi: false,
@@ -127,7 +137,10 @@ describe("parseApiResponse", () => {
       date: { year: 2024, month: 11 },
       label: "7.5",
     });
-    expect(manga.releases[4]).toMatchObject({ multi: true, editionLineHint: true });
+    expect(manga.releases[4]).toMatchObject({
+      multi: true,
+      editionLineHint: true,
+    });
   });
 
   it("tolerates warnings and empty responses", () => {
@@ -136,6 +149,19 @@ describe("parseApiResponse", () => {
 });
 
 describe("release lines — ISBNs, chapters, packaging in the title", () => {
+  it("keeps missing-href identities distinct across manga and packaging lines", () => {
+    const xml = `<ann>${[1, 2]
+      .map(
+        (id) => `<manga id="${id}" name="Series ${id}">
+      <release date="2026-01-01">Series ${id} (GN 1-3)</release>
+      <release date="2026-01-01">Series ${id} (GN 4-6)</release>
+      </manga>`,
+      )
+      .join("")}</ann>`;
+    const ids = parseApiResponse(xml).flatMap((manga) => manga.releases.map((line) => line.annId));
+    expect(new Set(ids).size).toBe(4);
+  });
+
   it("keeps a valid ean as the line's ISBN-13 and drops malformed ones", () => {
     const [manga] = parseApiResponse(`<ann><manga id="1223" name="One Piece">
 <info gid="1" type="Main title" lang="EN">One Piece</info>
@@ -163,13 +189,15 @@ describe("release lines — ISBNs, chapters, packaging in the title", () => {
     expect(
       splitReleaseTitle("Summer Ghost: The Complete Manga Collection (GN)", "Summer Ghost"),
     ).toMatchObject({ label: undefined, editionLineHint: true });
-    expect(
-      splitReleaseTitle("orange: The Complete Collection 2 (GN 2)", "Orange"),
-    ).toMatchObject({ label: "2", editionLineHint: true });
+    expect(splitReleaseTitle("orange: The Complete Collection 2 (GN 2)", "Orange")).toMatchObject({
+      label: "2",
+      editionLineHint: true,
+    });
     // The series' own name carries the word: not packaging.
-    expect(
-      splitReleaseTitle("The Omnibus Club (GN 2)", "The Omnibus Club"),
-    ).toMatchObject({ label: "2", editionLineHint: false });
+    expect(splitReleaseTitle("The Omnibus Club (GN 2)", "The Omnibus Club")).toMatchObject({
+      label: "2",
+      editionLineHint: false,
+    });
   });
 });
 
@@ -185,6 +213,14 @@ const BOX_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=
 const OLD_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/10045.jpg" align="RIGHT"><b>Title:</b> Fall in Love Like a Comic!<br><b>Volume:</b>  GN 2 / 2<br><b>Pages:</b> 192<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2008-01-01<br><b>Suggested retail price:</b> $8.99<br><b>Age rating:</b> 15+<br></p><p><b>SKU:</b> <span class="release-ean">CTFL-02</span><br><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">4215</span><span title="product">1374</span><span title="check digit">9</span></span><span style="visibility:hidden"> 1421513749</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">4215</span><span title="product">1374</span><span title="check digit">4</span></span><span style="visibility:hidden"> 9781421513744</span><br></p><p class="easyread-width"><b>Description:</b><br>…</p><p><small>(added on 2007-10-05, modified on 2007-10-05)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=8124">Zoku Manga Mitaina Koi Shitai!</a></b></li></ul></body></html>`;
 
 describe("parseReleasePage", () => {
+  it("derives an ISBN-13 when an older release lists only ISBN-10", () => {
+    const page = "<b>Title:</b> Example<br><b>ISBN-10:</b> 1421513749<br>";
+    expect(parseReleasePage(page)).toMatchObject({
+      isbn10: "1421513749",
+      isbn13: "9781421513744",
+    });
+  });
+
   it("reads distributor, ISBNs, date, price, and the entry of a GN page", () => {
     expect(parseReleasePage(GN_PAGE)).toEqual({
       title: "One Piece",

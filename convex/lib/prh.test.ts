@@ -23,7 +23,12 @@ const TITLE = {
 // Real titles from the PRH snapshot; the shared parser (lib/bookTitle.ts)
 // has its own exhaustive tests — these pin what the snapshot carries.
 function parsed(title: string, seriesNumber?: number) {
-  return parseTitle({ isbn: "9781646094356", title, seriesNumber, imprint: "Kodansha Comics" });
+  return parseTitle({
+    isbn: "9781646094356",
+    title,
+    seriesNumber,
+    imprint: "Kodansha Comics",
+  });
 }
 
 describe("parseTitle — title splitting", () => {
@@ -53,7 +58,11 @@ describe("parseTitle — title splitting", () => {
       seriesTitle: "Noragami",
       volumeLabel: undefined,
       multiVolume: true,
-      packaging: { lineName: "Omnibus", linePosition: "7", coverRange: { from: "19", to: "21" } },
+      packaging: {
+        lineName: "Omnibus",
+        linePosition: "7",
+        coverRange: { from: "19", to: "21" },
+      },
     });
     expect(parsed("The Way of the Househusband, Vol. 1-3 (Omnibus)")).toMatchObject({
       seriesTitle: "The Way of the Househusband",
@@ -75,14 +84,29 @@ describe("parseTitle — title splitting", () => {
 
 describe("parseTitle — scope gates", () => {
   it("denies the prose Vertical and coloring-book imprints but keeps Vertical Comics", () => {
-    const entry = { isbn: "9781945054853", title: "The Seven Deadly Sins (Novel)" };
+    const entry = {
+      isbn: "9781945054853",
+      title: "The Seven Deadly Sins (Novel)",
+    };
     expect(parseTitle({ ...entry, title: "Ring", imprint: "Vertical" })).toBeNull();
     expect(
-      parseTitle({ ...entry, title: "Attack on Titan Coloring Book", imprint: "Waves of Color" }),
+      parseTitle({
+        ...entry,
+        title: "Attack on Titan Coloring Book",
+        imprint: "Waves of Color",
+      }),
     ).toBeNull();
     expect(
-      parseTitle({ ...entry, title: "Ajin: Demi-Human 1", seriesNumber: 1, imprint: "Vertical Comics" }),
-    ).toMatchObject({ seriesTitle: "Ajin: Demi-Human", imprint: "Vertical Comics" });
+      parseTitle({
+        ...entry,
+        title: "Ajin: Demi-Human 1",
+        seriesNumber: 1,
+        imprint: "Vertical Comics",
+      }),
+    ).toMatchObject({
+      seriesTitle: "Ajin: Demi-Human",
+      imprint: "Vertical Comics",
+    });
   });
 
   it("drops novels, merchandise, samplers, and non-English editions by title", () => {
@@ -103,19 +127,31 @@ describe("parseTitle — scope gates", () => {
   const subjects = (...codes: string[]) => codes.map((code) => ({ code, description: code }));
 
   it("drops what PRH itself classifies as prose or, at TOKYOPOP, as a non-manga graphic novel", () => {
-    const entry = { isbn: "9781506709390", imprint: { code: "KN", description: "Dark Horse Manga" } };
+    const entry = {
+      isbn: "9781506709390",
+      imprint: { code: "KN", description: "Dark Horse Manga" },
+    };
+    expect(prhScopeReason({ ...entry, graphicCategory: "Light Novel" }, "Dark Horse Manga")).toBe(
+      "novel",
+    );
     expect(
-      prhScopeReason({ ...entry, graphicCategory: "Light Novel" }, "Dark Horse Manga"),
-    ).toBe("novel");
-    expect(
-      parseTitle({ ...entry, title: "Berserk: The Flame Dragon Knight", graphicCategory: "Light Novel" }),
+      parseTitle({
+        ...entry,
+        title: "Berserk: The Flame Dragon Knight",
+        graphicCategory: "Light Novel",
+      }),
     ).toBeNull();
-    expect(
-      prhScopeReason({ subjects: subjects("FIC015000", "FIC108000") }, "TOKYOPOP"),
-    ).toBe("prose");
+    expect(prhScopeReason({ subjects: subjects("FIC015000", "FIC108000") }, "TOKYOPOP")).toBe(
+      "prose",
+    );
     for (const title of ["Ballad of The Broken Heart, Volume 1", "ALIEN STAGE: The Art Book"]) {
       expect(
-        parseTitle({ isbn: "9781427884800", title, imprint: "TOKYOPOP", graphicCategory: "Graphic Novel" }),
+        parseTitle({
+          isbn: "9781427884800",
+          title,
+          imprint: "TOKYOPOP",
+          graphicCategory: "Graphic Novel",
+        }),
         title,
       ).toBeNull();
     }
@@ -124,7 +160,12 @@ describe("parseTitle — scope gates", () => {
   it("keeps manga whatever its origin or audience, and Graphic Novel outside TOKYOPOP", () => {
     // Titan Manga and Vertical Comics file real manga as "Graphic Novel".
     expect(
-      parseTitle({ isbn: "9781787744424", title: "Yan Vol.1", imprint: "Titan Manga", graphicCategory: "Graphic Novel" }),
+      parseTitle({
+        isbn: "9781787744424",
+        title: "Yan Vol.1",
+        imprint: "Titan Manga",
+        graphicCategory: "Graphic Novel",
+      }),
     ).not.toBeNull();
     // Juvenile-only subjects are kids' manga, not a scope signal.
     expect(
@@ -137,9 +178,17 @@ describe("parseTitle — scope gates", () => {
       }),
     ).not.toBeNull();
     // Manga-styled originals are manga (owner's scope rule): no origin gate.
-    for (const title of ["Masters of the Universe: Legends of Eternia, Issue #2", "Emma & Capucine, Volume 3"]) {
+    for (const title of [
+      "Masters of the Universe: Legends of Eternia, Issue #2",
+      "Emma & Capucine, Volume 3",
+    ]) {
       expect(
-        parseTitle({ isbn: "9781427892331", title, imprint: "TOKYOPOP", graphicCategory: "Manga" }),
+        parseTitle({
+          isbn: "9781427892331",
+          title,
+          imprint: "TOKYOPOP",
+          graphicCategory: "Manga",
+        }),
         title,
       ).not.toBeNull();
     }
@@ -174,7 +223,11 @@ describe("parseTitle", () => {
         imprint: "Kodansha Comics",
         priceUsd: 10.99,
       }),
-    ).toMatchObject({ format: "digital", binding: undefined, priceCents: 1099 });
+    ).toMatchObject({
+      format: "digital",
+      binding: undefined,
+      priceCents: 1099,
+    });
     expect(
       parseTitle({
         isbn: "9781646094370",
@@ -187,6 +240,19 @@ describe("parseTitle", () => {
 });
 
 describe("parseTitleList", () => {
+  it("keeps the upstream page size when all entries are excluded", () => {
+    expect(
+      parseTitleList({
+        data: { titles: [{ ...TITLE, title: "A Light Novel" }] },
+      }),
+    ).toMatchObject({ titles: [], rawCount: 1 });
+  });
+
+  it.each([null, {}, { error: "unauthorized" }, { data: {} }, { data: { titles: null } }])(
+    "rejects malformed envelopes: %j",
+    (raw) => expect(() => parseTitleList(raw)).toThrow("titles array"),
+  );
+
   it("reads the data.titles envelope with recordCount", () => {
     const { titles, recordCount } = parseTitleList({
       recordCount: 812,
@@ -199,14 +265,21 @@ describe("parseTitleList", () => {
 
 describe("imprintPublisher", () => {
   it("resolves duplicate strings to the company and imprints to their own row", () => {
-    expect(imprintPublisher("Kodansha Comics")).toEqual({ name: "Kodansha", slug: "kodansha" });
-    expect(imprintPublisher("Square Enix Manga")).toMatchObject({ slug: "square-enix" });
+    expect(imprintPublisher("Kodansha Comics")).toEqual({
+      name: "Kodansha",
+      slug: "kodansha",
+    });
+    expect(imprintPublisher("Square Enix Manga")).toMatchObject({
+      slug: "square-enix",
+    });
     expect(imprintPublisher("Ghost Ship")).toEqual({
       name: "Ghost Ship",
       slug: "ghost-ship",
       parentSlug: "seven-seas",
     });
-    expect(imprintPublisher("Vertical Comics")).toMatchObject({ slug: "vertical" });
+    expect(imprintPublisher("Vertical Comics")).toMatchObject({
+      slug: "vertical",
+    });
   });
 
   it("slugs an unknown imprint description", () => {
@@ -219,7 +292,11 @@ describe("imprintPublisher", () => {
 
 describe("parseOnsale", () => {
   it("reads bare and timestamped dates", () => {
-    expect(parseOnsale("2026-12-08")).toEqual({ year: 2026, month: 12, day: 8 });
+    expect(parseOnsale("2026-12-08")).toEqual({
+      year: 2026,
+      month: 12,
+      day: 8,
+    });
     expect(parseOnsale("2026-12-08T00:00:00-05:00")).toEqual({
       year: 2026,
       month: 12,

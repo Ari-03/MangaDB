@@ -20,10 +20,11 @@ function dumpLine(edition: Record<string, unknown>): string {
 function stubDump(editions: Array<Record<string, unknown>>) {
   const body = editions.map(dumpLine).join("\n") + "\n";
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url === DUMP_URL) {
-      return new Response(body, { headers: { "content-type": "text/plain" } });
+      return new Response(body, {
+        headers: { "content-type": "text/plain" },
+      });
     }
     return new Response("not found", { status: 404 });
   });
@@ -47,8 +48,7 @@ async function seedRegistry(t: TestT) {
   await t.mutation(internal.importSources.seedRegistry, {});
 }
 
-const sync = (t: TestT, args: object = {}) =>
-  t.action(internal.openLibrary.sync, { ...args });
+const sync = (t: TestT, args: object = {}) => t.action(internal.openLibrary.sync, { ...args });
 
 /** The ANN-built skeleton + a VIZ publisher row: series, volumes 1-2, and
  * (optionally) an existing ISBN-less release covering volume 1. */
@@ -115,6 +115,37 @@ const CHAINSAW_22 = {
 };
 
 describe("openLibrary.sync — configuration", () => {
+  it.each([0, -1, 1.5, 20001])(
+    "rejects unsafe line limit %s before starting a run",
+    async (maxLines) => {
+      const t = makeT();
+      await seedRegistry(t);
+      await expect(sync(t, { maxLines })).rejects.toThrow("maxLines must be an integer");
+      await t.run(async (ctx) => {
+        expect(await ctx.db.query("importRuns").collect()).toHaveLength(0);
+      });
+    },
+  );
+
+  it("records malformed lines as a failed run while processing valid records", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    vi.stubGlobal("fetch", async () => new Response(`not a dump\n${dumpLine(CHAINSAW_22)}\n`));
+    expect(await sync(t)).toMatchObject({
+      recordsSeen: 1,
+      recordsChanged: 1,
+      failed: true,
+      errorCount: 1,
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))?.isbn13).toBe("9781974766512");
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("failed");
+      expect(run?.errors?.[0]).toContain("dump line 1");
+    });
+  });
+
   it("skips as unconfigured without a dump URL", async () => {
     vi.stubEnv("OPENLIBRARY_DUMP_URL", "");
     const t = makeT();

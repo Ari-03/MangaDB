@@ -53,16 +53,13 @@ function stubSite(books: FixtureBook[]) {
     modified_gmt: b.modified ?? "2026-08-01T00:00:00",
     content: { rendered: "" },
   }));
-  const pages = new Map(
-    books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]),
-  );
+  const pages = new Map(books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]));
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url.startsWith(`${BASE}/wp-json/wp/v2/books`)) {
       return new Response(JSON.stringify(listing), {
         headers: {
-          "x-wp-totalpages": "1",
+          "x-wp-totalpages": books.length === 0 ? "0" : "1",
           "content-type": "application/json",
         },
       });
@@ -84,10 +81,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function seedRegistry(
-  t: ReturnType<typeof convexTest>,
-  bootstrap: boolean,
-) {
+async function seedRegistry(t: ReturnType<typeof convexTest>, bootstrap: boolean) {
   await t.mutation(internal.importSources.seedRegistry, {});
   await t.mutation(internal.importSources.setBootstrapModeInternal, {
     on: bootstrap,
@@ -211,9 +205,7 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
         },
       });
       expect(revisions[0]!.approvedBy).toBeUndefined();
-      expect(
-        revisions[0]!.changes.map((c) => c.field).sort(),
-      ).toContain("pubDate");
+      expect(revisions[0]!.changes.map((c) => c.field).sort()).toContain("pubDate");
 
       // The immediately approved system Proposal behind Vol. 1's creation.
       const proposal = await ctx.db.get(revisions[0]!.proposalId);
@@ -240,7 +232,10 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
           q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "series:alpha-manga"),
         )
         .unique();
-      expect(seriesObs?.recordRef).toEqual({ type: "series", id: series[0]!._id });
+      expect(seriesObs?.recordRef).toEqual({
+        type: "series",
+        id: series[0]!._id,
+      });
 
       // The Import Run log.
       const runs = await ctx.db.query("importRuns").collect();
@@ -292,9 +287,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     stubSite([ALPHA_1]);
     await sync(t);
     const before = await t.run(async (ctx) =>
-      (await ctx.db.query("sourceObservations").collect()).find(
-        (o) => o.sourceRecordId === "101",
-      ),
+      (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === "101"),
     );
     await new Promise((r) => setTimeout(r, 5));
 
@@ -319,22 +312,23 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     await sync(t);
 
     // The source moves the date: modified_gmt bumps, the page changes.
-    stubSite([
-      { ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" },
-    ]);
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
     const result = await sync(t);
     expect(result).toMatchObject({ recordsChanged: 1 });
 
     await t.run(async (ctx) => {
       const history = await ctx.db.query("observationSnapshots").collect();
       expect(history).toHaveLength(1);
-      expect(
-        (history[0]!.snapshot as { releaseDate: { month: number } }).releaseDate
-          .month,
-      ).toBe(1); // the superseded snapshot, retained append-only
+      expect((history[0]!.snapshot as { releaseDate: { month: number } }).releaseDate.month).toBe(
+        1,
+      ); // the superseded snapshot, retained append-only
 
       const release = (await ctx.db.query("releases").collect())[0]!;
-      expect(release.pubDate).toMatchObject({ month: 2, day: 3, sort: 20260203 });
+      expect(release.pubDate).toMatchObject({
+        month: 2,
+        day: 3,
+        sort: 20260203,
+      });
 
       const revisions = await ctx.db
         .query("revisions")
@@ -365,9 +359,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
       await ctx.db.patch(release._id, { overriddenFields: ["pubDate"] });
     });
 
-    stubSite([
-      { ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" },
-    ]);
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
     await sync(t);
     await t.run(async (ctx) => {
       const release = (await ctx.db.query("releases").collect())[0]!;
@@ -377,9 +369,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "101",
       )!;
-      expect(
-        (obs.snapshot as { releaseDate: { month: number } }).releaseDate.month,
-      ).toBe(2);
+      expect((obs.snapshot as { releaseDate: { month: number } }).releaseDate.month).toBe(2);
       const revisions = await ctx.db.query("revisions").collect();
       expect(revisions.filter((r) => r.ref.type === "release")).toHaveLength(1);
     });
@@ -426,12 +416,7 @@ describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
           author: { kind: "source", sourceKey: "sevenseas" },
         });
         const version = (await ctx.db.query("proposalVersions").collect())[0]!;
-        expect(version.ops.map((op) => op.kind)).toEqual([
-          "create",
-          "create",
-          "create",
-          "create",
-        ]);
+        expect(version.ops.map((op) => op.kind)).toEqual(["create", "create", "create", "create"]);
         expect(version.evidence[0]?.kind).toBe("observation");
         const obs = (await ctx.db.query("sourceObservations").collect()).find(
           (o) => o.sourceRecordId === "101",
@@ -462,19 +447,14 @@ describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
       const vol2 = releases.find((r) => r.isbn13 === "9781999000110")!;
       expect(vol2.bootstrapUnreviewed).toBeUndefined();
       expect(
-        (await ctx.db.query("proposals").collect()).filter(
-          (p) => p.state === "inReview",
-        ),
+        (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview"),
       ).toHaveLength(0);
     });
   });
 });
 
 describe("sevenSeas.sync — ISBN matching rung", () => {
-  const insertCatalogRelease = async (
-    t: ReturnType<typeof convexTest>,
-    seriesTitle: string,
-  ) =>
+  const insertCatalogRelease = async (t: ReturnType<typeof convexTest>, seriesTitle: string) =>
     await t.run(async (ctx) => {
       const publisherId = await ctx.db.insert("publishers", {
         status: "active",
@@ -552,13 +532,95 @@ describe("sevenSeas.sync — ISBN matching rung", () => {
 });
 
 describe("sevenSeas.sync — failure handling", () => {
+  it("does not withdraw a listed book when its title becomes out of scope", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      for (const observation of await ctx.db.query("sourceObservations").collect()) {
+        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+      }
+    });
+    stubSite([{ ...ALPHA_1, title: "Alpha Adventures (Light Novel) Vol. 1" }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const observation = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "101"),
+        )
+        .unique();
+      expect(observation?.withdrawn).toBe(false);
+    });
+  });
+
+  it.each(["missing pagination", "malformed book", "unexpected empty page"])(
+    "does not withdraw existing observations after %s",
+    async (failure) => {
+      const t = convexTest(schema);
+      await seedRegistry(t, true);
+      stubSite([ALPHA_1]);
+      await sync(t);
+      await t.run(async (ctx) => {
+        for (const observation of await ctx.db.query("sourceObservations").collect()) {
+          await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+        }
+      });
+      vi.stubGlobal(
+        "fetch",
+        async () =>
+          new Response(JSON.stringify(failure === "malformed book" ? [{ id: 101 }] : []), {
+            headers: failure === "missing pagination" ? {} : { "x-wp-totalpages": "1" },
+          }),
+      );
+      expect(await sync(t)).toMatchObject({
+        failed: true,
+        completeSweep: false,
+      });
+      await t.run(async (ctx) => {
+        const observation = await ctx.db
+          .query("sourceObservations")
+          .withIndex("by_source_record", (q) =>
+            q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "101"),
+          )
+          .unique();
+        expect(observation?.withdrawn).toBe(false);
+      });
+    },
+  );
+
+  it("records a failed detail run without creating a book from an HTTP 200 error page", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    const siteFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).includes("/books/")) {
+        return new Response("<html>Just a moment...</html>");
+      }
+      return siteFetch(input);
+    });
+    expect(await sync(t)).toMatchObject({
+      failed: true,
+      recordsChanged: 0,
+      errorCount: 1,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+      expect(await ctx.db.query("sourceObservations").collect()).toHaveLength(0);
+      const source = await ctx.db
+        .query("approvedSources")
+        .withIndex("by_key", (q) => q.eq("key", "sevenseas"))
+        .unique();
+      expect(source?.consecutiveFailures).toBe(1);
+    });
+  });
+
   it("logs a failed run and counts toward source health", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);
-    vi.stubGlobal(
-      "fetch",
-      async () => new Response("gone", { status: 404 }),
-    );
+    vi.stubGlobal("fetch", async () => new Response("gone", { status: 404 }));
     const result = (await sync(t)) as { failed?: boolean };
     expect(result.failed).toBe(true);
     await t.run(async (ctx) => {

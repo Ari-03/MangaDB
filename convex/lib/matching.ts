@@ -79,10 +79,7 @@ export function titlesSimilar(a: string, b: string): boolean {
 }
 
 /** Volume-label equality: exact after trimming, or numerically ("07" = "7"). */
-export function labelsEqual(
-  a: string | null | undefined,
-  b: string | null,
-): boolean {
+export function labelsEqual(a: string | null | undefined, b: string | null): boolean {
   const left = a ?? null;
   if (left === null || b === null) return left === b;
   if (left.trim() === b.trim()) return true;
@@ -172,9 +169,7 @@ async function seriesByTitle(
     }
     return { active: [...active.values()], hidden: [...hidden.values()] };
   };
-  const primary = await resolve(
-    all.filter((series) => normalizeTitle(series.title) === wanted),
-  );
+  const primary = await resolve(all.filter((series) => normalizeTitle(series.title) === wanted));
   const alt = await resolve(
     all.filter((series) => series.altTitles.some((title) => normalizeTitle(title) === wanted)),
   );
@@ -236,7 +231,20 @@ export async function matchRelease(
     const resolved = await Promise.all(
       withIsbn.map((release) => survivorOf<"releases">(ctx, release)),
     );
-    const byIsbn = resolved.find((release) => release?.status === "active") ?? null;
+    // Multiple historical rows can resolve to the same survivor. Distinct
+    // active survivors sharing an ISBN are ambiguous, regardless of title.
+    const active = new Map<Id<"releases">, Doc<"releases">>();
+    for (const release of resolved) {
+      if (release?.status === "active") active.set(release._id, release);
+    }
+    if (active.size > 1) {
+      return {
+        kind: "review",
+        rung: 2,
+        reason: `ISBN ${fact.isbn13} matches ${active.size} distinct active Releases`,
+      };
+    }
+    const byIsbn = active.values().next().value ?? null;
     if (byIsbn === null && resolved.some((release) => release?.status === "hidden")) {
       return {
         kind: "review",
@@ -312,11 +320,7 @@ export async function matchRelease(
             coversOnlyThisVolume &&
             fact.publisherId !== null &&
             edition.publisherId === fact.publisherId;
-          const bucket = !sameEdition
-            ? loose
-            : release.format === fact.format
-              ? strict
-              : siblings;
+          const bucket = !sameEdition ? loose : release.format === fact.format ? strict : siblings;
           bucket.set(release._id, release);
         }
       }

@@ -63,7 +63,9 @@ function asIsbn13(raw: unknown): string | undefined {
 }
 
 function asIsbn10(raw: unknown): string | undefined {
-  const chars = String(raw ?? "").replace(/[^0-9Xx]/g, "").toUpperCase();
+  const chars = String(raw ?? "")
+    .replace(/[^0-9Xx]/g, "")
+    .toUpperCase();
   return /^\d{9}[\dX]$/.test(chars) ? chars : undefined;
 }
 
@@ -128,7 +130,9 @@ export function prhScopeReason(
   if (PROSE_CATEGORY.test(category)) return "novel";
   const codes = Array.isArray(entry.subjects)
     ? entry.subjects.flatMap((subject) =>
-        typeof subject === "object" && subject !== null && "code" in subject &&
+        typeof subject === "object" &&
+        subject !== null &&
+        "code" in subject &&
         typeof subject.code === "string"
           ? [subject.code]
           : [],
@@ -164,8 +168,7 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   if (language !== undefined && !/^(?:e|en|eng|english)$/i.test(language)) return null;
 
   // Format family: audio is out of catalog scope entirely (spec §1).
-  const formatText =
-    described(entry.format) ?? described(entry.formatFamily) ?? "";
+  const formatText = described(entry.format) ?? described(entry.formatFamily) ?? "";
   if (AUDIO.test(formatText)) return null;
   const digital = DIGITAL.test(formatText);
   const binding = !digital
@@ -214,20 +217,24 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
 export function parseTitleList(raw: unknown): {
   titles: PrhTitleSnapshot[];
   recordCount?: number;
+  /** Upstream page size, before scope filtering. */
+  rawCount: number;
 } {
   const root = raw as Record<string, unknown> | null;
   const data = (root?.data ?? root) as Record<string, unknown> | null;
   const list = data?.titles;
+  if (!Array.isArray(list)) {
+    throw new Error("PRH response is missing its titles array");
+  }
   const titles: PrhTitleSnapshot[] = [];
-  if (Array.isArray(list)) {
-    for (const entry of list) {
-      const parsed = parseTitle(entry);
-      if (parsed) titles.push(parsed);
-    }
+  for (const entry of list) {
+    const parsed = parseTitle(entry);
+    if (parsed) titles.push(parsed);
   }
   const count = root?.recordCount ?? data?.recordCount;
   return {
     titles,
+    rawCount: list.length,
     recordCount: typeof count === "number" ? count : undefined,
   };
 }

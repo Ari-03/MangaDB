@@ -68,8 +68,8 @@ type SyncResult =
     };
 
 /**
- * One PRH import run. Daily runs fetch future-dated titles (onsaleFrom =
- * today); UTC-Sunday runs (or {mode: "full"}) sweep each configured
+ * One PRH import run. Daily runs filter future-dated titles client-side;
+ * UTC-Sunday runs (or {mode: "full"}) sweep each configured
  * imprint's whole catalog.
  *
  *   npx convex run prh:sync '{"mode":"full"}'
@@ -96,7 +96,7 @@ export const sync = internalAction({
     );
     if (!source) {
       throw new Error(
-        'The approved-source registry has no "prh" row. Run: npx convex run importSources:seedRegistry \'{}\'',
+        "The approved-source registry has no \"prh\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
     if (!source.enabled) return { skipped: "disabled" as const };
@@ -114,18 +114,17 @@ export const sync = internalAction({
       return { skipped: "unconfigured" as const };
     }
 
-    const mode: "future" | "full" =
-      args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
-    const runId: Id<"importRuns"> = await ctx.runMutation(
-      internal.imports.startRun,
-      { sourceKey: SOURCE_KEY },
-    );
+    const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
+    const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
+      sourceKey: SOURCE_KEY,
+    });
     const runStartedAt = Date.now();
     const delay = args.politeDelayMs ?? 350;
     const maxPages = args.maxPages ?? 50;
     const errors: string[] = [];
     let seen = 0;
     let changed = 0;
+    let recordFailures = 0;
     // A subset sweep can't prove absence, so it never withdraws.
     let completeSweep = mode === "full" && args.imprints === undefined;
     const todayKey = dateKey(new Date());
@@ -150,8 +149,11 @@ export const sync = internalAction({
             `${API_BASE}/imprints/${encodeURIComponent(imprint)}/titles?${params}`,
             delay,
           );
-          const { titles, recordCount } = parseTitleList(await res.json());
+          const { titles, recordCount, rawCount } = parseTitleList(await res.json());
           pages++;
+          if (rawCount === 0 && recordCount !== undefined && start < recordCount) {
+            throw new Error("PRH returned an empty page before its reported record count");
+          }
 
           // Newest-first, so the first title dated before today ends the
           // imprint; undated titles neither apply nor end it.
@@ -171,20 +173,18 @@ export const sync = internalAction({
               });
               if (result.changed) changed++;
               if (result.status === "needsReview") {
-                errors.push(
-                  `review ${snapshot.isbn13}: ${result.reason ?? "conflict"}`,
-                );
+                errors.push(`review ${snapshot.isbn13}: ${result.reason ?? "conflict"}`);
               }
             } catch (e) {
+              recordFailures++;
+              completeSweep = false;
               errors.push(`title ${snapshot.isbn13}: ${redactKey(errorMessage(e))}`);
             }
           }
 
           start += ROWS_PER_PAGE;
           const exhausted =
-            titles.length === 0 ||
-            (recordCount !== undefined && start >= recordCount) ||
-            pastReached;
+            rawCount === 0 || (recordCount !== undefined && start >= recordCount) || pastReached;
           if (exhausted) break;
         }
       }
@@ -200,7 +200,7 @@ export const sync = internalAction({
 
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: "succeeded",
+        status: recordFailures > 0 ? "failed" : "succeeded",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
@@ -212,6 +212,7 @@ export const sync = internalAction({
         mode,
         completeSweep: mode === "full" && completeSweep,
         errorCount: errors.length,
+        ...(recordFailures > 0 ? { failed: true } : {}),
       };
     } catch (e) {
       // politeFetch errors quote the request URL, api_key included; run

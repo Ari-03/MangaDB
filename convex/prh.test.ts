@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
 import schema from "./schema";
+import * as catalogTitle from "./lib/catalogTitle";
 
 type FixtureTitle = {
   isbn: string;
@@ -26,8 +27,7 @@ const requestedUrls: string[] = [];
 
 function stubApi(titles: FixtureTitle[]) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
     requestedUrls.push(url);
     if (url.includes("api.penguinrandomhouse.com")) {
       const params = new URL(url).searchParams;
@@ -38,11 +38,17 @@ function stubApi(titles: FixtureTitle[]) {
         seriesNumber: t.seriesNumber,
         onsale: t.onsale,
         format: { code: "TR", description: t.format ?? "Trade Paperback" },
-        imprint: { code: "IMPR", description: t.imprint ?? "Kodansha Comics" },
+        imprint: {
+          code: "IMPR",
+          description: t.imprint ?? "Kodansha Comics",
+        },
         priceUsd: t.priceUsd,
       }));
       return new Response(
-        JSON.stringify({ recordCount: titles.length, data: { titles: page } }),
+        JSON.stringify({
+          recordCount: titles.length,
+          data: { titles: page },
+        }),
         { headers: { "content-type": "application/json" } },
       );
     }
@@ -57,6 +63,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -98,11 +105,15 @@ describe("prh.sync — configuration", () => {
     await sync(t, { mode: "future" });
     expect(requestedUrls.some((u) => u.includes("/imprints/KODCM/titles"))).toBe(true);
     expect(requestedUrls.some((u) => u.includes("dir=desc"))).toBe(true);
-    expect(requestedUrls.some((u) => u.includes("imprint=") || u.includes("onsaleFrom="))).toBe(false);
+    expect(requestedUrls.some((u) => u.includes("imprint=") || u.includes("onsaleFrom="))).toBe(
+      false,
+    );
     requestedUrls.length = 0;
     await sync(t, { mode: "full" });
     expect(requestedUrls.some((u) => u.includes("/imprints/KODCM/titles"))).toBe(true);
-    expect(requestedUrls.some((u) => u.includes("sort=onsale") && u.includes("dir=asc"))).toBe(true);
+    expect(requestedUrls.some((u) => u.includes("sort=onsale") && u.includes("dir=asc"))).toBe(
+      true,
+    );
   });
 
   it("future mode applies only future-dated titles and stops at the first past page", async () => {
@@ -119,6 +130,79 @@ describe("prh.sync — configuration", () => {
     await t.run(async (ctx) => {
       const observations = await ctx.db.query("sourceObservations").collect();
       expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519811"]);
+    });
+  });
+
+  it("continues past a page containing only out-of-scope titles", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      ...Array.from({ length: 200 }, () => ({
+        isbn: "9781646519811",
+        title: "Excluded Story (Light Novel) Vol. 1",
+      })),
+      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
+    ]);
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsSeen: 1, completeSweep: true });
+    expect(requestedUrls).toHaveLength(2);
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519828"]);
+    });
+  });
+
+  it("fails malformed list responses without withdrawing existing observations", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
+    await sync(t);
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "upstream error" })));
+    const result = await sync(t);
+    expect(result).toMatchObject({ failed: true, completeSweep: false });
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations).toHaveLength(1);
+      expect(observations[0]!.withdrawn).not.toBe(true);
+    });
+  });
+
+  it("does not call a prematurely empty upstream page a complete sweep", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({
+            recordCount: 201,
+            data: { titles: [] },
+          }),
+        ),
+    );
+    expect(await sync(t)).toMatchObject({ failed: true, completeSweep: false });
+  });
+
+  it("records individual write failures as a failed run and continues other titles", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      { isbn: "9781646519811", title: "Failed Manga 1", seriesNumber: 1 },
+      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
+    ]);
+    vi.spyOn(catalogTitle, "applyCatalogTitle").mockRejectedValueOnce(new Error("write failed"));
+    expect(await sync(t)).toMatchObject({
+      failed: true,
+      completeSweep: false,
+      recordsSeen: 2,
+      errorCount: 1,
+    });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.status).toBe("failed");
+      expect(run!.errors).toEqual(["title 9781646519811: write failed"]);
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519828"]);
     });
   });
 
@@ -227,8 +311,11 @@ describe("prh.sync — the authoritative overlay", () => {
     ]);
     const result = await sync(t);
     expect(result).toMatchObject({ recordsSeen: 1, completeSweep: true });
+    expect(result).not.toHaveProperty("failed", true);
 
     await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.status).toBe("succeeded");
       const release = (await ctx.db.query("releases").collect())[0]!;
       // Authoritative fills apply...
       expect(release.isbn13).toBe("9781646094356");
@@ -239,7 +326,10 @@ describe("prh.sync — the authoritative overlay", () => {
         (p) => p.state === "inReview",
       );
       expect(proposals).toHaveLength(1);
-      expect(proposals[0]!.author).toEqual({ kind: "source", sourceKey: "prh" });
+      expect(proposals[0]!.author).toEqual({
+        kind: "source",
+        sourceKey: "prh",
+      });
       // The observation is linked (rung ③ full key) for future runs.
       const obs = await ctx.db
         .query("sourceObservations")
@@ -320,10 +410,9 @@ describe("prh.sync — steady state", () => {
       const editionOp = versions[0]!.ops.find(
         (op) => op.kind === "create" && op.table === "editions",
       );
-      expect(
-        (editionOp as { fields: { publisherSlug: string } }).fields
-          .publisherSlug,
-      ).toBe("kodansha");
+      expect((editionOp as { fields: { publisherSlug: string } }).fields.publisherSlug).toBe(
+        "kodansha",
+      );
       // "Kodansha Comics" is Kodansha under another string: one company row,
       // which exists, so approving the guess is one click.
       const publishers = await ctx.db.query("publishers").collect();
@@ -362,10 +451,17 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     await seedRegistry(t, true);
     const seriesId = await backbone(t, "Noragami: Stray God", ["19", "20"]);
     await t.run((ctx) =>
-      ctx.db.patch(seriesId, { altTitles: ["Noragami"], searchText: "Noragami: Stray God Noragami" }),
+      ctx.db.patch(seriesId, {
+        altTitles: ["Noragami"],
+        searchText: "Noragami: Stray God Noragami",
+      }),
     );
     stubApi([
-      { isbn: "9781646519026", title: "Noragami Omnibus 7 (Vol. 19-21)", seriesNumber: 7 },
+      {
+        isbn: "9781646519026",
+        title: "Noragami Omnibus 7 (Vol. 19-21)",
+        seriesNumber: 7,
+      },
       {
         isbn: "9781646519033",
         title: "Noragami Omnibus 7 (Vol. 19-21)",
@@ -382,7 +478,10 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
       expect(line).toMatchObject({ seriesId, name: "Omnibus" });
       const editions = await ctx.db.query("editions").collect();
       expect(editions).toHaveLength(1);
-      expect(editions[0]).toMatchObject({ editionLineId: line!._id, linePosition: "7" });
+      expect(editions[0]).toMatchObject({
+        editionLineId: line!._id,
+        linePosition: "7",
+      });
       const releases = await ctx.db.query("releases").collect();
       expect(releases.map((r) => r.format).sort()).toEqual(["digital", "physical"]);
     });
@@ -479,13 +578,20 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     await backbone(t, "Fire Force", []);
     stubApi([
       { isbn: "9781632364425", title: "Fire Force 1", seriesNumber: 1 },
-      { isbn: "9798888772584", title: "Fire Force Manga Box Set 1 (Vol. 1-6)", seriesNumber: 1 },
+      {
+        isbn: "9798888772584",
+        title: "Fire Force Manga Box Set 1 (Vol. 1-6)",
+        seriesNumber: 1,
+      },
     ]);
     await sync(t);
     await t.run(async (ctx) => {
       const bundles = await ctx.db.query("releaseBundles").collect();
       expect(bundles).toMatchObject([
-        { isbn13: "9798888772584", name: "Fire Force Manga Box Set 1 (Vol. 1-6)" },
+        {
+          isbn13: "9798888772584",
+          name: "Fire Force Manga Box Set 1 (Vol. 1-6)",
+        },
       ]);
       expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(1);
       // The box is not a Release, and it made no Volume.
@@ -532,8 +638,16 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     const t = makeT();
     await seedRegistry(t, true);
     stubApi([
-      { isbn: "9781945054853", title: "The Seven Deadly Sins (Novel)", imprint: "Kodansha Comics" },
-      { isbn: "9781935654100", title: "Number Place: Blue", imprint: "Vertical" },
+      {
+        isbn: "9781945054853",
+        title: "The Seven Deadly Sins (Novel)",
+        imprint: "Kodansha Comics",
+      },
+      {
+        isbn: "9781935654100",
+        title: "Number Place: Blue",
+        imprint: "Vertical",
+      },
       {
         isbn: "9781427880024",
         title: "Her Royal Highness Seems to Be Angry, Volume 1 (Light Novel)",

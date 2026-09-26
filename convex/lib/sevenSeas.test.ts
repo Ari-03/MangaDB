@@ -38,9 +38,7 @@ const PAGE_FIXTURE = `
 
 describe("text plumbing", () => {
   it("decodes WordPress entities", () => {
-    expect(decodeEntities("Marie&#8217;s Ex &amp; Co &#038; more")).toBe(
-      "Marie’s Ex & Co & more",
-    );
+    expect(decodeEntities("Marie&#8217;s Ex &amp; Co &#038; more")).toBe("Marie’s Ex & Co & more");
   });
 
   it("strips tags and collapses whitespace", () => {
@@ -75,8 +73,7 @@ describe("parseBookPage", () => {
     expect(page).toMatchObject({
       seriesTitle: "Betrothed to My Sister’s Ex (Manga)",
       seriesSlug: "betrothed-to-my-sisters-ex-manga",
-      seriesUrl:
-        "https://sevenseasentertainment.com/series/betrothed-to-my-sisters-ex-manga/",
+      seriesUrl: "https://sevenseasentertainment.com/series/betrothed-to-my-sisters-ex-manga/",
       creators: ["Tobirano", "Chikage Nakakura"],
       releaseDate: { year: 2027, month: 4, day: 13 },
       priceCents: 1399,
@@ -88,28 +85,50 @@ describe("parseBookPage", () => {
     });
   });
 
-  it("yields a partial result for a partial page", () => {
-    const page = parseBookPage("<div>nothing useful</div>");
+  it("yields a partial result for a recognized partial book page", () => {
+    const page = parseBookPage('<div id="volume-meta"></div>');
     expect(page.seriesTitle).toBeUndefined();
     expect(page.releaseDate).toBeUndefined();
     expect(page.isbn13).toBeUndefined();
     expect(page.creators).toEqual([]);
   });
+
+  it("rejects successful HTTP error pages instead of importing empty facts", () => {
+    expect(() => parseBookPage("<html>Just a moment...</html>")).toThrow("volume-meta");
+    expect(() => parseBookPage("<html>Page not found</html>")).toThrow("volume-meta");
+  });
 });
 
 describe("parseUsDate", () => {
   it("parses month-name dates", () => {
-    expect(parseUsDate("April 13, 2027")).toEqual({ year: 2027, month: 4, day: 13 });
+    expect(parseUsDate("April 13, 2027")).toEqual({
+      year: 2027,
+      month: 4,
+      day: 13,
+    });
     expect(parseUsDate("nonsense")).toBeUndefined();
     expect(parseUsDate("Smarch 3, 2027")).toBeUndefined();
+  });
+
+  it("rejects impossible dates without losing leap days", () => {
+    expect(parseUsDate("February 29, 2027")).toBeUndefined();
+    expect(parseUsDate("April 31, 2027")).toBeUndefined();
+    expect(parseUsDate("February 29, 2028")).toEqual({
+      year: 2028,
+      month: 2,
+      day: 29,
+    });
   });
 });
 
 // Title splitting is the shared parser (lib/bookTitle.ts); these pin what
 // normalizeBook stores for Seven Seas' own title styles.
 function snapshotFor(title: string) {
-  const listing = parseBookListing({ ...LISTING_FIXTURE, title: { rendered: title } })!;
-  return normalizeBook(listing, parseBookPage(""));
+  const listing = parseBookListing({
+    ...LISTING_FIXTURE,
+    title: { rendered: title },
+  })!;
+  return normalizeBook(listing, { creators: [] });
 }
 
 describe("normalizeBook — title splitting", () => {
@@ -146,9 +165,7 @@ describe("normalizeBook — title splitting", () => {
 
 describe("isMangaBook", () => {
   it("decides on the Format line when present", () => {
-    expect(isMangaBook({ category: "Manga", title: "X (Light Novel) Vol. 1" })).toBe(
-      true,
-    );
+    expect(isMangaBook({ category: "Manga", title: "X (Light Novel) Vol. 1" })).toBe(true);
     expect(isMangaBook({ category: "Light Novel", title: "X Vol. 1" })).toBe(false);
     expect(isMangaBook({ category: "Audiobook", title: "X Vol. 1" })).toBe(false);
   });
@@ -193,12 +210,15 @@ describe("normalizeBook", () => {
       ...LISTING_FIXTURE,
       title: { rendered: "Big Series Deluxe Hardcover Vol. 1" },
     })!;
-    const snapshot = normalizeBook(listing, parseBookPage(""));
+    const snapshot = normalizeBook(listing, { creators: [] });
     expect(snapshot.binding).toBe("hardcover");
     // No series block on the page → the title-derived series and the book
     // slug stand in, so the snapshot still has a usable identity.
     expect(snapshot.seriesTitle).toBe("Big Series");
-    expect(snapshot.packaging).toMatchObject({ lineName: "Deluxe", linePosition: "1" });
+    expect(snapshot.packaging).toMatchObject({
+      lineName: "Deluxe",
+      linePosition: "1",
+    });
     expect(snapshot.seriesSlug).toBe(listing.slug);
   });
 });

@@ -29,12 +29,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { errorMessage, politeFetch } from "./lib/http";
 import { rangeLabels } from "./lib/bookTitle";
-import {
-  candidateSeries,
-  matchRelease,
-  type MatchOutcome,
-  type ReleaseFact,
-} from "./lib/matching";
+import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
@@ -103,21 +98,21 @@ export const sync = internalAction({
     );
     if (!source) {
       throw new Error(
-        'The approved-source registry has no "sevenseas" row. Run: npx convex run importSources:seedRegistry \'{}\'',
+        "The approved-source registry has no \"sevenseas\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
     if (!source.enabled) return { skipped: "disabled" as const };
 
-    const runId: Id<"importRuns"> = await ctx.runMutation(
-      internal.imports.startRun,
-      { sourceKey: SOURCE_KEY },
-    );
+    const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
+      sourceKey: SOURCE_KEY,
+    });
     const runStartedAt = Date.now();
     const delay = args.politeDelayMs ?? 350;
     const errors: string[] = [];
     let seen = 0;
     let changed = 0;
     let completeSweep = true;
+    let detailFailures = 0;
 
     try {
       let page = 1;
@@ -133,22 +128,36 @@ export const sync = internalAction({
           `${BASE_URL}/wp-json/wp/v2/books?per_page=100&page=${page}&orderby=modified&order=desc`,
           delay,
         );
-        totalPages = Number(res.headers.get("x-wp-totalpages")) || totalPages;
-        const items = (await res.json()) as unknown[];
+        const pageCount = res.headers.get("x-wp-totalpages");
+        if (pageCount === null || !/^\d+$/.test(pageCount)) {
+          throw new Error("Seven Seas listing is missing valid X-WP-TotalPages");
+        }
+        totalPages = Number(pageCount);
+        if (!Number.isSafeInteger(totalPages)) {
+          throw new Error("Seven Seas listing has an invalid page count");
+        }
+        const items: unknown = await res.json();
+        if (!Array.isArray(items) || (items.length > 0 && totalPages < page)) {
+          throw new Error("Seven Seas listing has an invalid collection shape");
+        }
+        if (items.length === 0 && totalPages >= page) {
+          throw new Error("Seven Seas listing ended before its declared page count");
+        }
 
         for (const raw of items) {
           const listing = parseBookListing(raw);
-          if (!listing) continue;
-          // Cheap out-of-catalog filter (light novels, audiobooks) on the
-          // title discriminator; the page's Format line is the backstop.
-          if (!isMangaBook({ title: listing.title })) continue;
-          seen++;
-
+          if (!listing) {
+            throw new Error(`Seven Seas listing page ${page} contains an invalid book`);
+          }
           const note = await ctx.runMutation(internal.sevenSeas.noteListing, {
             sourceRecordId: listing.sourceRecordId,
             modifiedGmt: listing.modifiedGmt,
             force: args.force ?? false,
           });
+          // Presence remains evidence even if the source recategorizes a
+          // previously imported book as prose. Scope changes are not deletion.
+          if (!isMangaBook({ title: listing.title })) continue;
+          seen++;
           if (!note.needsDetail) continue;
           if (detailBudget <= 0) {
             completeSweep = false;
@@ -160,7 +169,12 @@ export const sync = internalAction({
             const pageRes = await politeFetch(listing.url, delay);
             const details = parseBookPage(await pageRes.text());
             const snapshot = normalizeBook(listing, details);
-            if (!isMangaBook({ category: snapshot.category, title: snapshot.title })) {
+            if (
+              !isMangaBook({
+                category: snapshot.category,
+                title: snapshot.title,
+              })
+            ) {
               continue;
             }
 
@@ -188,6 +202,7 @@ export const sync = internalAction({
               }
             }
           } catch (e) {
+            detailFailures++;
             errors.push(`book ${listing.slug}: ${errorMessage(e)}`);
           }
         }
@@ -206,7 +221,7 @@ export const sync = internalAction({
 
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: "succeeded",
+        status: detailFailures > 0 ? "failed" : "succeeded",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
@@ -217,6 +232,7 @@ export const sync = internalAction({
         recordsChanged: changed,
         completeSweep,
         errorCount: errors.length,
+        ...(detailFailures > 0 ? { failed: true } : {}),
       };
     } catch (e) {
       errors.push(errorMessage(e));
@@ -407,8 +423,7 @@ export const applyBook = internalMutation({
       multiVolume: packaging !== null,
       format: "physical",
       isbn13: snapshot.isbn13,
-      publisherId:
-        publisher && publisher.status === "active" ? publisher._id : null,
+      publisherId: publisher && publisher.status === "active" ? publisher._id : null,
     };
     // A box set is never a Release: it skips the ladder for the bundle path.
     const match: MatchOutcome = snapshot.isBox
@@ -457,7 +472,10 @@ export const applyBook = internalMutation({
       pubDate: snapshot.releaseDate ? toPartialDate(snapshot.releaseDate) : undefined,
       price:
         snapshot.priceCents !== undefined
-          ? { amountCents: snapshot.priceCents, currency: snapshot.currency ?? "USD" }
+          ? {
+              amountCents: snapshot.priceCents,
+              currency: snapshot.currency ?? "USD",
+            }
           : undefined,
     };
 
@@ -497,7 +515,11 @@ export const applyBook = internalMutation({
         `"${snapshot.title}" is packaging whose covered Volumes the title does not state — an Editor maps it.`,
         now,
       );
-      return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
+      return {
+        status: "recordOnly",
+        changed: false,
+        reason: "packaging without coverage",
+      };
     }
     const editionLine =
       packaging?.lineName != null

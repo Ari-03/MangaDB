@@ -47,8 +47,7 @@ function calendarPayload(volumes: FixtureVolume[]) {
 
 function stubSite(volumes: FixtureVolume[]) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url.startsWith(`${BASE}/wp-json/kodansha/v1/release-calendar`)) {
       return new Response(JSON.stringify(calendarPayload(volumes)), {
         headers: { "content-type": "application/json" },
@@ -84,8 +83,7 @@ async function seedRegistry(t: TestT, bootstrap: boolean) {
   });
 }
 
-const sync = (t: TestT) =>
-  t.action(internal.kodansha.sync, { politeDelayMs: 0 });
+const sync = (t: TestT) => t.action(internal.kodansha.sync, { politeDelayMs: 0 });
 
 const IRUMA: FixtureVolume = {
   series: "Welcome to Demon School! Iruma-kun",
@@ -125,9 +123,7 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
       expect(editions).toHaveLength(1);
       const releases = await ctx.db.query("releases").collect();
       expect(releases).toHaveLength(2);
-      expect(new Set(releases.map((r) => r.format))).toEqual(
-        new Set(["physical", "digital"]),
-      );
+      expect(new Set(releases.map((r) => r.format))).toEqual(new Set(["physical", "digital"]));
       for (const release of releases) {
         expect(release.editionId).toBe(editions[0]!._id);
         expect(release.pubDate).toEqual({
@@ -144,7 +140,10 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
       const releaseRevisions = revisions.filter((r) => r.ref.type === "release");
       expect(releaseRevisions.length).toBe(2);
       for (const revision of releaseRevisions) {
-        expect(revision.author).toEqual({ kind: "source", sourceKey: "kodansha" });
+        expect(revision.author).toEqual({
+          kind: "source",
+          sourceKey: "kodansha",
+        });
         expect(revision.citation).toMatchObject({
           sourceName: "Kodansha USA",
           url: `${BASE}/series/welcome-to-demon-school-iruma-kun/volume-21/`,
@@ -152,13 +151,21 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
       }
       // Observations linked per (volume, format).
       const observations = await ctx.db.query("sourceObservations").collect();
-      const volumeObs = observations.filter((o) =>
-        o.sourceRecordId.includes("#"),
-      );
+      const volumeObs = observations.filter((o) => o.sourceRecordId.includes("#"));
       expect(volumeObs).toHaveLength(2);
       expect(volumeObs.every((o) => o.recordRef?.type === "release")).toBe(true);
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 2 });
+    });
+  });
+
+  it("marks a failed API envelope as a failed run, not an empty success", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ success: false, data: [] })));
+    expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("importRuns").collect())[0]?.status).toBe("failed");
     });
   });
 
@@ -192,9 +199,7 @@ describe("kodansha.sync — Bootstrap Mode creation path", () => {
         expect(release.pubDate!.sort).toBe(20260811);
       }
       // The prior snapshot is retained append-only (one per format).
-      expect(
-        await ctx.db.query("observationSnapshots").collect(),
-      ).toHaveLength(2);
+      expect(await ctx.db.query("observationSnapshots").collect()).toHaveLength(2);
     });
   });
 });
@@ -216,9 +221,7 @@ describe("kodansha.sync — steady state", () => {
       });
       const versions = await ctx.db.query("proposalVersions").collect();
       expect(versions).toHaveLength(1);
-      const tables = versions[0]!.ops.map((op) =>
-        op.kind === "create" ? op.table : op.kind,
-      );
+      const tables = versions[0]!.ops.map((op) => (op.kind === "create" ? op.table : op.kind));
       expect(tables).toEqual(["series", "volumes", "editions", "releases"]);
     });
   });
@@ -333,7 +336,9 @@ describe("kodansha.sync — series resolution and publishers", () => {
     await t.run(async (ctx) => {
       expect((await ctx.db.query("series").collect()).map((s) => s._id)).toEqual([spaceBrothers]);
       const volumes = await ctx.db.query("volumes").collect();
-      expect(volumes.find((v) => v.label === "46")).toMatchObject({ position: 46 });
+      expect(volumes.find((v) => v.label === "46")).toMatchObject({
+        position: 46,
+      });
     });
   });
 
@@ -388,7 +393,10 @@ describe("kodansha.sync — series resolution and publishers", () => {
   it("files a Vertical Series' new volume under Vertical, not Kodansha", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await backbone(t, "Kirio Fan Club", ["1", "2"], { name: "Vertical", slug: "vertical" });
+    await backbone(t, "Kirio Fan Club", ["1", "2"], {
+      name: "Vertical",
+      slug: "vertical",
+    });
     stubSite([
       {
         series: "Kirio Fan Club",
@@ -421,12 +429,27 @@ describe("kodansha.sync — series resolution and publishers", () => {
 const fixture = (name: string) =>
   readFileSync(new URL(`./lib/__fixtures__/kodansha/${name}`, import.meta.url), "utf8");
 
-type ListedSeries = { slug: string; name: string; type?: string; stamp?: string };
+type ListedSeries = {
+  slug: string;
+  name: string;
+  type?: string;
+  stamp?: string;
+};
 
 const BLUE_LOCK: ListedSeries = { slug: "blue-lock", name: "Blue Lock" };
-const NEEDLES: ListedSeries = { slug: "7-billion-needles", name: "7 Billion Needles" };
-const OMNIBUS: ListedSeries = { slug: "blue-lock-omnibus", name: "Blue Lock Omnibus" };
-const NOVEL: ListedSeries = { slug: "a-cops-eyes", name: "A Cop's Eyes", type: "novel" };
+const NEEDLES: ListedSeries = {
+  slug: "7-billion-needles",
+  name: "7 Billion Needles",
+};
+const OMNIBUS: ListedSeries = {
+  slug: "blue-lock-omnibus",
+  name: "Blue Lock Omnibus",
+};
+const NOVEL: ListedSeries = {
+  slug: "a-cops-eyes",
+  name: "A Cop's Eyes",
+  type: "novel",
+};
 
 /** A series page in the live shape: JSON-LD hasPart only. */
 function seriesPage(slug: string, name: string, volumes: string[]): string {
@@ -466,7 +489,12 @@ function stubBacklist(listed: ListedSeries[], pages: Record<string, string>) {
           type: row.type ?? "comic",
           last_updated_at: row.stamp ?? "2026-02-06T09:53:10+00:00",
         }));
-      return Response.json({ success: true, data: rows, count: rows.length, total_count: listed.length });
+      return Response.json({
+        success: true,
+        data: rows,
+        count: rows.length,
+        total_count: listed.length,
+      });
     }
     const html = pages[url.slice(`${BASE}/`.length)];
     return html !== undefined
@@ -551,7 +579,10 @@ describe("kodansha.backlistSync — the crawl", () => {
       expect(bySlug.get("7-billion-needles")).toMatchObject({ recheck: [] });
 
       const [run] = await ctx.db.query("importRuns").collect();
-      expect(run).toMatchObject({ sourceKey: "kodansha-backlist", status: "succeeded" });
+      expect(run).toMatchObject({
+        sourceKey: "kodansha-backlist",
+        status: "failed", // fixture includes three missing volume pages
+      });
       expect(run!.errors.filter((e) => e.includes("HTTP 404"))).toHaveLength(3);
     });
   });
@@ -584,7 +615,12 @@ describe("kodansha.backlistSync — the crawl", () => {
         publicId: 1,
         publisherId: kodansha!._id,
       });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+      await ctx.db.insert("volumeCoverages", {
+        editionId,
+        volumeId,
+        order: 1,
+        extent: "complete",
+      });
       return await ctx.db.insert("releases", {
         status: "active",
         editionId,
@@ -611,7 +647,10 @@ describe("kodansha.backlistSync — the crawl", () => {
         price: { amountCents: 1299, currency: "USD" },
       });
       const digital = releases.find((r) => r._id !== printId)!;
-      expect(digital).toMatchObject({ format: "digital", isbn13: "9781636990033" });
+      expect(digital).toMatchObject({
+        format: "digital",
+        isbn13: "9781636990033",
+      });
       expect(digital.editionId).toBe(print.editionId);
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "blue-lock/volume-1#physical",
@@ -655,7 +694,10 @@ describe("kodansha.backlistSync — the crawl", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "blue-lock/volume-40#digital",
       );
-      expect(obs?.snapshot).toMatchObject({ isbn13: "9798898303303", title: "Blue Lock Volume 40" });
+      expect(obs?.snapshot).toMatchObject({
+        isbn13: "9798898303303",
+        title: "Blue Lock Volume 40",
+      });
     });
   });
 
@@ -679,7 +721,7 @@ describe("kodansha.backlistSync — the crawl", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "blue-lock/volume-40#digital",
       );
-      return (obs?.snapshot as { releaseDate?: unknown }).releaseDate;
+      return (obs?.snapshot as { releaseDate?: unknown } | undefined)?.releaseDate;
     });
     expect(pageDate).toBeDefined();
     // The calendar files the book under another day; the page's date stands.
@@ -689,7 +731,9 @@ describe("kodansha.backlistSync — the crawl", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "blue-lock/volume-40#digital",
       );
-      expect((obs?.snapshot as { releaseDate?: unknown }).releaseDate).toEqual(pageDate);
+      expect((obs?.snapshot as { releaseDate?: unknown } | undefined)?.releaseDate).toEqual(
+        pageDate,
+      );
       const releases = await ctx.db.query("releases").collect();
       expect(releases.some((r) => r.pubDate?.sort === 20261130)).toBe(false);
     });
@@ -709,8 +753,13 @@ describe("kodansha.backlistSync — the crawl", () => {
     await sync(t);
     // Meanwhile another source created the same book under its ISBN.
     const otherId = await t.run(async (ctx) => {
-      const { _id, _creationTime, ...calendarRelease } = (await ctx.db.query("releases").collect())[0]!;
-      return await ctx.db.insert("releases", { ...calendarRelease, isbn13: "9798898303303" });
+      const { _id, _creationTime, ...calendarRelease } = (
+        await ctx.db.query("releases").collect()
+      )[0]!;
+      return await ctx.db.insert("releases", {
+        ...calendarRelease,
+        isbn13: "9798898303303",
+      });
     });
     vi.unstubAllGlobals();
     stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
@@ -843,12 +892,18 @@ describe("Kodansha scope gate — both feeds", () => {
         searchText: "Cells at Work! Picture Book",
       });
     });
-    const listed = { slug: "cells-at-work-picture-book", name: "Cells at Work! Picture Book" };
+    const listed = {
+      slug: "cells-at-work-picture-book",
+      name: "Cells at Work! Picture Book",
+    };
     stubBacklist([listed], {
       "series/cells-at-work-picture-book/": seriesPage(listed.slug, listed.name, ["volume-5"]),
       "series/cells-at-work-picture-book/volume-5/": PICTURE_BOOK,
     });
-    expect(await backlist(t)).toMatchObject({ recordsSeen: 2, seriesCrawled: 1 });
+    expect(await backlist(t)).toMatchObject({
+      recordsSeen: 2,
+      seriesCrawled: 1,
+    });
     await t.run(async (ctx) => {
       const series = await ctx.db.query("series").collect();
       expect(series.map((s) => s.status)).toEqual(["hidden"]);
@@ -888,7 +943,11 @@ describe("Kodansha scope gate — both feeds", () => {
         altTitles: [],
         searchText: "Cells at Work! Picture Book",
       });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 1, publisherId });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 1,
+        publisherId,
+      });
       const id = await ctx.db.insert("releases", {
         status: "active",
         editionId,
@@ -918,6 +977,81 @@ describe("Kodansha scope gate — both feeds", () => {
 });
 
 describe("kodansha.backlistSync — incremental and resumable", () => {
+  it("reports series and volume fetch failures even after a continuation", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([NEEDLES, BLUE_LOCK, OMNIBUS], {
+      "series/blue-lock/": BACKLIST_PAGES["series/blue-lock/"]!,
+      "series/blue-lock-omnibus/": seriesPage("blue-lock-omnibus", "Blue Lock Omnibus", []),
+    });
+    expect(await backlist(t, { maxFetches: 1 })).toMatchObject({
+      continued: true,
+    });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("failed");
+      expect(run?.errors?.some((error) => error.startsWith("series "))).toBe(true);
+      expect(run?.errors?.some((error) => error.startsWith("page "))).toBe(true);
+    });
+  });
+
+  it("fails an incomplete listing instead of silently truncating it at the page cap", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    vi.stubGlobal("fetch", async () =>
+      Response.json({
+        success: true,
+        data: [{ slug: "blue-lock", name: "Blue Lock", type: "comic" }],
+        total_count: 10000,
+      }),
+    );
+    expect(await backlist(t)).toMatchObject({ failed: true, seriesCrawled: 0 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("failed");
+      expect(run?.errors?.[0]).toContain("listing is incomplete");
+    });
+  });
+
+  it("keeps the full-crawl date through weekly rechecks and refreshes old volumes", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
+    await backlist(t);
+    const day = 24 * 60 * 60 * 1000;
+    const fullCrawledAt = Date.now() - 179 * day;
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceKey === "kodansha-backlist",
+      )!;
+      await ctx.db.patch(obs._id, {
+        lastSeenAt: Date.now() - 7 * day,
+        snapshot: { ...(obs.snapshot as object), fullCrawledAt },
+      });
+    });
+    requested.length = 0;
+    await backlist(t);
+    expect(requested).not.toContain(`${BASE}/series/blue-lock/volume-1/`);
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceKey === "kodansha-backlist",
+      )!;
+      expect(obs.snapshot).toMatchObject({ fullCrawledAt });
+      await ctx.db.patch(obs._id, {
+        snapshot: {
+          ...(obs.snapshot as object),
+          fullCrawledAt: Date.now() - 181 * day,
+        },
+      });
+    });
+    requested.length = 0;
+    await backlist(t);
+    expect(requested).toContain(`${BASE}/series/blue-lock/volume-1/`);
+  });
+
   it("skips fresh series, re-checks moving volumes a week on, and chains under one run", async () => {
     const t = makeT();
     await seedBacklist(t, true);
@@ -932,7 +1066,7 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs).toHaveLength(1);
-      expect(runs[0]).toMatchObject({ status: "succeeded", recordsSeen: 4 });
+      expect(runs[0]).toMatchObject({ status: "failed", recordsSeen: 4 });
       expect(await ctx.db.query("releases").collect()).toHaveLength(4);
     });
 
@@ -946,7 +1080,9 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     await t.run(async (ctx) => {
       for (const obs of await ctx.db.query("sourceObservations").collect()) {
         if (obs.sourceKey === "kodansha-backlist") {
-          await ctx.db.patch(obs._id, { lastSeenAt: obs.lastSeenAt - 7 * 24 * 60 * 60 * 1000 });
+          await ctx.db.patch(obs._id, {
+            lastSeenAt: obs.lastSeenAt - 7 * 24 * 60 * 60 * 1000,
+          });
         }
       }
     });
@@ -971,20 +1107,25 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     expect(requested).toHaveLength(0);
   });
 
-  it("disabling the row stops a scheduled crawl as \"stopped\"; a forced one finishes", async () => {
+  it('disabling the row stops a scheduled crawl as "stopped"; a forced one finishes', async () => {
     const drain = async (t: TestT) => {
       vi.useFakeTimers();
       await t.finishAllScheduledFunctions(vi.runAllTimers);
       vi.useRealTimers();
     };
     const off = (t: TestT) =>
-      t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha-backlist", enabled: false });
+      t.mutation(internal.importSources.setEnabledInternal, {
+        key: "kodansha-backlist",
+        enabled: false,
+      });
 
     // Scheduled: the first link crawls one series, then the row is disabled.
     const scheduled = makeT();
     await seedBacklist(scheduled, true);
     stubBacklist([BLUE_LOCK, NEEDLES], BACKLIST_PAGES);
-    expect(await backlist(scheduled, { maxFetches: 1 })).toMatchObject({ continued: true });
+    expect(await backlist(scheduled, { maxFetches: 1 })).toMatchObject({
+      continued: true,
+    });
     await off(scheduled);
     await drain(scheduled);
     await scheduled.run(async (ctx) => {
@@ -998,20 +1139,28 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     await seedBacklist(forced, true);
     await off(forced);
     stubBacklist([BLUE_LOCK, NEEDLES], BACKLIST_PAGES);
-    const runId = await forced.mutation(internal.imports.startRun, { sourceKey: "kodansha-backlist" });
+    const runId = await forced.mutation(internal.imports.startRun, {
+      sourceKey: "kodansha-backlist",
+    });
     await backlist(forced, { runId, maxFetches: 1 });
     await drain(forced);
     await forced.run(async (ctx) => {
-      expect((await ctx.db.get(runId))?.status).toBe("succeeded");
+      expect((await ctx.db.get(runId))?.status).toBe("failed");
     });
   });
 
   it("runs on its own row: a disabled daily window does not stop the crawl", async () => {
     const t = makeT();
     await seedBacklist(t, true);
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha", enabled: false });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "kodansha",
+      enabled: false,
+    });
     stubBacklist([NEEDLES], BACKLIST_PAGES);
-    expect(await backlist(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+    expect(await backlist(t)).toMatchObject({
+      recordsSeen: 1,
+      recordsChanged: 1,
+    });
     expect(await sync(t)).toEqual({ skipped: "disabled" });
   });
 });

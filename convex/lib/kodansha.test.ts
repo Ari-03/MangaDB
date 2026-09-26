@@ -30,7 +30,7 @@ import {
 const fixture = (name: string) =>
   readFileSync(new URL(`./__fixtures__/kodansha/${name}`, import.meta.url), "utf8");
 
-// Verbatim slices of the live payloads (including the   in titles).
+// Verbatim slices of the live payloads (including the \u00a0 in titles).
 const CALENDAR = {
   success: true,
   data: [
@@ -40,21 +40,19 @@ const CALENDAR = {
       is_past: true,
       items: [
         {
-          title: "Volume 21",
+          title: "Volume\u00a021",
           series_name: "Welcome to Demon School! Iruma-kun",
           creators: "By Osamu Nishi",
           image: "https://production.image.azuki.co/b80d2b33/800.webp",
-          volume_url:
-            "https://kodansha.us/series/welcome-to-demon-school-iruma-kun/volume-21/",
+          volume_url: "https://kodansha.us/series/welcome-to-demon-school-iruma-kun/volume-21/",
           formats: ["digital", "print"],
         },
         {
-          title: "Volume 22",
+          title: "Volume\u00a022",
           series_name: "Tying the Knot with an Amagami Sister",
           creators: "By Marcey Naito",
           image: "https://production.image.azuki.co/ea90e88b/800.webp",
-          volume_url:
-            "https://kodansha.us/series/tying-the-knot-with-an-amagami-sister/volume-22/",
+          volume_url: "https://kodansha.us/series/tying-the-knot-with-an-amagami-sister/volume-22/",
           formats: ["digital"],
         },
         { title: "malformed", volume_url: 42 },
@@ -96,14 +94,15 @@ const NEW_RELEASES = {
 
 describe("small parsers", () => {
   it("splits volume URLs into slugs", () => {
-    expect(
-      parseVolumeUrl("https://kodansha.us/series/my-home-hero/volume-26/"),
-    ).toEqual({ seriesSlug: "my-home-hero", volumeSlug: "volume-26" });
+    expect(parseVolumeUrl("https://kodansha.us/series/my-home-hero/volume-26/")).toEqual({
+      seriesSlug: "my-home-hero",
+      volumeSlug: "volume-26",
+    });
     expect(parseVolumeUrl("https://kodansha.us/about/")).toBeNull();
   });
 
   it("reads volume labels through the API's non-breaking space", () => {
-    expect(parseVolumeLabel("Volume 21")).toBe("21");
+    expect(parseVolumeLabel("Volume\u00a021")).toBe("21");
     expect(parseVolumeLabel("Volume 7.5")).toBe("7.5");
     expect(parseVolumeLabel("Box Set")).toBeUndefined();
     // The slug stands in when the title carries no "Volume N" (Comeback
@@ -124,14 +123,38 @@ describe("small parsers", () => {
   });
 
   it("parses both ISO date shapes", () => {
-    expect(parseIsoDate("2026-08-04")).toEqual({ year: 2026, month: 8, day: 4 });
+    expect(parseIsoDate("2026-08-04")).toEqual({
+      year: 2026,
+      month: 8,
+      day: 4,
+    });
     expect(parseIsoDate("2026-08-18T04:00:00+00:00")).toEqual({
       year: 2026,
       month: 8,
       day: 18,
     });
     expect(parseIsoDate("soon")).toBeUndefined();
+    expect(parseIsoDate("2025-02-29")).toBeUndefined();
+    expect(parseIsoDate("2026-04-31")).toBeUndefined();
+    expect(parseIsoDate("2026-08-04garbage")).toBeUndefined();
+    expect(parseIsoDate("2024-02-29")).toEqual({
+      year: 2024,
+      month: 2,
+      day: 29,
+    });
   });
+});
+
+describe("feed envelopes", () => {
+  it.each([parseCalendar, parseNewReleases, parseSeriesListing])(
+    "rejects API errors and schema drift while permitting an empty feed",
+    (parse) => {
+      expect(() => parse({ success: false, data: [] })).toThrow();
+      expect(() => parse({ error: "upstream unavailable" })).toThrow();
+      expect(() => parse({ data: {} })).toThrow();
+      expect(() => parse({ success: true, data: [] })).not.toThrow();
+    },
+  );
 });
 
 describe("parseCalendar", () => {
@@ -174,12 +197,8 @@ describe("per-format snapshots", () => {
     expect(sourceRecordId(item, "physical")).toBe(
       "welcome-to-demon-school-iruma-kun/volume-21#physical",
     );
-    expect(sourceRecordId(item, "digital")).not.toBe(
-      sourceRecordId(item, "physical"),
-    );
-    expect(snapshots[0]!.title).toBe(
-      "Welcome to Demon School! Iruma-kun Volume 21",
-    );
+    expect(sourceRecordId(item, "digital")).not.toBe(sourceRecordId(item, "physical"));
+    expect(snapshots[0]!.title).toBe("Welcome to Demon School! Iruma-kun Volume 21");
   });
 });
 
@@ -257,7 +276,10 @@ describe("parseSeriesName — Kodansha's own packaging names", () => {
   });
 
   it("keeps numbers in a series name and drops the webtoon (Print) tag", () => {
-    expect(parseSeriesName("Beast #6")).toMatchObject({ seriesTitle: "Beast #6", packaging: null });
+    expect(parseSeriesName("Beast #6")).toMatchObject({
+      seriesTitle: "Beast #6",
+      packaging: null,
+    });
     expect(parseSeriesName("She's My Knight (Print)")).toMatchObject({
       seriesTitle: "She's My Knight",
       packaging: null,
@@ -272,7 +294,11 @@ describe("backlist: search-series listing", () => {
     expect(page.pageLength).toBe(4);
     expect(page.total).toBe(1170);
     expect(page.entries).toEqual([
-      { slug: "10-dance", name: "10 DANCE", lastUpdatedAt: "2026-04-08T03:42:28+00:00" },
+      {
+        slug: "10-dance",
+        name: "10 DANCE",
+        lastUpdatedAt: "2026-04-08T03:42:28+00:00",
+      },
       {
         slug: "5-centimeters-per-second-collectors-edition",
         name: "5 Centimeters per Second (Collector's Edition)",
@@ -284,11 +310,7 @@ describe("backlist: search-series listing", () => {
         lastUpdatedAt: "2026-02-06T09:53:11+00:00",
       },
     ]);
-    expect(parseSeriesListing({ success: false })).toEqual({
-      entries: [],
-      pageLength: 0,
-      total: undefined,
-    });
+    expect(() => parseSeriesListing({ success: false })).toThrow();
   });
 });
 
@@ -385,7 +407,10 @@ describe("backlist: volume pages", () => {
       fixture("mermaid-prince-volume-0.html"),
       "https://kodansha.us/series/mermaid-prince/volume-0/",
     )!;
-    expect(mermaid.item).toMatchObject({ seriesTitle: "Mermaid Prince", volumeLabel: undefined });
+    expect(mermaid.item).toMatchObject({
+      seriesTitle: "Mermaid Prince",
+      volumeLabel: undefined,
+    });
     expect(mermaid.offers.map((o) => o.isbn13)).toEqual(["9781647293628", "9781647293611"]);
     const collectors = parseVolumePage(
       fixture("5-centimeters-collectors-edition-volume-0.html"),
@@ -404,10 +429,10 @@ describe("backlist: volume pages", () => {
     const html = fixture("blue-lock-volume-1.html").replace(
       '"workExample": [',
       `"workExample": [
-        { "@type": "Book", "bookFormat": "https:\/\/schema.org\/Hardcover", "isbn": "9781646516544" },
-        { "@type": "Book", "bookFormat": "https:\/\/schema.org\/AudiobookFormat", "isbn": "9781636990040" },
-        { "@type": "Book", "bookFormat": "https:\/\/schema.org\/Hardcover", "isbn": "9781636990041" },
-        { "@type": "Book", "bookFormat": "https:\/\/schema.org\/Hardcover", "isbn": "9780316473996", "datePublished": "2020-01-01" },`,
+        { "@type": "Book", "bookFormat": "https://schema.org/Hardcover", "isbn": "9781646516544" },
+        { "@type": "Book", "bookFormat": "https://schema.org/AudiobookFormat", "isbn": "9781636990040" },
+        { "@type": "Book", "bookFormat": "https://schema.org/Hardcover", "isbn": "9781636990041" },
+        { "@type": "Book", "bookFormat": "https://schema.org/Hardcover", "isbn": "9780316473996", "datePublished": "2020-01-01" },`,
     );
     const page = parseVolumePage(html, "https://kodansha.us/series/blue-lock/volume-1/")!;
     // Audiobooks, bad check digits, and repeated ISBNs are dropped.
@@ -424,7 +449,9 @@ describe("backlist: volume pages", () => {
   });
 
   it("returns null without a JSON-LD Book, and marks out-of-scope books", () => {
-    expect(parseVolumePage("<html><title>x</title></html>", "https://kodansha.us/series/x/volume-1/")).toBeNull();
+    expect(
+      parseVolumePage("<html><title>x</title></html>", "https://kodansha.us/series/x/volume-1/"),
+    ).toBeNull();
     const novel = fixture("blue-lock-volume-1.html").replace(
       '"name": "Blue Lock Volume 1"',
       '"name": "Blue Lock (Novel) Volume 1"',
@@ -450,11 +477,36 @@ describe("backlist: crawl state", () => {
 
   it("crawls new, re-stamped, and stale series whole; re-checks moving ones weekly", () => {
     expect(crawlMode(entry, null, now)).toBe("full");
-    expect(crawlMode({ lastUpdatedAt: "2026-09-20T00:00:00+00:00" }, { snapshot: state(), crawledAt: now - 1000 }, now)).toBe("full");
-    expect(crawlMode(entry, { snapshot: state(), crawledAt: now - FULL_REFRESH_MS - 1 }, now)).toBe("full");
-    expect(crawlMode(entry, { snapshot: state(), crawledAt: now - RECHECK_MS - 1 }, now)).toBe("recheck");
+    expect(
+      crawlMode(
+        { lastUpdatedAt: "2026-09-20T00:00:00+00:00" },
+        { snapshot: state(), crawledAt: now - 1000 },
+        now,
+      ),
+    ).toBe("full");
+    expect(crawlMode(entry, { snapshot: state(), crawledAt: now - FULL_REFRESH_MS - 1 }, now)).toBe(
+      "full",
+    );
+    expect(crawlMode(entry, { snapshot: state(), crawledAt: now - RECHECK_MS - 1 }, now)).toBe(
+      "recheck",
+    );
     expect(crawlMode(entry, { snapshot: state(), crawledAt: now - 1000 }, now)).toBeNull();
-    expect(crawlMode(entry, { snapshot: state({ recheck: [] }), crawledAt: now - RECHECK_MS - 1 }, now)).toBeNull();
+    expect(
+      crawlMode(entry, { snapshot: state({ recheck: [] }), crawledAt: now - RECHECK_MS - 1 }, now),
+    ).toBeNull();
+  });
+
+  it("does not postpone the full refresh when a weekly recheck just ran", () => {
+    expect(
+      crawlMode(
+        entry,
+        {
+          snapshot: state({ fullCrawledAt: now - FULL_REFRESH_MS - 1 }),
+          crawledAt: now - 1000,
+        },
+        now,
+      ),
+    ).toBe("full");
   });
 
   it("re-checks only moving and new volume pages", () => {
@@ -469,7 +521,11 @@ describe("backlist: crawl state", () => {
       fixture("blue-lock-volume-40.html"),
       "https://kodansha.us/series/blue-lock/volume-40/",
     )!;
-    expect(upcoming.offers[0]!.releaseDate).toEqual({ year: 2026, month: 11, day: 24 });
+    expect(upcoming.offers[0]!.releaseDate).toEqual({
+      year: 2026,
+      month: 11,
+      day: 24,
+    });
     expect(needsRecheck(upcoming.offers, now)).toBe(true);
     const old = parseVolumePage(
       fixture("blue-lock-volume-1.html"),

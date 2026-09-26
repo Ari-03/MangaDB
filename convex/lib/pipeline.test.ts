@@ -15,9 +15,11 @@ import {
   createReleaseBundle,
   ensurePublisher,
   findPublisherByName,
+  queueCreationProposal,
   reconcileLinkedSeries,
   volumePositionFor,
 } from "./pipeline";
+import { applyCreatePlan, planCreateOps } from "./proposalCreates";
 
 const makeT = () => convexTest(schema);
 
@@ -137,6 +139,85 @@ describe("createCanonicalRecords — Volumes", () => {
   });
 });
 
+describe("queueCreationProposal", () => {
+  it("reuses the survivor of a merged unnumbered Volume", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const seriesId = await series(ctx, "One shot", ["1"]);
+      const survivor = (await ctx.db.query("volumes").collect())[0]!;
+      await ctx.db.insert("volumes", {
+        status: "merged",
+        publicId: 2,
+        seriesId,
+        position: 0.5,
+        mergedIntoId: survivor._id,
+      });
+      const proposalId = await queueCreationProposal(ctx, {
+        sourceKey: "prh",
+        observation: await observation(ctx, "one-shot"),
+        seriesId,
+        seriesTitle: "One shot",
+        labels: [],
+        release: { format: "physical", publisherSlug: "kodansha" },
+        comment: "Review release",
+        now: 1,
+      });
+      const version = (await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+        .unique())!;
+      expect(version.ops.filter((op) => op.kind === "create" && op.table === "volumes")).toEqual(
+        [],
+      );
+      expect(
+        version.ops.find((op) => op.kind === "create" && op.table === "editions"),
+      ).toMatchObject({
+        fields: {
+          volumeCoverage: [{ volume: survivor._id, order: 1, extent: "complete" }],
+        },
+      });
+    });
+  });
+
+  it("approves new packaging using existing Volumes and creates only missing labels", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Noragami", ["1", "2"]);
+      const before = await ctx.db.query("volumes").collect();
+      const proposalId = await queueCreationProposal(ctx, {
+        sourceKey: "prh",
+        observation: await observation(ctx, "omnibus"),
+        seriesId,
+        seriesTitle: "Noragami",
+        labels: ["01", "2", "3", "03"],
+        release: { format: "physical", publisherSlug: "kodansha" },
+        comment: "Review omnibus coverage",
+        now: 1,
+      });
+      const version = (await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) => q.eq("proposalId", proposalId))
+        .unique())!;
+      expect(
+        version.ops.filter((op) => op.kind === "create" && op.table === "volumes"),
+      ).toHaveLength(1);
+      const createOps = version.ops.filter((op) => op.kind === "create");
+      const plans = await planCreateOps(ctx, createOps);
+      const temp = new Map<string, string>();
+      for (const plan of plans) await applyCreatePlan(ctx, plan, temp);
+      const after = await ctx.db.query("volumes").collect();
+      expect(after.map((volume) => volume.label)).toEqual(["1", "2", "3"]);
+      const coverage = await ctx.db.query("volumeCoverages").collect();
+      expect(coverage.map((row) => row.volumeId)).toEqual([
+        before.find((volume) => volume.label === "1")!._id,
+        before.find((volume) => volume.label === "2")!._id,
+        after.find((volume) => volume.label === "3")!._id,
+      ]);
+    });
+  });
+});
+
 describe("publisher resolution", () => {
   it("resolves duplicates exactly before any prefix, and imprints to their own row", async () => {
     const t = makeT();
@@ -144,34 +225,20 @@ describe("publisher resolution", () => {
       const kodansha = await publisher(ctx, "Kodansha", "kodansha");
       // The historical PRH duplicate row, not yet merged.
       await publisher(ctx, "Kodansha Comics", "kodansha-comics");
-      const sevenSeas = await publisher(
-        ctx,
-        "Seven Seas Entertainment",
-        "seven-seas",
-      );
+      const sevenSeas = await publisher(ctx, "Seven Seas Entertainment", "seven-seas");
       const ghostShip = await publisher(ctx, "Ghost Ship", "ghost-ship");
       const squareEnix = await publisher(ctx, "Square Enix", "square-enix");
       await publisher(ctx, "Square Enix Manga", "square-enix-manga");
 
-      expect((await findPublisherByName(ctx, "Kodansha Comics"))?._id).toBe(
-        kodansha,
-      );
+      expect((await findPublisherByName(ctx, "Kodansha Comics"))?._id).toBe(kodansha);
       expect((await findPublisherByName(ctx, "Kodansha"))?._id).toBe(kodansha);
-      expect((await findPublisherByName(ctx, "Square Enix Manga"))?._id).toBe(
-        squareEnix,
-      );
-      expect((await findPublisherByName(ctx, "Ghost Ship"))?._id).toBe(
-        ghostShip,
-      );
-      expect((await findPublisherByName(ctx, "Seven Seas"))?._id).toBe(
+      expect((await findPublisherByName(ctx, "Square Enix Manga"))?._id).toBe(squareEnix);
+      expect((await findPublisherByName(ctx, "Ghost Ship"))?._id).toBe(ghostShip);
+      expect((await findPublisherByName(ctx, "Seven Seas"))?._id).toBe(sevenSeas);
+      expect((await findPublisherByName(ctx, "Seven Seas Entertainment, LLC"))?._id).toBe(
         sevenSeas,
       );
-      expect(
-        (await findPublisherByName(ctx, "Seven Seas Entertainment, LLC"))?._id,
-      ).toBe(sevenSeas);
-      expect(
-        (await findPublisherByName(ctx, "Kodansha USA Publishing"))?._id,
-      ).toBe(kodansha);
+      expect((await findPublisherByName(ctx, "Kodansha USA Publishing"))?._id).toBe(kodansha);
       expect(await findPublisherByName(ctx, "NASA")).toBeNull();
     });
   });
@@ -189,12 +256,8 @@ describe("publisher resolution", () => {
         status: "merged",
         mergedIntoId: oddball,
       });
-      expect((await findPublisherByName(ctx, "Dark Horse Manga"))?._id).toBe(
-        darkHorse,
-      );
-      expect((await findPublisherByName(ctx, "Oddball Press"))?._id).toBe(
-        oddball,
-      );
+      expect((await findPublisherByName(ctx, "Dark Horse Manga"))?._id).toBe(darkHorse);
+      expect((await findPublisherByName(ctx, "Oddball Press"))?._id).toBe(oddball);
       // Creation never lands on the merged row either.
       expect(
         (
@@ -291,10 +354,7 @@ describe("createCanonicalRecords — Edition Lines", () => {
       const volumes = await ctx.db.query("volumes").collect();
       expect(volumes.map((v) => v.label).sort()).toEqual(["19", "20", "21"]);
       const releases = await ctx.db.query("releases").collect();
-      expect(releases.map((r) => r.editionId)).toEqual([
-        editions[0]!._id,
-        editions[0]!._id,
-      ]);
+      expect(releases.map((r) => r.editionId)).toEqual([editions[0]!._id, editions[0]!._id]);
       expect(physical.releaseId).not.toBe(digital.releaseId);
     });
   });
@@ -506,7 +566,9 @@ describe("createCanonicalRecords — repairs stand", () => {
         snapshot: { kind: "series", title: "Summer Ghost" },
         now: 1,
       });
-      await ctx.db.patch(link._id, { recordRef: { type: "series", id: loser } });
+      await ctx.db.patch(link._id, {
+        recordRef: { type: "series", id: loser },
+      });
 
       // The adapter's rung-① read repoints the link.
       const linked = await reconcileLinkedSeries(ctx, {
@@ -521,7 +583,9 @@ describe("createCanonicalRecords — repairs stand", () => {
 
       // The creation path alone (an adapter that skipped rung ①) also lands
       // on the survivor.
-      await ctx.db.patch(link._id, { recordRef: { type: "series", id: loser } });
+      await ctx.db.patch(link._id, {
+        recordRef: { type: "series", id: loser },
+      });
       const result = await createCanonicalRecords(ctx, {
         sourceKey: "kodansha",
         observation: await observation(ctx, "9798888431900"),
@@ -596,10 +660,12 @@ describe("createCanonicalRecords — repairs stand", () => {
         .query("volumes")
         .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
         .collect();
-      expect(after.filter((v) => v.status === "active").map((v) => v.label).sort()).toEqual([
-        "1",
-        "3",
-      ]);
+      expect(
+        after
+          .filter((v) => v.status === "active")
+          .map((v) => v.label)
+          .sort(),
+      ).toEqual(["1", "3"]);
       expect(backbone.volumeIds).toHaveLength(1);
     });
   });

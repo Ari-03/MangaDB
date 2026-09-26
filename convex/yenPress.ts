@@ -4,7 +4,7 @@
 // it; before this adapter its books reached the catalog only through
 // OpenLibrary's patchy records.
 //
-// One run: fetch the sitemap, group title URLs by slug (a book's print and
+// One run: fetch the sitemap, plan title URLs by ISBN (some print and
 // digital ISBNs share one page), skip slugs that name prose/audio, and
 // fetch each remaining page that is new or due — at most one request per
 // second. A page yields one snapshot per format; every snapshot is
@@ -16,7 +16,7 @@
 // Incremental: a book whose ISBNs are all observed is re-fetched only when
 // due — weekly while its date is upcoming or recent (dates move), every
 // ~6 months otherwise. A run spends a bounded number of fetches per
-// action invocation and chains itself (cursor = the last slug handled).
+// action invocation and chains itself (cursor = the last slug/ISBN handled).
 // The sitemap has no lastmod and pages are skipped when fresh, so absence
 // proves nothing: this adapter never marks observations withdrawn.
 
@@ -45,7 +45,7 @@ const IMPORT_COMMENT = "Imported from Yen Press (yenpress.com).";
 const YEN_DELAY_MS = 1100;
 /** Page fetches per action invocation before it hands off (~1.1 s each). */
 const DEFAULT_MAX_FETCHES = 300;
-/** Slugs whose freshness one planning query checks. */
+/** ISBNs whose freshness one planning query checks. */
 const PLAN_CHUNK = 100;
 /** Errors carried across continuation links. */
 const MAX_CARRIED_ERRORS = 50;
@@ -125,6 +125,7 @@ export const sync = internalAction({
     changed: v.optional(v.number()),
     fetched: v.optional(v.number()),
     errors: v.optional(v.array(v.string())),
+    pageFailed: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<SyncResult> => {
     // Explicit annotations break the type cycle with imports.ts's adapter map.
@@ -142,6 +143,7 @@ export const sync = internalAction({
     const delay = args.politeDelayMs ?? YEN_DELAY_MS;
     const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
     const errors = [...(args.errors ?? [])];
+    let pageFailed = args.pageFailed ?? false;
     let seen = args.seen ?? 0;
     let changed = args.changed ?? 0;
     let fetchedTotal = args.fetched ?? 0;
@@ -150,28 +152,30 @@ export const sync = internalAction({
 
     try {
       const sitemap = await (await politeFetch(SITEMAP_URL, delay)).text();
-      // One book per slug: its print and digital ISBN URLs share the page.
-      const bySlug = new Map<string, { url: string; isbns: string[] }>();
-      for (const entry of parseSitemap(sitemap)) {
-        if (skipsWithoutFetch(entry.slug)) continue;
-        const book = bySlug.get(entry.slug);
-        if (book) book.isbns.push(entry.isbn13);
-        else bySlug.set(entry.slug, { url: entry.url, isbns: [entry.isbn13] });
-      }
-      const slugs = [...bySlug.keys()]
+      // A shared slug does not guarantee a shared page: older titles can
+      // expose print and digital separately. Plan every ISBN, and suppress
+      // another fetch only after that ISBN was actually observed.
+      const books = new Map(
+        parseSitemap(sitemap)
+          .filter((entry) => !skipsWithoutFetch(entry.slug))
+          .map((entry) => [`${entry.slug}/${entry.isbn13}`, entry] as const),
+      );
+      if (books.size === 0) throw new Error("Yen sitemap contained no eligible title URLs");
+      const slugs = [...books.keys()]
         .sort()
-        .filter((slug) => args.afterSlug === undefined || slug > args.afterSlug);
+        .filter((key) => args.afterSlug === undefined || key > args.afterSlug);
+      const observedHere = new Set<string>();
 
       let budgetSpent = false;
       for (let offset = 0; offset < slugs.length && !budgetSpent; offset += PLAN_CHUNK) {
         const chunk = slugs.slice(offset, offset + PLAN_CHUNK);
         const due: number[] = await ctx.runQuery(internal.yenPress.booksToFetch, {
-          books: chunk.map((slug) => bySlug.get(slug)!.isbns),
+          books: chunk.map((slug) => [books.get(slug)!.isbn13]),
           now: Date.now(),
         });
         const dueSet = new Set(due);
         for (const [i, slug] of chunk.entries()) {
-          if (!dueSet.has(i)) {
+          if (!dueSet.has(i) || observedHere.has(books.get(slug)!.isbn13)) {
             lastSlug = slug;
             continue;
           }
@@ -179,18 +183,25 @@ export const sync = internalAction({
             budgetSpent = true;
             break;
           }
-          const book = bySlug.get(slug)!;
+          const book = books.get(slug)!;
           fetchedHere++;
           fetchedTotal++;
           try {
             const res = await politeFetch(book.url, delay);
             const page = parseTitlePage(await res.text());
             if (!page) {
+              pageFailed = true;
               errors.push(`page ${book.url}: not a title page`);
             } else {
-              for (const snapshot of toSnapshots(page, book.url)) {
+              const snapshots = toSnapshots(page, book.url);
+              if (snapshots.length === 0) {
+                pageFailed = true;
+                errors.push(`page ${book.url}: no usable ISBNs`);
+              }
+              for (const snapshot of snapshots) {
                 seen++;
                 const result = await ctx.runMutation(internal.yenPress.applyTitle, { snapshot });
+                observedHere.add(snapshot.isbn13);
                 if (result.changed) changed++;
                 if (result.status === "needsReview") {
                   errors.push(`review ${snapshot.isbn13}: ${result.reason ?? "conflict"}`);
@@ -200,6 +211,7 @@ export const sync = internalAction({
           } catch (e) {
             // A removed title (404) or a transient failure: the book stays
             // unobserved/due and is retried next run.
+            pageFailed = true;
             errors.push(`page ${book.url}: ${errorMessage(e)}`);
           }
           lastSlug = slug;
@@ -216,6 +228,7 @@ export const sync = internalAction({
           changed,
           fetched: fetchedTotal,
           errors: errors.slice(0, MAX_CARRIED_ERRORS),
+          pageFailed,
         });
         return {
           runId,
@@ -229,7 +242,7 @@ export const sync = internalAction({
 
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: "succeeded",
+        status: pageFailed ? "failed" : "succeeded",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
@@ -240,6 +253,7 @@ export const sync = internalAction({
         recordsChanged: changed,
         fetched: fetchedTotal,
         continued: false,
+        failed: pageFailed || undefined,
         errorCount: errors.length,
       };
     } catch (e) {

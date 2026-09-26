@@ -47,8 +47,7 @@ function apiXml(manga: FixtureManga[], ids: string[]) {
       if (!m) return `<warning>no result for manga=${id}</warning>`;
       const alts = (m.altTitles ?? [])
         .map(
-          (alt) =>
-            `<info gid="2" type="Alternative title" lang="${alt.lang}">${alt.text}</info>`,
+          (alt) => `<info gid="2" type="Alternative title" lang="${alt.lang}">${alt.text}</info>`,
         )
         .join("\n");
       const releases = m.releases
@@ -72,8 +71,7 @@ const pageRequests: string[] = [];
 /** Serves the report + API for `manga`, and release pages from `pages`. */
 function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url =
-      typeof input === "object" && "url" in input ? input.url : String(input);
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (url.includes("/encyclopedia/releases.php")) {
       const id = Number(new URL(url).searchParams.get("id"));
       pageRequests.push(String(id));
@@ -159,10 +157,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
 
     await t.run(async (ctx) => {
       const series = await ctx.db.query("series").collect();
-      expect(series.map((s) => s.title).sort()).toEqual([
-        "Alpha Saga",
-        "Beta Blade",
-      ]);
+      expect(series.map((s) => s.title).sort()).toEqual(["Alpha Saga", "Beta Blade"]);
       const alpha = series.find((s) => s.title === "Alpha Saga")!;
       expect(alpha.bootstrapUnreviewed).toBe(true);
       expect(alpha.altTitles).toEqual(["アルファ・サーガ"]); // IT dropped
@@ -177,22 +172,16 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       expect(await ctx.db.query("publishers").collect()).toHaveLength(0);
       // Series observation linked; release observations retained unlinked.
       const observations = await ctx.db.query("sourceObservations").collect();
-      const mangaObs = observations.find(
-        (o) => o.sourceRecordId === "manga:100",
-      )!;
+      const mangaObs = observations.find((o) => o.sourceRecordId === "manga:100")!;
       expect(mangaObs.recordRef?.type).toBe("series");
-      const releaseObs = observations.filter((o) =>
-        o.sourceRecordId.startsWith("release:"),
-      );
+      const releaseObs = observations.filter((o) => o.sourceRecordId.startsWith("release:"));
       expect(releaseObs).toHaveLength(5);
       expect(releaseObs.every((o) => o.recordRef === undefined)).toBe(true);
       // Creation Revisions cite the Encyclopedia entry (ANN's license).
       const revisions = await ctx.db.query("revisions").collect();
       expect(revisions.length).toBeGreaterThan(0);
       for (const revision of revisions) {
-        expect(revision.citation?.url).toContain(
-          "animenewsnetwork.com/encyclopedia/manga.php?id=",
-        );
+        expect(revision.citation?.url).toContain("animenewsnetwork.com/encyclopedia/manga.php?id=");
       }
       // The mirror's run, plus the release-page pass it opened and queued.
       const runs = await ctx.db.query("importRuns").collect();
@@ -211,8 +200,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     const { releaseNoDate, releaseAuthDate } = await t.run(async (ctx) => {
       const series = (await ctx.db.query("series").collect())[0]!;
       const volumes = await ctx.db.query("volumes").collect();
-      const vol = (label: string) =>
-        volumes.find((v) => v.label === label)!._id;
+      const vol = (label: string) => volumes.find((v) => v.label === label)!._id;
       const publisherId = await ctx.db.insert("publishers", {
         status: "active",
         name: "VIZ Media",
@@ -354,18 +342,54 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     // convex-test simulates by scanning the table.
   }, 60000);
 
+  it.each(["html report", "missing detail", "failed detail", "malformed report item"])(
+    "preserves observations and fails an incomplete sweep: %s",
+    async (failure) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      stubAnn([ALPHA]);
+      await sync(t, { releasePages: false });
+      await t.run(async (ctx) => {
+        for (const obs of await ctx.db.query("sourceObservations").collect()) {
+          await ctx.db.patch(obs._id, { lastSeenAt: 1 });
+        }
+      });
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("reports.xml")) {
+          return new Response(
+            failure === "html report"
+              ? "<html>Temporarily unavailable</html>"
+              : failure === "malformed report item"
+                ? '<report listed="1"><item><name>Missing id</name></item></report>'
+                : reportXml([ALPHA], 0, 500),
+          );
+        }
+        return failure === "failed detail"
+          ? new Response("forbidden", { status: 403 })
+          : new Response("<ann><warning>no result for manga=100</warning></ann>");
+      });
+      expect(await sync(t, { releasePages: false })).toMatchObject({
+        failed: true,
+      });
+      await t.run(async (ctx) => {
+        const observations = await ctx.db.query("sourceObservations").collect();
+        expect(observations.every((obs) => !obs.withdrawn)).toBe(true);
+        const runs = await ctx.db.query("importRuns").collect();
+        expect(runs.at(-1)?.status).toBe("failed");
+      });
+    },
+  );
+
   it("defaults to ANN's 1 req/s etiquette", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     const waits: number[] = [];
-    vi.stubGlobal(
-      "setTimeout",
-      ((fn: () => void, ms?: number) => {
-        waits.push(ms ?? 0);
-        fn();
-        return 0;
-      }) as unknown as typeof setTimeout,
-    );
+    vi.stubGlobal("setTimeout", ((fn: () => void, ms?: number) => {
+      waits.push(ms ?? 0);
+      fn();
+      return 0;
+    }) as unknown as typeof setTimeout);
     stubAnn([BETA]);
     await sync(t, { politeDelayMs: undefined });
     expect(waits.length).toBeGreaterThan(0);
@@ -437,7 +461,12 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
     };
     stubAnn([NANA]);
     await sync(t);
-    const release = await releaseFor(t, "1", { year: 2005, month: 12, day: 6, sort: 20051206 });
+    const release = await releaseFor(t, "1", {
+      year: 2005,
+      month: 12,
+      day: 6,
+      sort: 20051206,
+    });
     await sync(t);
     expect(await linkOf(t, 9101)).toBeNull();
     expect(await linkOf(t, 9102)).toBeNull();
@@ -492,9 +521,7 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
           .withIndex("by_series", (q) => q.eq("seriesId", byTitle(title)))
           .collect();
       expect(await volumesOf("Homunculus")).toHaveLength(0);
-      expect((await volumesOf("Sand Land")).map((v) => [v.label, v.position])).toEqual([
-        ["1", 1],
-      ]);
+      expect((await volumesOf("Sand Land")).map((v) => [v.label, v.position])).toEqual([["1", 1]]);
     });
   });
 });
@@ -512,9 +539,7 @@ describe("ann.sync — steady state", () => {
       expect(proposals).toHaveLength(1);
       expect(proposals[0]!.state).toBe("inReview");
       const versions = await ctx.db.query("proposalVersions").collect();
-      const tables = versions[0]!.ops.map((op) =>
-        op.kind === "create" ? op.table : op.kind,
-      );
+      const tables = versions[0]!.ops.map((op) => (op.kind === "create" ? op.table : op.kind));
       expect(tables).toEqual(["series", "volumes"]);
     });
   });
@@ -546,9 +571,7 @@ const obsFor = (t: TestT, annId: number) =>
   );
 
 async function seedPublisher(t: TestT, name: string, slug: string) {
-  return await t.run(async (ctx) =>
-    ctx.db.insert("publishers", { status: "active", name, slug }),
-  );
+  return await t.run(async (ctx) => ctx.db.insert("publishers", { status: "active", name, slug }));
 }
 
 describe("ann — ISBN-linked release lines", () => {
@@ -559,8 +582,18 @@ describe("ann — ISBN-linked release lines", () => {
       id: 310,
       title: "NANA",
       releases: [
-        { annId: 9111, date: "2005-12-06", designator: "GN 1", ean: "9781421501086" },
-        { annId: 9112, date: "2025-10-21", designator: "GN 1", ean: "9781974757282" },
+        {
+          annId: 9111,
+          date: "2005-12-06",
+          designator: "GN 1",
+          ean: "9781421501086",
+        },
+        {
+          annId: 9112,
+          date: "2025-10-21",
+          designator: "GN 1",
+          ean: "9781974757282",
+        },
       ],
     };
     stubAnn([NANA]);
@@ -595,22 +628,65 @@ describe("ann — ISBN-linked release lines", () => {
       });
     });
     await sync(t, { releasePages: false });
-    expect((await obsFor(t, 9112))!.recordRef).toEqual({ type: "release", id: releaseId });
+    expect((await obsFor(t, 9112))!.recordRef).toEqual({
+      type: "release",
+      id: releaseId,
+    });
     // The 2005 printing (another ISBN) never links to the 2025 book.
     expect((await obsFor(t, 9111))!.recordRef).toBeUndefined();
     await t.run(async (ctx) => {
-      expect((await ctx.db.get(releaseId))!.pubDate).toMatchObject({ year: 2025, month: 10 });
+      expect((await ctx.db.get(releaseId))!.pubDate).toMatchObject({
+        year: 2025,
+        month: 10,
+      });
     });
   });
 });
 
 describe("ann.syncReleasePages — leaf Releases from release pages", () => {
+  it.each(["http error", "unparsed page"])(
+    "marks page pass failures unhealthy: %s",
+    async (failure) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      stubAnn([BETA]);
+      await sync(t, { releasePages: false });
+      vi.stubGlobal(
+        "fetch",
+        async () =>
+          new Response("<html>Unavailable</html>", {
+            status: failure === "http error" ? 403 : 200,
+          }),
+      );
+      expect(await syncPages(t)).toMatchObject({ failed: true });
+      await t.run(async (ctx) => {
+        expect((await ctx.db.query("importRuns").collect()).at(-1)?.status).toBe("failed");
+        const observation = (await ctx.db.query("sourceObservations").collect()).find(
+          (obs) => obs.sourceRecordId === "release:9101",
+        );
+        expect(observation?.snapshot).toMatchObject({
+          page: { status: failure === "http error" ? "error" : "unparsed" },
+        });
+      });
+    },
+  );
+
   const ONE: FixtureManga = {
     id: 1223,
     title: "One Piece",
     releases: [
-      { annId: 57439, date: "2026-11-10", designator: "GN 113", ean: "9781974766703" },
-      { annId: 57440, date: "2026-12-08", designator: "GN 114", ean: "9781974766710" },
+      {
+        annId: 57439,
+        date: "2026-11-10",
+        designator: "GN 113",
+        ean: "9781974766703",
+      },
+      {
+        annId: 57440,
+        date: "2026-12-08",
+        designator: "GN 114",
+        ean: "9781974766710",
+      },
       {
         annId: 57441,
         date: "2026-11-10",
@@ -618,7 +694,12 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
         ean: "9781974799992",
         title: "One Piece - [Walmart Exclusive Cover]",
       },
-      { annId: 24124, date: "2013-11-05", designator: "GN 1-23", ean: "9781421560748" },
+      {
+        annId: 24124,
+        date: "2013-11-05",
+        designator: "GN 1-23",
+        ean: "9781421560748",
+      },
     ],
   };
   const PAGES = {
@@ -656,7 +737,11 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
 
     const result = await syncPages(t);
-    expect(result).toMatchObject({ continued: false, fetched: 4, recordsSeen: 4 });
+    expect(result).toMatchObject({
+      continued: false,
+      fetched: 4,
+      recordsSeen: 4,
+    });
 
     const created = (await obsFor(t, 57439))!;
     expect(created.recordRef?.type).toBe("release");
@@ -739,7 +824,10 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
       });
     });
     await syncPages(t);
-    expect((await obsFor(t, 57439))!.recordRef).toEqual({ type: "release", id: existing });
+    expect((await obsFor(t, 57439))!.recordRef).toEqual({
+      type: "release",
+      id: existing,
+    });
     await t.run(async (ctx) => {
       expect(await ctx.db.query("releases").collect()).toHaveLength(1);
       // The page's ISBN fills the linked Release, which had none.
@@ -762,10 +850,15 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
   it("a mirror forced on the disabled source chains a forced page pass", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "ann", enabled: false });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "ann",
+      enabled: false,
+    });
     stubAnn([ONE], PAGES);
     await seedPublisher(t, "VIZ Media", "viz-media");
-    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const runId = await t.mutation(internal.imports.startRun, {
+      sourceKey: "ann",
+    });
     await sync(t, { runId });
     vi.useFakeTimers();
     await t.finishAllScheduledFunctions(vi.runAllTimers);
@@ -775,7 +868,9 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs).toHaveLength(2);
-      expect(runs.every((run) => run.status === "succeeded" && run.automatic === undefined)).toBe(true);
+      expect(runs.every((run) => run.status === "succeeded" && run.automatic === undefined)).toBe(
+        true,
+      );
     });
   });
 });
@@ -853,7 +948,10 @@ describe("ann — repairs stand across mirrors", () => {
         altTitles: ["Alpha Saga"],
         searchText: "Alpha Saga: Complete Alpha Saga",
       });
-      await ctx.db.patch(loser!._id, { status: "merged", mergedIntoId: survivorId });
+      await ctx.db.patch(loser!._id, {
+        status: "merged",
+        mergedIntoId: survivorId,
+      });
       for (const volume of await ctx.db
         .query("volumes")
         .withIndex("by_series", (q) => q.eq("seriesId", loser!._id))
@@ -932,12 +1030,13 @@ describe("ann — repairs stand across mirrors", () => {
         .collect();
       const byLabel = (label: string) => volumes.find((v) => v.label === label)!;
       await ctx.db.patch(byLabel("3")._id, { status: "hidden" });
-      await ctx.db.patch(byLabel("2")._id, { status: "merged", mergedIntoId: byLabel("1")._id });
+      await ctx.db.patch(byLabel("2")._id, {
+        status: "merged",
+        mergedIntoId: byLabel("1")._id,
+      });
     });
     await sync(t);
-    expect(
-      (await volumesOf(t, alpha!._id)).map((v) => [v.label, v.status]).sort(),
-    ).toEqual([
+    expect((await volumesOf(t, alpha!._id)).map((v) => [v.label, v.status]).sort()).toEqual([
       ["1", "active"],
       ["2", "merged"],
       ["3", "hidden"],
@@ -950,7 +1049,14 @@ describe("ann — repairs stand across mirrors", () => {
     const ONE_LINE: FixtureManga = {
       id: 1223,
       title: "One Piece",
-      releases: [{ annId: 57439, date: "2026-11-10", designator: "GN 113", ean: "9781974766703" }],
+      releases: [
+        {
+          annId: 57439,
+          date: "2026-11-10",
+          designator: "GN 113",
+          ean: "9781974766703",
+        },
+      ],
     };
     stubAnn([ONE_LINE], {
       57439: releasePage({

@@ -5,7 +5,7 @@
 //
 // - `GET /sitemap.xml` — one flat urlset listing every title page as
 //   `/titles/{isbn13}-{slug}` (~15.7k URLs: the print and the digital ISBN
-//   of one book are two URLs with the same slug and the same page), plus
+//   of one book often share a page, but some expose only one format), plus
 //   series/news/genre pages the adapter ignores. No lastmod.
 // - `GET /titles/{isbn13}-{slug}` — the book page: an `<h1>` title, one
 //   format tab per edition ("Paperback", "Hardback", "Digital"), a price
@@ -13,8 +13,8 @@
 //   (Series, Page Count, ISBN, Release Date, Imprint), plus the category
 //   of its genre labels (manga, comics, light-novels, audio-books).
 //
-// Scope (spec §1): Yen On (light novels), Yen Audio, and JY (middle-grade
-// prose and western comics) never enter; neither do the light-novel/audio
+// Scope (spec §1): Yen On (light novels) and Yen Audio never enter;
+// JY manga is allowed. Neither do the light-novel/audio
 // categories (which is how J-Novel Club's novels, distributed by Yen, stay
 // out while its print manga comes in), single digital chapters
 // ("…, Chapter 22 (v-scroll)"), or Yen's western "comics" — except Ize
@@ -115,7 +115,15 @@ export function parseYenDate(
   const month = MONTHS[m[1]!.toLowerCase()];
   const day = Number(m[2]);
   if (month === undefined || day < 1 || day > 31) return undefined;
-  return { year: Number(m[3]), month, day };
+  const year = Number(m[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  )
+    return undefined;
+  return { year, month, day };
 }
 
 /** One "full details" block's labelled fields ("ISBN" → "979…"). */
@@ -171,7 +179,7 @@ export function parseTitlePage(html: string): YenTitlePage | null {
 
 // Prose/audio imprints. J-Novel Club is not here: Yen distributes its
 // print manga too, and the page category tells them from its novels.
-const DENIED_IMPRINTS = /^(?:yen on|yen audio|jy)$/i;
+const DENIED_IMPRINTS = /^(?:yen on|yen audio)$/i;
 
 // Yen titles append a volume subtitle after the designator: "A Misanthrope
 // Teaches a Class for Demi-Humans, Vol. 4 (manga): Mr. Hitoma, …". The
@@ -204,6 +212,7 @@ function scopeReason(
     return "single chapter";
   }
   const category = page.category;
+  if (/^jy$/i.test(imprint ?? "") && category !== "manga") return "JY non-manga";
   if (category === "light-novels" || category === "audio-books") return `category ${category}`;
   if (category === "comics" && !/^ize press$/i.test(imprint ?? "")) return "western comics";
   return outOfScopeReason(page.title);
