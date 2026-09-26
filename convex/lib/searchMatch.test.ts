@@ -4,6 +4,7 @@ import {
   allowedEdits,
   editDistance,
   matchesAllWords,
+  matchNames,
   probePrefixes,
   rankNearMisses,
   searchWords,
@@ -59,6 +60,37 @@ describe("sortByTitleMatch", () => {
       "The Science of Attack on Titan",
       "Attack on Titan: No Regrets",
     ]);
+  });
+});
+
+describe("matchNames", () => {
+  const publishers = [
+    { name: "Yen Press" },
+    { name: "Seven Seas Entertainment" },
+    { name: "Drawn & Quarterly" },
+    { name: "Ize Press" },
+    { name: "Press Start" },
+  ];
+  const names = (query: string) => matchNames(query, publishers).map((p) => p.name);
+
+  it("finds a name from any part of it, not just its opening", () => {
+    expect(names("Seven Seas Entertainment")).toEqual(["Seven Seas Entertainment"]);
+    expect(names("seven seas")).toEqual(["Seven Seas Entertainment"]);
+    expect(names("seas")).toEqual(["Seven Seas Entertainment"]);
+  });
+
+  it("puts exact and opening matches first, then the rest A–Z", () => {
+    expect(names("press")).toEqual(["Press Start", "Ize Press", "Yen Press"]);
+    expect(names("yen press")).toEqual(["Yen Press"]);
+  });
+
+  it("folds punctuation and '&' so spelling variants still match", () => {
+    expect(names("drawn and quarterly")).toEqual(["Drawn & Quarterly"]);
+    expect(names("DRAWN & QUARTERLY!")).toEqual(["Drawn & Quarterly"]);
+  });
+
+  it("matches nothing for a query with no letters or digits", () => {
+    expect(names("  !! ")).toEqual([]);
   });
 });
 

@@ -1,10 +1,11 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, type CSSProperties } from "react";
 
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
 import { isbnInProgress, useDebounced } from "~/lib/searchSuggest";
 import { slugParams } from "~/lib/slug";
+import { useUrlDraft } from "~/lib/urlDraft";
 import { fetchSearchResults, type SearchResults } from "~/server/search";
 
 /**
@@ -66,22 +67,15 @@ function SearchPage() {
   // URL is replaced (the loader re-runs; the old results stay up meanwhile).
   // The route stays mounted, so focus and caret survive. A query arriving
   // from elsewhere (the header box, a "Did you mean" link) refills the box,
-  // but not an echo of what this box pushed while typing carried on.
-  const [text, setText] = useState(urlQuery);
-  const pushed = useRef(urlQuery);
-  useEffect(() => {
-    if (urlQuery !== pushed.current) {
-      pushed.current = urlQuery;
-      setText(urlQuery);
-    }
-  }, [urlQuery]);
+  // but none this box asked for while typing carried on, whatever order
+  // they land in (`useUrlDraft`).
+  const { draft: text, setDraft: setText, request } = useUrlDraft(urlQuery, urlQuery);
   const settled = useDebounced(text, LIVE_DEBOUNCE_MS);
   useEffect(() => {
     // An ISBN being typed waits for Enter (the loader redirects valid ones).
-    if (settled === pushed.current || isbnInProgress(settled.trim())) return;
-    pushed.current = settled;
+    if (isbnInProgress(settled.trim()) || !request(settled)) return;
     void navigate({ search: { q: settled }, replace: true, resetScroll: false });
-  }, [settled, navigate]);
+  }, [settled, request, navigate]);
 
   return (
     <main className="search-page">
@@ -96,7 +90,7 @@ function SearchPage() {
           method="get"
           onSubmit={(event) => {
             event.preventDefault();
-            pushed.current = text;
+            request(text);
             void navigate({ to: "/search", search: { q: text } });
           }}
         >

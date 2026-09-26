@@ -1,6 +1,8 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
+import { todaySortKey } from "../src/lib/month";
+
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -349,10 +351,12 @@ describe("seriesBrowse filters first, then the sort", () => {
     expect(await bucket("16-plus")).toEqual(["Delta"]);
   });
 
+  type Timing = "upcoming" | "past-3m" | "past-6m" | "past-12m" | "finished";
+
   it("filters by release timing", async () => {
     const t = await shelf();
-    const timing = async (timing: "upcoming" | "past-3m" | "past-6m" | "past-12m" | "finished") =>
-      titles(await t.query(api.seriesBrowse.browse, { sort: "title", timing }));
+    const timing = async (timing: Timing) =>
+      titles(await t.query(api.seriesBrowse.browse, { sort: "title", timing, todaySort: todaySortKey() }));
     expect(await timing("upcoming")).toEqual(["Bravo"]);
     expect(await timing("past-3m")).toEqual(["Alpha"]);
     expect(await timing("past-6m")).toEqual(["Alpha", "Bravo"]);
@@ -360,6 +364,20 @@ describe("seriesBrowse filters first, then the sort", () => {
     // Quiet for a year with nothing announced; Foxtrot's source is still
     // ongoing and Echo has never had a dated release.
     expect(await timing("finished")).toEqual(["Charlie"]);
+  });
+
+  it("counts timing back from the caller's todaySort, which it requires", async () => {
+    const t = await shelf();
+    const timing = async (timing: Timing, todaySort?: number) =>
+      titles(await t.query(api.seriesBrowse.browse, { sort: "title", timing, todaySort }));
+    // Three months on, Alpha's release (a month ago) has aged out of the
+    // last three months; the cutoff follows the date passed, not the clock.
+    expect(await timing("past-3m", monthsAgo(-3))).toEqual([]);
+    expect(await timing("past-12m", monthsAgo(-3))).toEqual(["Alpha", "Bravo"]);
+    // Upcoming reads no date; the others refuse to guess one.
+    expect(await timing("upcoming")).toEqual(["Bravo"]);
+    await expect(timing("past-3m")).rejects.toThrow(/todaySort/);
+    await expect(timing("finished", 20261300)).rejects.toThrow(/todaySort/);
   });
 
   it("sorts and pages a combined filter to the end, keeping the total", async () => {
@@ -373,7 +391,7 @@ describe("seriesBrowse filters first, then the sort", () => {
     expect([p1.total, p2.total, p3.total]).toEqual([5, 5, 5]);
     expect(p3.nextCursor).toBeNull();
 
-    const narrow = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["seas"], volumes: "one", timing: "past-12m" });
+    const narrow = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["seas"], volumes: "one", timing: "past-12m", todaySort: todaySortKey() });
     expect(narrow).toMatchObject({ items: [], total: 0, nextCursor: null });
   });
 

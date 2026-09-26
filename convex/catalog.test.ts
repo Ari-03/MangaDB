@@ -128,6 +128,13 @@ describe("catalog.search", () => {
         name: "Seven Hidden Press",
         slug: "seven-hidden",
       });
+      await ctx.db.insert("series", {
+        status: "active",
+        publicId: 5,
+        title: "Seven Seeds",
+        altTitles: [],
+        searchText: "Seven Seeds",
+      });
     });
   };
 
@@ -212,6 +219,18 @@ describe("catalog.search", () => {
     ]);
   });
 
+  it("offers no typo help when the query names a Publisher", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    // "Seven Seas" is one edit-pair from Seven Seeds, but it names a Publisher.
+    const results = await t.query(api.catalog.search, { query: "Seven Seas" });
+    expect(results.publishers.map((p) => p.slug)).toEqual(["seven-seas"]);
+    expect(results.didYouMean).toEqual([]);
+    // Without the Publisher, the same query is a typo for Seven Seeds.
+    const typo = await t.query(api.catalog.search, { query: "Seven Seaz" });
+    expect(typo.didYouMean.map((s) => s.title)).toEqual(["Seven Seeds"]);
+  });
+
   it("returns nothing for an empty or whitespace query", async () => {
     const t = convexTest(schema);
     await seed(t);
@@ -231,6 +250,7 @@ describe("catalog.suggest", () => {
         [2, "Berserk", ["Berserk Max"], "active"],
         [3, "Chainsaw Man", ["Chensoman"], "active"],
         [4, "Berserk Duplicate", [], "merged"],
+        [5, "Seven Seeds", [], "active"],
       ];
       for (const [publicId, title, altTitles, status] of rows) {
         await ctx.db.insert("series", {
@@ -250,6 +270,17 @@ describe("catalog.suggest", () => {
         status: "active",
         name: "VIZ Media",
         slug: "viz-media",
+      });
+      const kodansha = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Kodansha",
+        slug: "kodansha",
+      });
+      await ctx.db.insert("publishers", {
+        status: "merged",
+        mergedIntoId: kodansha,
+        name: "Kodansha Comics",
+        slug: "kodansha-comics",
       });
     });
   };
@@ -285,13 +316,34 @@ describe("catalog.suggest", () => {
     expect(chainsawman.didYouMean.map((s) => s.title)).toEqual(["Chainsaw Man"]);
   });
 
-  it("finds publishers by the opening of their name", async () => {
+  it("finds publishers by any part of their name, as search does", async () => {
     const t = convexTest(schema);
     await seed(t);
-    expect((await t.query(api.catalog.suggest, { query: "Seven" })).publishers).toEqual([
-      { name: "Seven Seas Entertainment", slug: "seven-seas" },
-    ]);
-    expect((await t.query(api.catalog.suggest, { query: "seas" })).publishers).toEqual([]);
+    const seven = [{ name: "Seven Seas Entertainment", slug: "seven-seas" }];
+    for (const query of ["Seven", "seas", "Seven Seas Entertainment"]) {
+      expect((await t.query(api.catalog.suggest, { query })).publishers).toEqual(seven);
+    }
+  });
+
+  it("finds a merged Publisher's survivor by the old name", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    expect(
+      (await t.query(api.catalog.suggest, { query: "kodansha comics" })).publishers,
+    ).toEqual([{ name: "Kodansha", slug: "kodansha" }]);
+    // The survivor is listed once, though both rows match "kodansha".
+    expect(
+      (await t.query(api.catalog.suggest, { query: "kodansha" })).publishers,
+    ).toEqual([{ name: "Kodansha", slug: "kodansha" }]);
+  });
+
+  it("offers no typo help or loose matches when the query names a Publisher", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const results = await t.query(api.catalog.suggest, { query: "Seven Seas" });
+    expect(results.publishers.map((p) => p.slug)).toEqual(["seven-seas"]);
+    expect(results.didYouMean).toEqual([]);
+    expect(results.series).toEqual([]);
   });
 
   it("returns nothing for a blank query", async () => {

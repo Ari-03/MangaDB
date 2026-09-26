@@ -43,19 +43,44 @@ async function resolvePublisher(
   return await followMerges(ctx, "publishers", doc);
 }
 
-/** Memoized ctx.db.get so the per-release joins stay cheap within a window. */
-function cachedGet<T extends "publishers" | "series" | "volumes" | "editions" | "editionLines">(
-  ctx: QueryCtx,
-) {
-  const cache = new Map<string, Doc<T> | null>();
-  return async (id: Id<T>): Promise<Doc<T> | null> => {
-    const hit = cache.get(id);
-    if (hit !== undefined) return hit;
-    const doc = await ctx.db.get(id);
-    cache.set(id, doc);
-    return doc;
+/**
+ * Memoize an async lookup by key. The promise itself is cached, so lookups
+ * running in parallel (Promise.all) still read each key once.
+ */
+export function memoize<K, V>(load: (key: K) => Promise<V>): (key: K) => Promise<V> {
+  const cache = new Map<K, Promise<V>>();
+  return (key) => {
+    let hit = cache.get(key);
+    if (!hit) {
+      hit = load(key);
+      cache.set(key, hit);
+    }
+    return hit;
   };
 }
+
+/**
+ * Memoized reads for joining Releases to the catalog: gets by ID plus an
+ * Edition's ordered Coverage. Make one per query and pass it to every helper
+ * that looks up the same rows (joinBrowseRows, the Publishers board), so
+ * each document is read once.
+ */
+export function browseCache(ctx: QueryCtx) {
+  return {
+    publisher: memoize((id: Id<"publishers">) => ctx.db.get(id)),
+    series: memoize((id: Id<"series">) => ctx.db.get(id)),
+    volume: memoize((id: Id<"volumes">) => ctx.db.get(id)),
+    edition: memoize((id: Id<"editions">) => ctx.db.get(id)),
+    line: memoize((id: Id<"editionLines">) => ctx.db.get(id)),
+    coverage: memoize((editionId: Id<"editions">) =>
+      ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+        .collect(),
+    ),
+  };
+}
+export type BrowseCache = ReturnType<typeof browseCache>;
 
 /**
  * The Volume label a browser row wears, composed from the Edition's ordered
@@ -86,59 +111,46 @@ function composeVolumeLabel(
  * §10). A month-precision date (day unknown, sort yyyymm00) keeps `day: null`
  * so views can group it as "date to be announced"; rows whose Edition or
  * every Series is hidden drop out. Rows return date-sorted, then stable by
- * title and volume. Shared by the browser's month window (monthBrowse) and
- * the Publisher Spotlight's upcoming lane (publisher.ts, ticket #25).
+ * title and volume. Shared by the browser's month window (monthBrowse), the
+ * Publisher Spotlight's upcoming lane and the Publishers board's cover
+ * strips (publisher.ts); pass `cache` to share lookups a caller already made.
  */
 export async function joinBrowseRows(
   ctx: QueryCtx,
   docs: Array<Doc<"releases">>,
+  cache: BrowseCache = browseCache(ctx),
 ) {
-  const getPublisher = cachedGet<"publishers">(ctx);
-  const getSeries = cachedGet<"series">(ctx);
-  const getVolume = cachedGet<"volumes">(ctx);
-  const getEdition = cachedGet<"editions">(ctx);
-  const getLine = cachedGet<"editionLines">(ctx);
-  const coverageByEdition = new Map<string, Array<Doc<"volumeCoverages">>>();
-
   const releases = [];
   for (const release of docs) {
     const pubDate = release.pubDate;
     if (!pubDate) continue; // unreachable inside an index range; type guard
 
-    const edition = await getEdition(release.editionId);
+    const edition = await cache.edition(release.editionId);
     if (!edition || edition.status !== "active") continue;
 
     // Series links come from the denormalized seriesIds (spec §8); a hidden
     // Series hides its releases from the public browser.
     const series = [];
     for (const seriesId of release.seriesIds) {
-      const doc = await getSeries(seriesId);
+      const doc = await cache.series(seriesId);
       if (doc && doc.status === "active") {
         series.push({ publicId: doc.publicId, title: doc.title });
       }
     }
     if (series.length === 0) continue;
 
-    let coverage = coverageByEdition.get(edition._id);
-    if (!coverage) {
-      coverage = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
-      coverageByEdition.set(edition._id, coverage);
-    }
     const covered = [];
     let anyPartial = false;
-    for (const row of coverage) {
-      const volume = await getVolume(row.volumeId);
+    for (const row of await cache.coverage(edition._id)) {
+      const volume = await cache.volume(row.volumeId);
       if (!volume || volume.status !== "active") continue;
       covered.push({ label: volume.label ?? null, position: volume.position });
       if (row.extent === "partial") anyPartial = true;
     }
 
-    const publisherDoc = await getPublisher(release.publisherId);
+    const publisherDoc = await cache.publisher(release.publisherId);
     const line = edition.editionLineId
-      ? await getLine(edition.editionLineId)
+      ? await cache.line(edition.editionLineId)
       : null;
 
     releases.push({

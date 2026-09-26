@@ -4,6 +4,9 @@
 // Berserk). The Convex search index only prefix-matches the last term and
 // has no fuzzy mode, so catalog.ts gathers a small candidate set through
 // `probePrefixes` and this module does the forgiving part in memory.
+// Publishers are matched by name here too (`matchNames`), over the small list.
+
+import { publisherNameKey } from "./publishers";
 
 /** Shortest query (letters and digits, spaces dropped) that gets typo help. */
 export const NEAR_MISS_MIN_LENGTH = 4;
@@ -67,6 +70,29 @@ export function sortByTitleMatch<
   });
   return keyed
     .sort((a, b) => a.rank - b.rank || a.length - b.length || a.index - b.index)
+    .map(({ item }) => item);
+}
+
+/**
+ * The items whose name contains the query anywhere, compared as publisher-name
+ * keys (case, accents, punctuation, and "&"/"and" folded), so "seas", "seven
+ * seas", and "Seven Seas Entertainment" all find Seven Seas Entertainment.
+ * An exact name leads, then names that open with the query, then the rest,
+ * each A–Z. The one Publisher matcher behind both search and suggestions.
+ */
+export function matchNames<T extends { name: string }>(
+  query: string,
+  items: ReadonlyArray<T>,
+): T[] {
+  const q = publisherNameKey(query);
+  if (q === "") return [];
+  return items
+    .flatMap((item) => {
+      const key = publisherNameKey(item.name);
+      if (!key.includes(q)) return [];
+      return [{ item, rank: key === q ? 0 : key.startsWith(q) ? 1 : 2 }];
+    })
+    .sort((a, b) => a.rank - b.rank || a.item.name.localeCompare(b.item.name))
     .map(({ item }) => item);
 }
 

@@ -19,7 +19,7 @@
 // documents (8 MiB / 16,384 on older Convex), so bytes are the ceiling, at
 // about 8x (4x) today's catalog.
 
-import { v, type Infer, type ObjectType } from "convex/values";
+import { ConvexError, v, type Infer, type ObjectType } from "convex/values";
 
 import { internal } from "./_generated/api";
 import { recountCatalog } from "./catalog";
@@ -32,6 +32,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
+import { searchWords } from "./lib/searchMatch";
 
 export const SORTS = [
   "title",
@@ -330,21 +331,12 @@ export function sortKeyFor(title: string): string {
 }
 
 /**
- * Title and alt titles as the distinct lower-cased, accent-free words the
- * library's title filter matches against: ["Pokémon: Red", "Pokemon"] →
- * "pokemon red". A query goes through the same function, so both sides
- * split words alike.
+ * Title and alt titles as the distinct `searchWords` the library's title
+ * filter matches against: ["Pokémon: Red", "Pokemon"] → "pokemon red". The
+ * filter splits a query with `searchWords` too, so both sides agree.
  */
 export function searchKeyFor(texts: ReadonlyArray<string>): string {
-  const words = texts
-    .join(" ")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .normalize("NFC")
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter(Boolean);
-  return [...new Set(words)].join(" ");
+  return [...new Set(searchWords(texts.join(" ")))].join(" ");
 }
 
 export function letterFor(titleSort: string): string {
@@ -352,8 +344,19 @@ export function letterFor(titleSort: string): string {
   return c >= "a" && c <= "z" ? c : "#";
 }
 
+/**
+ * yyyymmdd for `now` (UTC), the pubDate.sort shape. Only the rebuild uses the
+ * clock; `browse` is a cached query, so its caller passes `todaySort`.
+ */
 function todaySortKey(now: Date = new Date()): number {
   return now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+}
+
+/** True for a plausible yyyymmdd day key (month 1-12, day 1-31). */
+function isDayKey(key: number): boolean {
+  const month = Math.floor(key / 100) % 100;
+  const day = key % 100;
+  return Number.isInteger(key) && key >= 10000101 && key <= 99991231 && month >= 1 && month <= 12 && day >= 1 && day <= 31;
 }
 
 
@@ -468,11 +471,19 @@ function monthsBefore(today: number, months: number): number {
  *   unknown today, so this is the English run's quiet end, finished or
  *   stalled; a Series whose final volume just came out reads as recent
  *   until a year has passed.
+ * All but upcoming count back from `today`, the caller's `todaySort`: a
+ * cached query must not read the clock, or a result from an earlier day
+ * could keep serving an old cutoff.
  */
-function timingTest(timing: Timing, today: number): (entry: Entry) => boolean {
+function timingTest(timing: Timing, today: number | undefined): (entry: Entry) => boolean {
+  if (timing === "upcoming") return (entry) => entry.nextReleaseSort > 0;
+  if (today === undefined || !isDayKey(today)) {
+    throw new ConvexError({
+      code: "invalidField",
+      message: `The "${timing}" timing needs todaySort, today's yyyymmdd (UTC).`,
+    });
+  }
   switch (timing) {
-    case "upcoming":
-      return (entry) => entry.nextReleaseSort > 0;
     case "past-3m":
     case "past-6m":
     case "past-12m": {
@@ -495,7 +506,7 @@ function timingTest(timing: Timing, today: number): (entry: Entry) => boolean {
  * One predicate for every filter that is set, or null when none is (the
  * unfiltered shelf). Values are resolved once here rather than per row.
  */
-function matcher(f: Filters, today: number): ((entry: Entry) => boolean) | null {
+function matcher(f: Filters, today: number | undefined): ((entry: Entry) => boolean) | null {
   const tests: Array<(entry: Entry) => boolean> = [];
   const publishers = new Set(f.publishers?.filter(Boolean));
   if (publishers.size > 0) tests.push((entry) => entry.publishers.some((p) => publishers.has(p.slug)));
@@ -509,7 +520,7 @@ function matcher(f: Filters, today: number): ((entry: Entry) => boolean) | null 
   if (format === "physical") tests.push((entry) => entry.hasPhysical);
   if (format === "digital") tests.push((entry) => entry.hasDigital);
   if (letter && /^[a-z#]$/.test(letter)) tests.push((entry) => letterFor(entry.titleSort) === letter);
-  const words = searchKeyFor([f.q ?? ""]).split(" ").filter(Boolean);
+  const words = searchWords(f.q ?? "");
   if (words.length > 0) {
     tests.push((entry) => {
       const key = ` ${entry.searchKey}`;
@@ -657,13 +668,15 @@ async function stillPublic(ctx: QueryCtx, row: StatsRow): Promise<boolean> {
  * following page (null at the end), and `total`, the number of Series the
  * filters match, or null for the unfiltered shelf (facets' total is that).
  * The total can include a Series hidden since the last rebuild; it is
- * skipped when a page reaches it.
+ * skipped when a page reaches it. `todaySort` (today's yyyymmdd, UTC) is
+ * required with the timings that count back from today (past-Nm, finished).
  */
 export const browse = query({
   args: {
     sort: sortValidator,
     order: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
     ...filterArgs,
+    todaySort: v.optional(v.number()),
     cursor: v.optional(v.union(v.string(), v.null())),
     pageSize: v.optional(v.number()),
   },
@@ -672,7 +685,7 @@ export const browse = query({
     const pageSize = Math.max(1, Math.min(PAGE_MAX, Math.floor(args.pageSize ?? PAGE_DEFAULT)));
     const { field } = SORT_INDEX[args.sort];
     const keyOf = (row: StatsRow | Entry): Cursor => ({ v: row[field], id: row.publicId });
-    const test = matcher(args, todaySortKey());
+    const test = matcher(args, args.todaySort);
 
     if (test) {
       // Filters pick the set from the packs (the cost is in the header

@@ -521,6 +521,57 @@ describe("publisher.monthBoard", () => {
     expect(cards.map((card) => [card.releases, card.previousReleases])).toEqual([[1, 1]]);
   });
 
+  it("counts a digital Release of an old Vol. 1 as a backfill, not a new series", async () => {
+    const t = await board();
+    await t.run(async (ctx) => {
+      // Tokyopop: Vol. 1 in print in 2019, its digital Release this month.
+      const [tokyopop] = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "tokyopop"))
+        .take(1);
+      if (!tokyopop) throw new Error("fixture has Tokyopop");
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 900,
+        title: "Backfilled",
+        altTitles: [],
+        searchText: "Backfilled",
+      });
+      const volumeId = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 901,
+        seriesId,
+        position: 1,
+        label: "1",
+      });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 902,
+        publisherId: tokyopop._id,
+      });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+      for (const [format, sort] of [
+        ["physical", 20190305],
+        ["digital", 20260910],
+      ] as const) {
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format,
+          language: "en",
+          pubDate: { year: Math.floor(sort / 10000), month: Math.floor(sort / 100) % 100, day: sort % 100, sort },
+          publisherId: tokyopop._id,
+          seriesIds: [seriesId],
+        });
+      }
+    });
+    const { board: cards } = await t.query(api.publisher.monthBoard, { year: 2026, month: 9 });
+    const card = cards.find((c) => c.publisher.slug === "tokyopop");
+    expect(card).toMatchObject({ releases: 1, series: 1, newSeries: 0 });
+    // Seven Seas' debut (print and digital the same month) still counts.
+    expect(cards.find((c) => c.publisher.slug === "seven-seas")?.newSeries).toBe(1);
+  });
+
   it("reads a malformed month as an empty board, directory intact", async () => {
     const t = await board();
     const result = await t.query(api.publisher.monthBoard, { year: 2026, month: 13 });

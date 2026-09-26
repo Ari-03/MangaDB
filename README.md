@@ -95,7 +95,9 @@ in memory with an exact keyset cursor and total (a filtered page reads about
 2 MB in 64 documents; the header of `convex/seriesBrowse.ts` has the numbers
 and the limits). After deploying a change to either table's shape, run the
 rebuild so the packs follow; until packs exist, filtered views fall back to
-reading every row. Popularity is the signals the catalog has — Series
+reading every row. The timing filters count back from today's UTC date,
+which the server function passes as `todaySort`, so a cached query never
+serves an earlier day's cutoff. Popularity is the signals the catalog has — Series
 Follows and distinct collectors — not ratings, which v1 does not model. The
 Source Status filter appears once any importer supplies a status.
 
@@ -259,10 +261,14 @@ The cross-publisher overview: what every Publisher is releasing in one month.
   listed too.
 - **Query shape** (`convex/publisher.ts` `monthBoard`): the browser's month
   window (`by_date`, `WINDOW_CAP`) plus the previous month's for the delta,
-  grouped by Publisher in memory under the browser's visibility rules; cover
-  rows come from `joinBrowseRows`. A "new series" is a Series whose Volume 1
-  publishes this month in a standard Edition (Edition Line repackagings such
-  as a Deluxe Vol. 1 don't count). No denormalized tables.
+  read in parallel and grouped by Publisher in memory under the browser's
+  visibility rules, with one memo cache (`browseCache`) for every lookup.
+  Cover candidates are ranked first and only the five picks per card are
+  joined through `joinBrowseRows`. A "new series" is a Series whose Volume 1
+  publishes this month in a standard Edition that has no Release dated
+  earlier (Edition Line repackagings such as a Deluxe Vol. 1 don't count,
+  nor does this month's digital Release of a Vol. 1 in print since 2019).
+  No denormalized tables.
 
 ## Search
 
@@ -274,8 +280,12 @@ in the site header. It is deliberately narrow:
   so "Toukyou Kushu" finds Tokyo Ghoul. Results link the canonical
   `/series/{id}/{slug}` pages; hidden and merged records never appear (a
   merged Series is findable through its survivor).
-- **Publishers** resolve by case-insensitive name match over the small
-  publisher list, linking their `/publisher/{slug}` Spotlight pages.
+- **Publishers** match when their name contains the query, case,
+  punctuation, and "&"/"and" folded (`matchNames`), over the small publisher
+  list, linking their `/publisher/{slug}` Spotlight pages. "seas", "seven
+  seas", and "Seven Seas Entertainment" all find Seven Seas; a merged
+  Publisher's old name finds its survivor ("Kodansha Comics" → Kodansha).
+  The page and the typeahead share this matcher.
 - **Results follow the box**: series hits containing every typed word come
   first (an exact or opening title match leads, so "attack on" puts Attack on
   Titan ahead of its spinoffs), each with its jacket from the Series library
@@ -285,13 +295,14 @@ in the site header. It is deliberately narrow:
 - **Typeahead**: with the reactive Convex client, the header box (desktop
   and mobile drawer) is an ARIA combobox (`src/lib/searchSuggest.tsx`) fed by
   `catalog.suggest` 180ms after typing stops: up to six Series (cover, the alt
-  title that matched, volume count, publisher), Publishers whose name starts
-  with the query (a `by_slug` prefix range), and a "See all results" row.
+  title that matched, volume count, publisher), up to three Publishers
+  matched as on the page, and a "See all results" row.
   ArrowUp/Down highlight, Enter opens the highlight (or submits to `/search`
   as before, ISBN redirect included), Escape or leaving the box closes it.
   Without Convex, or before hydration, it is the plain GET form.
-- **Typo help**: when no hit contains every typed word, both the dropdown
-  and the page offer "Did you mean" titles — "berzerk" → Berserk, "one
+- **Typo help**: when no Series hit contains every typed word and no
+  Publisher name contains the query, both the dropdown and the page offer
+  "Did you mean" titles — "berzerk" → Berserk, "one
   peice" → One Piece, "chainsawman" → Chainsaw Man. The search index has no
   fuzzy mode, so `catalog.ts` probes it with the 3- and 4-letter openings of
   the two longest query words (at most four probes of 8 documents), pools
@@ -299,8 +310,10 @@ in the site header. It is deliberately narrow:
   (`convex/lib/searchMatch.ts`): edit distance with adjacent swaps, spaces
   and punctuation ignored, against each title and alt title (or its opening),
   one edit allowed per four letters. A typo in the first three letters of a
-  one-word query is out of reach. A suggestion call reads about 30 documents
-  (under 70 worst case).
+  one-word query is out of reach. A query naming a Publisher ("Seven Seas")
+  gets no typo help and no loose Series matches in the dropdown. A
+  suggestion call reads about 100 documents, most of them the publisher
+  list (under 140 worst case).
 - **ISBNs**: a query recognized as a valid ISBN-10/13 (`src/lib/isbn.ts` —
   checksum-verified, separators ignored) never runs a text search; the loader
   302s through `/isbn/{isbn}`, the route that owns resolution to the owning

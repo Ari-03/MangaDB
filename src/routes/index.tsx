@@ -528,7 +528,6 @@ function hasArt(release: BrowseRelease): boolean {
   return release.coverUrl !== null || release.coverIsbn !== null;
 }
 
-/** Thousands separators without a locale, so SSR and hydration agree. */
 /**
  * A headline count rounded down to two significant figures, as a floor:
  * 5,488 → "5,400+", 28,155 → "28,000+", 65 → "65+". The catalog grows daily,
@@ -540,6 +539,7 @@ function roundedCount(value: number): string {
   return `${groupDigits(Math.floor(value / step) * step)}+`;
 }
 
+/** Thousands separators without a locale, so SSR and hydration agree. */
 function groupDigits(value: number): string {
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }

@@ -10,9 +10,9 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCover } from "./lib/covers";
 import { groupEditions } from "./lib/editionGroups";
-import { publisherNameKey } from "./lib/publishers";
 import {
   matchesAllWords,
+  matchNames,
   probePrefixes,
   rankNearMisses,
   sortByTitleMatch,
@@ -162,8 +162,8 @@ export const recentSeries = query({
 
 export const SEARCH_LIMIT = 20;
 // The publisher list is deliberately small (spec §8: "publishers via the
-// small list" — a few dozen English-market publishers), so a capped scan
-// replaces any index; the cap only guards against pathology.
+// small list" — a few dozen English-market publishers, 65 active today), so
+// a capped scan replaces any index; the cap only guards against pathology.
 export const PUBLISHER_SCAN_CAP = 500;
 /** Series rows in the header's live suggestions. */
 export const SUGGEST_LIMIT = 6;
@@ -220,6 +220,32 @@ async function nearMisses(ctx: QueryCtx, query: string, seen: ReadonlyArray<Doc<
   return rankNearMisses(query, [...pool.values()], NEAR_MISS_LIMIT);
 }
 
+/**
+ * Active Publishers whose name contains the query (`matchNames`: exact, then
+ * opening, then anywhere in the name), read off the small publisher list —
+ * one capped scan of PUBLISHER_SCAN_CAP rows. A merged row's old name finds
+ * its survivor, so "Kodansha Comics" finds Kodansha. Shared by search and
+ * suggest, so the dropdown and the page agree.
+ */
+async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
+  const docs = await ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP);
+  const byId = new Map(docs.map((doc) => [doc._id, doc]));
+  const hits = new Map<Id<"publishers">, { name: string; slug: string }>();
+  for (const doc of matchNames(query, docs)) {
+    // Follow merges within the list; the visited set guards a cycle.
+    let target: Doc<"publishers"> | undefined = doc;
+    const visited = new Set<Id<"publishers">>();
+    while (target?.status === "merged" && target.mergedIntoId && !visited.has(target._id)) {
+      visited.add(target._id);
+      target = byId.get(target.mergedIntoId);
+    }
+    if (target?.status === "active") {
+      hits.set(target._id, { name: target.name, slug: target.slug });
+    }
+  }
+  return [...hits.values()].slice(0, limit);
+}
+
 /** The alt title a hit matched through, or null when its title matched. */
 function matchedAlt(query: string, doc: Doc<"series">): string | null {
   if (matchesAllWords(query, doc.title)) return null;
@@ -261,9 +287,10 @@ function nearMissCards(ctx: QueryCtx, misses: Awaited<ReturnType<typeof nearMiss
  * v1 search (spec §8): Series only, matched through the title + alt-titles
  * search index (`searchText` is both concatenated on write), hits containing
  * every typed word first, each with its jacket from the Series library;
- * Publishers resolved by case-insensitive name match over the small
- * publisher list. When no hit contains the whole query, `didYouMean` offers
- * near-miss titles ("berzerk" → Berserk). No Volume or Bundle search in v1.
+ * Publishers whose name contains the query (`publisherHits`). When neither
+ * a Series hit nor a Publisher contains the whole query, `didYouMean` offers
+ * near-miss titles ("berzerk" → Berserk); "Seven Seas" names a Publisher, so
+ * it gets no "Seven Seeds?". No Volume or Bundle search in v1.
  * ISBN inputs never reach this query — the /search route recognizes them
  * first and redirects through `/isbn/{isbn}`.
  *
@@ -280,31 +307,21 @@ export const search = query({
     }
 
     // Overfetch so post-filtering hidden/merged docs can't starve the page.
-    const hits = await titleHits(ctx, trimmed, SEARCH_LIMIT * 2);
+    const [hits, publishers] = await Promise.all([
+      titleHits(ctx, trimmed, SEARCH_LIMIT * 2),
+      publisherHits(ctx, trimmed, SEARCH_LIMIT),
+    ]);
     const wholeIds = new Set(hits.whole.map((doc) => doc._id));
     const ranked = [
       ...hits.whole,
       ...hits.active.filter((doc) => !wholeIds.has(doc._id)),
     ].slice(0, SEARCH_LIMIT);
-    const series = await Promise.all(
-      ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
-    );
-    const didYouMean =
-      hits.whole.length === 0
-        ? await nearMissCards(ctx, await nearMisses(ctx, trimmed, hits.active))
-        : [];
-
-    const needle = trimmed.toLowerCase();
-    const publisherDocs = await ctx.db
-      .query("publishers")
-      .take(PUBLISHER_SCAN_CAP);
-    const publishers = publisherDocs
-      .filter(
-        (doc) =>
-          doc.status === "active" && doc.name.toLowerCase().includes(needle),
-      )
-      .slice(0, SEARCH_LIMIT)
-      .map((doc) => ({ name: doc.name, slug: doc.slug }));
+    const [series, didYouMean] = await Promise.all([
+      Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
+      hits.whole.length === 0 && publishers.length === 0
+        ? nearMisses(ctx, trimmed, hits.active).then((misses) => nearMissCards(ctx, misses))
+        : [],
+    ]);
 
     return { series, publishers, didYouMean };
   },
@@ -313,14 +330,16 @@ export const search = query({
 /**
  * Live suggestions for the header search box, run per (debounced) keystroke
  * by the reactive client, so every read is bounded: SUGGEST_TAKE search-index
- * hits, a `seriesStats` row per shown Series, publishers by slug prefix off
- * the `by_slug` index (so "seven" finds Seven Seas without scanning the
- * list), and — only when no hit contains every typed word — up to four
- * typo-help probes of PROBE_TAKE documents each: about 30 documents for a
- * typical query, under 70 in the worst case.
+ * hits, a `seriesStats` row per shown Series, the publisher list matched
+ * exactly as search matches it (`publisherHits`, ~70 rows today, at most
+ * PUBLISHER_SCAN_CAP), and — only when neither a Series hit nor a Publisher
+ * contains every typed word — up to four typo-help probes of PROBE_TAKE
+ * documents each: about 100 documents for a typical query, under 140 in the
+ * worst case with today's publisher list.
  *
  * Series that share only some words with the query are noise next to a
- * "did you mean", so they fill the list only when there is nothing better.
+ * "did you mean" or a Publisher hit, so they fill the list only when there
+ * is nothing better.
  */
 export const suggest = query({
   args: { query: v.string() },
@@ -328,30 +347,26 @@ export const suggest = query({
     const trimmed = rawQuery.trim();
     if (trimmed === "") return { series: [], didYouMean: [], publishers: [] };
 
-    const hits = await titleHits(ctx, trimmed, SUGGEST_TAKE);
-    const misses = hits.whole.length === 0 ? await nearMisses(ctx, trimmed, hits.active) : [];
-    const shown = hits.whole.length > 0 || misses.length > 0 ? hits.whole : hits.active;
-    const series = await Promise.all(
-      shown
-        .slice(0, SUGGEST_LIMIT)
-        .map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
-    );
+    const [hits, publishers] = await Promise.all([
+      titleHits(ctx, trimmed, SUGGEST_TAKE),
+      publisherHits(ctx, trimmed, SUGGEST_PUBLISHERS),
+    ]);
+    const misses =
+      hits.whole.length === 0 && publishers.length === 0
+        ? await nearMisses(ctx, trimmed, hits.active)
+        : [];
+    const better = hits.whole.length > 0 || misses.length > 0 || publishers.length > 0;
+    const shown = better ? hits.whole : hits.active;
+    const [series, didYouMean] = await Promise.all([
+      Promise.all(
+        shown
+          .slice(0, SUGGEST_LIMIT)
+          .map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
+      ),
+      nearMissCards(ctx, misses),
+    ]);
 
-    const slugPrefix = publisherNameKey(trimmed).replace(/ /g, "-");
-    const publisherDocs = slugPrefix
-      ? await ctx.db
-          .query("publishers")
-          .withIndex("by_slug", (q) =>
-            q.gte("slug", slugPrefix).lt("slug", `${slugPrefix}\uffff`),
-          )
-          .take(SUGGEST_PUBLISHERS * 2)
-      : [];
-    const publishers = publisherDocs
-      .filter((doc) => doc.status === "active")
-      .slice(0, SUGGEST_PUBLISHERS)
-      .map((doc) => ({ name: doc.name, slug: doc.slug }));
-
-    return { series, didYouMean: await nearMissCards(ctx, misses), publishers };
+    return { series, didYouMean, publishers };
   },
 });
 

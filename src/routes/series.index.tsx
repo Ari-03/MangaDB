@@ -10,6 +10,7 @@ import {
   SITE_NAME,
 } from "~/lib/seo";
 import { slugParams } from "~/lib/slug";
+import { useUrlDraft } from "~/lib/urlDraft";
 import {
   fetchSeriesBrowse,
   fetchSeriesFacets,
@@ -292,42 +293,34 @@ function SeriesLibraryPage() {
 /**
  * The filter panel's working copy of the view. A control changes it at once
  * and navigates in place (replace, no scroll jump); title search navigates
- * after a pause in typing. A view the page did not ask for (a removed chip,
- * Clear all, back/forward) replaces the draft, while the URL catching up with
- * the draft never does, so results arriving never reset what is being typed.
- * The router drops a superseded navigation's results, so a slow response for
- * an older query never replaces a newer one.
+ * after a pause in typing. Only a view the page did not ask for (a removed
+ * chip, Clear all, back/forward) replaces the draft and drops a pending
+ * search; views it asked for landing, in any order, never reset what is
+ * being typed (`useUrlDraft`). The router drops a superseded navigation's
+ * results, so a slow response for an older query never replaces a newer one.
  */
 function useLibraryDraft(search: LibrarySearch) {
   const navigate = Route.useNavigate();
-  const [draft, setDraft] = useState(search);
-  const requested = useRef(viewKey(search));
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  const key = viewKey(search);
-  useEffect(() => {
-    if (key === requested.current) return;
-    clearTimeout(timer.current);
-    requested.current = key;
-    setDraft(search);
-  }, [key, search]);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  const cancelPending = useCallback(() => clearTimeout(timer.current), []);
+  const { draft, setDraft, request } = useUrlDraft(search, viewKey(search), cancelPending);
+  useEffect(() => cancelPending, [cancelPending]);
 
   const update = useCallback(
     (patch: Partial<LibrarySearch>, delayMs = 0) => {
       const next = { ...draft, ...patch };
       setDraft(next);
-      clearTimeout(timer.current);
+      cancelPending();
       const go = () => {
         const view = validateLibrarySearch(next);
-        if (viewKey(view) === requested.current) return;
-        requested.current = viewKey(view);
-        void navigate({ search: view, replace: true, resetScroll: false });
+        if (request(viewKey(view))) {
+          void navigate({ search: view, replace: true, resetScroll: false });
+        }
       };
       if (delayMs > 0) timer.current = setTimeout(go, delayMs);
       else go();
     },
-    [draft, navigate],
+    [draft, setDraft, cancelPending, request, navigate],
   );
 
   return { draft, update };
@@ -733,8 +726,8 @@ function LibraryShelf({
   search: LibrarySearch;
   firstPage: SeriesBrowsePage;
 }) {
-  const viewKey = JSON.stringify(search);
-  const restored = loadedViews.get(viewKey);
+  const key = viewKey(search);
+  const restored = loadedViews.get(key);
   const [items, setItems] = useState(restored?.items ?? firstPage.items);
   const [cursor, setCursor] = useState(restored ? restored.cursor : firstPage.nextCursor);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
@@ -749,7 +742,7 @@ function LibraryShelf({
       const next = await fetchSeriesBrowse({ data: browseArgs(search, cursor) });
       if (!next) throw new Error("Convex is not configured");
       const merged = [...items, ...next.items];
-      loadedViews.set(viewKey, { items: merged, cursor: next.nextCursor });
+      loadedViews.set(key, { items: merged, cursor: next.nextCursor });
       setItems(merged);
       setCursor(next.nextCursor);
       setState("idle");
@@ -758,7 +751,7 @@ function LibraryShelf({
     } finally {
       loading.current = false;
     }
-  }, [cursor, items, search, viewKey]);
+  }, [cursor, items, search, key]);
 
   // Load the next page whenever the sentinel under the shelf comes near the
   // viewport; re-armed after each page so a short page keeps filling.
