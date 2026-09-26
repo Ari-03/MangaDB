@@ -64,7 +64,8 @@ function coverImage(url: string): Response {
   });
 }
 
-function stubSite(volumes: FixtureVolume[]) {
+/** The stubbed kodansha.us; `art` answers the image CDN. */
+function stubSite(volumes: FixtureVolume[], art: (url: string) => Response = coverImage) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
     const url = typeof input === "object" && "url" in input ? input.url : String(input);
     requested.push(url);
@@ -78,7 +79,7 @@ function stubSite(volumes: FixtureVolume[]) {
         headers: { "content-type": "application/json" },
       });
     }
-    if (url.includes("azuki.co")) return coverImage(url);
+    if (url.includes("azuki.co")) return art(url);
     return new Response("not found", { status: 404 });
   });
 }
@@ -504,7 +505,7 @@ describe("kodansha covers — stored once, kept current", () => {
     const again = await upload();
     expect(await attach(print!._id, again, print!.coverImage!.sourceUrl!)).toEqual({
       attached: false,
-      storageId: old,
+      held: old,
     });
     expect(await exists(again)).toBe(false);
 
@@ -512,7 +513,7 @@ describe("kodansha covers — stored once, kept current", () => {
     const fresh = await upload();
     expect(await attach(print!._id, fresh, "https://img.example/new.webp")).toEqual({
       attached: true,
-      storageId: fresh,
+      held: fresh,
     });
     expect(await exists(old)).toBe(true);
 
@@ -521,30 +522,120 @@ describe("kodansha covers — stored once, kept current", () => {
     const duplicate = await upload();
     expect(await attach(digital!._id, duplicate, "https://img.example/new.webp")).toEqual({
       attached: true,
-      storageId: fresh,
+      held: fresh,
     });
     expect(await exists(duplicate)).toBe(false);
     expect(await exists(old)).toBe(false);
     expect(await exists(fresh)).toBe(true);
+
+    // A hidden Release offered the very blob it alone holds keeps it; a
+    // Release that vanished leaves the blob alone too.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(digital!._id, { status: "hidden" });
+      await ctx.db.patch(print!._id, { coverImage: undefined });
+    });
+    expect(await attach(digital!._id, fresh, "https://img.example/other.webp")).toEqual({
+      attached: false,
+      held: null,
+    });
+    expect(await exists(fresh)).toBe(true);
+    await t.run((ctx) => ctx.db.delete(digital!._id));
+    expect(await attach(digital!._id, fresh, "https://img.example/other.webp")).toEqual({
+      attached: false,
+      held: null,
+    });
+    expect(await exists(fresh)).toBe(true);
   });
 
-  it("never stores a placeholder image", async () => {
+  it("trusts the bytes when the image comes without a usable content type", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    stubSite([{ ...IRUMA, image: "https://production.image.azuki.co/tiny/800.webp" }]);
+    const jpeg = new Uint8Array(MIN_COVER_BYTES + 1).fill(0xff);
+    jpeg[1] = 0xd8; // FF D8 FF: a JPEG, served with no Content-Type at all
+    const vol22: FixtureVolume = { ...IRUMA, volume: 22 };
+    stubSite([IRUMA, vol22], (url) =>
+      url.includes("-22/")
+        ? new Response("<html>not an image</html>", { headers: { "content-type": "text/html" } })
+        : new Response(jpeg),
+    );
+    expect(await sync(t)).toMatchObject({ errorCount: 1 });
+    await t.run(async (ctx) => {
+      // Volume 21's jacket is stored under the sniffed type; 22's page is a placeholder.
+      const files = await ctx.db.system.query("_storage").collect();
+      expect(files).toHaveLength(1);
+      expect((await ctx.storage.get(files[0]!._id))?.type).toBe("image/jpeg");
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.filter((r) => r.coverImage?.storageId === files[0]!._id)).toHaveLength(2);
+      expect(releases.filter((r) => r.coverImage && !r.coverImage.storageId)).toHaveLength(2);
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.errors).toEqual([expect.stringContaining("placeholder, not stored (text/html")]);
+    });
+  });
+
+  it("shares a blob within an Edition only, so one Edition's new art cannot strand another's", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // Two volumes (two Editions) whose calendar items name the same jacket.
+    const shared = "https://production.image.azuki.co/coming-soon/800.webp";
+    const vol22: FixtureVolume = { ...IRUMA, volume: 22, image: shared };
+    stubSite([{ ...IRUMA, image: shared }, vol22]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    // One download per Edition: attachCover only knows about sharing within one.
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([shared, shared]);
+    const blobsByEdition = () =>
+      t.run(async (ctx) => {
+        const byEdition = new Map<Id<"editions">, Set<Id<"_storage">>>();
+        for (const r of await ctx.db.query("releases").collect()) {
+          byEdition.set(
+            r.editionId,
+            (byEdition.get(r.editionId) ?? new Set()).add(r.coverImage!.storageId),
+          );
+        }
+        return [...byEdition.values()].map((ids) => [...ids]);
+      });
+    const [a, b] = await blobsByEdition();
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    expect(a![0]).not.toBe(b![0]);
+
+    // Volume 21's real jacket arrives; volume 22's Releases still show a live blob.
+    stubSite([{ ...IRUMA, image: "https://production.image.azuki.co/iruma-21-real/800.webp" }, vol22]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query("releases").collect()) {
+        expect(await ctx.storage.getUrl(r.coverImage!.storageId)).not.toBeNull();
+      }
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(2);
+    });
+  });
+
+  it("records a placeholder image on the Release instead of storing or refetching it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const tiny = "https://production.image.azuki.co/tiny/800.webp";
+    stubSite([{ ...IRUMA, image: tiny }]);
     const result = await sync(t);
-    expect(result).toMatchObject({ recordsChanged: 2 });
+    expect(result).toMatchObject({ recordsChanged: 2, errorCount: 1 });
     expect((result as { failed?: boolean }).failed).toBeUndefined();
     await t.run(async (ctx) => {
       const releases = await ctx.db.query("releases").collect();
-      expect(releases.every((r) => r.coverImage === undefined)).toBe(true);
+      // Both formats remember the URL, with nothing to show for it.
+      expect(releases.map((r) => r.coverImage)).toEqual([
+        { sourceUrl: tiny, attribution: expect.stringContaining("Kodansha") },
+        { sourceUrl: tiny, attribution: expect.stringContaining("Kodansha") },
+      ]);
       expect(await ctx.db.system.query("_storage").collect()).toHaveLength(0);
       const [run] = await ctx.db.query("importRuns").collect();
       expect(run).toMatchObject({ status: "succeeded" });
-      // One notice per format; neither is a failure.
-      expect(run!.errors).toHaveLength(2);
-      expect(run!.errors.every((e) => e.includes("placeholder, not stored"))).toBe(true);
+      // One notice for the Edition, not a failure.
+      expect(run!.errors).toEqual([
+        expect.stringContaining("placeholder, not stored (image/webp, 3 bytes)"),
+      ]);
     });
+    // Tomorrow: nothing to fetch and nothing to report until the URL changes.
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0, errorCount: 0 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([]);
   });
 });
 
@@ -831,6 +922,55 @@ describe("kodansha.backlistSync — the crawl", () => {
         isbn13: "9798898303303",
         title: "Blue Lock Volume 40",
       });
+    });
+  });
+
+  it("the calendar stores the volume page's art, never its own size of the jacket", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], {
+      ...BACKLIST_PAGES,
+      "series/blue-lock/": seriesPage("blue-lock", "Blue Lock", ["volume-1"]),
+    });
+    await backlist(t);
+    const page = "https://production.image.azuki.co/a5dd87dd-6148-4cf3-917b-2f54a576854c/800.webp";
+    const calendar = page.replace("800.webp", "600.webp");
+    const volume1: FixtureVolume = {
+      series: "Blue Lock",
+      seriesSlug: "blue-lock",
+      volume: 1,
+      date: "2022-06-21",
+      formats: ["digital", "print"],
+      image: calendar,
+    };
+    const covers = () =>
+      t.run(async (ctx) => (await ctx.db.query("releases").collect()).map((r) => r.coverImage!));
+
+    // Art already from the page: the calendar's other size fetches nothing.
+    vi.unstubAllGlobals();
+    requested.length = 0;
+    stubSite([volume1]);
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(requested.some((u) => u.includes("azuki.co"))).toBe(false);
+    expect((await covers()).every((c) => c.sourceUrl === page)).toBe(true);
+
+    // Art from the calendar (stored before the crawl carried covers): the
+    // page's URL is what the daily feed fetches and attaches, once for both
+    // formats, rather than re-downloading its own URL to be refused.
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query("releases").collect()) {
+        await ctx.db.patch(r._id, { coverImage: { ...r.coverImage!, sourceUrl: calendar } });
+      }
+    });
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([page]);
+    const after = await covers();
+    expect(after).toHaveLength(2);
+    expect(after.every((c) => c.sourceUrl === page)).toBe(true);
+    expect(after[0]!.storageId).toBe(after[1]!.storageId);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(1);
     });
   });
 

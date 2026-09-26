@@ -469,19 +469,26 @@ describe("sevenSeas.sync — covers", () => {
     });
   });
 
-  it("skips an SVG placeholder without storing it", async () => {
+  it("records an SVG placeholder on the Release instead of storing or refetching it", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);
     stubSite([{ ...ALPHA_1, coverFile: "no-cover.svg" }]);
     const result = await sync(t);
     expect(result).toMatchObject({ recordsChanged: 1, errorCount: 1 });
     expect((result as { failed?: boolean }).failed).toBeUndefined();
-    expect(await cover(t)).toBeNull();
+    expect(await cover(t)).toEqual({
+      sourceUrl: expect.stringContaining("no-cover.svg"),
+      attribution: expect.any(String),
+    });
     await t.run(async (ctx) => {
       expect(await ctx.db.system.query("_storage").collect()).toHaveLength(0);
       const run = (await ctx.db.query("importRuns").collect())[0]!;
       expect(run.errors[0]).toContain("placeholder, not stored (image/svg+xml");
     });
+    // A forced re-read fetches nothing for it until the URL changes.
+    imageRequests.length = 0;
+    expect(await sync(t, { force: true })).toMatchObject({ errorCount: 0 });
+    expect(imageRequests).toEqual([]);
   });
 });
 

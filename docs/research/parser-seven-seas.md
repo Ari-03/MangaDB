@@ -4,7 +4,7 @@ Checked 2026-09-26. Scope: `convex/sevenSeas.ts`, `convex/lib/sevenSeas.ts`, the
 
 ## What works, and what remains unverified
 
-The adapter has a complete offline import path. It discovers WordPress book records, checks `modified_gmt`, fetches detail HTML, stores Source Observations, and passes facts through matching and reconciliation. Its tests cover creation, update history, Human Overrides, review gates, ISBN matches, covers, and withdrawal. A re-read book whose cover URL changed gets the new image and the old stored file is deleted; an SVG or tiny placeholder is never stored.
+The adapter has a complete offline import path. It discovers WordPress book records, checks `modified_gmt`, fetches detail HTML, stores Source Observations, and passes facts through matching and reconciliation. Its tests cover creation, update history, Human Overrides, review gates, ISBN matches, covers, and withdrawal. A re-read book whose cover URL changed gets the new image and the old stored file is deleted; an SVG or tiny placeholder is recorded on the Release, never stored, and not fetched again until its URL changes.
 
 Live operation could not be established from this environment. A read-only GET to [the first-party book endpoint](https://sevenseasentertainment.com/wp-json/wp/v2/books?per_page=3&orderby=modified&order=desc) returned HTTP 403 with `cf-mitigated: challenge`. The web tool also returned HTTP 403 for [Gilded Seven Vol. 1](https://sevenseasentertainment.com/books/gilded-seven-vol-1/) and [the digital catalog](https://sevenseasentertainment.com/digital/). No challenge bypass was attempted. This demonstrates an access blocker from this environment, not an outage for all visitors or proof that production Convex requests fail.
 

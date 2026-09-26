@@ -30,7 +30,9 @@ const money = v.object({
 });
 
 const cover = v.object({
-  storageId: v.id("_storage"),
+  // Absent when the source's art at `sourceUrl` was a placeholder: the URL is
+  // remembered so it is not fetched again until it changes (lib/covers.ts).
+  storageId: v.optional(v.id("_storage")),
   sourceUrl: v.optional(v.string()),
   attribution: v.optional(v.string()),
 });

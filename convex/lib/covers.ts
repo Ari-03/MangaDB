@@ -25,52 +25,97 @@ export async function coverUrl(
 }
 
 /**
- * Whether a source's art at `coverUrl` should be (re)stored on a Release:
- * none on file yet, or the publisher now serves it from a different URL.
+ * Art an apply mutation asks its action to store: the Release, its Edition,
+ * and the URL the source names for it. The mutation decides the URL (a
+ * Kodansha calendar item defers to the volume page's) so the action never
+ * downloads one the Release already has.
  */
-export function coverOutdated(
-  coverImage: Doc<"releases">["coverImage"],
+export type CoverRequest = {
+  releaseId: Id<"releases">;
+  editionId: Id<"editions">;
+  sourceUrl: string;
+};
+
+/**
+ * The cover to store on `release` from `coverUrl`, or undefined when there
+ * is none to fetch or the Release's cover already came from that URL (art,
+ * or a placeholder it recorded).
+ */
+export function coverRequest(
+  release: Pick<Doc<"releases">, "_id" | "editionId" | "coverImage">,
   coverUrl: string | undefined,
-): boolean {
-  return coverUrl !== undefined && coverImage?.sourceUrl !== coverUrl;
+): CoverRequest | undefined {
+  if (coverUrl === undefined || release.coverImage?.sourceUrl === coverUrl) return undefined;
+  return { releaseId: release._id, editionId: release.editionId, sourceUrl: coverUrl };
 }
 
-/** Blobs one action invocation stored, by source URL, so a second format reuses the first. */
-export type StoredCovers = Map<string, Id<"_storage">>;
+/**
+ * What one action invocation found at each cover, by `coverKey`: the blob it
+ * stored, or "placeholder", so a second format of the same Edition neither
+ * downloads nor reports it again. Keyed per Edition, not per URL alone:
+ * `imports.attachCover` only knows about sharing within an Edition, so a
+ * blob must never be handed to another one.
+ */
+export type StoredCovers = Map<string, Id<"_storage"> | "placeholder">;
+
+export function coverKey(cover: Pick<CoverRequest, "editionId" | "sourceUrl">): string {
+  return `${cover.editionId} ${cover.sourceUrl}`;
+}
+
+/** The raster format a jacket comes in, from the file's leading bytes; null for anything else. */
+function rasterType(bytes: Uint8Array): string | null {
+  const ascii = (offset: number, text: string) =>
+    [...text].every((ch, i) => bytes[offset + i] === ch.charCodeAt(0));
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes[0] === 0x89 && ascii(1, "PNG")) return "image/png";
+  if (ascii(0, "GIF8")) return "image/gif";
+  if (ascii(0, "RIFF") && ascii(8, "WEBP")) return "image/webp";
+  return null;
+}
 
 /**
  * Download publisher art (Kodansha, Seven Seas) into file storage and attach
  * it to a Release through `imports.attachCover`, which keeps one blob per
- * Edition and URL. A URL this invocation already stored is not fetched
- * again: callers charging downloads to a budget check `stored.has(url)`
- * first. Throws on a failed download or on a placeholder (not a raster
- * image, or under MIN_COVER_BYTES), which then never reaches storage.
+ * Edition and URL. A cover this invocation already handled for the Edition
+ * is not fetched again: callers charging downloads to a budget check
+ * `stored.has(coverKey(cover))` first. A placeholder (SVG, under
+ * MIN_COVER_BYTES, or not an image by header or, failing a usable header,
+ * by its bytes) is recorded on the Release without storing anything, and
+ * returns a notice the first time this invocation meets it; art is stored
+ * and returns null. Throws only when the download itself fails.
  */
 export async function storeCover(
   ctx: ActionCtx,
   stored: StoredCovers,
-  args: { releaseId: Id<"releases">; sourceUrl: string; attribution: string; delayMs: number },
-): Promise<void> {
-  let storageId = stored.get(args.sourceUrl);
-  if (storageId === undefined) {
-    const blob = await (await politeFetch(args.sourceUrl, args.delayMs)).blob();
-    const type = blob.type.split(";")[0]!.trim().toLowerCase();
-    if (!type.startsWith("image/") || type === "image/svg+xml" || blob.size < MIN_COVER_BYTES) {
-      throw new Error(`placeholder, not stored (${type || "no type"}, ${blob.size} bytes)`);
+  args: CoverRequest & { attribution: string; delayMs: number },
+): Promise<string | null> {
+  const key = coverKey(args);
+  let held = stored.get(key);
+  let notice: string | null = null;
+  if (held === undefined) {
+    const res = await politeFetch(args.sourceUrl, args.delayMs);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const header = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+    const type = header.startsWith("image/") ? header : rasterType(bytes);
+    if (type === null || type === "image/svg+xml" || bytes.length < MIN_COVER_BYTES) {
+      notice = `placeholder, not stored (${type ?? (header || "no type")}, ${bytes.length} bytes)`;
+      held = "placeholder";
+    } else {
+      held = await ctx.storage.store(new Blob([bytes], { type }));
     }
-    storageId = await ctx.storage.store(blob);
   }
-  const result: { storageId: Id<"_storage"> | null } = await ctx.runMutation(
+  const result: { held: Id<"_storage"> | "placeholder" | null } = await ctx.runMutation(
     internal.imports.attachCover,
     {
       releaseId: args.releaseId,
-      storageId,
+      storageId: held === "placeholder" ? undefined : held,
       sourceUrl: args.sourceUrl,
       attribution: args.attribution,
     },
   );
-  if (result.storageId) stored.set(args.sourceUrl, result.storageId);
-  else stored.delete(args.sourceUrl);
+  if (result.held === null) stored.delete(key);
+  else stored.set(key, result.held);
+  return notice;
 }
 
 /**

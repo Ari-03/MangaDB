@@ -57,7 +57,9 @@ already published, earliest Volume, standard run before an Edition Line. The
 few stored covers (Kodansha and Seven Seas imports) win where they exist, and
 `convex/lib/covers.ts` hides the blank SVG some importers once stored. That
 publisher art is stored once per Edition and image URL, shared by print and
-digital, and refreshed when the publisher's image URL changes.
+digital, and refreshed when the publisher's image URL changes. A placeholder
+(an SVG, a tiny file, or not an image at all) is recorded on the Release
+instead, and not fetched again until its URL changes.
 
 Coverage, measured September 2026 on a 627-ISBN sample stratified by
 publisher × format × date (weighted to the 17,169 active Releases with an

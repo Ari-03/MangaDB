@@ -28,7 +28,8 @@
 //
 // Both feeds store Kodansha's art (lib/covers.ts `storeCover`): one blob per
 // Edition and image URL, shared by print and digital, and replaced when the
-// URL changes.
+// URL changes. A placeholder image is recorded on the Release instead, and
+// not fetched again until its URL changes.
 //
 // Both feeds share one scope gate: a novel, children's picture book, or
 // other non-manga volume (lib/kodansha.ts `outOfScope`) is observed and
@@ -47,7 +48,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
-import { coverOutdated, storeCover, type StoredCovers } from "./lib/covers";
+import { coverKey, coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { runToContinue } from "./lib/importRuns";
 import {
@@ -192,14 +193,14 @@ export const sync = internalAction({
           if (result.status === "needsReview") {
             errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
           }
-          if (result.coverNeeded && result.releaseId && snapshot.coverUrl) {
+          if (result.cover) {
             try {
-              await storeCover(ctx, covers, {
-                releaseId: result.releaseId,
-                sourceUrl: snapshot.coverUrl,
+              const notice = await storeCover(ctx, covers, {
+                ...result.cover,
                 attribution: source.attribution ?? PUBLISHER.name,
                 delayMs: delay,
               });
+              if (notice) errors.push(`cover ${recordId}: ${notice}`);
             } catch (e) {
               errors.push(`cover ${recordId}: ${errorMessage(e)}`);
             }
@@ -492,21 +493,20 @@ export const backlistSync = internalAction({
                   if (result.status === "needsReview") {
                     errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
                   }
-                  const coverUrl = snapshot.coverUrl;
-                  if (result.coverNeeded && result.releaseId && coverUrl) {
+                  if (result.cover) {
                     // A download counts against the budget; a failed one is a
                     // notice, retried when the volume is next applied.
-                    if (!covers.has(coverUrl)) {
+                    if (!covers.has(coverKey(result.cover))) {
                       fetchedHere++;
                       fetchedTotal++;
                     }
                     try {
-                      await storeCover(ctx, covers, {
-                        releaseId: result.releaseId,
-                        sourceUrl: coverUrl,
+                      const notice = await storeCover(ctx, covers, {
+                        ...result.cover,
                         attribution: source.attribution ?? PUBLISHER.name,
                         delayMs: delay,
                       });
+                      if (notice) errors.push(`cover ${recordId}: ${notice}`);
                     } catch (e) {
                       errors.push(`cover ${recordId}: ${errorMessage(e)}`);
                     }
@@ -591,7 +591,8 @@ type ApplyResult = {
     | "recordOnly";
   changed: boolean;
   releaseId?: Id<"releases">;
-  coverNeeded?: boolean;
+  /** Art the action should store on the Release (lib/covers.ts `storeCover`). */
+  cover?: CoverRequest;
   reason?: string;
 };
 
@@ -676,7 +677,8 @@ export const applyVolume = internalMutation({
         return { status: "recordOnly", changed: false };
       }
       // An unchanged snapshot is done unless its art moved to a new URL.
-      if (!changed && !coverOutdated(release.coverImage, snapshot.coverUrl)) {
+      const cover = coverRequest(release, snapshot.coverUrl);
+      if (!changed && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
       const seriesResult = await reconcileLinkedSeries(ctx, {
@@ -709,7 +711,7 @@ export const applyVolume = internalMutation({
               : "recordOnly",
         changed: result.changed || seriesResult.changed,
         releaseId: release._id,
-        coverNeeded: coverOutdated(release.coverImage, snapshot.coverUrl),
+        cover,
       };
     }
 
@@ -789,7 +791,7 @@ export const applyVolume = internalMutation({
         status: "linked",
         changed: true,
         releaseId: release._id,
-        coverNeeded: coverOutdated(release.coverImage, snapshot.coverUrl),
+        cover: coverRequest(release, snapshot.coverUrl),
       };
     }
 
@@ -902,11 +904,12 @@ export const applyVolume = internalMutation({
     if (creation.blocked !== undefined) {
       return { status: "recordOnly", changed: false, reason: "hidden series" };
     }
+    const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
     return {
       status: "created",
       changed: true,
       releaseId: creation.releaseId,
-      coverNeeded: snapshot.coverUrl !== undefined,
+      cover: created ? coverRequest(created, snapshot.coverUrl) : undefined,
     };
   },
 });

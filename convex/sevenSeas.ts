@@ -22,14 +22,15 @@
 //
 // Covers land in Convex file storage as {storageId, sourceUrl, attribution}
 // through the shared attach path (lib/covers.ts `storeCover`), and are
-// replaced when the book's cover URL changes.
+// replaced when the book's cover URL changes. A placeholder image is recorded
+// on the Release instead, and not fetched again until its URL changes.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
-import { coverOutdated, storeCover, type StoredCovers } from "./lib/covers";
+import { coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { rangeLabels } from "./lib/bookTitle";
 import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
@@ -203,14 +204,14 @@ export const sync = internalAction({
               errors.push(`review ${listing.slug}: ${result.reason ?? "conflict"}`);
             }
 
-            if (result.coverNeeded && result.releaseId && snapshot.coverUrl) {
+            if (result.cover) {
               try {
-                await storeCover(ctx, covers, {
-                  releaseId: result.releaseId,
-                  sourceUrl: snapshot.coverUrl,
+                const notice = await storeCover(ctx, covers, {
+                  ...result.cover,
                   attribution: source.attribution ?? PUBLISHER.name,
                   delayMs: delay,
                 });
+                if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
               } catch (e) {
                 errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
               }
@@ -310,7 +311,8 @@ type ApplyResult = {
     | "recordOnly";
   changed: boolean;
   releaseId?: Id<"releases">;
-  coverNeeded?: boolean;
+  /** Art the action should store on the Release (lib/covers.ts `storeCover`). */
+  cover?: CoverRequest;
   reason?: string;
 };
 
@@ -378,7 +380,8 @@ export const applyBook = internalMutation({
       // the Release lacks: descriptions predate their import, so the first
       // sync after that change must not skip already-linked books.
       const blurbPending = snapshot.description !== undefined && release.description === undefined;
-      if (!changed && !blurbPending && !coverOutdated(release.coverImage, snapshot.coverUrl)) {
+      const cover = coverRequest(release, snapshot.coverUrl);
+      if (!changed && !blurbPending && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
       const seriesResult = await reconcileSeries(ctx, snapshot, citation, now);
@@ -400,7 +403,7 @@ export const applyBook = internalMutation({
               : "recordOnly",
         changed: result.changed || seriesResult.changed,
         releaseId: release._id,
-        coverNeeded: coverOutdated(release.coverImage, snapshot.coverUrl),
+        cover,
       };
     }
 
@@ -486,7 +489,7 @@ export const applyBook = internalMutation({
         status: "linked",
         changed: true,
         releaseId: release._id,
-        coverNeeded: coverOutdated(release.coverImage, snapshot.coverUrl),
+        cover: coverRequest(release, snapshot.coverUrl),
       };
     }
 
@@ -622,11 +625,12 @@ export const applyBook = internalMutation({
       tagBootstrapUnreviewed: bootstrap && gates.length > 0,
       now,
     });
+    const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
     return {
       status: "created",
       changed: true,
       releaseId: creation.releaseId,
-      coverNeeded: snapshot.coverUrl !== undefined,
+      cover: created ? coverRequest(created, snapshot.coverUrl) : undefined,
     };
   },
 });

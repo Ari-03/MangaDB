@@ -26,7 +26,10 @@ const projections = {
     status: d.status,
     isbn13: d.isbn13 ?? null,
     publisherId: d.publisherId,
-    placeholderCover: d.coverImage?.sourceUrl?.includes("placeholder") ?? false,
+    placeholderCover:
+      d.coverImage !== undefined &&
+      (d.coverImage.storageId === undefined ||
+        (d.coverImage.sourceUrl?.includes("placeholder") ?? false)),
   }),
   editionLines: (d: Doc<"editionLines">) => ({ status: d.status }),
   releaseBundles: (d: Doc<"releaseBundles">) => ({ status: d.status }),
