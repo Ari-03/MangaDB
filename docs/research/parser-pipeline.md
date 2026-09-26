@@ -8,6 +8,8 @@ Adapters normalize source responses into snapshots. Observations retain source i
 
 The separation is useful: adapters can change without changing the catalog model. Snapshot history and source-authored revisions already provide evidence for diagnosing wrong records. The missing protections described below concern what happens between successful parsing and approved catalog data.
 
+Publisher blurbs travel the same path. Each adapter cleans its source text with `cleanBlurb` in `convex/lib/text.ts`, which strips tags, decodes entities, collapses whitespace, and caps the text at 4,000 characters. Empty text is dropped. The result goes into the snapshot and is offered as the Release `description` or Series `synopsis`. Both fields share the `description` authority category. Seven Seas, Kodansha, and Yen Press are authoritative, PRH is standard, and ANN and Open Library are weak. As a result, publisher text replaces a summary that filled the field first, while a Human Override queues. The creation path carries blurbs into new Releases, and into new Series for Kodansha and ANN. A series-link observation (`series:{key}`) stores the synopsis it was offered, and a feed with no series text keeps the stored one.
+
 Primary references: [domain definitions](../../CONTEXT.md), [matching](../../convex/lib/matching.ts), [pipeline](../../convex/lib/pipeline.ts), [reconciliation](../../convex/lib/reconcile.ts), [observations](../../convex/lib/observations.ts), [source registry](../../convex/importSources.ts), and [scheduler](../../convex/imports.ts). No ADR files were found during this audit.
 
 ## Repairs included in this work
@@ -54,11 +56,11 @@ Evidence: [proposal creation](../../convex/lib/proposalCreates.ts), `CREATABLE_T
 
 ### Field availability is narrower than the registry suggests
 
-Registry rows advertise creator authority, but the shared creation payload contains publication fields only. Publisher descriptions are intentionally observation-only in the Seven Seas parser. `sourceStatus`, although defined as an imported fact in the domain model, is not an authority category in `FIELD_CATEGORY`. The website cannot gain those fields merely because the parser fetched them.
+Registry rows advertise creator authority, but the shared creation payload carries only publication fields and blurbs. `sourceStatus`, although defined as an imported fact in the domain model, is not an authority category in `FIELD_CATEGORY`. The website cannot gain those fields merely because the parser fetched them.
 
-There is no canonical creator field or creator table in the current schema, so public queries have no creator credits to return. Release descriptions do have a schema field and are returned by `catalogPages.ts`; shared creation and reconciliation do not import the publisher copy. Series pages already render canonical `sourceStatus` and `synopsis` when present, but improved parser extraction alone cannot populate them through the current shared payloads. These gaps explain why richer source snapshots can coexist with sparse public pages.
+There is no canonical creator field or creator table in the current schema, so public queries have no creator credits to return. Release descriptions and Series synopses are now imported (see above). Series pages already render canonical `sourceStatus` when present, but improved parser extraction alone cannot populate it through the current shared payloads. These gaps explain why richer source snapshots can coexist with sparse public pages.
 
-Treat these as product/schema decisions, not parser failures. Agree which creator roles, source completion status, and release descriptions should become canonical. Then add explicit normalized fields, validation, provenance, authority, and UI consumption together.
+Treat these as product/schema decisions, not parser failures. Agree which creator roles and source completion status should become canonical. Then add explicit normalized fields, validation, provenance, authority, and UI consumption together.
 
 Evidence: [authority categories](../../convex/lib/authority.ts), [ReleasePayload](../../convex/lib/pipeline.ts), [Seven Seas snapshot policy](../../convex/lib/sevenSeas.ts), [domain definitions](../../CONTEXT.md).
 

@@ -15,7 +15,8 @@
 //
 // What the mirror writes:
 // - one manga entry = one Series (linked via the manga observation itself;
-//   a title change at ANN is a rung-① field conflict at standard authority)
+//   a title change at ANN is a rung-① field conflict at standard authority,
+//   and its Plot Summary is offered as the synopsis at weak authority)
 // - "(GN n)" / "(eBook n)" designators define the Volume backbone; missing
 //   Volumes are created under the linked Series (spec §6 allows creating
 //   the Volume of a single-volume release under a linked Series); brand-new
@@ -597,7 +598,12 @@ export const applyManga = internalMutation({
             sourceKey: SOURCE_KEY,
             ref: { type: "series", id: series._id },
             doc: series,
-            offered: { title: snapshot.title },
+            // The Plot Summary fills a blank synopsis (weak authority): any
+            // publisher's text outranks it and stays.
+            offered: {
+              title: snapshot.title,
+              ...(snapshot.synopsis !== undefined ? { synopsis: snapshot.synopsis } : {}),
+            },
             observation,
             citation,
             now,
@@ -662,6 +668,7 @@ export const applyManga = internalMutation({
         seriesId: null,
         seriesTitle: snapshot.title,
         seriesAltTitles: snapshot.altTitles,
+        seriesSynopsis: snapshot.synopsis,
         labels: labels.filter((l): l is string => l !== undefined),
         // Omnibus-only entries evidence no single Volume: no placeholder.
         seriesOnly: packagingOnly(snapshot),

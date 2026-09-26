@@ -26,7 +26,8 @@ describe("authorityRank", () => {
 
   it('an absent category is the table\'s "—": no authority at all', () => {
     expect(authorityRank(ANN, "isbn13")).toBe(0); // ANN has no ISBN authority
-    expect(authorityRank(SEVEN_SEAS, "description")).toBe(0); // no category
+    expect(authorityRank(SEVEN_SEAS, "description")).toBe(0); // no description column
+    expect(authorityRank(SEVEN_SEAS, "coverImage")).toBe(0); // no category at all
     expect(authorityRank(undefined, "pubDate")).toBe(0); // unknown source
   });
 });
@@ -208,6 +209,94 @@ describe("decideField — date precision refinement", () => {
         offered: fullDate,
         incumbent: { kind: "human" },
       }).action,
+    ).toBe("queue");
+  });
+});
+
+// Publisher blurbs (Release description, Series synopsis): the publisher's own
+// catalog text wins over the distributor's, which wins over aggregators';
+// any source fills a blank; a human's text is never overwritten.
+describe("the description category", () => {
+  const KODANSHA = { description: "authoritative" } as const;
+  const PRH = { description: "standard" } as const;
+  const ANN_BLURB = { description: "weak" } as const;
+
+  it("ranks description and synopsis through one category", () => {
+    for (const field of ["description", "synopsis"]) {
+      expect(authorityRank(KODANSHA, field)).toBe(3);
+      expect(authorityRank(PRH, field)).toBe(2);
+      expect(authorityRank(ANN_BLURB, field)).toBe(1);
+      expect(authorityRank({ date: "authoritative" }, field)).toBe(0);
+    }
+  });
+
+  // A blurb offer: ANN's text is the incumbent by default.
+  const blurb = (overrides: Partial<Parameters<typeof decideField>[0]> = {}) =>
+    decideField({
+      field: "description",
+      current: "An aggregator summary.",
+      offered: "The publisher's own blurb.",
+      overridden: false,
+      incomingSourceKey: "kodansha",
+      incomingObservationId: "obs-incoming",
+      incomingRank: authorityRank(KODANSHA, "description"),
+      incumbent: src("ann", authorityRank(ANN_BLURB, "description")),
+      ...overrides,
+    }).action;
+
+  it("(a) an aggregator fills an empty description", () => {
+    expect(
+      blurb({
+        current: undefined,
+        offered: "An aggregator summary.",
+        incomingSourceKey: "ann",
+        incomingRank: 1,
+        incumbent: { kind: "none" },
+      }),
+    ).toBe("auto");
+  });
+
+  it("(b) the publisher's own text replaces an aggregator's", () => {
+    expect(blurb()).toBe("auto");
+  });
+
+  it("(c) an aggregator never replaces the publisher's text", () => {
+    expect(
+      blurb({
+        current: "The publisher's own blurb.",
+        offered: "An aggregator summary.",
+        incomingSourceKey: "ann",
+        incomingRank: 1,
+        incumbent: src("kodansha", 3),
+      }),
+    ).toBe("recordOnly");
+  });
+
+  it("(d) the distributor loses to the publisher, and yields to it", () => {
+    expect(
+      blurb({
+        current: "The publisher's own blurb.",
+        offered: "Distributor flap copy.",
+        incomingSourceKey: "prh",
+        incomingRank: 2,
+        incumbent: src("kodansha", 3),
+      }),
+    ).toBe("recordOnly");
+    expect(blurb({ current: "Distributor flap copy.", incumbent: src("prh", 2) })).toBe("auto");
+  });
+
+  it("(e) a human's text queues, never overwritten", () => {
+    expect(blurb({ incumbent: { kind: "human" } })).toBe("queue");
+    expect(blurb({ overridden: true, incumbent: src("ann", 1) })).toBe("queue");
+  });
+
+  it("(f) two own-catalog publishers disagreeing queue for a human", () => {
+    expect(
+      blurb({
+        field: "synopsis",
+        current: "Seven Seas' blurb.",
+        incumbent: src("sevenseas", 3),
+      }),
     ).toBe("queue");
   });
 });

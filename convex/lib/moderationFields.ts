@@ -91,6 +91,7 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
       options: SOURCE_STATUS_OPTIONS,
       help: "The source work's completion state, not the English edition's.",
     },
+    textarea("synopsis", "Series synopsis", { editorial: true }),
   ],
   volume: [
     text("label", "Volume label", {

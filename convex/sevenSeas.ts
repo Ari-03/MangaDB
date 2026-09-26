@@ -323,6 +323,7 @@ function offeredReleaseFields(snapshot: BookSnapshot): Record<string, unknown> {
       currency: snapshot.currency ?? "USD",
     };
   }
+  if (snapshot.description !== undefined) offered.description = snapshot.description;
   return offered;
 }
 
@@ -494,6 +495,7 @@ export const applyBook = internalMutation({
               currency: snapshot.currency ?? "USD",
             }
           : undefined,
+      description: snapshot.description,
     };
 
     const bootstrap = await getBootstrapMode(ctx);

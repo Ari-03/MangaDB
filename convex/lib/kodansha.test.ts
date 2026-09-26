@@ -16,6 +16,7 @@ import {
   parseSeriesListing,
   parseSeriesName,
   parseSeriesPage,
+  parseSeriesSynopsis,
   parseVolumeLabel,
   parseVolumePage,
   parseVolumeUrl,
@@ -291,7 +292,7 @@ describe("parseSeriesName — Kodansha's own packaging names", () => {
 });
 
 describe("backlist: search-series listing", () => {
-  it("keeps comic series with their update stamps and drops novels", () => {
+  it("keeps comic series with their update stamps and blurbs, and drops novels", () => {
     const page = parseSeriesListing(JSON.parse(fixture("search-series.json")));
     expect(page.pageLength).toBe(4);
     expect(page.total).toBe(1170);
@@ -300,16 +301,19 @@ describe("backlist: search-series listing", () => {
         slug: "10-dance",
         name: "10 DANCE",
         lastUpdatedAt: "2026-04-08T03:42:28+00:00",
+        synopsis: expect.stringMatching(/^Dip into your new obsession .* red-hot romance!$/),
       },
       {
         slug: "5-centimeters-per-second-collectors-edition",
         name: "5 Centimeters per Second (Collector's Edition)",
         lastUpdatedAt: "2026-02-06T09:53:10+00:00",
+        synopsis: expect.stringMatching(/^Based on the award winning film by Makoto Shinkai/),
       },
       {
         slug: "7-billion-needles",
         name: "7 Billion Needles",
         lastUpdatedAt: "2026-02-06T09:53:11+00:00",
+        synopsis: expect.stringMatching(/^Hikaru Takabe may not be the most social of teens\./),
       },
     ]);
     expect(() => parseSeriesListing({ success: false })).toThrow();
@@ -336,6 +340,13 @@ describe("backlist: series pages", () => {
       "volume-4",
       "volume-5",
     ]);
+  });
+
+  it("reads the series blurb from the JSON-LD ComicSeries description", () => {
+    expect(parseSeriesSynopsis(fixture("series-7-billion-needles.html"))).toMatch(
+      /^Hikaru Takabe may not be the most social of teens\. .* in a compact four volumes\.$/,
+    );
+    expect(parseSeriesSynopsis(fixture("blue-lock-volume-1.html"))).toBeUndefined();
   });
 });
 
@@ -370,7 +381,7 @@ describe("backlist: volume pages", () => {
       },
     ]);
 
-    const snapshots = toBacklistSnapshots(page);
+    const snapshots = toBacklistSnapshots(page, "Soccer, reinvented.");
     expect(snapshots.map((s) => s.sourceRecordId)).toEqual([
       "blue-lock/volume-1#digital",
       "blue-lock/volume-1#physical",
@@ -388,7 +399,11 @@ describe("backlist: volume pages", () => {
       isbn13: "9781646516544",
       priceCents: 1299,
       releaseDate: { year: 2022, month: 6, day: 21 },
+      // The series page's blurb rides on every volume snapshot.
+      seriesSynopsis: "Soccer, reinvented.",
     });
+    // Kodansha's volume-page Book has no description: no per-volume blurb.
+    expect(snapshots[1]!.snapshot).not.toHaveProperty("description");
   });
 
   it("keeps a packaging line's volume on its base Series as a line position", () => {
@@ -402,6 +417,9 @@ describe("backlist: volume pages", () => {
     expect(page.offers).toEqual([
       expect.objectContaining({ format: "physical", isbn13: "9798888778210" }),
     ]);
+    // The line's page describes the omnibus edition, not the work.
+    const [omnibus] = toBacklistSnapshots(page, "A new 3-in-1 omnibus edition!");
+    expect(omnibus!.snapshot.seriesSynopsis).toBeUndefined();
   });
 
   it("reads Kodansha's volume-0 oneshots without a volume label", () => {

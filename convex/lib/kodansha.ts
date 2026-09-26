@@ -14,14 +14,21 @@
 //
 // The backlist crawl (verified live 2026-09-25; robots.txt allows both):
 // - `GET /wp-json/kodansha/v1/search-series?offset=N&count=100` — every
-//   series (~1,170: ~860 comic, ~310 novel), alphabetical, with its `type`
-//   and a `last_updated_at` stamp. `count` tops out at 100.
+//   series (~1,170: ~860 comic, ~310 novel), alphabetical, with its `type`,
+//   a `last_updated_at` stamp, and a `short_description` blurb. `count`
+//   tops out at 100.
 // - `GET /series/{slug}/` — the series page: JSON-LD `ComicSeries.hasPart`
 //   lists the volume pages (packaging pages omit it, so the page's own
-//   volume links count too).
+//   volume links count too); its `description` is the full series blurb.
 // - `GET /series/{slug}/{volume}/` — the volume page: a JSON-LD `Book` whose
 //   `workExample` has one entry per format (EBook / Paperback / Hardcover)
-//   with its ISBN, `datePublished`, and USD list price.
+//   with its ISBN, `datePublished`, and USD list price. The Book carries no
+//   `description`, so Kodansha offers no per-volume blurb.
+//
+// The series blurb (page description, else the listing's short one) rides
+// on every volume snapshot of the crawl as `seriesSynopsis` and is offered
+// as the Series synopsis. A packaging line's page describes the line ("a
+// new 3-in-1 omnibus edition"), not the work, so its volumes carry none.
 //
 // One volume yields one snapshot PER FORMAT: print and digital are distinct
 // Releases of one Edition (spec §2), so each gets its own observation
@@ -41,6 +48,7 @@ import {
   type Packaging,
 } from "./bookTitle";
 import { toIsbn13 } from "./openLibrary";
+import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -68,6 +76,8 @@ export const kodanshaSnapshotValidator = v.object({
   isbn13: v.optional(v.string()),
   binding: v.optional(v.string()),
   priceCents: v.optional(v.number()),
+  /** The crawl's series blurb (the Series synopsis); never on packaging lines. */
+  seriesSynopsis: v.optional(v.string()),
   /** Why the volume is outside the manga catalog (bookTitle ScopeReason); absent = in scope. */
   outOfScope: v.optional(v.string()),
 });
@@ -378,6 +388,8 @@ export type SeriesListingEntry = {
   name: string;
   /** Kodansha's `last_updated_at` stamp — the crawl's change signal. */
   lastUpdatedAt: string;
+  /** The listing's `short_description` blurb; the series page's is fuller. */
+  synopsis?: string;
 };
 
 /** Series per search-series request; the endpoint caps `count` at 100. */
@@ -405,6 +417,7 @@ export function parseSeriesListing(raw: unknown): {
       slug: r.slug,
       name: r.name.trim(),
       lastUpdatedAt: typeof r.last_updated_at === "string" ? r.last_updated_at : "",
+      synopsis: cleanBlurb(r.short_description),
     });
   }
   return {
@@ -469,6 +482,12 @@ export function parseSeriesPage(html: string, seriesSlug: string): string[] {
     own(m[1]);
   }
   return [...slugs].sort(volumeOrder);
+}
+
+/** A series page → its JSON-LD `ComicSeries.description` blurb, cleaned. */
+export function parseSeriesSynopsis(html: string): string | undefined {
+  const series = jsonLdObjects(html).find((obj) => obj["@type"] === "ComicSeries");
+  return cleanBlurb(series?.description);
 }
 
 /** One format of a volume page: its own ISBN, date, and list price. */
@@ -561,10 +580,12 @@ export function parseVolumePage(html: string, pageUrl: string): KodanshaVolumePa
 /**
  * A parsed volume page → one (record id, snapshot) per format. A second
  * ISBN of the same format (a paperback and a hardcover) is a Release of its
- * own, keyed by its ISBN.
+ * own, keyed by its ISBN. `seriesSynopsis` is the series page's blurb,
+ * dropped for a packaging line's volumes (it describes the line).
  */
 export function toBacklistSnapshots(
   page: KodanshaVolumePage,
+  seriesSynopsis?: string,
 ): Array<{ sourceRecordId: string; snapshot: KodanshaSnapshot }> {
   const taken = new Set<string>();
   return page.offers.map((offer) => {
@@ -579,6 +600,7 @@ export function toBacklistSnapshots(
         isbn13: offer.isbn13,
         binding: offer.binding,
         priceCents: offer.priceCents,
+        seriesSynopsis: page.item.packaging ? undefined : seriesSynopsis,
       },
     };
   });

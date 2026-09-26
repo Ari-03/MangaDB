@@ -6,7 +6,8 @@
 //   every manga entry (`<item><id>…</id><name>…</name></item>`), paged.
 // - `api.xml?manga=ID1/ID2/…` — batch details, up to 50 ids per request
 //   (ANN etiquette: 1 request per second). Each `<manga>` carries the Main
-//   title, Alternative titles, staff, and one `<release date="YYYY-MM-DD"
+//   title, Alternative titles, a Plot Summary (the Series synopsis ANN
+//   offers at weak authority), staff, and one `<release date="YYYY-MM-DD"
 //   href="…releases.php?id=NNN">Title (GN 14)</release>` per North American
 //   release — future dates included, month precision possible
 //   ("2024-11-00"), eBook lines for digital.
@@ -22,7 +23,7 @@
 
 import { v, type Infer } from "convex/values";
 import { toIsbn13 } from "./openLibrary";
-import { cleanTitleText, decodeEntities, stripHtml } from "./text";
+import { cleanBlurb, cleanTitleText, decodeEntities, stripHtml } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -35,6 +36,8 @@ export const annMangaValidator = v.object({
   url: v.string(),
   title: v.string(),
   altTitles: v.array(v.string()),
+  /** The entry's Plot Summary, cleaned to one paragraph. */
+  synopsis: v.optional(v.string()),
   staff: v.array(v.string()),
   releases: v.array(
     v.object({
@@ -209,6 +212,7 @@ export type AnnManga = {
   id: string;
   title: string;
   altTitles: string[];
+  synopsis?: string;
   staff: string[];
   releases: AnnRelease[];
 };
@@ -250,7 +254,8 @@ const MAX_ALT_TITLES = 12;
  * One api.xml batch response → its manga records. Tolerant: `<warning>`
  * elements ("no result for manga=…") and malformed blocks are skipped. The
  * title is the Main title, or the block's `name` attribute when that is
- * absent or empty after cleaning.
+ * absent or empty after cleaning. The Plot Summary is decoded before tags
+ * are stripped: ANN's XML escapes the text (sometimes twice).
  */
 export function parseApiResponse(xml: string): AnnManga[] {
   const records: AnnManga[] = [];
@@ -283,10 +288,13 @@ export function parseApiResponse(xml: string): AnnManga[] {
       if (name !== "" && !staff.includes(name)) staff.push(name);
     }
 
+    const plot = /<info[^>]*type="Plot Summary"[^>]*>([\s\S]*?)<\/info>/.exec(body)?.[1];
+
     records.push({
       id,
       title,
       altTitles,
+      synopsis: plot !== undefined ? cleanBlurb(decodeEntities(plot)) : undefined,
       staff,
       releases: parseReleases(body, title, id),
     });
@@ -384,6 +392,7 @@ export function toSnapshot(manga: AnnManga): AnnMangaSnapshot {
     url: mangaUrl(manga.id),
     title: manga.title,
     altTitles: manga.altTitles,
+    synopsis: manga.synopsis,
     staff: manga.staff,
     releases: manga.releases,
   };

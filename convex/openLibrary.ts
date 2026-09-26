@@ -5,7 +5,8 @@
 //
 // - a matched record (stored link, ISBN, or the full publisher+title+label+
 //   format key) reconciles in what the authority table allows — ISBN fill
-//   at standard rank, dates at weak, format/binding at standard
+//   at standard rank, dates at weak, format/binding at standard, and the
+//   edition's description blurb at weak (fills a blank; publisher text outranks it)
 // - an unmatched record may create at most a LEAF: a Release (+ its Edition
 //   packaging) under a Series, Volume, and Publisher that all already exist
 //   — how VIZ releases (whose site is never scraped and who is not
@@ -277,7 +278,6 @@ type ApplyResult = {
   releaseId?: Id<"releases">;
 };
 
-/** The fields this source offers on a linked Release, per its authority row. */
 /**
  * Why another source that keys its records by ISBN (Yen Press) holds this
  * book out of scope, or null. PRH drops such titles before observing them,
@@ -289,12 +289,14 @@ async function outOfScopeElsewhere(ctx: MutationCtx, isbn13: string): Promise<st
   return reason !== undefined ? `Yen Press (${reason})` : null;
 }
 
+/** The fields this source offers on a linked Release, per its authority row. */
 function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unknown> {
   const offered: Record<string, unknown> = {};
   if (snapshot.isbn13 !== undefined) offered.isbn13 = snapshot.isbn13;
   if (snapshot.isbn10 !== undefined) offered.isbn10 = snapshot.isbn10;
   if (snapshot.publishDate) offered.pubDate = toPartialDate(snapshot.publishDate);
   if (snapshot.binding !== undefined) offered.binding = snapshot.binding;
+  if (snapshot.description !== undefined) offered.description = snapshot.description;
   return offered;
 }
 
@@ -463,6 +465,7 @@ export const applyEdition = internalMutation({
         isbn13: snapshot.isbn13,
         isbn10: snapshot.isbn10,
         pubDate: snapshot.publishDate ? toPartialDate(snapshot.publishDate) : undefined,
+        description: snapshot.description,
         publisher: { name: publisher.name, slug: publisher.slug },
       },
       tagBootstrapUnreviewed: false,

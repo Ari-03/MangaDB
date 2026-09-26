@@ -6,6 +6,8 @@ Audit date: 2026-09-26. Scope: `convex/ann.ts`, `convex/lib/ann.ts`, and their t
 
 The mirror enumerates manga through report 155, fetches details in batches of 50, then builds Series and Volume observations from English GN and eBook release lines. Existing Releases link by ISBN, with a restricted volume-and-format fallback. A separate pass fetches unlinked release pages for publisher and ISBN information, then creates eligible leaf Releases under existing Volumes. Publisher feeds retain higher authority.
 
+Each manga's `<info type="Plot Summary">` comes back in the same batch response. It is decoded, cleaned, and offered as the Series synopsis at weak authority, so it fills a blank and any publisher's text outranks it.
+
 The endpoint choice and batch size match [ANN's API documentation](https://www.animenewsnetwork.com/encyclopedia/api.php). ANN documents a limit of one request per second per IP, a maximum batch size of 50 titles, and source attribution with a link to the relevant Encyclopedia entry. The adapter waits 1.1 seconds before requests and stores those entry URLs. That delay is local to each action; it does not coordinate unrelated processes sharing an IP.
 
 ## Live checks

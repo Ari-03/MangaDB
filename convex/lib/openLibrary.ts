@@ -10,10 +10,12 @@
 // *into* the existing skeleton and never define Series structure. The
 // parser accordingly normalizes exactly the fields the authority table lets
 // OpenLibrary offer — ISBNs (standard), dates (weak), format/binding
-// (standard) — plus the title/publisher keys matching needs.
+// (standard), the edition's `description` blurb (weak) — plus the
+// title/publisher keys matching needs.
 
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
+import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -42,6 +44,8 @@ export const olEditionValidator = v.object({
   isbn10: v.optional(v.string()),
   format: v.union(v.literal("physical"), v.literal("digital")),
   binding: v.optional(v.string()),
+  /** The edition's blurb, cleaned to one paragraph. */
+  description: v.optional(v.string()),
 });
 
 export type OlEditionSnapshot = Infer<typeof olEditionValidator>;
@@ -186,6 +190,12 @@ export function isEnglishEdition(languages: unknown, isbn13: string | undefined)
 
 const DIGITAL_FORMAT = /e-?book|electronic|kindle|digital/i;
 
+/** An edition `description`: a bare string or a `{type: "/type/text", value}` object. */
+function descriptionOf(raw: unknown): string | undefined {
+  const text = typeof raw === "object" && raw !== null ? (raw as { value?: unknown }).value : raw;
+  return cleanBlurb(text);
+}
+
 /** One edition JSON object → a snapshot, or null when out of scope. */
 export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -247,6 +257,7 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     ...isbns,
     format: digital ? "digital" : "physical",
     binding,
+    description: descriptionOf(edition.description),
   };
 }
 

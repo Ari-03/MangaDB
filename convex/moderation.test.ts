@@ -516,3 +516,210 @@ describe("moderation.editForm", () => {
     expect(form?.backLink).toMatchObject({ entity: "edition", publicId: 1 });
   });
 });
+
+describe("moderation — series synopsis is editorial and editable", () => {
+  it("appears on the edit form and saves through a direct edit", async () => {
+    const t = convexTest(schema);
+    await setup(t);
+    const seriesId = await addSeries(t);
+    const asMod = t.withIdentity({ subject: MOD });
+    const form = await asMod.query(api.moderation.editForm, { type: "series", key: "1" });
+    expect(form?.fields.find((f) => f.name === "synopsis")).toMatchObject({
+      kind: "textarea",
+      editorial: true,
+      value: null,
+    });
+    await asMod.mutation(api.moderation.submitDirectEdit, {
+      ref: { type: "series", id: seriesId },
+      changes: [{ field: "synopsis", value: "  A quiet start.  " }],
+      comment: "Wrote a synopsis.",
+    });
+    const series = await t.run((ctx) => ctx.db.get(seriesId));
+    expect(series?.synopsis).toBe("A quiet start.");
+  });
+});
+
+describe("moderation.sourceBlurbs", () => {
+  // A Release whose description Kodansha authored, with a Kodansha and an
+  // ANN observation linked; ANN's lower-authority offer was recorded only.
+  async function seedRelease(t: ReturnType<typeof convexTest>) {
+    return await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Pub",
+        slug: "pub",
+      });
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 1,
+        publisherId,
+      });
+      const releaseId = await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        publisherId,
+        seriesIds: [],
+        description: "Kodansha's own blurb.",
+      });
+      for (const [key, name] of [
+        ["kodansha", "Kodansha USA"],
+        ["ann", "Anime News Network Encyclopedia"],
+      ] as const) {
+        await ctx.db.insert("approvedSources", {
+          key,
+          name,
+          enabled: true,
+          scope: "test",
+          fieldAuthority: { description: key === "kodansha" ? "authoritative" : "weak" },
+          cadence: "daily",
+          healthState: "healthy",
+          consecutiveFailures: 0,
+        });
+      }
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "kodansha" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: releaseId },
+        seq: 1,
+        proposalId,
+        author: { kind: "source", sourceKey: "kodansha" },
+        changes: [{ field: "description", before: undefined, after: "Kodansha's own blurb." }],
+        comment: "Imported from Kodansha USA.",
+      });
+      await ctx.db.insert("sourceObservations", {
+        sourceKey: "kodansha",
+        sourceRecordId: "vol-1",
+        recordRef: { type: "release", id: releaseId },
+        snapshot: { url: "https://kodansha.test/vol-1", description: "Kodansha's own blurb." },
+        lastSeenAt: 1000,
+        withdrawn: false,
+      });
+      await ctx.db.insert("sourceObservations", {
+        sourceKey: "ann",
+        sourceRecordId: "line:9",
+        recordRef: { type: "release", id: releaseId },
+        snapshot: { url: "https://ann.test/9", description: "ANN's summary." },
+        lastSeenAt: 2000,
+        withdrawn: false,
+        conflicts: [
+          {
+            field: "description",
+            offered: "ANN's summary.",
+            at: 2000,
+            reason: "lower authority than the current value's source",
+          },
+        ],
+      });
+      // Another source linked without any blurb: nothing to list.
+      await ctx.db.insert("sourceObservations", {
+        sourceKey: "openlibrary",
+        sourceRecordId: "OL1M",
+        recordRef: { type: "release", id: releaseId },
+        snapshot: { url: "https://openlibrary.test/OL1M" },
+        lastSeenAt: 3000,
+        withdrawn: true,
+      });
+      return releaseId;
+    });
+  }
+
+  it("lists every source's text with its source and marks the canonical one", async () => {
+    const t = convexTest(schema);
+    await setup(t);
+    const releaseId = await seedRelease(t);
+    const result = await t
+      .withIdentity({ subject: MOD })
+      .query(api.moderation.sourceBlurbs, { ref: { type: "release", id: releaseId } });
+
+    expect(result?.field).toBe("description");
+    expect(result?.canonical).toEqual({
+      text: "Kodansha's own blurb.",
+      author: { kind: "source", sourceKey: "kodansha" },
+      overridden: false,
+    });
+    expect(result?.truncated).toBe(false);
+    const bySource = new Map(result?.blurbs.map((b) => [b.sourceKey, b]));
+    expect(result?.blurbs).toHaveLength(2);
+    expect(bySource.get("kodansha")).toMatchObject({
+      sourceName: "Kodansha USA",
+      url: "https://kodansha.test/vol-1",
+      text: "Kodansha's own blurb.",
+      current: true,
+      recordedOnly: null,
+      lastSeenAt: 1000,
+      withdrawn: false,
+    });
+    expect(bySource.get("ann")).toMatchObject({
+      sourceName: "Anime News Network Encyclopedia",
+      url: "https://ann.test/9",
+      text: "ANN's summary.",
+      current: false,
+      recordedOnly: { reason: "lower authority than the current value's source", at: 2000 },
+    });
+  });
+
+  it("reports a human author and is Moderator-only", async () => {
+    const t = convexTest(schema);
+    await setup(t);
+    const releaseId = await seedRelease(t);
+    const base = await t.run(async (ctx) => (await ctx.db.query("revisions").collect())[0]!);
+    const asMod = t.withIdentity({ subject: MOD });
+    await asMod.mutation(api.moderation.submitDirectEdit, {
+      ref: { type: "release", id: releaseId },
+      baseRevisionId: base._id,
+      changes: [{ field: "description", value: "An editor's rewrite." }],
+      comment: "Tightened the blurb.",
+    });
+    const result = await asMod.query(api.moderation.sourceBlurbs, {
+      ref: { type: "release", id: releaseId },
+    });
+    expect(result?.canonical).toEqual({
+      text: "An editor's rewrite.",
+      author: { kind: "user", username: "bob" },
+      overridden: true,
+    });
+    expect(result?.blurbs.every((b) => !b.current)).toBe(true);
+
+    await expect(
+      t
+        .withIdentity({ subject: EDITOR })
+        .query(api.moderation.sourceBlurbs, { ref: { type: "release", id: releaseId } }),
+    ).rejects.toMatchObject({ data: { code: "forbidden" } });
+  });
+
+  it("reads a series link observation's synopsis", async () => {
+    const t = convexTest(schema);
+    await setup(t);
+    const seriesId = await addSeries(t);
+    await t.run((ctx) =>
+      ctx.db.insert("sourceObservations", {
+        sourceKey: "sevenseas",
+        sourceRecordId: "series:alpha",
+        recordRef: { type: "series", id: seriesId },
+        snapshot: {
+          kind: "series",
+          title: "Alpha",
+          url: "https://ss.test/alpha",
+          synopsis: "Alpha begins.",
+        },
+        lastSeenAt: 1,
+        withdrawn: false,
+      }),
+    );
+    const result = await t
+      .withIdentity({ subject: MOD })
+      .query(api.moderation.sourceBlurbs, { ref: { type: "series", id: seriesId } });
+    expect(result).toMatchObject({
+      field: "synopsis",
+      canonical: { text: null, author: null, overridden: false },
+      blurbs: [
+        { sourceKey: "sevenseas", sourceName: "sevenseas", text: "Alpha begins.", current: false },
+      ],
+    });
+  });
+});

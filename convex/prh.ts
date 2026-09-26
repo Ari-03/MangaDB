@@ -6,9 +6,10 @@
 // records — but a distributed imprint can still publish prose or
 // merchandise, so the parser gates scope per title (lib/prh.ts). Per the
 // authority table its dates, ISBNs, and prices apply at authoritative rank,
-// titles/creators/format at standard. Titles resolve to their base Series
-// through the shared parser: omnibus/deluxe books become Edition Line
-// members covering real Volumes, box sets Release Bundles.
+// titles/creators/format and the flap-copy blurb (the Release Description,
+// embedded via the list's content zoom) at standard. Titles resolve to
+// their base Series through the shared parser: omnibus/deluxe books become
+// Edition Line members covering real Volumes, box sets Release Bundles.
 //
 // Cadence (spec §6): daily future-dated + weekly full sweep. The registry
 // row ticks daily; the adapter widens to a full sweep on UTC Sundays (or
@@ -40,6 +41,8 @@ export const SOURCE_KEY = "prh";
 const API_BASE = "https://api.penguinrandomhouse.com/resources/v2/title/domains/PRH.US";
 const IMPORT_COMMENT = "Imported from the Penguin Random House API.";
 const ROWS_PER_PAGE = 200;
+/** The list endpoint's content zoom: each title embeds its flap copy (lib/prh.ts). */
+const CONTENT_ZOOM = "https://api.penguinrandomhouse.com/title/titles/content/definition";
 
 // ---------- the sync action ----------
 
@@ -144,6 +147,8 @@ export const sync = internalAction({
             start: String(start),
             sort: "onsale",
             dir: mode === "future" ? "desc" : "asc",
+            // Embeds each title's flap copy: the blurb, with no extra request.
+            zoom: CONTENT_ZOOM,
           });
           const res = await politeFetch(
             `${API_BASE}/imprints/${encodeURIComponent(imprint)}/titles?${params}`,

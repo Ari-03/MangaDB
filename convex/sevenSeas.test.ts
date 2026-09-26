@@ -25,6 +25,8 @@ type FixtureBook = {
   category?: string;
   isbn?: string;
   cover?: boolean;
+  /** The listing's `content.rendered` blurb HTML. */
+  blurb?: string;
 };
 
 function bookPageHtml(b: FixtureBook): string {
@@ -51,7 +53,7 @@ function stubSite(books: FixtureBook[]) {
     link: `${BASE}/books/${b.slug}/`,
     title: { rendered: b.title },
     modified_gmt: b.modified ?? "2026-08-01T00:00:00",
-    content: { rendered: "" },
+    content: { rendered: b.blurb ?? "" },
   }));
   const pages = new Map(books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]));
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
@@ -101,6 +103,7 @@ const ALPHA_1: FixtureBook = {
   date: "January 6, 2026",
   price: "$14.99",
   isbn: "978-1-9990001-0-3",
+  blurb: "<p>Alpha&#8217;s <em>first</em>\n adventure.</p>\n",
 };
 
 const ALPHA_2: FixtureBook = {
@@ -173,13 +176,15 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
         // Vol. 1 created the Series → steady state would have queued it.
         bootstrapUnreviewed: true,
       });
-      // Marketing copy is never imported into canonical records (spec §6).
-      expect(vol1Release.description).toBeUndefined();
+      // The listing blurb becomes the Release Description, cleaned to text;
+      // a book without one gets none (never "").
+      expect(vol1Release.description).toBe("Alpha’s first adventure.");
 
       // Vol. 2 landed under an already-linked Series — steady state would
       // have auto-created it, so it carries no bootstrap tag.
       const vol2Release = releases.find((r) => r.isbn13 === "9781999000110")!;
       expect(vol2Release.bootstrapUnreviewed).toBeUndefined();
+      expect(vol2Release.description).toBeUndefined();
 
       // Covers in file storage with source URL + attribution.
       expect(vol1Release.coverImage).toMatchObject({
@@ -205,7 +210,9 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
         },
       });
       expect(revisions[0]!.approvedBy).toBeUndefined();
-      expect(revisions[0]!.changes.map((c) => c.field).sort()).toContain("pubDate");
+      expect(revisions[0]!.changes.map((c) => c.field)).toEqual(
+        expect.arrayContaining(["pubDate", "description"]),
+      );
 
       // The immediately approved system Proposal behind Vol. 1's creation.
       const proposal = await ctx.db.get(revisions[0]!.proposalId);

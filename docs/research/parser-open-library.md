@@ -6,7 +6,7 @@ Open Library can fill useful gaps, but this audit does not establish that the pr
 
 ## How it works
 
-The offline `scripts/filter-openlibrary-dump.mjs` keeps publisher-related editions from the monthly dump. An operator hosts that file and configures `OPENLIBRARY_DUMP_URL`. The adapter streams records, normalizes ISBNs, titles, language, binding and dates, then matches existing Releases. It can create a Release only under existing Series, Volume and Publisher structure. It does not withdraw records missing from the filtered slice.
+The offline `scripts/filter-openlibrary-dump.mjs` keeps publisher-related editions from the monthly dump. An operator hosts that file and configures `OPENLIBRARY_DUMP_URL`. The adapter streams records, normalizes ISBNs, titles, language, binding and dates, then matches existing Releases. It can create a Release only under existing Series, Volume and Publisher structure. It does not withdraw records missing from the filtered slice. An edition's `description`, either a string or `{type: "/type/text", value}`, becomes the Release Description at weak authority. It fills a blank and never outranks publisher text.
 
 This use of a bulk dump fits Open Library's guidance. Its [dump documentation](https://openlibrary.org/developers/dumps) describes monthly exports with five tab-separated columns ending in the full JSON record. The [API documentation](https://openlibrary.org/developers/api) asks bulk users to use dumps. A Work is not a MangaDB Series identity: the [Books API documentation](https://openlibrary.org/dev/docs/api/books) distinguishes umbrella Work metadata from edition-specific publisher and ISBN facts.
 

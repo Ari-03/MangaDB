@@ -1,0 +1,346 @@
+{
+ "status": "ok",
+ "recordCount": 2677,
+ "startTimestamp": "2026-09-26T15:59:32Z",
+ "endTimestamp": "2026-09-26T15:59:33Z",
+ "timeTaken": 532,
+ "data": {
+  "titles": [
+   {
+    "isbn": 9781935429005,
+    "isbnHyphenated": "978-1-935429-00-5",
+    "title": "Akira 1",
+    "subtitle": null,
+    "author": "Katsuhiro Otomo",
+    "onsale": "2009-10-13",
+    "price": [
+     {
+      "amount": 29.99,
+      "currencyCode": "CAD",
+      "pricingType": null
+     },
+     {
+      "amount": 24.99,
+      "currencyCode": "USD",
+      "pricingType": null
+     }
+    ],
+    "seoFriendlyUrl": "/books/643406/akira-1-by-katsuhiro-otomo/9781935429005",
+    "format": {
+     "code": "TR",
+     "description": "Trade Paperback"
+    },
+    "subformat": {
+     "code": "MLT",
+     "description": "Manga LTR - TR"
+    },
+    "division": {
+     "code": "EA",
+     "description": "Kodansha Comics"
+    },
+    "imprint": {
+     "code": "KM",
+     "description": "Kodansha Comics"
+    },
+    "publisher": {
+     "code": "EAEA",
+     "description": "Kodansha Comics"
+    },
+    "pages": 352,
+    "age": {
+     "code": null,
+     "description": null
+    },
+    "grade": {
+     "code": null,
+     "description": null
+    },
+    "educationGrade": {
+     "code": null,
+     "description": null
+    },
+    "sgmt_desc": null,
+    "subjects": [
+     {
+      "code": "CGN004050",
+      "description": "Comics & Graphic Novels - East Asian Style - Manga - General"
+     },
+     {
+      "code": "CGN004400",
+      "description": "Comics & Graphic Novels - Science Fiction - Apocalyptic & Post-Apocalyptic"
+     },
+     {
+      "code": "CGN004060",
+      "description": "Comics & Graphic Novels - Media Tie-In"
+     }
+    ],
+    "trim": "7 x 10",
+    "formatFamily": "Paperback",
+    "consumerFormat": "Paperback",
+    "consumerImprint": null,
+    "consumerImprintUri": null,
+    "saleStatus": "IP",
+    "language": "E",
+    "seriesNumber": 1,
+    "subseries": null,
+    "editionType": null,
+    "propertyName": null,
+    "cartonQuantity": 20,
+    "version": "Regular Edition",
+    "productLine": "E11",
+    "productType": "EL1",
+    "flags": [
+     "3PD"
+    ],
+    "workId": 643406,
+    "frontlistiestSeq": null,
+    "contribRoleCode": null,
+    "contribRoleDesc": null,
+    "salesRestriction": {
+     "code": "00",
+     "description": "World"
+    },
+    "titleBlock": null,
+    "titleShort": "AKIRA 1",
+    "audioPackage": null,
+    "projectedMinutes": null,
+    "binding": {
+     "code": null,
+     "description": null
+    },
+    "editionId": 0,
+    "editionTarget": {
+     "code": null,
+     "description": null
+    },
+    "originalIsbn": null,
+    "illustPhoto": null,
+    "childrensBookCategory": null,
+    "asin": "1935429000",
+    "customSubjectCategory": "Graphic Novel",
+    "coverUpdatedOn": "2014-02-26",
+    "otherFields": {},
+    "isbn10": "1935429000",
+    "isbn10hyphenated": null,
+    "boxComponentCt": 0,
+    "focDate": null,
+    "cataDate": null,
+    "itemTypeCode": null,
+    "rcatDate": null,
+    "reisFocDate": null,
+    "reisCataDate": null,
+    "orderReq": 0,
+    "overUpc": null,
+    "additionalSeriesInfo": null,
+    "mediaRating": "TP",
+    "mediaRatingDesc": "Rated T+",
+    "coverVariantDesc": null,
+    "catalogs": [],
+    "familyCoverVariantFlag": false,
+    "explicitCoverFlag": false,
+    "sortByAuthor": "Otomo",
+    "alerts": [],
+    "cbRtnDate": null,
+    "isbnCounts": {
+     "variant": 0,
+     "format": 1
+    },
+    "graphicCategory": "Manga",
+    "shortRunInd": null,
+    "seriesFrequency": null,
+    "asset_types": {},
+    "isbnStr": "9781935429005",
+    "_embeds": [
+     {
+      "content": {
+       "updated_on": "2009-07-08 12:06:44",
+       "cr_about": null,
+       "rgauthbio": null,
+       "copyright": null,
+       "rgcopy": null,
+       "pressrelease": null,
+       "ean": "9781935429005",
+       "positioning": "Regarded by many as the finest work of graphic fiction ever produced, Akira is a bold and breathtaking epic of potent narrative strength and astonishing illustrative skill.",
+       "pubcomments": null,
+       "jacketquotes": "&#8220;One of the most important manga of the 1980s, Akira influenced thousands of science fiction manga and anime with its dark urban future.&#8221;&#8212;Manga: The Complete Guide",
+       "flapcopy": "Welcome to Neo-Tokyo, built on the ashes of a Tokyo annihilated by a blast of unknown origin that triggered World War III. The lives of two streetwise teenage friends, Tetsuo and Kaneda, change forever when paranormal abilities begin to waken in Tetsuo, making him a target for a shadowy agency that will stop at nothing to prevent another catastrophe like the one that leveled Tokyo. At the core of the agency&#8217;s motivation is a raw, all-consuming fear of an unthinkable, monstrous power known only as Akira.<br><br>Katsuhiro Otomo&#8217;s stunning science fiction masterpiece is considered by many to be the finest work of graphic fiction ever produced, and Otomo&#8217;s brilliant animated film version is regarded worldwide as a classic.<br><br>This edition includes a new foreword from the author and a postscript from Dark Horse publisher Mike Richardson!",
+       "rgdiscussion": null,
+       "timestamp": "2024-10-19 23:00:55",
+       "keynote": "Akira is an important manga that influenced a generation of Japanese and American creators. It debuted in Japan in 1984 and in the U.S. in 1989, and it has remained a perenial bestseller in both countries ever since. The anime film version of Akira is credited with changing the way animation was perceived in America, and interest in Akira has never been higher.",
+       "pressreleasecontact": null,
+       "tgcopy": null,
+       "tableofcontents": null,
+       "authorbio": null,
+       "rgsuggest": null,
+       "acmartflap": null,
+       "product_feature": null,
+       "rgabout": null,
+       "authqanda": null,
+       "excerpt": null,
+       "pressreleasedate": null,
+       "bonusfeature": null,
+       "authordesktop": null
+      },
+      "_embeds": null,
+      "_links": [
+       {
+        "rel": "self",
+        "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/content?sort=onsale&dir=asc&api_key=REDACTED",
+        "method": "GET",
+        "parameters": null
+       },
+       {
+        "rel": "https://api.penguinrandomhouse.com/title/titles/definition",
+        "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005?sort=onsale&dir=asc&api_key=REDACTED",
+        "method": "GET",
+        "parameters": null
+       }
+      ]
+     }
+    ],
+    "_links": [
+     {
+      "rel": "self",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "icon",
+      "href": "https://images.penguinrandomhouse.com/cover/9781935429005",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/authors/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/authors?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/categories/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/categories?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/awards/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/awards?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/characters/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/characters?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/content/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/content?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/dimensions/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/dimensions?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/events/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/events?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/hashtags/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/hashtags?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/keywords/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/keywords?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/promoimages/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/promoimages?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/titles/retaillinks/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/retaillinks?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/vendorids/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/vendorids?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/weblinks/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/titles/9781935429005/weblinks?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/series/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/series/AKR?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/divisions/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/divisions/EA?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/imprints/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/imprints/KM?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     },
+     {
+      "rel": "https://api.penguinrandomhouse.com/title/works/definition",
+      "href": "https://api.penguinrandomhouse.com/title/client/Public/domains/PRH.US/works/643406?sort=onsale&dir=asc&api_key=REDACTED",
+      "method": "GET",
+      "parameters": null
+     }
+    ]
+   }
+  ],
+  "_embeds": null,
+  "_links": [
+   {
+    "rel": "https://api.penguinrandomhouse.com/title/domains/definition",
+    "href": "https://api.penguinrandomhouse.com/title",
+    "method": "GET",
+    "parameters": null
+   },
+   {
+    "rel": "next",
+    "href": "https://api.penguinrandomhouse.com/title/domains/PRH.US/titles?sort=onsale&dir=asc&api_key=REDACTED&imprintCode=KM&start=1&rows=1",
+    "method": "GET",
+    "parameters": null
+   }
+  ]
+ },
+ "error": null,
+ "params": {
+  "clientGroup": "Public",
+  "domain": "PRH.US",
+  "imprintCode": "KM",
+  "zoom": "https://api.penguinrandomhouse.com/title/titles/content/definition",
+  "sort": "onsale",
+  "rows": 1,
+  "dir": "asc"
+ },
+ "requestedMethod": "listTitles"
+}

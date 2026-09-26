@@ -21,6 +21,8 @@ type FixtureTitle = {
   format?: string;
   imprint?: string;
   priceUsd?: number;
+  /** The content zoom's flap copy (HTML), embedded as the live API does. */
+  flapcopy?: string;
 };
 
 const requestedUrls: string[] = [];
@@ -43,6 +45,8 @@ function stubApi(titles: FixtureTitle[]) {
           description: t.imprint ?? "Kodansha Comics",
         },
         priceUsd: t.priceUsd,
+        _embeds:
+          t.flapcopy !== undefined ? [{ content: { ean: t.isbn, flapcopy: t.flapcopy } }] : null,
       }));
       return new Response(
         JSON.stringify({
@@ -367,6 +371,14 @@ describe("prh.sync — the authoritative overlay", () => {
       },
     ]);
     await sync(t);
+    // Every list request asks for the content zoom (the flap copy).
+    expect(
+      requestedUrls.every(
+        (u) =>
+          new URL(u).searchParams.get("zoom") ===
+          "https://api.penguinrandomhouse.com/title/titles/content/definition",
+      ),
+    ).toBe(true);
     await t.run(async (ctx) => {
       const publishers = await ctx.db.query("publishers").collect();
       expect(publishers.map((p) => p.slug)).toEqual(["denpa"]);
@@ -382,6 +394,24 @@ describe("prh.sync — the authoritative overlay", () => {
         title: "Yotsuba&!",
         bootstrapUnreviewed: true,
       });
+    });
+
+    // The flap copy arrives later: it fills the linked Release's description.
+    vi.unstubAllGlobals();
+    stubApi([
+      {
+        isbn: "9781634429457",
+        title: "Yotsuba&!, Vol. 16",
+        onsale: "2026-10-20",
+        imprint: "Denpa",
+        priceUsd: 13.95,
+        flapcopy: "Yotsuba&#8217;s back!<br><br>More everyday adventures.",
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const [release] = await ctx.db.query("releases").collect();
+      expect(release!.description).toBe("Yotsuba’s back! More everyday adventures.");
     });
 
     // The title disappears from a complete full sweep → withdrawn.

@@ -26,6 +26,8 @@ type FixtureManga = {
   id: number;
   title: string;
   altTitles?: Array<{ lang: string; text: string }>;
+  /** The Plot Summary's XML text (already escaped, as ANN serves it). */
+  plot?: string;
   releases: FixtureRelease[];
 };
 
@@ -56,9 +58,11 @@ function apiXml(manga: FixtureManga[], ids: string[]) {
             `<release date="${r.date}" href="https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${r.annId}"${r.ean ? ` ean="${r.ean}"` : ""}>${r.title ?? m.title} (${r.designator})</release>`,
         )
         .join("\n");
+      const plot = m.plot !== undefined ? `<info gid="4" type="Plot Summary">${m.plot}</info>` : "";
       return `<manga id="${m.id}" gid="1" type="manga" name="${m.title}" precision="manga">
 <info gid="1" type="Main title" lang="EN">${m.title}</info>
 ${alts}
+${plot}
 ${releases}
 <staff gid="3"><task>Story &amp; Art</task><person id="1">Some One</person></staff></manga>`;
     })
@@ -1225,6 +1229,53 @@ describe("ann — repairs stand across mirrors", () => {
     await t.run(async (ctx) => {
       const releases = await ctx.db.query("releases").collect();
       expect(releases.map((r) => r.status)).toEqual(["hidden"]);
+    });
+  });
+});
+
+describe("ann.sync — the Plot Summary as the Series synopsis", () => {
+  it("fills a blank synopsis, and only records its text against a publisher's", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([{ ...ALPHA, plot: "Alpha&amp;#039;s &quot;saga&quot;\nbegins." }]);
+    await sync(t, { releasePages: false });
+    const series = async () => await t.run(async (ctx) => (await ctx.db.query("series").first())!);
+    expect((await series()).synopsis).toBe('Alpha\'s "saga" begins.');
+
+    // Kodansha's own series text (authoritative) replaced ANN's since.
+    await t.run(async (ctx) => {
+      const current = (await ctx.db.query("series").first())!;
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "kodansha" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "series", id: current._id } as never,
+        seq: 2,
+        proposalId,
+        author: { kind: "source", sourceKey: "kodansha" },
+        changes: [{ field: "synopsis", before: current.synopsis, after: "The publisher's text." }],
+        comment: "Imported from kodansha.",
+      });
+      await ctx.db.patch(current._id, { synopsis: "The publisher's text." });
+    });
+
+    // A new ANN summary is lower authority: on the observation only.
+    stubAnn([{ ...ALPHA, plot: "A rewritten summary." }]);
+    await sync(t, { releasePages: false });
+    expect((await series()).synopsis).toBe("The publisher's text.");
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "manga:100",
+      )!;
+      expect(obs.snapshot).toMatchObject({ synopsis: "A rewritten summary." });
+      expect(obs.conflicts?.find((c) => c.field === "synopsis")).toMatchObject({
+        offered: "A rewritten summary.",
+        reason: expect.stringContaining("lower authority"),
+      });
+      const proposals = await ctx.db.query("proposals").collect();
+      expect(proposals.filter((p) => p.state === "inReview")).toHaveLength(0);
     });
   });
 });

@@ -14,7 +14,9 @@
 //   drives the ladder (rung ② first), so the crawl links PRH/ANN records
 //   and fills ISBNs on calendar-created Releases; unmatched volumes follow
 //   the standard creation boundaries. It never downloads covers: with an
-//   ISBN, the site's cover lookup finds the art (README "Covers").
+//   ISBN, the site's cover lookup finds the art (README "Covers"). The
+//   series blurb (series page, else listing) rides on each volume snapshot
+//   and is offered as the Series synopsis; the calendar keeps it.
 //
 // The backlist is incremental and resumable. Each series' crawl state is an
 // observation of its own under "kodansha-backlist" (lib/kodansha.ts
@@ -52,6 +54,7 @@ import {
   parseNewReleases,
   parseSeriesListing,
   parseSeriesPage,
+  parseSeriesSynopsis,
   parseVolumePage,
   seriesCrawlValidator,
   sourceRecordId,
@@ -442,16 +445,16 @@ export const backlistSync = internalAction({
             break;
           }
 
-          // The series page: its volume list.
+          // The series page: its volume list and blurb.
           const seriesUrl = `${BASE_URL}/series/${entry.slug}/`;
           fetchedHere++;
           fetchedTotal++;
           let volumes: string[];
+          let synopsis: string | undefined;
           try {
-            volumes = parseSeriesPage(
-              await (await politeFetch(seriesUrl, delay)).text(),
-              entry.slug,
-            );
+            const html = await (await politeFetch(seriesUrl, delay)).text();
+            volumes = parseSeriesPage(html, entry.slug);
+            synopsis = parseSeriesSynopsis(html) ?? entry.synopsis;
           } catch (e) {
             // Unrecorded, so the series stays due and is retried next run.
             failures++;
@@ -470,7 +473,10 @@ export const backlistSync = internalAction({
               const page = parseVolumePage(await (await politeFetch(url, delay)).text(), url);
               if (page === null || needsRecheck(page.offers, Date.now())) recheck.push(volumeSlug);
               if (page === null) continue;
-              for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(page)) {
+              for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(
+                page,
+                synopsis,
+              )) {
                 seen++;
                 try {
                   const result = await ctx.runMutation(internal.kodansha.applyVolume, {
@@ -578,10 +584,11 @@ function offeredReleaseFields(snapshot: KodanshaSnapshot): Record<string, unknow
 }
 
 /**
- * The calendar never carries ISBNs or prices, and its date is the calendar
- * bucket's: when a volume page already gave this record its ISBN, a calendar
- * snapshot keeps the page's facts (title, ISBN, binding, price, per-format
- * date) instead of erasing them, so the two feeds never flip-flop.
+ * The calendar never carries ISBNs, prices, or series blurbs, and its date
+ * is the calendar bucket's: when a volume page already gave this record its
+ * ISBN, a calendar snapshot keeps the page's facts (title, ISBN, binding,
+ * price, per-format date, series synopsis) instead of erasing them, so the
+ * two feeds never flip-flop.
  */
 async function withPageFacts(
   ctx: MutationCtx,
@@ -599,6 +606,7 @@ async function withPageFacts(
     binding: stored.binding,
     priceCents: stored.priceCents,
     releaseDate: stored.releaseDate ?? snapshot.releaseDate,
+    seriesSynopsis: snapshot.seriesSynopsis ?? stored.seriesSynopsis,
   };
 }
 
@@ -647,6 +655,7 @@ export const applyVolume = internalMutation({
         sourceKey: SOURCE_KEY,
         seriesKey: snapshot.seriesSlug,
         offeredTitle: snapshot.seriesTitle,
+        offeredSynopsis: snapshot.seriesSynopsis,
         citation,
         now,
       });
@@ -680,6 +689,7 @@ export const applyVolume = internalMutation({
       sourceKey: SOURCE_KEY,
       seriesKey: snapshot.seriesSlug,
       offeredTitle: snapshot.seriesTitle,
+      offeredSynopsis: snapshot.seriesSynopsis,
       citation,
       now,
     });
@@ -696,6 +706,7 @@ export const applyVolume = internalMutation({
           seriesKey: snapshot.seriesSlug,
           title: snapshot.seriesTitle,
           url: snapshot.seriesUrl,
+          synopsis: snapshot.seriesSynopsis,
           seriesId,
           now,
         });
@@ -732,6 +743,7 @@ export const applyVolume = internalMutation({
           seriesKey: snapshot.seriesSlug,
           title: snapshot.seriesTitle,
           url: snapshot.seriesUrl,
+          synopsis: snapshot.seriesSynopsis,
           seriesId: firstSeriesId,
           now,
         });
@@ -853,6 +865,7 @@ export const applyVolume = internalMutation({
       seriesTitle: snapshot.seriesTitle,
       seriesKey: snapshot.seriesSlug,
       seriesUrl: snapshot.seriesUrl,
+      seriesSynopsis: snapshot.seriesSynopsis,
       labels,
       release: { ...releasePayload, publisher: publisherRef },
       tagBootstrapUnreviewed: bootstrap && gates.length > 0,

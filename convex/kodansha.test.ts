@@ -435,6 +435,8 @@ type ListedSeries = {
   name: string;
   type?: string;
   stamp?: string;
+  /** The listing's `short_description`. */
+  blurb?: string;
 };
 
 const BLUE_LOCK: ListedSeries = { slug: "blue-lock", name: "Blue Lock" };
@@ -452,8 +454,8 @@ const NOVEL: ListedSeries = {
   type: "novel",
 };
 
-/** A series page in the live shape: JSON-LD hasPart only. */
-function seriesPage(slug: string, name: string, volumes: string[]): string {
+/** A series page in the live shape: JSON-LD hasPart and, optionally, a description. */
+function seriesPage(slug: string, name: string, volumes: string[], description?: string): string {
   const hasPart = volumes.map((volume) => ({
     "@type": "Book",
     url: `${BASE}/series/${slug}/${volume}/`,
@@ -462,6 +464,7 @@ function seriesPage(slug: string, name: string, volumes: string[]): string {
     "@context": "https://schema.org",
     "@type": "ComicSeries",
     name,
+    description,
     hasPart,
   })}</script></head><body></body></html>`;
 }
@@ -488,6 +491,7 @@ function stubBacklist(listed: ListedSeries[], pages: Record<string, string>) {
           slug: row.slug,
           name: row.name,
           type: row.type ?? "comic",
+          short_description: row.blurb ?? "",
           last_updated_at: row.stamp ?? "2026-02-06T09:53:10+00:00",
         }));
       return Response.json({
@@ -699,6 +703,68 @@ describe("kodansha.backlistSync — the crawl", () => {
         isbn13: "9798898303303",
         title: "Blue Lock Volume 40",
       });
+    });
+  });
+
+  it("offers the series blurb as the Series synopsis, and the calendar never erases it", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    // The series page's full description wins over the listing's short one;
+    // Blue Lock's page has none, so its listing blurb stands in.
+    stubBacklist(
+      [
+        { ...BLUE_LOCK, blurb: "<p>Listing &amp; blurb.</p>" },
+        { ...NEEDLES, blurb: "Short listing blurb." },
+      ],
+      BACKLIST_PAGES,
+    );
+    await backlist(t);
+    const synopses = async () =>
+      await t.run(async (ctx) => {
+        const series = await ctx.db.query("series").collect();
+        return Object.fromEntries(series.map((s) => [s.title, s.synopsis]));
+      });
+    expect(await synopses()).toEqual({
+      "Blue Lock": "Listing & blurb.",
+      "7 Billion Needles": expect.stringMatching(/^Hikaru Takabe may not be the most social/),
+    });
+
+    // The daily calendar has no series text: it keeps the crawl's.
+    vi.unstubAllGlobals();
+    stubSite([
+      {
+        series: "Blue Lock",
+        seriesSlug: "blue-lock",
+        volume: 40,
+        date: "2026-11-24",
+        formats: ["digital"],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      const volume = observations.find((o) => o.sourceRecordId === "blue-lock/volume-40#digital");
+      expect(volume?.snapshot).toMatchObject({ seriesSynopsis: "Listing & blurb." });
+      const link = observations.find((o) => o.sourceRecordId === "series:blue-lock");
+      expect(link?.snapshot).toMatchObject({ kind: "series", synopsis: "Listing & blurb." });
+    });
+
+    // Kodansha rewrites the blurb on its own page: its own fact, updated.
+    vi.unstubAllGlobals();
+    stubBacklist([{ ...BLUE_LOCK, stamp: "2026-10-01T00:00:00+00:00" }], {
+      ...BACKLIST_PAGES,
+      "series/blue-lock/": seriesPage(
+        "blue-lock",
+        "Blue Lock",
+        ["volume-1", "volume-40"],
+        "The full page blurb.",
+      ),
+    });
+    await backlist(t);
+    expect((await synopses())["Blue Lock"]).toBe("The full page blurb.");
+    await t.run(async (ctx) => {
+      const proposals = await ctx.db.query("proposals").collect();
+      expect(proposals.filter((p) => p.state === "inReview")).toHaveLength(0);
     });
   });
 

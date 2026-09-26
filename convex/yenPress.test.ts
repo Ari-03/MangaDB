@@ -1,8 +1,9 @@
 // Yen Press tests: the sitemap/title-page parsers against trimmed copies of
 // live pages (fetched 2026-09-25: the header, format tabs, prices, and the
 // "full details" section; a site-nav genre link stays in front to prove the
-// category is read from the book's own labels), and the adapter run
-// against a stubbed yenpress.com — no network.
+// category is read from the book's own labels; little-witch-academia-3,
+// fetched 2026-09-26, also keeps the `.content-heading-txt` blurb), and the
+// adapter run against a stubbed yenpress.com — no network.
 
 import { readFileSync } from "node:fs";
 import { convexTest } from "convex-test";
@@ -154,6 +155,26 @@ describe("parseTitlePage / toSnapshots", () => {
     expect(
       toSnapshots({ ...page, category: undefined }, "https://yenpress.com")[0]!.outOfScope,
     ).toBeUndefined();
+  });
+
+  it("reads the blurb paragraph, not the tagline, onto every format's snapshot", () => {
+    const html = liveFixture("little-witch-academia-3");
+    const page = parseTitlePage(html)!;
+    expect(page.description).toMatch(
+      /^The curtain rises ono an interschool broom race .* final volume of Little Witch Academia!$/,
+    );
+    expect(page.description).not.toContain("give up");
+    const snapshots = toSnapshots(
+      page,
+      "https://yenpress.com/titles/9781975357429-little-witch-academia-vol-3-manga",
+    );
+    expect(snapshots.map((s) => s.isbn13)).toEqual(["9781975357429", "9781975357436"]);
+    expect(snapshots.every((s) => s.description === page.description)).toBe(true);
+    // The live markup sometimes leaves the <p> unclosed before </div>.
+    const unclosed = html.replace(/<\/p>\s*<\/div>/, "\n</div>");
+    expect(parseTitlePage(unclosed)!.description).toBe(page.description);
+    // A page without the block offers no description at all.
+    expect(parseTitlePage(liveFixture("little-witch-academia"))!.description).toBeUndefined();
   });
 
   it("rejects impossible calendar dates", () => {
@@ -377,6 +398,28 @@ describe("yenPress.sync", () => {
       expect(releases).toHaveLength(2);
       expect(releases.every((release) => release.publisherId === publisher!._id)).toBe(true);
     });
+  });
+
+  it("carries the blurb into new Releases and fills it on linked ones", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const url = "https://yenpress.com/titles/9781975357429-little-witch-academia-vol-3-manga";
+    const page = parseTitlePage(liveFixture("little-witch-academia-3"))!;
+    // First seen without a blurb, then with one: the linked Releases fill.
+    for (const snapshot of toSnapshots({ ...page, description: undefined }, url)) {
+      await t.mutation(internal.yenPress.applyTitle, { snapshot });
+    }
+    const descriptions = async () =>
+      await t.run(async (ctx) =>
+        (await ctx.db.query("releases").collect()).map((r) => r.description ?? null),
+      );
+    expect(await descriptions()).toEqual([null, null]);
+    for (const snapshot of toSnapshots(page, url)) {
+      expect(await t.mutation(internal.yenPress.applyTitle, { snapshot })).toMatchObject({
+        status: "updated",
+      });
+    }
+    expect(await descriptions()).toEqual([page.description, page.description]);
   });
 
   it("creates in-scope books under Yen's publisher rows, once per page, never novels", async () => {

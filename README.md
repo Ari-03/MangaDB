@@ -543,6 +543,15 @@ deployment seeded before ticket #36, flip the four newer rows on via
 `importSources.upsert` or the dashboard (`seedRegistry` never overwrites an
 existing row).
 
+When the defaults gain an authority column (the `description` category for
+publisher blurbs, 2026-09), backfill it onto a deployment seeded earlier. It
+adds only the categories a stored row lacks and never changes one already
+set, so an Administrator's edit stands:
+
+```sh
+npx convex run importSources:backfillFieldAuthority '{}'
+```
+
 **Source Observations** (`convex/lib/observations.ts`). External facts are
 observations, never direct writes: identity is (source, source-record-id),
 `snapshot` holds the latest normalized form read by reconciliation, and
@@ -576,7 +585,11 @@ normalizes, and reconciles each snapshot atomically:
   a system-authored, immediately approved Proposal creates
   Series → Volume → Edition (+ coverage) → Release, with one public
   importer-authored **Revision per record citing the source name + record
-  URL**. Marketing descriptions are never imported (spec §6).
+  URL**. Publisher blurbs import as the Release Description and the Series
+  synopsis under the `description` authority column: the publisher's own
+  catalog text wins, the distributor (PRH) comes next, and aggregators (ANN,
+  OpenLibrary) only fill a blank. A human's edit is never overwritten, and
+  the edit form lists every source's text for review.
 - **Steady state** auto-creates a single-volume Release under an
   already-linked Series; a brand-new Series, multi-volume coverage, or an
   Edition-Line-shaped release (deluxe/omnibus/box-set packaging) queues an

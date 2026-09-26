@@ -209,11 +209,15 @@ export async function findPublisherByName(
 
 // ---------- the series half of rung ① ----------
 
+/** The synthetic series-link snapshot: the source's series title, page, and blurb. */
+type SeriesLinkSnapshot = { kind: "series"; title: string; url?: string; synopsis?: string };
+
 /**
  * Upsert the synthetic series-link observation (`series:{key}`) and point it
  * at the canonical Series if not linked yet. The key is the source's own
  * series identity (its slug or record id), making a later series rename a
- * rung-① field conflict instead of a failed match.
+ * rung-① field conflict instead of a failed match. A feed without series
+ * text (Kodansha's calendar) keeps the synopsis another feed stored.
  */
 export async function linkSeriesObservation(
   ctx: MutationCtx,
@@ -222,14 +226,25 @@ export async function linkSeriesObservation(
     seriesKey: string;
     title: string;
     url?: string;
+    synopsis?: string;
     seriesId: Id<"series">;
     now: number;
   },
 ): Promise<Id<"sourceObservations">> {
+  const sourceRecordId = `series:${args.seriesKey}`;
+  const stored = (await getObservation(ctx, args.sourceKey, sourceRecordId))?.snapshot as
+    | SeriesLinkSnapshot
+    | undefined;
+  const synopsis = args.synopsis ?? stored?.synopsis;
   const { observation } = await upsertObservation(ctx, {
     sourceKey: args.sourceKey,
-    sourceRecordId: `series:${args.seriesKey}`,
-    snapshot: { kind: "series", title: args.title, url: args.url },
+    sourceRecordId,
+    snapshot: {
+      kind: "series",
+      title: args.title,
+      url: args.url,
+      ...(synopsis !== undefined ? { synopsis } : {}),
+    },
     now: args.now,
   });
   if (!observation.recordRef) {
@@ -241,10 +256,12 @@ export async function linkSeriesObservation(
 }
 
 /**
- * Reconcile the linked Series' title with the source's current one — a
- * series rename at the source is a field conflict routed through the same
- * authority rules as any other field (spec §6 rung ①, never a failed
- * match). Returns the linked series, if any, for the creation boundaries.
+ * Reconcile the linked Series' title — and its synopsis, when the source
+ * offers one — with the source's current values: a series rename at the
+ * source is a field conflict routed through the same authority rules as any
+ * other field (spec §6 rung ①, never a failed match). An offered synopsis
+ * is also stored on the series observation. Returns the linked series, if
+ * any, for the creation boundaries.
  */
 export async function reconcileLinkedSeries(
   ctx: MutationCtx,
@@ -252,11 +269,12 @@ export async function reconcileLinkedSeries(
     sourceKey: string;
     seriesKey: string;
     offeredTitle: string;
+    offeredSynopsis?: string;
     citation: { sourceName: string; url: string };
     now: number;
   },
 ): Promise<{ seriesId: Id<"series"> | null; changed: boolean }> {
-  const seriesObs = await getObservation(ctx, args.sourceKey, `series:${args.seriesKey}`);
+  let seriesObs = await getObservation(ctx, args.sourceKey, `series:${args.seriesKey}`);
   if (seriesObs?.recordRef?.type !== "series") {
     return { seriesId: null, changed: false };
   }
@@ -271,12 +289,24 @@ export async function reconcileLinkedSeries(
       recordRef: { type: "series", id: series._id },
     });
   }
+  const snapshot = seriesObs.snapshot as SeriesLinkSnapshot;
+  if (args.offeredSynopsis !== undefined && snapshot.synopsis !== args.offeredSynopsis) {
+    ({ observation: seriesObs } = await upsertObservation(ctx, {
+      sourceKey: args.sourceKey,
+      sourceRecordId: seriesObs.sourceRecordId,
+      snapshot: { ...snapshot, synopsis: args.offeredSynopsis },
+      now: args.now,
+    }));
+  }
   if (series.locked) return { seriesId: series._id, changed: false };
   const result = await reconcileFields(ctx, {
     sourceKey: args.sourceKey,
     ref: { type: "series", id: series._id },
     doc: series,
-    offered: { title: args.offeredTitle },
+    offered: {
+      title: args.offeredTitle,
+      ...(args.offeredSynopsis !== undefined ? { synopsis: args.offeredSynopsis } : {}),
+    },
     observation: seriesObs,
     citation: args.citation,
     now: args.now,
@@ -411,6 +441,8 @@ export type ReleasePayload = {
   isbn10?: string;
   pubDate?: PartialDate;
   price?: { amountCents: number; currency: string };
+  /** The publisher's blurb for this book (a Release Description). */
+  description?: string;
 };
 
 type PublisherRef = { name: string; slug: string; parentSlug?: string };
@@ -424,6 +456,8 @@ export type CreationArgs = {
   seriesId: Id<"series"> | null;
   seriesTitle: string;
   seriesAltTitles?: string[];
+  /** The source's series blurb, for a brand-new Series and its series link. */
+  seriesSynopsis?: string;
   /** Source-side series identity for the rung-① series link. */
   seriesKey?: string;
   seriesUrl?: string;
@@ -746,7 +780,7 @@ export async function createCanonicalRecords(
   if (seriesId === null) {
     const publicId = await allocatePublicId(ctx, "series");
     const altTitles = args.seriesAltTitles ?? [];
-    const fields = { title: args.seriesTitle, altTitles };
+    const fields = { title: args.seriesTitle, altTitles, synopsis: args.seriesSynopsis };
     seriesId = await ctx.db.insert("series", {
       status: "active",
       ...tag,
@@ -766,6 +800,7 @@ export async function createCanonicalRecords(
           seriesKey: args.seriesKey,
           title: args.seriesTitle,
           url: args.seriesUrl,
+          synopsis: args.seriesSynopsis,
           seriesId,
           now,
         }),
@@ -852,6 +887,7 @@ export async function createCanonicalRecords(
       isbn10: args.release.isbn10,
       pubDate: args.release.pubDate,
       price: args.release.price,
+      description: args.release.description,
     };
     releaseId = await ctx.db.insert("releases", {
       status: "active",
@@ -992,6 +1028,7 @@ export async function createReleaseBundle(
     isbn10: args.release.isbn10,
     pubDate: args.release.pubDate,
     price: args.release.price,
+    description: args.release.description,
   };
   const bundleId = await ctx.db.insert("releaseBundles", {
     status: "active",
@@ -1161,6 +1198,7 @@ export async function queueCreationProposal(
         isbn10: args.release.isbn10,
         pubDate: args.release.pubDate,
         price: args.release.price,
+        description: args.release.description,
       },
     });
   }

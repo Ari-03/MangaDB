@@ -166,6 +166,24 @@ describe("parseApiResponse", () => {
     });
   });
 
+  it("reads the Plot Summary as the synopsis: entities decoded, line breaks collapsed", () => {
+    const [manga] = parseApiResponse(`<ann><manga id="24449" name="Frieren">
+<info gid="4083496145" type="Main title" lang="EN">Frieren</info>
+<info gid="1981291311" type="Plot Summary">The demon king has been defeated, and the victorious hero party returns home.
+Elf mage Frieren &amp;amp; her comrades said &quot;farewell&quot; &#8212; what&#039;s next?</info>
+</manga></ann>`);
+    expect(manga!.synopsis).toBe(
+      "The demon king has been defeated, and the victorious hero party returns home. " +
+        "Elf mage Frieren & her comrades said \"farewell\" — what's next?",
+    );
+    // No Plot Summary (or an empty one): no synopsis at all.
+    expect(parseApiResponse(API)[0]!.synopsis).toBeUndefined();
+    const [blank] = parseApiResponse(
+      `<ann><manga id="1" name="X"><info gid="1" type="Plot Summary"> </info></manga></ann>`,
+    );
+    expect(blank!.synopsis).toBeUndefined();
+  });
+
   it("tolerates warnings and empty responses", () => {
     expect(parseApiResponse("<ann><warning>no result</warning></ann>")).toEqual([]);
   });

@@ -19,8 +19,8 @@ import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitl
 // ---------- the normalized snapshot ----------
 
 // What reconciliation reads (spec §6): the latest normalized form of one
-// source record. `description` stays observation-only — marketing copy is
-// never imported into canonical description fields in v1 (#13).
+// source record. `description` is the listing's blurb (`content.rendered`),
+// offered as the Release Description at Seven Seas' own-catalog authority.
 export const bookSnapshotValidator = v.object({
   kind: v.literal("book"),
   url: v.string(),
@@ -54,7 +54,7 @@ export type BookSnapshot = Infer<typeof bookSnapshotValidator>;
 // Shared with the other adapters' parsers; re-exported to keep this module
 // the one import site for Seven Seas parsing.
 export { decodeEntities, stripHtml } from "./text";
-import { decodeEntities, stripHtml } from "./text";
+import { cleanBlurb, decodeEntities, stripHtml } from "./text";
 
 // ---------- WP REST listing ----------
 
@@ -91,8 +91,7 @@ export function parseBookListing(raw: unknown): BookListing | null {
     typeof item.content === "object" && item.content !== null
       ? (item.content as Record<string, unknown>).rendered
       : undefined;
-  const description =
-    typeof content === "string" && content.trim() !== "" ? stripHtml(content) : undefined;
+  const description = cleanBlurb(content);
   return {
     sourceRecordId: String(item.id),
     slug,

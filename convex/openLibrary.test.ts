@@ -238,6 +238,47 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     });
   });
 
+  it("fills a blank description from the edition's blurb, never over a publisher's", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    const blurb = { type: "/type/text", value: "Denji&#39;s <b>back</b>." };
+    stubDump([{ ...CHAINSAW_22, description: blurb }]);
+    await sync(t);
+    const description = async () =>
+      await t.run(async (ctx) => (await ctx.db.get(releaseId!))!.description);
+    expect(await description()).toBe("Denji's back.");
+
+    // A publisher feed (authoritative) replaced it; OL's rewrite stays on
+    // its observation.
+    await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "sevenseas" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: releaseId! } as never,
+        seq: 10,
+        proposalId,
+        author: { kind: "source", sourceKey: "sevenseas" },
+        changes: [{ field: "description", after: "The publisher's copy." }],
+        comment: "Imported from Seven Seas Entertainment.",
+      });
+      await ctx.db.patch(releaseId!, { description: "The publisher's copy." });
+    });
+    stubDump([{ ...CHAINSAW_22, description: "A rewritten OL blurb." }]);
+    await sync(t);
+    expect(await description()).toBe("The publisher's copy.");
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
+      expect(obs.conflicts?.find((c) => c.field === "description")).toMatchObject({
+        offered: "A rewritten OL blurb.",
+        reason: expect.stringContaining("lower authority"),
+      });
+    });
+  });
+
   it("creates a leaf Release under fully pre-existing structure — and nothing else, ever", async () => {
     const t = makeT();
     await seedRegistry(t);

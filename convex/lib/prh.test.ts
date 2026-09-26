@@ -267,6 +267,32 @@ describe("parseTitleList", () => {
     });
   });
 
+  it("reads the content zoom's flap copy as the description, cleaned to text", () => {
+    const { titles } = parseTitleList(
+      JSON.parse(
+        readFileSync(new URL("./__fixtures__/prh/titles-page-zoom.json", import.meta.url), "utf8"),
+      ),
+    );
+    const akira = titles[0]!;
+    expect(akira).toMatchObject({ isbn13: "9781935429005", title: "Akira 1" });
+    expect(akira.description).toMatch(/^Welcome to Neo-Tokyo, built on the ashes of a Tokyo/);
+    expect(akira.description).toContain("agency’s motivation");
+    expect(akira.description).not.toMatch(/<br|&#8217;/);
+    expect(akira.description).toMatch(/publisher Mike Richardson!$/);
+  });
+
+  it("falls back to the positioning line, never to another EAN's copy", () => {
+    const embed = (content: Record<string, unknown>) => ({ ...TITLE, _embeds: [{ content }] });
+    expect(
+      parseTitle(embed({ ean: "9781646094356", flapcopy: " ", positioning: "One line." }))
+        ?.description,
+    ).toBe("One line.");
+    expect(
+      parseTitle(embed({ ean: "9780000000000", flapcopy: "Another book." }))?.description,
+    ).toBeUndefined();
+    expect(parseTitle(TITLE)?.description).toBeUndefined();
+  });
+
   it.each([
     { recordCount: 5, data: {} },
     { recordCount: 3, data: { titles: null } },

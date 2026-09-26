@@ -19,7 +19,13 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
-import { authorityRank, decideField, type FieldDecision, type Incumbent } from "./authority";
+import {
+  authorityRank,
+  decideField,
+  latestTouch,
+  type FieldDecision,
+  type Incumbent,
+} from "./authority";
 import { sameValue, valueHash } from "./values";
 
 /** The record types imports reconcile field-level today. */
@@ -160,19 +166,19 @@ export async function reconcileFields(
   const recordOnly: Array<{ field: string; offered: unknown; reason: string }> = [];
   for (const [field, offeredValue] of Object.entries(args.offered)) {
     const current = (doc as Record<string, unknown>)[field];
-    const latestTouch = history.find((rev) => rev.changes.some((change) => change.field === field));
+    const touch = latestTouch(history, field);
     let incumbent: Incumbent;
-    if (!latestTouch) {
+    if (!touch) {
       incumbent = current === undefined ? { kind: "none" } : { kind: "unattributed" };
-    } else if (latestTouch.author.kind === "user") {
+    } else if (touch.author.kind === "user") {
       incumbent = { kind: "human" };
     } else {
-      const key = latestTouch.author.sourceKey;
+      const key = touch.author.sourceKey;
       incumbent = {
         kind: "source",
         sourceKey: key,
         rank: authorityRank((await registryRow(key))?.fieldAuthority, field),
-        observationIds: await evidenceOf(latestTouch),
+        observationIds: await evidenceOf(touch),
       };
     }
     const decision = decideField({

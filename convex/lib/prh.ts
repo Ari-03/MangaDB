@@ -10,6 +10,13 @@
 // The imprint-scoped path is mandatory: the flat /titles endpoint silently
 // ignores its `imprint` and `onsaleFrom` query params (verified live
 // 2026-08 and 2026-09), so date filtering happens client-side in the sync.
+// The sync adds the content zoom
+// (`zoom=https://api.penguinrandomhouse.com/title/titles/content/definition`),
+// which embeds each title's marketing copy in the same response
+// (`_embeds[].content`: `flapcopy`, `positioning`, `jacketquotes`… as HTML
+// with entities and `<br>`; verified live 2026-09-26,
+// __fixtures__/prh/titles-page-zoom.json). The flap copy (else the one-line
+// positioning) is the snapshot's `description` — PRH's Release Description.
 //
 // The parser is deliberately tolerant of shape drift (nested vs flat
 // imprint/format fields, string vs number ISBNs) — verified against the
@@ -31,6 +38,7 @@
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
 import { catalogTitleFields } from "./catalogTitle";
+import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -89,6 +97,27 @@ function priceCents(entry: Record<string, unknown>): number | undefined {
       if (p.currencyCode === "USD" && typeof p.amount === "number" && p.amount > 0) {
         return Math.round(p.amount * 100);
       }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The title's blurb from the content zoom (`_embeds[].content`): the flap
+ * copy, else the one-line positioning. An embed naming another EAN is
+ * ignored.
+ */
+function flapCopy(entry: Record<string, unknown>, isbn13: string): string | undefined {
+  const contents = (Array.isArray(entry._embeds) ? entry._embeds : []).flatMap((embed) => {
+    const content = (embed as { content?: unknown } | null)?.content;
+    if (typeof content !== "object" || content === null) return [];
+    const fields = content as Record<string, unknown>;
+    return fields.ean === undefined || String(fields.ean) === isbn13 ? [fields] : [];
+  });
+  for (const key of ["flapcopy", "positioning"]) {
+    for (const content of contents) {
+      const text = cleanBlurb(content[key]);
+      if (text !== undefined) return text;
     }
   }
   return undefined;
@@ -210,6 +239,7 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
     binding,
     imprint,
     priceCents: priceCents(entry),
+    description: flapCopy(entry, isbn13),
   };
 }
 

@@ -240,6 +240,98 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
           ) : null}
         </form>
       )}
+      {type === "release" || type === "series" ? (
+        <SourceDescriptions recordRef={{ type, id: form.ref.id }} />
+      ) : null}
     </main>
+  );
+}
+
+/**
+ * Every blurb the sources offered for this Release (description) or Series
+ * (synopsis), beside the canonical one, so a reviewer can compare them and
+ * copy a better text into the form above. Imports pick by authority: the
+ * publisher's own text, then the distributor's, then aggregators'.
+ */
+function SourceDescriptions({
+  recordRef,
+}: {
+  recordRef: { type: "release" | "series"; id: string };
+}) {
+  const result = useQuery(api.moderation.sourceBlurbs, { ref: recordRef });
+  if (result === undefined) {
+    return (
+      <section className="mod-panel">
+        <h2>Source descriptions</h2>
+        <p className="mod-empty">Loading…</p>
+      </section>
+    );
+  }
+  if (result === null) return null;
+
+  const { canonical, blurbs } = result;
+  const noun = result.field === "description" ? "description" : "synopsis";
+  const authorship =
+    canonical.author === null
+      ? "predates revision history"
+      : canonical.author.kind === "user"
+        ? `was written by ${
+            canonical.author.username ? `@${canonical.author.username}` : "a deleted account"
+          }`
+        : `was imported from ${canonical.author.sourceKey}`;
+
+  return (
+    <section className="mod-panel">
+      <h2>Source descriptions</h2>
+      <p className="section-hint">
+        {canonical.text === null
+          ? `No ${noun} yet: the first source to offer one fills it, or write one above.`
+          : `The current ${noun} ${authorship}.`}
+        {canonical.overridden ? " It is a Human Override: imports never replace it." : null}
+        {result.truncated ? " Showing the first 50 linked source records." : null}
+      </p>
+      {blurbs.length === 0 ? (
+        <p className="mod-empty">No source has offered a {noun} for this record.</p>
+      ) : (
+        <div>
+          <ol className="revision-list">
+            {blurbs.map((blurb) => (
+              <li key={`${blurb.observationId}:${blurb.text}`} className="revision">
+                <div className="revision-meta">
+                  <span className="revision-author">{blurb.sourceName}</span>
+                  {blurb.current ? (
+                    <span className="chip mod-chip mod-chip--ok">current</span>
+                  ) : null}
+                  {blurb.recordedOnly ? (
+                    <span className="chip mod-chip mod-chip--mute">
+                      recorded only ({blurb.recordedOnly.reason})
+                    </span>
+                  ) : null}
+                  {blurb.withdrawn ? (
+                    <span className="chip mod-chip mod-chip--warn">withdrawn at source</span>
+                  ) : null}
+                  <time dateTime={new Date(blurb.lastSeenAt).toISOString()}>
+                    seen{" "}
+                    {new Date(blurb.lastSeenAt).toLocaleDateString(undefined, {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </time>
+                </div>
+                <p className="revision-comment">{blurb.text}</p>
+                {blurb.url ? (
+                  <p className="revision-citation">
+                    <a href={blurb.url} target="_blank" rel="noreferrer">
+                      View at {blurb.sourceName}
+                    </a>
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
   );
 }

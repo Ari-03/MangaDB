@@ -10,7 +10,7 @@ The adapter has useful offline coverage for ISBN matching, publisher aliases, pa
 
 `sync` requires an enabled source and PRH API key plus imprint codes. It pages each imprint's titles in batches of 200. Daily runs sort newest first and retain today/future dates. Sunday or explicitly full runs walk the catalog. Each accepted ISBN becomes a normalized snapshot and an atomic `applyCatalogTitle` mutation. Full, uncapped sweeps without an imprint override may mark unseen observations withdrawn. The default cap is 50 pages per imprint.
 
-`parseTitle` reads the title, ISBN, series number, on-sale date, format/binding, author, imprint, USD price and source URL. Shared title parsing identifies series and packaging. Scope checks exclude novels, prose imprints, audio, non-English records and some non-manga classifications. Manga appearance remains partly editorial judgment; BISAC or imprint membership cannot prove it.
+`parseTitle` reads the title, ISBN, series number, on-sale date, format/binding, author, imprint, USD price, source URL, and blurb. The sync requests the list with `zoom=https://api.penguinrandomhouse.com/title/titles/content/definition`, which embeds each title's `_embeds[].content` at no extra request cost. The flap copy, or else the positioning line, is cleaned of `<br>` and entities and becomes the Release Description at standard authority. A redacted live page is pinned as `convex/lib/__fixtures__/prh/titles-page-zoom.json`. Shared title parsing identifies series and packaging. Scope checks exclude novels, prose imprints, audio, non-English records and some non-manga classifications. Manga appearance remains partly editorial judgment; BISAC or imprint membership cannot prove it.
 
 ## Fixed defects
 

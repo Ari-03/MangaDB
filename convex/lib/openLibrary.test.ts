@@ -217,6 +217,18 @@ describe("parseEditionJson / parseDumpLine", () => {
     expect(parseDumpLine(dumpLine({ ...EDITION, title: 42 }))).toBeNull();
   });
 
+  it("reads the description in both of OL's shapes, cleaned; blank is none", () => {
+    const described = (description: unknown) =>
+      parseEditionJson({ ...EDITION, description })?.description;
+    expect(described("Denji&#39;s <i>back</i>.\n")).toBe("Denji's back.");
+    expect(described({ type: "/type/text", value: "Devils,\r\n\r\nchainsaws." })).toBe(
+      "Devils, chainsaws.",
+    );
+    expect(described("  ")).toBeUndefined();
+    expect(described({ type: "/type/text" })).toBeUndefined();
+    expect(parseEditionJson(EDITION)?.description).toBeUndefined();
+  });
+
   it("classifies e-book physical_format as digital", () => {
     expect(parseEditionJson({ ...EDITION, physical_format: "E-book" })).toMatchObject({
       format: "digital",

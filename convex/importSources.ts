@@ -17,6 +17,7 @@ import {
   query,
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { AuthorityLevel } from "./lib/authority";
 import { requireModerator, requireRole } from "./lib/roles";
 
 const authorityLevel = v.union(
@@ -51,6 +52,7 @@ export const V1_SOURCE_DEFAULTS = [
       creators: "authoritative",
       format: "authoritative",
       price: "authoritative",
+      description: "authoritative",
     },
     cadence: "daily",
     attribution: "Cover and publication data courtesy of Seven Seas Entertainment (sevenseasentertainment.com).",
@@ -67,6 +69,7 @@ export const V1_SOURCE_DEFAULTS = [
       creators: "authoritative",
       format: "authoritative",
       price: "authoritative",
+      description: "authoritative",
     },
     cadence: "daily",
     attribution: "Cover and publication data courtesy of Kodansha (kodansha.us).",
@@ -83,6 +86,8 @@ export const V1_SOURCE_DEFAULTS = [
       creators: "standard",
       format: "standard",
       price: "authoritative",
+      // Distributor flap copy: the publisher's own site text wins.
+      description: "standard",
     },
     cadence: "daily",
     attribution: "Publication data via the Penguin Random House API.",
@@ -99,6 +104,8 @@ export const V1_SOURCE_DEFAULTS = [
       format: "standard",
       // Fills a Release's blank ISBN from its ANN line; never overrides.
       isbn: "weak",
+      // Plot summaries fill a blank synopsis; any publisher text replaces them.
+      description: "weak",
     },
     cadence: "weekly",
     attribution: "Encyclopedia data provided by Anime News Network.",
@@ -114,6 +121,7 @@ export const V1_SOURCE_DEFAULTS = [
       titles: "weak",
       creators: "weak",
       format: "standard",
+      description: "weak",
     },
     cadence: "monthly",
     attribution: "Bibliographic data from OpenLibrary (openlibrary.org), CC0.",
@@ -133,6 +141,7 @@ export const V1_SOURCE_DEFAULTS = [
       creators: "authoritative",
       format: "authoritative",
       price: "authoritative",
+      description: "authoritative",
     },
     cadence: "daily",
     attribution: "Publication data courtesy of Yen Press (yenpress.com).",
@@ -154,6 +163,7 @@ export const V1_SOURCE_DEFAULTS = [
       creators: "authoritative",
       format: "authoritative",
       price: "authoritative",
+      description: "authoritative",
     },
     cadence: "weekly",
     attribution: "Publication data courtesy of Kodansha (kodansha.us).",
@@ -362,6 +372,34 @@ export const addFieldAuthorityInternal = internalMutation({
       fieldAuthority: { ...source.fieldAuthority, [category]: level },
     });
     return { changed: true };
+  },
+});
+
+/**
+ * Backfill the categories V1_SOURCE_DEFAULTS gained after a deployment was
+ * seeded (seedRegistry only inserts missing rows): each stored default row
+ * gets every default category it lacks. A category already set is never
+ * changed, so an Administrator's edit stands; missing rows are seedRegistry's.
+ *   npx convex run importSources:backfillFieldAuthority '{}'
+ */
+export const backfillFieldAuthority = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const added: Array<{ key: string; category: string; level: AuthorityLevel }> = [];
+    for (const source of V1_SOURCE_DEFAULTS) {
+      const row = await getSourceByKey(ctx, source.key);
+      if (!row) continue;
+      const stored: Record<string, AuthorityLevel | undefined> = row.fieldAuthority;
+      const missing = Object.entries(source.fieldAuthority).filter(
+        ([category]) => stored[category] === undefined,
+      );
+      if (missing.length === 0) continue;
+      await ctx.db.patch(row._id, {
+        fieldAuthority: { ...row.fieldAuthority, ...Object.fromEntries(missing) },
+      });
+      for (const [category, level] of missing) added.push({ key: source.key, category, level });
+    }
+    return { added };
   },
 });
 

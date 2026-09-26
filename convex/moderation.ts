@@ -16,7 +16,9 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { editionCoverage, followMerges } from "./catalogPages";
+import { getSourceByKey } from "./importSources";
 import { recordRef } from "./schema";
+import { latestTouch } from "./lib/authority";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   EDITABLE_FIELDS,
@@ -78,10 +80,7 @@ function importAuthoredFields(
 ): Set<string> {
   const result = new Set<string>();
   for (const field of fields) {
-    const latestTouch = revisionsNewestFirst.find((rev) =>
-      rev.changes.some((change) => change.field === field),
-    );
-    if (latestTouch && latestTouch.author.kind === "source") result.add(field);
+    if (latestTouch(revisionsNewestFirst, field)?.author.kind === "source") result.add(field);
   }
   return result;
 }
@@ -488,6 +487,115 @@ export const editForm = query({
         value: (doc as Record<string, unknown>)[descriptor.name] ?? null,
       })),
       backLink,
+    };
+  },
+});
+
+// ---------- source blurbs (reviewer visibility) ----------
+
+/** Observations read per record; a record links a handful of sources in practice. */
+const BLURB_OBSERVATION_CAP = 50;
+
+/** A non-empty string, or null: snapshots are `v.any()` and adapters evolve. */
+function blurbText(raw: unknown): string | null {
+  return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+}
+
+/**
+ * Every blurb a source offered for one Release (its description) or Series
+ * (its synopsis), for the edit form's review panel: one entry per linked
+ * observation's current snapshot text, plus any recordOnly conflict entry
+ * whose text differs from it. Also which text is canonical now and who
+ * authored it (the latest Revision touching the field, as reconciliation
+ * resolves the incumbent). Moderator/Administrator only.
+ */
+export const sourceBlurbs = query({
+  args: {
+    ref: v.object({
+      type: v.union(v.literal("release"), v.literal("series")),
+      id: v.string(),
+    }),
+  },
+  handler: async (ctx, { ref }) => {
+    await requireModerator(ctx);
+    const id = ctx.db.normalizeId(TABLE_FOR_TYPE[ref.type], ref.id);
+    const doc = id ? await ctx.db.get(id) : null;
+    if (!id || !doc) return null;
+    const field = ref.type === "release" ? "description" : "synopsis";
+    const canonicalText = blurbText((doc as Record<string, unknown>)[field]);
+
+    const touch = latestTouch(await revisionsOf(ctx, { type: ref.type, id }), field);
+    const author =
+      touch === undefined
+        ? null
+        : touch.author.kind === "user"
+          ? {
+              kind: "user" as const,
+              username: (await ctx.db.get(touch.author.userId))?.username ?? null,
+            }
+          : { kind: "source" as const, sourceKey: touch.author.sourceKey };
+
+    const observations = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_record", (q) => q.eq("recordRef.type", ref.type).eq("recordRef.id", id))
+      .take(BLURB_OBSERVATION_CAP + 1);
+
+    const sourceNames = new Map<string, string>();
+    const sourceName = async (key: string) => {
+      if (!sourceNames.has(key)) {
+        sourceNames.set(key, (await getSourceByKey(ctx, key))?.name ?? key);
+      }
+      return sourceNames.get(key) ?? key;
+    };
+
+    const blurbs = [];
+    for (const observation of observations.slice(0, BLURB_OBSERVATION_CAP)) {
+      const snapshot: Record<string, unknown> =
+        typeof observation.snapshot === "object" && observation.snapshot !== null
+          ? observation.snapshot
+          : {};
+      const conflict = (observation.conflicts ?? []).find((c) => c.field === field);
+      const recorded = conflict
+        ? { text: blurbText(conflict.offered), reason: conflict.reason, at: conflict.at }
+        : null;
+      const offeredNow = blurbText(snapshot[field]);
+      const base = {
+        observationId: observation._id,
+        sourceKey: observation.sourceKey,
+        sourceName: await sourceName(observation.sourceKey),
+        url: blurbText(snapshot.url),
+        lastSeenAt: observation.lastSeenAt,
+        withdrawn: observation.withdrawn,
+      };
+      // A recordOnly entry names the offer that lost; it rides on the matching
+      // snapshot text, or stands alone when the snapshot has since moved on.
+      const texts = [
+        ...(offeredNow !== null ? [offeredNow] : []),
+        ...(recorded?.text && recorded.text !== offeredNow ? [recorded.text] : []),
+      ];
+      for (const text of texts) {
+        const current = text === canonicalText;
+        blurbs.push({
+          ...base,
+          text,
+          current,
+          recordedOnly:
+            recorded?.text === text && !current
+              ? { reason: recorded.reason, at: recorded.at }
+              : null,
+        });
+      }
+    }
+
+    return {
+      field,
+      canonical: {
+        text: canonicalText,
+        author,
+        overridden: (doc.overriddenFields ?? []).includes(field),
+      },
+      blurbs,
+      truncated: observations.length > BLURB_OBSERVATION_CAP,
     };
   },
 });

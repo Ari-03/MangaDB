@@ -28,7 +28,7 @@ Search-indexed first-party pages still show the expected release metadata. [Gild
 5. An unchanged `modified_gmt` skips detail fetches even after a cover download failed. Cover retries need their own pending state or bounded retry path. `force` can currently revisit such records, but is not an automatic recovery strategy.
 6. `modified_gmt` is assumed to reflect every relevant publisher field change. That assumption was not verified against current WordPress custom-field updates. A periodic detail refresh would bound staleness.
 7. Page-number pagination ordered by modification time can move records between pages during a sweep. Valid pagination headers do not prove snapshot consistency. Stable ordering, repeated-boundary checks, or a second absence check should precede stronger withdrawal guarantees.
-8. Descriptions and creators are collected as observations but do not populate all canonical website fields. This behavior is explicit in the existing parser comments; richer extraction alone will not improve those displays.
+8. Creators are collected as observations but do not populate canonical website fields. The listing blurb (`content.rendered`) is now the Release Description at authoritative rank. It is set at creation and reconciled on linked Releases.
 9. The publisher's [book archive](https://sevenseasentertainment.com/series/seven-seas-book-archive/) explicitly groups permanently out-of-print releases. A generic archive Series link must not become a real Series identity. Current normalization trusts a detail page's Series link; verify whether archived detail pages point to that archive before importing them.
 
 ## Validation

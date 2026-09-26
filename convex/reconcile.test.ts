@@ -26,6 +26,8 @@ type FixtureBook = {
   date?: string;
   price?: string;
   isbn?: string;
+  /** The listing's `content.rendered` blurb HTML. */
+  blurb?: string;
 };
 
 function bookPageHtml(b: FixtureBook): string {
@@ -47,7 +49,7 @@ function stubSite(books: FixtureBook[]) {
     link: `${BASE}/books/${b.slug}/`,
     title: { rendered: b.title },
     modified_gmt: b.modified ?? "2026-08-01T00:00:00",
-    content: { rendered: "" },
+    content: { rendered: b.blurb ?? "" },
   }));
   const pages = new Map(books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]));
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
@@ -136,30 +138,47 @@ const versionOf = async (t: TestT, proposal: Doc<"proposals">) =>
     ),
   );
 
-/** Fabricate provenance: the release's pubDate was last set by `sourceKey`. */
-async function fabricateIncumbent(
+/** Fabricate provenance: the release's field was last set by `sourceKey`. */
+async function fabricateRevision(
   t: TestT,
   sourceKey: string,
-  pubDate: { year: number; month?: number; day?: number; sort: number },
+  patch:
+    | { pubDate: { year: number; month?: number; day?: number; sort: number } }
+    | { description: string },
 ) {
   await t.run(async (ctx) => {
     const release = (await ctx.db.query("releases").collect())[0]!;
+    const history = await ctx.db
+      .query("revisions")
+      .withIndex("by_record", (q) =>
+        q.eq("ref.type", "release").eq("ref.id", release._id as never),
+      )
+      .collect();
     const proposalId = await ctx.db.insert("proposals", {
       author: { kind: "source", sourceKey },
       state: "approved",
       currentVersionNo: 1,
     });
+    const [field, after] = Object.entries(patch)[0]!;
     await ctx.db.insert("revisions", {
       ref: { type: "release", id: release._id } as never,
-      seq: 2,
+      seq: history.length + 1,
       proposalId,
       author: { kind: "source", sourceKey },
-      changes: [{ field: "pubDate", before: release.pubDate, after: pubDate }],
+      changes: [
+        { field, before: "pubDate" in patch ? release.pubDate : release.description, after },
+      ],
       comment: `Imported from ${sourceKey}.`,
     });
-    await ctx.db.patch(release._id, { pubDate });
+    await ctx.db.patch(release._id, patch);
   });
 }
+
+const fabricateIncumbent = (
+  t: TestT,
+  sourceKey: string,
+  pubDate: { year: number; month?: number; day?: number; sort: number },
+) => fabricateRevision(t, sourceKey, { pubDate });
 
 describe("authority rules — sticky Human Overrides and suppression", () => {
   it("withdraws a stale conflict when the source returns to the approved value", async () => {
@@ -401,6 +420,59 @@ describe("authority rules — the conflict table between sources", () => {
     await sync(t);
     const release = await theRelease(t);
     expect(release.pubDate).toMatchObject({ month: 1, day: 6, sort: 20260106 });
+    expect(await inReviewProposals(t)).toHaveLength(0);
+  });
+});
+
+describe("publisher blurbs — the Release Description", () => {
+  it("fills a blank, follows the same book's new text, and queues against a human edit", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBeUndefined();
+
+    // The book gains a blurb: filling a blank field is not a disagreement.
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", blurb: "<p>First &amp; best.</p>" }]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBe("First & best.");
+
+    // Seven Seas rewrites it: the same record revising its own fact.
+    stubSite([{ ...ALPHA_1, modified: "2026-08-11T00:00:00", blurb: "<p>Rewritten.</p>" }]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBe("Rewritten.");
+    expect(await inReviewProposals(t)).toHaveLength(0);
+
+    // An Editor's text is a sticky Human Override: a new blurb queues.
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      await ctx.db.patch(release._id, {
+        description: "Editor's text.",
+        overriddenFields: ["description"],
+      });
+    });
+    stubSite([{ ...ALPHA_1, modified: "2026-08-12T00:00:00", blurb: "<p>Third take.</p>" }]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBe("Editor's text.");
+    const open = await inReviewProposals(t);
+    expect(open).toHaveLength(1);
+    expect((await versionOf(t, open[0]!))?.ops[0]).toMatchObject({
+      kind: "update",
+      changes: [{ field: "description", after: "Third take." }],
+    });
+  });
+
+  it("the publisher's own text replaces a distributor's; the distributor never replaces it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    // PRH (standard for descriptions) filled the blurb first.
+    await fabricateRevision(t, "prh", { description: "Distributor flap copy." });
+
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", blurb: "<p>Publisher copy.</p>" }]);
+    await sync(t);
+    expect((await theRelease(t)).description).toBe("Publisher copy.");
     expect(await inReviewProposals(t)).toHaveLength(0);
   });
 });
