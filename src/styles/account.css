@@ -378,6 +378,15 @@
   max-width: 64ch;
 }
 
+/* "Did you mean …?" when nothing contains the query */
+.did-you-mean { margin-top: 26px; font-size: 1.02rem; color: var(--text-dim); }
+.did-you-mean a {
+  color: var(--accent);
+  font-weight: 700;
+  border-bottom: 1px solid transparent;
+}
+.did-you-mean a:hover { border-bottom-color: var(--accent); }
+
 .search-results { padding-block: 30px 4px; }
 .search-results + .search-results { border-top: 1px solid var(--line); }
 

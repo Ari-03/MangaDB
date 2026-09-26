@@ -206,6 +206,13 @@ export default defineSchema({
     latestReleaseSort: v.number(),
     // Earliest future release, or 0 when nothing is announced.
     nextReleaseSort: v.number(),
+    // Most recent release already out, or 0 when none is. Optional only
+    // until every row has been rebuilt; readers fall back to latestReleaseSort.
+    lastReleasedSort: v.optional(v.number()),
+    // Title and alt titles as lower-cased, accent-free words joined by
+    // spaces, for the library's in-memory title filter. Optional like
+    // lastReleasedSort; readers fall back to titleSort.
+    searchKey: v.optional(v.string()),
     // Series Follows and distinct users with a Collection Entry on any of
     // its Releases: the popularity signals the catalog actually has.
     followers: v.number(),
@@ -223,6 +230,40 @@ export default defineSchema({
     .index("by_followers", ["followers", "publicId"])
     .index("by_collectors", ["collectors", "publicId"])
     .index("by_rebuiltAt", ["rebuiltAt"]),
+
+  // The library's filter-and-sort facts for every Series, packed many to a
+  // document so a filtered view reads a handful of documents instead of one
+  // per Series (seriesBrowse.browse). Block k holds the Series with
+  // publicId in [k * PACK_SPAN, (k + 1) * PACK_SPAN), so a Series is always
+  // in exactly one pack. Rewritten from seriesStats at the end of each
+  // rebuild, and read only once appConfig.seriesPacksReady says a complete
+  // set exists; an entry is a few hundred bytes, a pack well under 1 MB.
+  seriesStatsPacks: defineTable({
+    block: v.number(),
+    entries: v.array(
+      v.object({
+        publicId: v.number(),
+        titleSort: v.string(),
+        searchKey: v.string(),
+        sourceStatus: v.union(
+          v.literal("ongoing"),
+          v.literal("completed"),
+          v.literal("hiatus"),
+          v.literal("cancelled"),
+          v.literal("unknown"),
+        ),
+        publishers: v.array(v.object({ name: v.string(), slug: v.string() })),
+        hasPhysical: v.boolean(),
+        hasDigital: v.boolean(),
+        volumeCount: v.number(),
+        latestReleaseSort: v.number(),
+        nextReleaseSort: v.number(),
+        lastReleasedSort: v.number(),
+        followers: v.number(),
+        collectors: v.number(),
+      }),
+    ),
+  }).index("by_block", ["block"]),
 
   publisherSlugRedirects: defineTable({
     fromSlug: v.string(),
@@ -605,10 +646,6 @@ export default defineSchema({
     next: v.number(),
   }).index("by_entity", ["entity"]),
 
-  // Singleton. Bootstrap Mode (#15) is switched off permanently before launch.
-  // The launch bookkeeping (#40, spec §7) also lives here: the latest
-  // duplicate-sweep summary (QA gate ③) and the Administrator's attestation
-  // that the correction loop ran end-to-end for real (launch gate ④).
   // Exact active-record totals for the home page, refreshed by the Series
   // library rebuild (seriesBrowse.rebuild); one row.
   catalogCounts: defineTable({
@@ -620,8 +657,15 @@ export default defineSchema({
     countedAt: v.number(),
   }),
 
+  // Singleton. Bootstrap Mode (#15) is switched off permanently before launch.
+  // The launch bookkeeping (#40, spec §7) also lives here: the latest
+  // duplicate-sweep summary (QA gate ③) and the Administrator's attestation
+  // that the correction loop ran end-to-end for real (launch gate ④).
   appConfig: defineTable({
     bootstrapMode: v.boolean(),
+    // Set once the first rebuild has written a complete seriesStatsPacks set;
+    // until then the Series library filters from the seriesStats rows.
+    seriesPacksReady: v.optional(v.boolean()),
     duplicateSweep: v.optional(
       v.object({
         ranAt: v.number(),

@@ -26,3 +26,21 @@ export type PublisherPageData = Exclude<
   PublisherPageResult,
   { redirectTo: string }
 >;
+
+/**
+ * SSR fetch for the Publishers board (`/publishers`, `/publishers/{yyyy-mm}`):
+ * one month's activity per Publisher plus the A–Z directory, from a single
+ * public query (convex/publisher.ts monthBoard). Returns null when Convex is
+ * not configured, so the routes render a setup notice instead of crashing.
+ */
+export const fetchPublishersBoard = createServerFn({ method: "GET" })
+  .validator((args: { year: number; month: number }) => args)
+  .handler(async ({ data }) => {
+    const convex = convexServerClient();
+    if (!convex) return null;
+    return await convex.query(api.publisher.monthBoard, data);
+  });
+
+export type PublishersBoardData = NonNullable<
+  Awaited<ReturnType<typeof fetchPublishersBoard>>
+>;

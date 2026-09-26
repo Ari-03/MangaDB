@@ -10,6 +10,14 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCover } from "./lib/covers";
 import { groupEditions } from "./lib/editionGroups";
+import { canonicalPublisherFor } from "./lib/publishers";
+import {
+  matchesAllWords,
+  matchNames,
+  probePrefixes,
+  rankNearMisses,
+  sortByTitleMatch,
+} from "./lib/searchMatch";
 
 // Fallback cap for counting on a deployment the rebuild has not counted yet;
 // the home page renders "N+" past it.
@@ -155,16 +163,155 @@ export const recentSeries = query({
 
 export const SEARCH_LIMIT = 20;
 // The publisher list is deliberately small (spec §8: "publishers via the
-// small list" — a few dozen English-market publishers), so a capped scan
-// replaces any index; the cap only guards against pathology.
+// small list" — a few dozen English-market publishers, 65 active today), so
+// a capped scan replaces any index; the cap only guards against pathology.
 export const PUBLISHER_SCAN_CAP = 500;
+/** Series rows in the header's live suggestions. */
+export const SUGGEST_LIMIT = 6;
+// Search-index hits read per suggestion: merged and hidden Series stay in
+// the index and crowd the top, and the exact title is not always its first
+// hit ("Attack on Titan" trails its spinoffs), so look past the six shown.
+const SUGGEST_TAKE = 20;
+/** Publisher rows in the header's live suggestions. */
+export const SUGGEST_PUBLISHERS = 3;
+/** "Did you mean" titles offered at most. */
+export const NEAR_MISS_LIMIT = 3;
+/** Documents each typo-help prefix probe reads (at most four probes). */
+const PROBE_TAKE = 8;
+
+/**
+ * Active Series the title search index returns for a query, and among them
+ * the `whole` hits whose titles contain every typed word, exact and opening
+ * matches first (`sortByTitleMatch`). The index matches any one term ("one
+ * peice" finds every "One …"), so `whole` is what tells a real match from a
+ * shared word. Reads `take` documents.
+ */
+async function titleHits(ctx: QueryCtx, query: string, take: number) {
+  const docs = await ctx.db
+    .query("series")
+    .withSearchIndex("search_title", (q) => q.search("searchText", query))
+    .take(take);
+  const active = docs.filter((doc) => doc.status === "active");
+  const whole = sortByTitleMatch(
+    query,
+    active.filter((doc) => matchesAllWords(query, doc.searchText)),
+  );
+  return { active, whole };
+}
+
+/**
+ * "Did you mean" Series for a query the index matched poorly: probe the
+ * index with the query words' 3- and 4-letter openings (`probePrefixes`, at
+ * most 4 × PROBE_TAKE reads), pool those with the hits already read, and
+ * rank the near misses in memory (lib/searchMatch.ts).
+ */
+async function nearMisses(ctx: QueryCtx, query: string, seen: ReadonlyArray<Doc<"series">>) {
+  const pool = new Map(seen.map((doc) => [doc._id, doc]));
+  const probes = await Promise.all(
+    probePrefixes(query).map((prefix) =>
+      ctx.db
+        .query("series")
+        .withSearchIndex("search_title", (q) => q.search("searchText", prefix))
+        .take(PROBE_TAKE),
+    ),
+  );
+  for (const doc of probes.flat()) {
+    if (doc.status === "active") pool.set(doc._id, doc);
+  }
+  return rankNearMisses(query, [...pool.values()], NEAR_MISS_LIMIT);
+}
+
+/**
+ * Active Publishers the query finds, read off the small publisher list — one
+ * capped scan of PUBLISHER_SCAN_CAP rows — and whether it `names` one. A
+ * canonical alias (lib/publishers.ts `canonicalPublisherFor`: "Shonen Jump"
+ * → VIZ Media, "Seven Seas Siren" → Seven Seas) leads, then the name
+ * matches (`matchNames`: every query word opens a word of the name, exact
+ * and opening matches first). A merged row's old name finds its survivor
+ * ("Kodansha Comics" → Kodansha), which also covers moderator merges the
+ * alias table does not list.
+ *
+ * `names` is true for an alias or a name whose leading words the query
+ * spells out whole ("seven seas", "kodansha", "digital"): the reader is
+ * after that Publisher, so search skips typo help and suggest drops loose
+ * Series rows. A partial word ("kod", "del") or a word deeper in a name
+ * ("manga", "press", "gasp") lists the Publishers but suppresses nothing.
+ * Shared by search and suggest, so the dropdown and the page agree.
+ */
+async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
+  const docs = await ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP);
+  const byId = new Map(docs.map((doc) => [doc._id, doc]));
+  const alias = canonicalPublisherFor(query);
+  const aliased = alias ? docs.find((doc) => doc.slug === alias.slug) : undefined;
+  const matches = [
+    ...(aliased ? [{ item: aliased, names: true }] : []),
+    ...matchNames(query, docs),
+  ];
+  const hits = new Map<Id<"publishers">, { name: string; slug: string }>();
+  let names = false;
+  for (const match of matches) {
+    // Follow merges within the list; the visited set guards a cycle.
+    let target: Doc<"publishers"> | undefined = match.item;
+    const visited = new Set<Id<"publishers">>();
+    while (target?.status === "merged" && target.mergedIntoId && !visited.has(target._id)) {
+      visited.add(target._id);
+      target = byId.get(target.mergedIntoId);
+    }
+    if (target?.status === "active") {
+      hits.set(target._id, { name: target.name, slug: target.slug });
+      names ||= match.names;
+    }
+  }
+  return { publishers: [...hits.values()].slice(0, limit), names };
+}
+
+/** The alt title a hit matched through, or null when its title matched. */
+function matchedAlt(query: string, doc: Doc<"series">): string | null {
+  if (matchesAllWords(query, doc.title)) return null;
+  return doc.altTitles.find((alt) => matchesAllWords(query, alt)) ?? null;
+}
+
+/**
+ * A Series result as search renders it: the Series library's stored jacket,
+ * Volume count, and first publisher (one indexed `seriesStats` read). A
+ * Series the library has not rebuilt yet reads as cloth with no counts.
+ */
+async function seriesCard(ctx: QueryCtx, doc: Doc<"series">, altMatch: string | null) {
+  const stats = await ctx.db
+    .query("seriesStats")
+    .withIndex("by_series", (q) => q.eq("seriesId", doc._id))
+    .first();
+  return {
+    publicId: doc.publicId,
+    title: doc.title,
+    altTitles: doc.altTitles,
+    altMatch,
+    coverUrl: stats?.coverUrl ?? null,
+    coverIsbn: stats?.coverIsbn ?? null,
+    volumeCount: stats?.volumeCount ?? null,
+    publisher: stats?.publishers[0]?.name ?? null,
+  };
+}
+
+/** Cards for near misses, naming the alt title when that is what was close. */
+function nearMissCards(ctx: QueryCtx, misses: Awaited<ReturnType<typeof nearMisses>>) {
+  return Promise.all(
+    misses.map(({ item, matched }) =>
+      seriesCard(ctx, item, matched === item.title ? null : matched),
+    ),
+  );
+}
 
 /**
  * v1 search (spec §8): Series only, matched through the title + alt-titles
- * search index (`searchText` is both concatenated on write); Publishers
- * resolved by case-insensitive name match over the small publisher list. No
- * Volume or Bundle search in v1. ISBN inputs never reach this query — the
- * /search route recognizes them first and redirects through `/isbn/{isbn}`.
+ * search index (`searchText` is both concatenated on write), hits containing
+ * every typed word first, each with its jacket from the Series library;
+ * Publishers by name or alias (`publisherHits`). When no Series hit contains
+ * the whole query and it names no Publisher, `didYouMean` offers near-miss
+ * titles ("berzerk" → Berserk); "Seven Seas" names a Publisher, so it gets
+ * no "Seven Seeds?". No Volume or Bundle search in v1.
+ * ISBN inputs never reach this query — the /search route recognizes them
+ * first and redirects through `/isbn/{isbn}`.
  *
  * Results carry only active records: hidden records are invisible, and a
  * merged Series is findable through its survivor (merges fold alt titles
@@ -175,36 +322,68 @@ export const search = query({
   handler: async (ctx, { query: rawQuery }) => {
     const trimmed = rawQuery.trim();
     if (trimmed === "") {
-      return { series: [], publishers: [] };
+      return { series: [], publishers: [], didYouMean: [] };
     }
 
-    const seriesDocs = await ctx.db
-      .query("series")
-      .withSearchIndex("search_title", (q) => q.search("searchText", trimmed))
-      // Overfetch so post-filtering hidden/merged docs can't starve the page.
-      .take(SEARCH_LIMIT * 2);
-    const series = seriesDocs
-      .filter((doc) => doc.status === "active")
-      .slice(0, SEARCH_LIMIT)
-      .map((doc) => ({
-        publicId: doc.publicId,
-        title: doc.title,
-        altTitles: doc.altTitles,
-      }));
+    // Overfetch so post-filtering hidden/merged docs can't starve the page.
+    const [hits, { publishers, names }] = await Promise.all([
+      titleHits(ctx, trimmed, SEARCH_LIMIT * 2),
+      publisherHits(ctx, trimmed, SEARCH_LIMIT),
+    ]);
+    const wholeIds = new Set(hits.whole.map((doc) => doc._id));
+    const ranked = [
+      ...hits.whole,
+      ...hits.active.filter((doc) => !wholeIds.has(doc._id)),
+    ].slice(0, SEARCH_LIMIT);
+    const [series, didYouMean] = await Promise.all([
+      Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
+      hits.whole.length === 0 && !names
+        ? nearMisses(ctx, trimmed, hits.active).then((misses) => nearMissCards(ctx, misses))
+        : [],
+    ]);
 
-    const needle = trimmed.toLowerCase();
-    const publisherDocs = await ctx.db
-      .query("publishers")
-      .take(PUBLISHER_SCAN_CAP);
-    const publishers = publisherDocs
-      .filter(
-        (doc) =>
-          doc.status === "active" && doc.name.toLowerCase().includes(needle),
-      )
-      .slice(0, SEARCH_LIMIT)
-      .map((doc) => ({ name: doc.name, slug: doc.slug }));
+    return { series, publishers, didYouMean };
+  },
+});
 
-    return { series, publishers };
+/**
+ * Live suggestions for the header search box, run per (debounced) keystroke
+ * by the reactive client, so every read is bounded: SUGGEST_TAKE search-index
+ * hits, a `seriesStats` row per shown Series, the publisher list matched
+ * exactly as search matches it (`publisherHits`, ~70 rows today, at most
+ * PUBLISHER_SCAN_CAP), and — only when no Series hit contains every typed
+ * word and the query names no Publisher — up to four typo-help probes of
+ * PROBE_TAKE documents each: about 100 documents for a typical query, under
+ * 140 in the worst case with today's publisher list.
+ *
+ * Series that share only some words with the query are noise next to a
+ * "did you mean" or a Publisher the query names, so they fill the list only
+ * when there is nothing better.
+ */
+export const suggest = query({
+  args: { query: v.string() },
+  handler: async (ctx, { query: rawQuery }) => {
+    const trimmed = rawQuery.trim();
+    if (trimmed === "") return { series: [], didYouMean: [], publishers: [] };
+
+    const [hits, { publishers, names }] = await Promise.all([
+      titleHits(ctx, trimmed, SUGGEST_TAKE),
+      publisherHits(ctx, trimmed, SUGGEST_PUBLISHERS),
+    ]);
+    const misses =
+      hits.whole.length === 0 && !names ? await nearMisses(ctx, trimmed, hits.active) : [];
+    const better = hits.whole.length > 0 || misses.length > 0 || names;
+    const shown = better ? hits.whole : hits.active;
+    const [series, didYouMean] = await Promise.all([
+      Promise.all(
+        shown
+          .slice(0, SUGGEST_LIMIT)
+          .map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
+      ),
+      nearMissCards(ctx, misses),
+    ]);
+
+    return { series, didYouMean, publishers };
   },
 });
 

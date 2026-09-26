@@ -1,15 +1,20 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import type { CSSProperties } from "react";
+import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
-import { seriesPath } from "~/lib/slug";
+import { isbnInProgress, useDebounced } from "~/lib/searchSuggest";
+import { slugParams } from "~/lib/slug";
+import { useUrlDraft } from "~/lib/urlDraft";
 import { fetchSearchResults, type SearchResults } from "~/server/search";
 
 /**
  * v1 search (ticket #38, spec §8/§11): `/search?q=…` over Series via the
- * title + alt-titles search index, results linking canonical Series pages;
- * Publisher lookup via the small publisher list, linking Publisher pages.
+ * title + alt-titles search index, results linking canonical Series pages
+ * with their jackets; Publisher lookup via the small publisher list, linking
+ * Publisher pages. When nothing contains the whole query, a "Did you mean"
+ * line offers near-miss titles. Results follow the box as you type (a
+ * debounced `replace` navigation, so history is not spammed).
  *
  * An input recognized as a valid ISBN never runs a text search: the loader
  * redirects through the `/isbn/{isbn}` route, which owns resolution to the
@@ -20,9 +25,7 @@ import { fetchSearchResults, type SearchResults } from "~/server/search";
  * set (spec §11), so they carry robots noindex.
  */
 export const Route = createFileRoute("/search")({
-  validateSearch: (search: Record<string, unknown>): { q: string } => ({
-    q: typeof search.q === "string" ? search.q : "",
-  }),
+  validateSearch,
   loaderDeps: ({ search }) => ({ q: search.q }),
   loader: async ({ deps }) => {
     const q = deps.q.trim();
@@ -46,13 +49,47 @@ export const Route = createFileRoute("/search")({
   component: SearchPage,
 });
 
-function emptyResults(): SearchResults {
-  return { series: [], publishers: [] };
+function validateSearch(search: Record<string, unknown>): { q: string } {
+  return { q: typeof search.q === "string" ? search.q : "" };
 }
+
+/** The page's view is its query. */
+function queryOf(search: { q: string }): string {
+  return search.q;
+}
+
+function emptyResults(): SearchResults {
+  return { series: [], publishers: [], didYouMean: [] };
+}
+
+/** Quiet time before the page's box re-runs the search. */
+const LIVE_DEBOUNCE_MS = 250;
 
 function SearchPage() {
   const { q, results } = Route.useLoaderData();
   const navigate = Route.useNavigate();
+
+  // The box is controlled so results can follow it: once typing pauses, the
+  // URL is replaced (the loader re-runs; the old results stay up meanwhile).
+  // The route stays mounted, so focus and caret survive. A navigation from
+  // elsewhere (the header box, a "Did you mean" link, back/forward), even
+  // to the query already shown, refills the box as it starts, and the text
+  // it replaces never settles into a search; the box's own navigations
+  // never touch what is being typed (`useUrlDraft`). Any other navigation
+  // — including one leaving the page — holds the live search until the next
+  // keystroke, so a pending settle can't pull the reader back to /search.
+  const held = useRef(false);
+  const hold = useCallback(() => {
+    held.current = true;
+  }, []);
+  const { draft, setDraft, request } = useUrlDraft(Route.useSearch(), validateSearch, queryOf, hold);
+  const text = draft.q;
+  const settled = useDebounced(text, LIVE_DEBOUNCE_MS);
+  useEffect(() => {
+    // An ISBN being typed waits for Enter (the loader redirects valid ones).
+    if (held.current || isbnInProgress(settled.trim()) || !request(settled)) return;
+    void navigate({ search: { q: settled }, replace: true, resetScroll: false });
+  }, [settled, request, navigate]);
 
   return (
     <main className="search-page">
@@ -67,18 +104,18 @@ function SearchPage() {
           method="get"
           onSubmit={(event) => {
             event.preventDefault();
-            const value = new FormData(event.currentTarget).get("q");
-            void navigate({
-              to: "/search",
-              search: { q: typeof value === "string" ? value : "" },
-            });
+            if (request(text)) void navigate({ to: "/search", search: { q: text } });
           }}
         >
           <input
             className="search-field"
             type="search"
             name="q"
-            defaultValue={q}
+            value={text}
+            onChange={(event) => {
+              held.current = false;
+              setDraft({ q: event.target.value });
+            }}
             placeholder="Series title, publisher, or ISBN"
             aria-label="Search series, publishers, or an ISBN"
             autoFocus
@@ -112,40 +149,45 @@ function SearchResultsView({
   q: string;
   results: SearchResults;
 }) {
+  const didYouMean = <DidYouMean hits={results.didYouMean} />;
   if (results.series.length === 0 && results.publishers.length === 0) {
     return (
-      <div className="empty-shelf">
-        <div className="ghost-shelf" aria-hidden="true">
-          <div className="ghost-spine">
-            <span className="cover">
-              <span className="cover-ph" style={{ "--cloth": "#455060" } as CSSProperties} />
-            </span>
+      <>
+        {didYouMean}
+        <div className="empty-shelf">
+          <div className="ghost-shelf" aria-hidden="true">
+            <div className="ghost-spine">
+              <span className="cover">
+                <span className="cover-ph" style={{ "--cloth": "#455060" } as CSSProperties} />
+              </span>
+            </div>
+            <div className="ghost-spine">
+              <span className="cover">
+                <span className="cover-ph" style={{ "--cloth": "#7a2e2a" } as CSSProperties} />
+              </span>
+            </div>
+            <div className="ghost-spine">
+              <span className="cover">
+                <span className="cover-ph" style={{ "--cloth": "#2b5d5b" } as CSSProperties} />
+              </span>
+            </div>
           </div>
-          <div className="ghost-spine">
-            <span className="cover">
-              <span className="cover-ph" style={{ "--cloth": "#7a2e2a" } as CSSProperties} />
-            </span>
-          </div>
-          <div className="ghost-spine">
-            <span className="cover">
-              <span className="cover-ph" style={{ "--cloth": "#2b5d5b" } as CSSProperties} />
-            </span>
+          <div className="empty-note">
+            <p>
+              Nothing on the shelf matches “{q}”. Try fewer words, the Japanese
+              title, or browse what is coming out this month.
+            </p>
+            <Link className="btn" to="/releases">
+              Open the release agenda
+            </Link>
           </div>
         </div>
-        <div className="empty-note">
-          <p>
-            Nothing on the shelf matches “{q}”. Try fewer words, the Japanese
-            title, or browse what is coming out this month.
-          </p>
-          <Link className="btn" to="/releases">
-            Open the release agenda
-          </Link>
-        </div>
-      </div>
+      </>
     );
   }
   return (
     <>
+      {didYouMean}
       {results.series.length > 0 ? (
         <section className="search-results">
           <div className="section-head">
@@ -162,18 +204,23 @@ function SearchResultsView({
                   <Link
                     className="cover-link"
                     to="/series/$publicId/$slug"
-                    params={seriesLinkParams(s.publicId, s.title)}
+                    params={slugParams(s.publicId, s.title)}
                   >
-                    {/* A Series has no volume or publisher of its own, so
-                        the coverless book is plain cloth with the title. */}
-                    <Cover title={s.title} lazy={false} />
+                    {/* The Series library's jacket for it; a Series with no
+                        art on file is plain cloth with the title. */}
+                    <Cover
+                      src={s.coverUrl}
+                      isbn13={s.coverIsbn}
+                      title={s.title}
+                      lazy={false}
+                    />
                   </Link>
                 </div>
                 <div className="caption">
                   <Link
                     className="caption-title"
                     to="/series/$publicId/$slug"
-                    params={seriesLinkParams(s.publicId, s.title)}
+                    params={slugParams(s.publicId, s.title)}
                   >
                     {s.title}
                   </Link>
@@ -219,8 +266,28 @@ function SearchResultsView({
   );
 }
 
-function seriesLinkParams(publicId: number, title: string) {
-  const canonical = seriesPath(publicId, title);
-  const slug = canonical.split("/").pop() ?? "";
-  return { publicId: String(publicId), slug };
+/**
+ * "Did you mean Berserk?" over results that don't contain the query. Each
+ * suggestion re-runs the search with the title (or alt title) that came
+ * close, which lands the Series and its relatives.
+ */
+function DidYouMean({ hits }: { hits: SearchResults["didYouMean"] }) {
+  if (hits.length === 0) return null;
+  return (
+    <p className="did-you-mean">
+      Did you mean{" "}
+      {hits.map((hit, i) => {
+        const name = hit.altMatch ?? hit.title;
+        return (
+          <span key={hit.publicId}>
+            {i === 0 ? null : i === hits.length - 1 ? " or " : ", "}
+            <Link to="/search" search={{ q: name }}>
+              {name}
+            </Link>
+          </span>
+        );
+      })}
+      ?
+    </p>
+  );
 }

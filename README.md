@@ -76,16 +76,38 @@ images are signed URLs), and OpenLibrary by edition key (no extra hits).
 
 ## Series library (`/series`)
 
-Browse every Series with sort (title, recently added, most volumes, latest
-release, upcoming next, most followed, most collected), filters (publisher,
-format, first letter), and title search — all in the URL, working before
-hydration, paging with "Show more". It reads `seriesStats`, one denormalized
-row per active Series that `seriesBrowse.rebuild` refreshes every six hours
-(`crons.ts`; `npx convex run seriesBrowse:rebuild` by hand), so every sort is
-an index range with an exact keyset cursor and no import write path changed.
-Popularity is the signals the catalog has — Series Follows and distinct
-collectors — not ratings, which v1 does not model. The Source Status filter
-appears once any importer supplies a status.
+Browse every Series filters-first. A filter panel narrows the set by
+Publishers (tick any number; a Series matches any of them), volume count
+(1, 2–5, 6–15, 16+), release timing (upcoming, released in the last 3/6/12
+months, or finished: nothing announced and no release in a year, unless the
+Source Status says Ongoing or Hiatus), Format, Source Status, first letter,
+and a title search that updates as you type (words match the starts of
+title and alt-title words). The sort (title, recently added, most volumes,
+latest release, upcoming next, most followed, most collected) then orders
+whatever matched, under a "123 series match" count, and the shelf loads
+more as you scroll. Everything is in the URL
+(`/series?publisher=viz-media,yen-press&volumes=2-5&timing=past-6m&sort=latest`),
+active filters show as removable chips, and the panel is a GET form that
+works before hydration.
+
+It reads `seriesStats`, one denormalized row per active Series that
+`seriesBrowse.rebuild` refreshes every six hours (`crons.ts`;
+`npx convex run seriesBrowse:rebuild` by hand), so no import write path
+changed. The unfiltered shelf pages straight off each sort's index. Filtered
+views read `seriesStatsPacks` instead, the same facts packed about a thousand
+Series to a document at the end of each rebuild, then filter, sort, and page
+in memory with an exact keyset cursor and total (a filtered page reads about
+2 MB in 64 documents; the header of `convex/seriesBrowse.ts` has the numbers
+and the limits). After deploying a change to either table's shape, run the
+rebuild so the packs follow; until packs exist, filtered views fall back to
+reading every row. The timing filters that count back from today (past
+3/6/12 months, finished) use today's UTC date, which the server function
+passes as `todaySort`, so a cached query never serves an earlier day's
+cutoff; later pages keep the first page's date, which their cursor carries,
+so a view paged across midnight stays one set. Other views get no date and
+keep one cache key. Popularity is the signals the catalog has — Series
+Follows and distinct collectors — not ratings, which v1 does not model. The
+Source Status filter appears once any importer supplies a status.
 
 ## Local development
 
@@ -217,8 +239,8 @@ Spotlight**: a publisher-led profile — name, description, catalog facts —
 followed by a **bounded upcoming-Releases lane** (the next ~3 months, capped
 at 12 rows, grouped by month with the browser's Agenda treatment) and a clear
 route into the main Releases browser pre-filtered to that Publisher
-(`/releases?publisher={slug}`). There is deliberately no cross-publisher
-overview page; that comparison lives in the browser.
+(`/releases?publisher={slug}`). The cross-publisher comparison lives on the
+Publishers board (`/publishers`, below).
 
 Publishers are the slug-only URL exception (spec §8): the slug is the
 identity, so a **renamed Publisher's old slug 301s** to the new one via the
@@ -226,6 +248,37 @@ identity, so a **renamed Publisher's old slug 301s** to the new one via the
 survivor's (`convex/publisher.ts` resolves both; the route issues the
 redirect). The dev seed includes one redirect —
 `/publisher/seven-seas-entertainment` 301s to `/publisher/seven-seas`.
+
+## Publishers board (`/publishers`)
+
+The cross-publisher overview: what every Publisher is releasing in one month.
+
+- **`/publishers`** is the current month (UTC); **`/publishers/{yyyy-mm}`**
+  is any other. One month strip is the only month control: ‹ three months
+  either side of the shown one ›, today's month tagged "now", and a "Back to
+  {this month}" link once paging leaves it behind.
+  Both are indexable with a self canonical, like the Releases browser's month
+  pages.
+- **Board:** one card per Publisher with Releases that month, busiest first:
+  release count, physical/digital split, new vs continuing Series, the change
+  vs the previous month, a strip of covers, a link to the Publisher Spotlight,
+  and a hand-off to `/releases/{yyyy-mm}?publisher={slug}`. Imprints get
+  their own cards and name their parent.
+- **All publishers:** every active Publisher A–Z below the board, imprints
+  nested under their parent (one level), defunct ones flagged, quiet ones
+  listed too.
+- **Query shape** (`convex/publisher.ts` `monthBoard`): the browser's month
+  window (`by_date`, `WINDOW_CAP`) plus the previous month's for the delta,
+  read in parallel and grouped by Publisher in memory under the browser's
+  visibility rules, with one memo cache (`browseCache`) for every lookup.
+  Cover candidates are ranked first, tested for art five at a time in
+  parallel, and only the five picks per card are joined through
+  `joinBrowseRows`, which reuses the cached art lookups. A "new series" is a Series whose Volume 1
+  publishes this month in a standard Edition that has no Release dated
+  earlier (Edition Line repackagings such as a Deluxe Vol. 1 don't count,
+  nor does this month's digital Release of a Vol. 1 in print since 2019; a
+  year-only date in the same year is not "earlier").
+  No denormalized tables.
 
 ## Search
 
@@ -237,8 +290,45 @@ in the site header. It is deliberately narrow:
   so "Toukyou Kushu" finds Tokyo Ghoul. Results link the canonical
   `/series/{id}/{slug}` pages; hidden and merged records never appear (a
   merged Series is findable through its survivor).
-- **Publishers** resolve by case-insensitive name match over the small
-  publisher list, linking their `/publisher/{slug}` Spotlight pages.
+- **Publishers** match when every query word starts a word of their name,
+  as Series titles do, with case, punctuation, and "&"/"and" folded
+  (`matchNames`), over the small publisher list, linking their
+  `/publisher/{slug}` Spotlight pages. "seas", "seven seas", and "Seven Seas
+  Entertainment" all find Seven Seas; "one" finds One Peace Books, not
+  ComicsOne. A canonical alias (`convex/lib/publishers.ts`) finds its
+  Publisher ("Shonen Jump" → VIZ Media, "Seven Seas Siren" → Seven Seas), as
+  does a merged Publisher's old name ("Kodansha Comics" → Kodansha). The
+  page and the typeahead share this matcher.
+- **Results follow the box**: series hits containing every typed word come
+  first (an exact or opening title match leads, so "attack on" puts Attack on
+  Titan ahead of its spinoffs), each with its jacket from the Series library
+  (`seriesStats`). Typing on `/search` re-runs the search once typing pauses
+  (250ms) with a `replace` navigation, so history is not spammed and focus
+  stays in the box; an ISBN being typed waits for Enter.
+- **Typeahead**: with the reactive Convex client, the header box (desktop
+  and mobile drawer) is an ARIA combobox (`src/lib/searchSuggest.tsx`) fed by
+  `catalog.suggest` 180ms after typing stops: up to six Series (cover, the alt
+  title that matched, volume count, publisher), up to three Publishers
+  matched as on the page, and a "See all results" row.
+  ArrowUp/Down highlight, Enter opens the highlight (or submits to `/search`
+  as before, ISBN redirect included), Escape or leaving the box closes it.
+  Without Convex, or before hydration, it is the plain GET form.
+- **Typo help**: when no Series hit contains every typed word and the query
+  names no Publisher, both the dropdown and the page offer
+  "Did you mean" titles — "berzerk" → Berserk, "one
+  peice" → One Piece, "chainsawman" → Chainsaw Man. The search index has no
+  fuzzy mode, so `catalog.ts` probes it with the 3- and 4-letter openings of
+  the two longest query words (at most four probes of 8 documents), pools
+  those with the hits already read, and ranks them in memory
+  (`convex/lib/searchMatch.ts`): edit distance with adjacent swaps, spaces
+  and punctuation ignored, against each title and alt title (or its opening),
+  one edit allowed per four letters. A typo in the first three letters of a
+  one-word query is out of reach. A query naming a Publisher — an alias, or
+  the opening of its name ("Seven Seas", "kodansha") — gets no typo help and
+  no loose Series matches in the dropdown; one that is only a word deeper in
+  a name ("manga", "gasp") lists the Publishers and keeps both. A
+  suggestion call reads about 100 documents, most of them the publisher
+  list (under 140 worst case).
 - **ISBNs**: a query recognized as a valid ISBN-10/13 (`src/lib/isbn.ts` —
   checksum-verified, separators ignored) never runs a text search; the loader
   302s through `/isbn/{isbn}`, the route that owns resolution to the owning

@@ -5,6 +5,7 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../convex/_generated/api";
+import { SearchCombobox } from "~/lib/searchSuggest";
 
 // Client-side wiring (spec §9): <ClerkProvider> owns the session,
 // ConvexProviderWithClerk feeds its "convex"-template JWT to the reactive
@@ -65,6 +66,7 @@ export function SiteHeader() {
   const [open, setOpen] = useState(false);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const releasesCurrent = pathname.startsWith("/releases");
+  const publishersCurrent = pathname.startsWith("/publisher");
   const seriesCurrent = pathname.startsWith("/series");
   return (
     <header className="site-header">
@@ -81,6 +83,14 @@ export function SiteHeader() {
             aria-current={releasesCurrent ? "page" : undefined}
           >
             Releases
+          </Link>
+          {/* The Publishers board; a Publisher Spotlight counts as being in it. */}
+          <Link
+            to="/publishers"
+            className={publishersCurrent ? "nav-link is-current" : "nav-link"}
+            aria-current={publishersCurrent ? "page" : undefined}
+          >
+            Publishers
           </Link>
           {/* The Series library; a Series page counts as being in it. */}
           <Link
@@ -111,12 +121,15 @@ export function SiteHeader() {
       </div>
       <div className={open ? "mobile-nav is-open" : "mobile-nav"} id="mobile-nav">
         <div className="container mobile-nav-inner">
-          <HeaderSearch mobile />
+          <HeaderSearch mobile onNavigate={() => setOpen(false)} />
           <Link to="/" className="nav-link" onClick={() => setOpen(false)}>
             Home
           </Link>
           <Link to="/releases" className="nav-link" onClick={() => setOpen(false)}>
             Releases
+          </Link>
+          <Link to="/publishers" className="nav-link" onClick={() => setOpen(false)}>
+            Publishers
           </Link>
           <Link to="/series" className="nav-link" onClick={() => setOpen(false)}>
             Series
@@ -161,7 +174,20 @@ function ThemeToggle() {
 
 // Site-wide entry into /search (ticket #38). A real GET form so it works
 // before hydration; with JS the submit becomes a client-side navigation.
-function HeaderSearch({ mobile = false }: { mobile?: boolean }) {
+// With the reactive Convex client it is a combobox offering live
+// suggestions and typo help as you type (lib/searchSuggest.tsx); without
+// one, the plain form below. `onNavigate` lets the mobile drawer close.
+function HeaderSearch(props: { mobile?: boolean; onNavigate?: () => void }) {
+  return convexClient ? <SearchCombobox {...props} /> : <PlainHeaderSearch {...props} />;
+}
+
+function PlainHeaderSearch({
+  mobile = false,
+  onNavigate,
+}: {
+  mobile?: boolean;
+  onNavigate?: () => void;
+}) {
   const navigate = useNavigate();
   return (
     <form
@@ -176,6 +202,7 @@ function HeaderSearch({ mobile = false }: { mobile?: boolean }) {
           to: "/search",
           search: { q: typeof value === "string" ? value : "" },
         });
+        onNavigate?.();
       }}
     >
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">

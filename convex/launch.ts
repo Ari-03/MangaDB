@@ -20,6 +20,7 @@ import {
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
+import { todaySortKey } from "./lib/dates";
 import { ensurePublisher, publisherBySlug } from "./lib/pipeline";
 import { CANONICAL_PUBLISHERS, DEFUNCT_SLUGS } from "./lib/publishers";
 import { findDuplicatePairs, pairKeyOf, Reservoir, type SweepEntry } from "./lib/qa";
@@ -741,12 +742,6 @@ export const attestCorrectionLoop = mutation({
 
 // ---------- the launch-ready checklist (spec §7) ----------
 
-/** yyyymmdd sort key for "today" (UTC), comparable to releases.pubDate.sort. */
-function todaySort(now: number): number {
-  const d = new Date(now);
-  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
-}
-
 const V1_SOURCE_KEYS = ["sevenseas", "kodansha", "ann", "prh", "openlibrary"];
 
 /**
@@ -780,7 +775,7 @@ export const launchChecklist = query({
     const qualityGatesPass = random.pass && prominent.pass && duplicatesPass;
 
     // ③ populated calendar + all five sources healthy
-    const today = todaySort(Date.now());
+    const today = todaySortKey();
     const futureWindow = await ctx.db
       .query("releases")
       .withIndex("by_date", (q) => q.gte("pubDate.sort", today))

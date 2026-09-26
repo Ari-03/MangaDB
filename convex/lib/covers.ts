@@ -1,6 +1,7 @@
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { ActionCtx, QueryCtx } from "../_generated/server";
+import { todaySortKey } from "./dates";
 import { politeFetch } from "./http";
 
 // Some publishers serve a generic "no cover yet" SVG where the artwork would
@@ -203,7 +204,7 @@ export function seriesCoverIsbn(
   candidates: ReadonlyArray<SeriesCoverCandidate>,
   now: Date = new Date(),
 ): string | null {
-  const today = now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+  const today = todaySortKey(now);
   const published = (c: SeriesCoverCandidate) => {
     const sort = c.pubDate?.sort ?? 0;
     return sort > 0 && sort <= today;
