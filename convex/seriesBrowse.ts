@@ -1,11 +1,25 @@
-// The Series library (/series): browse every Series with sort, filters,
-// search, and pages. Reads go against `seriesStats`, one denormalized row
-// per active Series that `rebuild` refreshes on a schedule (crons.ts) —
-// so sorting by volume count, latest release, or followers is an index
-// range, and the import write paths stay untouched. Rows lag the canonical
-// records by at most one rebuild interval, which a browse page can afford.
+// The Series library (/series): browse every Series with filters, a sort,
+// title search, and pages. Reads go against `seriesStats`, one denormalized
+// row per active Series that `rebuild` refreshes on a schedule (crons.ts),
+// so the import write paths stay untouched. Rows lag the canonical records
+// by at most one rebuild interval, which a browse page can afford.
+//
+// Filters first, then the sort. An unfiltered shelf pages straight off the
+// chosen sort's index. Any filter or title search instead reads every
+// Series' filter-and-sort facts, keeps the matches, sorts them in memory,
+// and pages that set, so every combination returns full pages and an exact
+// total; only the page's own rows are then fetched for their cards.
+//
+// Those facts are packed about a thousand Series to a document
+// (`seriesStatsPacks`, written at the end of each rebuild) because reads
+// cost per document: scanning the 5,488 rows took ~2.2 s on the local
+// backend, the packs ~100-170 ms. Measured with getTransactionMetrics, a
+// filtered page reads 64 documents and 2.0 MB (8 packs, the largest ~380 KB
+// of the 1 MB document limit); per-query limits are 16 MiB and 32,000
+// documents (8 MiB / 16,384 on older Convex), so bytes are the ceiling, at
+// about 8x (4x) today's catalog.
 
-import { v } from "convex/values";
+import { v, type Infer, type ObjectType } from "convex/values";
 
 import { internal } from "./_generated/api";
 import { recountCatalog } from "./catalog";
@@ -40,12 +54,6 @@ const statusValidator = v.union(
 
 const PAGE_DEFAULT = 28;
 const PAGE_MAX = 56;
-// A filtered page keeps scanning the index in chunks until it fills; this
-// bounds the scan so an over-selective filter can't read the whole table.
-const SCAN_CHUNK = 120;
-const SCAN_MAX = 1200;
-// Full-text search ranks up to this many titles; paging walks that set.
-const SEARCH_LIMIT = 300;
 
 // ---------- Rebuild (scheduled) ----------
 
@@ -83,9 +91,16 @@ export const rebuild = internalAction({
       swept += n;
       if (n < STALE_SWEEP) break;
     }
+    // Then the packs the filtered views read, from the rows as they now are.
+    let blocks = 0;
+    for (;;) {
+      const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: blocks });
+      blocks++;
+      if (!more) break;
+    }
     // The home page's catalog totals ride along on the same schedule.
     const counts = await recountCatalog(ctx);
-    return { rows, swept, counts, ms: Date.now() - startedAt };
+    return { rows, swept, blocks, counts, ms: Date.now() - startedAt };
   },
 });
 
@@ -135,6 +150,49 @@ export const sweepStale = internalMutation({
   },
 });
 
+/** Series per pack: block k covers publicIds [k * PACK_SPAN, (k + 1) * PACK_SPAN). */
+const PACK_SPAN = 1000;
+/** Packs a reader takes at most: room for 100k publicIds. */
+const MAX_PACKS = 100;
+
+/**
+ * Rewrite pack `block` from the seriesStats rows in its publicId span,
+ * dropping it when the span is empty. Returns whether any row lies past the
+ * span; when none does, packs beyond it (a shrunken catalog) go too.
+ */
+export const repackBlock = internalMutation({
+  args: { block: v.number() },
+  handler: async (ctx, { block }) => {
+    const from = block * PACK_SPAN;
+    const to = from + PACK_SPAN;
+    const rows = await ctx.db
+      .query("seriesStats")
+      .withIndex("by_publicId", (q) => q.gte("publicId", from).lt("publicId", to))
+      .take(PACK_SPAN);
+    const entries = rows.map(entryOf);
+    const existing = await ctx.db
+      .query("seriesStatsPacks")
+      .withIndex("by_block", (q) => q.eq("block", block))
+      .unique();
+    if (existing && entries.length === 0) await ctx.db.delete(existing._id);
+    else if (existing) await ctx.db.replace(existing._id, { block, entries });
+    else if (entries.length > 0) await ctx.db.insert("seriesStatsPacks", { block, entries });
+
+    const more = await ctx.db
+      .query("seriesStats")
+      .withIndex("by_publicId", (q) => q.gte("publicId", to))
+      .first();
+    if (!more) {
+      const beyond = await ctx.db
+        .query("seriesStatsPacks")
+        .withIndex("by_block", (q) => q.gt("block", block))
+        .take(MAX_PACKS);
+      for (const pack of beyond) await ctx.db.delete(pack._id);
+    }
+    return more !== null;
+  },
+});
+
 /** Compute and write one Series' row from its canonical records. */
 async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: number) {
   const volumes = (
@@ -165,6 +223,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   let first = 0;
   let latest = 0;
   let next = 0;
+  let lastReleased = 0;
   let storedCover: string | null = null;
   const coverCandidates: SeriesCoverCandidate[] = [];
   const collectors = new Set<string>();
@@ -194,7 +253,11 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
         // A month-precision date (yyyymm00) in the current month is still
         // to come — its day is unannounced, not past.
         const forthcoming = sort > today || (sort % 100 === 0 && sort >= today - (today % 100));
-        if (forthcoming && (next === 0 || sort < next)) next = sort;
+        if (forthcoming) {
+          if (next === 0 || sort < next) next = sort;
+        } else if (sort > lastReleased) {
+          lastReleased = sort;
+        }
       }
       storedCover ??= await coverUrl(ctx, release.coverImage?.storageId);
       coverCandidates.push({
@@ -233,6 +296,8 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     firstReleaseSort: first,
     latestReleaseSort: latest,
     nextReleaseSort: next,
+    lastReleasedSort: lastReleased,
+    searchKey: searchKeyFor([series.title, ...series.altTitles]),
     followers,
     collectors: collectors.size,
     coverUrl: storedCover,
@@ -264,6 +329,24 @@ export function sortKeyFor(title: string): string {
     .trim();
 }
 
+/**
+ * Title and alt titles as the distinct lower-cased, accent-free words the
+ * library's title filter matches against: ["Pokémon: Red", "Pokemon"] →
+ * "pokemon red". A query goes through the same function, so both sides
+ * split words alike.
+ */
+export function searchKeyFor(texts: ReadonlyArray<string>): string {
+  const words = texts
+    .join(" ")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+  return [...new Set(words)].join(" ");
+}
+
 export function letterFor(titleSort: string): string {
   const c = titleSort.charAt(0);
   return c >= "a" && c <= "z" ? c : "#";
@@ -273,9 +356,47 @@ function todaySortKey(now: Date = new Date()): number {
   return now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
 }
 
+
 // ---------- Browse (public) ----------
 
 type StatsRow = Doc<"seriesStats">;
+/** One Series' filter-and-sort facts, as packed in seriesStatsPacks. */
+type Entry = Doc<"seriesStatsPacks">["entries"][number];
+
+/**
+ * A row's pack entry. Rows written before searchKey and lastReleasedSort
+ * existed fall back to the title and the latest date (which may be
+ * announced, not out) until their next rebuild.
+ */
+function entryOf(row: StatsRow): Entry {
+  return {
+    publicId: row.publicId,
+    titleSort: row.titleSort,
+    searchKey: row.searchKey ?? row.titleSort,
+    sourceStatus: row.sourceStatus,
+    publishers: row.publishers,
+    hasPhysical: row.hasPhysical,
+    hasDigital: row.hasDigital,
+    volumeCount: row.volumeCount,
+    latestReleaseSort: row.latestReleaseSort,
+    nextReleaseSort: row.nextReleaseSort,
+    lastReleasedSort: row.lastReleasedSort ?? row.latestReleaseSort,
+    followers: row.followers,
+    collectors: row.collectors,
+  };
+}
+
+/**
+ * Every Series' entry: the packs, a handful of documents. Before the first
+ * rebuild that writes packs, the rows themselves, one document each.
+ */
+async function allEntries(ctx: QueryCtx): Promise<Array<Entry>> {
+  const packs = await ctx.db.query("seriesStatsPacks").withIndex("by_block").take(MAX_PACKS);
+  if (packs.length > 0) return packs.flatMap((pack) => pack.entries);
+  const entries: Array<Entry> = [];
+  for await (const row of ctx.db.query("seriesStats")) entries.push(entryOf(row));
+  return entries;
+}
 
 const SORT_INDEX = {
   title: { index: "by_title", field: "titleSort", defaultOrder: "asc" },
@@ -285,22 +406,117 @@ const SORT_INDEX = {
   upcoming: { index: "by_next", field: "nextReleaseSort", defaultOrder: "asc" },
   followers: { index: "by_followers", field: "followers", defaultOrder: "desc" },
   collectors: { index: "by_collectors", field: "collectors", defaultOrder: "desc" },
-} as const satisfies Record<Sort, { index: string; field: keyof StatsRow; defaultOrder: "asc" | "desc" }>;
+} as const satisfies Record<
+  Sort,
+  { index: string; field: keyof StatsRow & keyof Entry; defaultOrder: "asc" | "desc" }
+>;
 
-type Filters = {
-  publisher?: string;
-  status?: "ongoing" | "completed" | "hiatus" | "cancelled";
-  format?: "physical" | "digital";
-  letter?: string;
+const volumesValidator = v.union(
+  v.literal("one"),
+  v.literal("2-5"),
+  v.literal("6-15"),
+  v.literal("16-plus"),
+);
+/** Volume count buckets, inclusive at both ends. */
+const VOLUME_RANGES: Record<Infer<typeof volumesValidator>, { min: number; max: number }> = {
+  one: { min: 1, max: 1 },
+  "2-5": { min: 2, max: 5 },
+  "6-15": { min: 6, max: 15 },
+  "16-plus": { min: 16, max: Number.POSITIVE_INFINITY },
 };
 
-function matches(row: StatsRow, f: Filters): boolean {
-  if (f.publisher && !row.publishers.some((p) => p.slug === f.publisher)) return false;
-  if (f.status && row.sourceStatus !== f.status) return false;
-  if (f.format === "physical" && !row.hasPhysical) return false;
-  if (f.format === "digital" && !row.hasDigital) return false;
-  if (f.letter && row.letter !== f.letter) return false;
-  return true;
+const timingValidator = v.union(
+  v.literal("upcoming"),
+  v.literal("past-3m"),
+  v.literal("past-6m"),
+  v.literal("past-12m"),
+  v.literal("finished"),
+);
+type Timing = Infer<typeof timingValidator>;
+const RECENT_MONTHS = { "past-3m": 3, "past-6m": 6, "past-12m": 12 } as const;
+/** "Finished" means no release in this many months (and nothing announced). */
+const FINISHED_QUIET_MONTHS = 12;
+
+/** Every filter the library offers; setting any one moves `browse` to the filtered path. */
+const filterArgs = {
+  /** Publisher slugs; a Series matches when any of its Publishers is listed. */
+  publishers: v.optional(v.array(v.string())),
+  volumes: v.optional(volumesValidator),
+  timing: v.optional(timingValidator),
+  status: v.optional(statusValidator),
+  format: v.optional(v.union(v.literal("physical"), v.literal("digital"))),
+  /** "a".."z", or "#" for titles that start with anything else. */
+  letter: v.optional(v.string()),
+  /** Title search: every typed word must start a word of the title or an alt title. */
+  q: v.optional(v.string()),
+};
+type Filters = ObjectType<typeof filterArgs>;
+
+/** The yyyymm00 key for the start of the month `months` before `today`'s. */
+function monthsBefore(today: number, months: number): number {
+  const index = Math.floor(today / 10000) * 12 + (Math.floor(today / 100) % 100) - 1 - months;
+  return Math.floor(index / 12) * 10000 + ((index % 12) + 1) * 100;
+}
+
+/**
+ * Release timing, from the row's derived dates:
+ * - upcoming: an Upcoming Release is announced (nextReleaseSort).
+ * - past-Nm: a release came out since the start of the month N months ago,
+ *   so a month-precision date (yyyymm00) in that month counts.
+ * - finished: nothing announced, the last release is over a year old, and
+ *   the Source Status is not Ongoing or Hiatus. Source Status is mostly
+ *   unknown today, so this is the English run's quiet end, finished or
+ *   stalled; a Series whose final volume just came out reads as recent
+ *   until a year has passed.
+ */
+function timingTest(timing: Timing, today: number): (entry: Entry) => boolean {
+  switch (timing) {
+    case "upcoming":
+      return (entry) => entry.nextReleaseSort > 0;
+    case "past-3m":
+    case "past-6m":
+    case "past-12m": {
+      const from = monthsBefore(today, RECENT_MONTHS[timing]);
+      return (entry) => entry.lastReleasedSort >= from;
+    }
+    case "finished": {
+      const quietSince = monthsBefore(today, FINISHED_QUIET_MONTHS);
+      return (entry) =>
+        entry.nextReleaseSort === 0 &&
+        entry.lastReleasedSort > 0 &&
+        entry.lastReleasedSort < quietSince &&
+        entry.sourceStatus !== "ongoing" &&
+        entry.sourceStatus !== "hiatus";
+    }
+  }
+}
+
+/**
+ * One predicate for every filter that is set, or null when none is (the
+ * unfiltered shelf). Values are resolved once here rather than per row.
+ */
+function matcher(f: Filters, today: number): ((entry: Entry) => boolean) | null {
+  const tests: Array<(entry: Entry) => boolean> = [];
+  const publishers = new Set(f.publishers?.filter(Boolean));
+  if (publishers.size > 0) tests.push((entry) => entry.publishers.some((p) => publishers.has(p.slug)));
+  if (f.volumes) {
+    const { min, max } = VOLUME_RANGES[f.volumes];
+    tests.push((entry) => entry.volumeCount >= min && entry.volumeCount <= max);
+  }
+  if (f.timing) tests.push(timingTest(f.timing, today));
+  const { status, format, letter } = f;
+  if (status) tests.push((entry) => entry.sourceStatus === status);
+  if (format === "physical") tests.push((entry) => entry.hasPhysical);
+  if (format === "digital") tests.push((entry) => entry.hasDigital);
+  if (letter && /^[a-z#]$/.test(letter)) tests.push((entry) => letterFor(entry.titleSort) === letter);
+  const words = searchKeyFor([f.q ?? ""]).split(" ").filter(Boolean);
+  if (words.length > 0) {
+    tests.push((entry) => {
+      const key = ` ${entry.searchKey}`;
+      return words.every((word) => key.includes(` ${word}`));
+    });
+  }
+  return tests.length > 0 ? (entry) => tests.every((test) => test(entry)) : null;
 }
 
 function card(row: StatsRow) {
@@ -325,7 +541,9 @@ function card(row: StatsRow) {
 
 // Keyset cursor: the last row's sort value + publicId, which every sort
 // index ends in, so a page resumes exactly where the previous one stopped
-// even when many rows share a value (every zero-follower Series, say).
+// even when many rows share a value (every zero-follower Series, say). Both
+// paths use it, so a Series added or hidden between requests shifts nothing
+// already seen.
 type Cursor = { v: string | number; id: number };
 
 // Base64url over UTF-8 with the web APIs the Convex runtime provides
@@ -353,10 +571,12 @@ function decodeCursor(raw: string | null | undefined): Cursor | null {
 }
 
 /**
- * One chunk of the sort index after `cursor`, at most `limit` rows. Two index
- * reads: the rest of the cursor's own value group, then everything past it.
- * Every sort index ends in publicId, which is what makes the cursor exact.
- * Spelled out per sort so each index range is fully typed.
+ * One chunk of the sort index after `cursor`, at most `limit` rows, drained
+ * from a short list of index ranges: the rest of the cursor's own value
+ * group, then everything past it. Every sort index ends in publicId, which
+ * is what makes the cursor exact. Ascending "upcoming" shelves the Series
+ * with nothing announced (0) after every dated one, as the filtered path's
+ * `compare` does. Spelled out per sort so each index range is fully typed.
  */
 async function readChunk(
   ctx: QueryCtx,
@@ -367,58 +587,63 @@ async function readChunk(
 ): Promise<Array<StatsRow>> {
   const table = () => ctx.db.query("seriesStats");
   const asc = order === "asc";
-  if (!cursor) {
-    return await table().withIndex(SORT_INDEX[sort].index).order(order).take(limit);
-  }
-  const id = cursor.id;
-  type IdRange<R> = { gt: (f: "publicId", v: number) => R; lt: (f: "publicId", v: number) => R };
-  // The cursor's value group beyond its publicId, in sort direction.
-  const same = <R>(r: IdRange<R>) => (asc ? r.gt("publicId", id) : r.lt("publicId", id));
-  const num = cursor.v as number;
-  const str = cursor.v as string;
-  const [sameValue, rest] = (() => {
+  const zerosAfter = (id: number) =>
+    table().withIndex("by_next", (r) => r.eq("nextReleaseSort", 0).gt("publicId", id));
+  const zerosLast = sort === "upcoming" && asc;
+  const ranges = (() => {
+    if (zerosLast && !cursor) {
+      return [table().withIndex("by_next", (r) => r.gt("nextReleaseSort", 0)), zerosAfter(-1)];
+    }
+    if (zerosLast && cursor?.v === 0) return [zerosAfter(cursor.id)];
+    if (!cursor) return [table().withIndex(SORT_INDEX[sort].index)];
+    const id = cursor.id;
+    type IdRange<R> = { gt: (f: "publicId", v: number) => R; lt: (f: "publicId", v: number) => R };
+    // The cursor's value group beyond its publicId, in sort direction.
+    const same = <R>(r: IdRange<R>) => (asc ? r.gt("publicId", id) : r.lt("publicId", id));
+    const num = cursor.v as number;
+    const str = cursor.v as string;
     switch (sort) {
       case "title":
         return [
           table().withIndex("by_title", (r) => same(r.eq("titleSort", str))),
           table().withIndex("by_title", (r) => (asc ? r.gt("titleSort", str) : r.lt("titleSort", str))),
-        ] as const;
+        ];
       case "recent":
-        return [
-          null,
-          table().withIndex("by_publicId", (r) => (asc ? r.gt("publicId", id) : r.lt("publicId", id))),
-        ] as const;
+        return [table().withIndex("by_publicId", (r) => same(r))];
       case "volumes":
         return [
           table().withIndex("by_volumes", (r) => same(r.eq("volumeCount", num))),
           table().withIndex("by_volumes", (r) => (asc ? r.gt("volumeCount", num) : r.lt("volumeCount", num))),
-        ] as const;
+        ];
       case "latest":
         return [
           table().withIndex("by_latest", (r) => same(r.eq("latestReleaseSort", num))),
           table().withIndex("by_latest", (r) => (asc ? r.gt("latestReleaseSort", num) : r.lt("latestReleaseSort", num))),
-        ] as const;
+        ];
       case "upcoming":
         return [
           table().withIndex("by_next", (r) => same(r.eq("nextReleaseSort", num))),
           table().withIndex("by_next", (r) => (asc ? r.gt("nextReleaseSort", num) : r.lt("nextReleaseSort", num))),
-        ] as const;
+          ...(zerosLast ? [zerosAfter(-1)] : []),
+        ];
       case "followers":
         return [
           table().withIndex("by_followers", (r) => same(r.eq("followers", num))),
           table().withIndex("by_followers", (r) => (asc ? r.gt("followers", num) : r.lt("followers", num))),
-        ] as const;
+        ];
       case "collectors":
         return [
           table().withIndex("by_collectors", (r) => same(r.eq("collectors", num))),
           table().withIndex("by_collectors", (r) => (asc ? r.gt("collectors", num) : r.lt("collectors", num))),
-        ] as const;
+        ];
     }
   })();
-  const head = sameValue ? await sameValue.order(order).take(limit) : [];
-  if (head.length >= limit) return head;
-  const tail = await rest.order(order).take(limit - head.length);
-  return [...head, ...tail];
+  const rows: Array<StatsRow> = [];
+  for (const range of ranges) {
+    if (rows.length >= limit) break;
+    rows.push(...(await range.order(order).take(limit - rows.length)));
+  }
+  return rows;
 }
 
 /** Whether the row's Series is still an active, unmerged public record. */
@@ -427,149 +652,115 @@ async function stillPublic(ctx: QueryCtx, row: StatsRow): Promise<boolean> {
   return series !== null && series.status === "active" && !series.mergedIntoId;
 }
 
+/**
+ * One page of the library: `items`, the `nextCursor` to pass back for the
+ * following page (null at the end), and `total`, the number of Series the
+ * filters match, or null for the unfiltered shelf (facets' total is that).
+ * The total can include a Series hidden since the last rebuild; it is
+ * skipped when a page reaches it.
+ */
 export const browse = query({
   args: {
     sort: sortValidator,
     order: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
-    publisher: v.optional(v.string()),
-    status: v.optional(statusValidator),
-    format: v.optional(v.union(v.literal("physical"), v.literal("digital"))),
-    letter: v.optional(v.string()),
-    q: v.optional(v.string()),
+    ...filterArgs,
     cursor: v.optional(v.union(v.string(), v.null())),
     pageSize: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const order = args.order ?? SORT_INDEX[args.sort].defaultOrder;
     const pageSize = Math.max(1, Math.min(PAGE_MAX, Math.floor(args.pageSize ?? PAGE_DEFAULT)));
-    const filters: Filters = {
-      publisher: args.publisher || undefined,
-      status: args.status,
-      format: args.format,
-      letter: args.letter && /^[a-z#]$/.test(args.letter) ? args.letter : undefined,
-    };
+    const { field } = SORT_INDEX[args.sort];
+    const keyOf = (row: StatsRow | Entry): Cursor => ({ v: row[field], id: row.publicId });
+    const test = matcher(args, todaySortKey());
 
-    // Search: the title index ranks the candidate set, the sort then orders
-    // it in memory and pages resume after the last row returned — the same
-    // (value, publicId) cursor the index sorts use, so a Series added or
-    // hidden between requests shifts nothing already seen. Upcoming keeps
-    // "nothing announced" (0) at the end.
-    const needle = args.q?.trim();
-    if (needle) {
-      const after = decodeCursor(args.cursor);
-      const hits = await ctx.db
-        .query("series")
-        .withSearchIndex("search_title", (q) => q.search("searchText", needle))
-        .take(SEARCH_LIMIT);
-      const rows: Array<StatsRow> = [];
-      for (const hit of hits) {
-        if (hit.status !== "active" || hit.mergedIntoId) continue;
-        const row = await ctx.db
-          .query("seriesStats")
-          .withIndex("by_series", (q) => q.eq("seriesId", hit._id))
-          .unique();
-        if (row && matches(row, filters)) rows.push(row);
-      }
-      const { field } = SORT_INDEX[args.sort];
+    if (test) {
+      // Filters pick the set from the packs (the cost is in the header
+      // comment). Then the sort orders it, nothing announced last on
+      // "upcoming", and the page resumes after the cursor's entry.
+      const entries = (await allEntries(ctx)).filter(test);
       const compare = (a: Cursor, b: Cursor) => {
         if (args.sort === "upcoming" && (a.v === 0) !== (b.v === 0)) return a.v === 0 ? 1 : -1;
         const cmp = a.v < b.v ? -1 : a.v > b.v ? 1 : a.id - b.id;
         return order === "asc" ? cmp : -cmp;
       };
-      const keyOf = (row: StatsRow): Cursor => ({ v: row[field], id: row.publicId });
-      rows.sort((a, b) => compare(keyOf(a), keyOf(b)));
-      const start = after ? rows.findIndex((row) => compare(keyOf(row), after) > 0) : 0;
-      const page = start < 0 ? [] : rows.slice(start, start + pageSize);
-      const edge = page[page.length - 1];
+      entries.sort((a, b) => compare(keyOf(a), keyOf(b)));
+      const after = decodeCursor(args.cursor);
+      const start = after ? entries.findIndex((entry) => compare(keyOf(entry), after) > 0) : 0;
+      const items: Array<StatsRow> = [];
+      let examined = start < 0 ? entries.length : start;
+      for (const entry of entries.slice(examined)) {
+        if (items.length === pageSize) break;
+        examined++;
+        const row = await ctx.db
+          .query("seriesStats")
+          .withIndex("by_publicId", (q) => q.eq("publicId", entry.publicId))
+          .unique();
+        // Entries lag their Series by up to a rebuild; a Series hidden or
+        // merged since must not surface from the library meanwhile.
+        if (row && (await stillPublic(ctx, row))) items.push(row);
+      }
+      const edge = entries[examined - 1];
       return {
-        items: page.map(card),
-        nextCursor: edge && start + pageSize < rows.length ? encodeCursor(keyOf(edge)) : null,
+        items: items.map(card),
+        nextCursor: examined < entries.length && edge ? encodeCursor(keyOf(edge)) : null,
+        total: entries.length,
       };
     }
 
-    const filtered = Boolean(filters.publisher || filters.status || filters.format || filters.letter);
-    let cursor = decodeCursor(args.cursor);
-    // Ascending "upcoming" would start at the thousands of Series with
-    // nothing announced (0); begin the range just past them instead.
-    if (!cursor && args.sort === "upcoming" && order === "asc") {
-      cursor = { v: 0, id: Number.MAX_SAFE_INTEGER };
-    }
-    // A letter under the title sort is a contiguous stretch of the title
-    // index: start the range at it and stop once past it, rather than
-    // scanning from "a" and running out of budget before "m" is reached.
-    const letterRange =
-      args.sort === "title" && filters.letter && filters.letter !== "#"
-        ? { from: filters.letter, to: String.fromCharCode(filters.letter.charCodeAt(0) + 1) }
-        : null;
-    if (!cursor && letterRange) {
-      cursor = order === "asc" ? { v: letterRange.from, id: -1 } : { v: letterRange.to, id: -1 };
-    }
-    // Collect one row past the page: finding it is how we know there is a
-    // next page without guessing at the end of the index.
+    // Unfiltered: straight off the sort index. Collect one row past the page:
+    // finding it is how we know there is a next page.
     const target = pageSize + 1;
     const items: Array<StatsRow> = [];
-    let scanned = 0;
-    let exhausted = false;
-    // Unfiltered pages come straight off the index; filtered ones keep
-    // reading chunks until the page fills or the scan budget is spent.
-    while (items.length < target && !exhausted && scanned < SCAN_MAX) {
-      const want = filtered ? SCAN_CHUNK : target - items.length;
+    let cursor = decodeCursor(args.cursor);
+    for (;;) {
+      const want = target - items.length;
       const chunk = await readChunk(ctx, args.sort, order, cursor, want);
-      scanned += chunk.length;
-      if (chunk.length < want) exhausted = true;
       for (const row of chunk) {
-        if (!matches(row, filters)) continue;
-        // The row lags its Series by up to a rebuild; a Series hidden or
-        // merged since must not surface from the library meanwhile.
-        if (!(await stillPublic(ctx, row))) continue;
-        items.push(row);
-        if (items.length === target) break;
+        if (await stillPublic(ctx, row)) items.push(row);
       }
       const last = chunk[chunk.length - 1];
-      if (last) cursor = { v: last[SORT_INDEX[args.sort].field], id: last.publicId };
-      if (last && letterRange) {
-        const past = order === "asc" ? last.titleSort >= letterRange.to : last.titleSort < letterRange.from;
-        if (past) exhausted = true;
-      }
+      if (!last || chunk.length < want || items.length === target) break;
+      cursor = keyOf(last);
     }
     const page = items.slice(0, pageSize);
     const edge = page[page.length - 1];
-    // More to come either because a row past the page was seen, or because
-    // the scan budget ran out before the index did: a sparse filter then
-    // returns a short page and resumes from the last row scanned.
-    const budgetSpent = !exhausted && items.length <= pageSize && scanned >= SCAN_MAX;
-    const nextCursor =
-      items.length > pageSize && edge
-        ? encodeCursor({ v: edge[SORT_INDEX[args.sort].field], id: edge.publicId })
-        : budgetSpent && cursor
-          ? encodeCursor(cursor)
-          : null;
-    return { items: page.map(card), nextCursor };
+    return {
+      items: page.map(card),
+      nextCursor: items.length > pageSize && edge ? encodeCursor(keyOf(edge)) : null,
+      total: null,
+    };
   },
 });
 
-/** What the filter controls offer: active publishers, status counts, total. */
+/**
+ * What the filter panel offers: every Publisher with a Series in the
+ * library and how many it has, the total Series count, and counts per
+ * Source Status. Publishers come from the packed entries themselves, so a
+ * listed slug always filters to something.
+ */
 export const facets = query({
   args: {},
   handler: async (ctx) => {
-    const publishers = (await ctx.db.query("publishers").take(500))
-      .filter((p) => p.status === "active")
-      .map((p) => ({ name: p.name, slug: p.slug }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    const counts = new Map<StatsRow["sourceStatus"], number>();
-    let total = 0;
-    // The stats table is one row per Series; counting it is the one full
-    // scan this page does, and it is small (a few hundred bytes a row).
-    for await (const row of ctx.db.query("seriesStats")) {
-      total++;
-      counts.set(row.sourceStatus, (counts.get(row.sourceStatus) ?? 0) + 1);
+    const publishers = new Map<string, { name: string; slug: string; count: number }>();
+    const statuses = new Map<Entry["sourceStatus"], number>();
+    // The same pack read as a filtered browse.
+    const entries = await allEntries(ctx);
+    for (const entry of entries) {
+      statuses.set(entry.sourceStatus, (statuses.get(entry.sourceStatus) ?? 0) + 1);
+      for (const publisher of entry.publishers) {
+        const entry = publishers.get(publisher.slug);
+        if (entry) entry.count++;
+        else publishers.set(publisher.slug, { ...publisher, count: 1 });
+      }
     }
     return {
-      publishers,
-      total,
-      statuses: [...counts.entries()]
+      publishers: [...publishers.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      total: entries.length,
+      statuses: [...statuses.entries()]
         .map(([status, count]) => ({ status, count }))
         .sort((a, b) => b.count - a.count),
     };
   },
 });
+

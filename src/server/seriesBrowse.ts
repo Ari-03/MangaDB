@@ -10,9 +10,10 @@ import { convexServerClient } from "~/server/convex";
 export type SeriesBrowseArgs = FunctionArgs<typeof api.seriesBrowse.browse>;
 
 /**
- * One page of the Series library (`/series`): sorted, filtered, cursor-paged.
- * Called by the route loader for the first page and from the client for
- * "Show more". Returns null when Convex is not configured.
+ * One page of the Series library (`/series`): filtered, then sorted,
+ * cursor-paged, with the filtered total. Called by the route loader for the
+ * first page and from the client as the shelf scrolls. Returns null when
+ * Convex is not configured.
  */
 export const fetchSeriesBrowse = createServerFn({ method: "GET" })
   .validator((args: SeriesBrowseArgs) => args)
@@ -23,8 +24,9 @@ export const fetchSeriesBrowse = createServerFn({ method: "GET" })
   });
 
 /**
- * The library's filter vocabulary: every Publisher with a Series, the total
- * Series count, and counts per Source Status. Null when unconfigured.
+ * The library's filter vocabulary: every Publisher with a Series and its
+ * Series count, the total Series count, and counts per Source Status. Null
+ * when unconfigured.
  */
 export const fetchSeriesFacets = createServerFn({ method: "GET" }).handler(
   async () => {

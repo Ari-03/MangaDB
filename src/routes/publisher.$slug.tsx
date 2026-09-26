@@ -34,8 +34,8 @@ const LANE_HORIZON_MONTHS = 3;
  * The Publisher Spotlight page (ticket #25, spec §10/§11): `/publisher/{slug}`
  * is a publisher-led profile — identity and context first, then a bounded
  * upcoming-Releases lane — with a clear route into the main Releases browser
- * pre-filtered to this Publisher. There is no cross-publisher overview page;
- * that comparison lives in the browser (prototype #17's decision).
+ * pre-filtered to this Publisher. The cross-publisher overview is the
+ * Publishers board (`/publishers`), a month of activity per Publisher.
  *
  * Publishers are the slug-only URL exception (spec §8): a renamed Publisher's
  * old slug 301s here via publisherSlugRedirects, and a merged Publisher's

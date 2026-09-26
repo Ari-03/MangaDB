@@ -97,6 +97,8 @@ describe("seriesBrowse.rebuild", () => {
       firstReleaseSort: 20150616,
       latestReleaseSort: 20991231,
       nextReleaseSort: 20991231,
+      lastReleasedSort: 20170101,
+      searchKey: "tokyo ghoul",
       followers: 1,
       collectors: 1,
       publishers: [{ name: "VIZ Media", slug: "viz-media" }],
@@ -131,13 +133,14 @@ describe("seriesBrowse.browse", () => {
     const followers = await t.query(api.seriesBrowse.browse, { sort: "followers" });
     expect(followers.items.map((i) => i.title)).toEqual(["Tokyo Ghoul", "The Quiet Cartographer"]);
     const upcoming = await t.query(api.seriesBrowse.browse, { sort: "upcoming" });
-    // Nothing announced never leads the upcoming shelf.
-    expect(upcoming.items.map((i) => i.title)).toEqual(["Tokyo Ghoul"]);
+    // Nothing announced never leads the upcoming shelf; a sort never drops rows.
+    expect(upcoming.items.map((i) => i.title)).toEqual(["Tokyo Ghoul", "The Quiet Cartographer"]);
+    expect(upcoming.total).toBeNull();
   });
 
   it("filters by publisher, status, format, and letter", async () => {
     const { t } = await seeded();
-    const seas = await t.query(api.seriesBrowse.browse, { sort: "title", publisher: "seven-seas" });
+    const seas = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["seven-seas"] });
     expect(seas.items.map((i) => i.title)).toEqual(["The Quiet Cartographer"]);
     const done = await t.query(api.seriesBrowse.browse, { sort: "title", status: "completed" });
     expect(done.items.map((i) => i.title)).toEqual(["The Quiet Cartographer"]);
@@ -159,7 +162,11 @@ describe("seriesBrowse.browse", () => {
     const { t } = await seeded();
     const f = await t.query(api.seriesBrowse.facets, {});
     expect(f.total).toBe(2);
-    expect(f.publishers.map((p) => p.slug)).toEqual(["seven-seas", "viz-media"]);
+    // From the rows: the hidden Series' VIZ book counts for nothing.
+    expect(f.publishers).toEqual([
+      { name: "Seven Seas", slug: "seven-seas", count: 1 },
+      { name: "VIZ Media", slug: "viz-media", count: 1 },
+    ]);
     expect(f.statuses).toEqual([
       { status: "ongoing", count: 1 },
       { status: "completed", count: 1 },
@@ -240,5 +247,186 @@ describe("seriesBrowse review follow-ups", () => {
     const p2 = await t.query(api.seriesBrowse.browse, { sort: "title", q: "echo", pageSize: 2, cursor: p1.nextCursor });
     expect(p2.items.map((i) => i.title)).toEqual(["Echo 3"]);
     expect(p2.nextCursor).toBeNull();
+  });
+});
+
+/** A yyyymmdd key for the 15th of the month `n` months before now (UTC). */
+function monthsAgo(n: number): number {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - n, 15));
+  return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + 15;
+}
+
+type ShelfSpec = {
+  title: string;
+  publishers: Array<string>;
+  volumes: number;
+  /** Release dates, one per Volume in order; missing ones are undated. */
+  dates: Array<number>;
+  sourceStatus?: "ongoing" | "completed";
+  altTitles?: Array<string>;
+};
+
+/**
+ * A library shaped for the filters: each Series' Volumes cycle through its
+ * Publishers, one physical Release each. publicIds follow the spec order.
+ */
+async function library(specs: Array<ShelfSpec>) {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    const publishers = new Map<string, Id<"publishers">>();
+    for (const slug of new Set(specs.flatMap((s) => s.publishers))) {
+      publishers.set(slug, await ctx.db.insert("publishers", { status: "active", name: slug.toUpperCase(), slug }));
+    }
+    for (const [n, spec] of specs.entries()) {
+      const publicId = n + 1;
+      const altTitles = spec.altTitles ?? [];
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId,
+        title: spec.title,
+        altTitles,
+        searchText: [spec.title, ...altTitles].join(" "),
+        sourceStatus: spec.sourceStatus,
+      });
+      for (let i = 0; i < spec.volumes; i++) {
+        const publisherId = publishers.get(spec.publishers[i % spec.publishers.length]!)!;
+        const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: publicId * 100 + i, seriesId, position: i + 1 });
+        const editionId = await ctx.db.insert("editions", { status: "active", publicId: publicId * 100 + i, publisherId });
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
+        const sort = spec.dates[i] ?? 0;
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          publisherId,
+          seriesIds: [seriesId],
+          format: "physical",
+          language: "en",
+          pubDate: sort ? { year: Math.floor(sort / 10000), month: Math.floor(sort / 100) % 100, day: sort % 100, sort } : undefined,
+        });
+      }
+    }
+  });
+  await t.action(internal.seriesBrowse.rebuild, {});
+  return t;
+}
+
+describe("seriesBrowse filters first, then the sort", () => {
+  const shelf = () =>
+    library([
+      { title: "Alpha", publishers: ["viz"], volumes: 1, dates: [monthsAgo(1)] },
+      { title: "Bravo", publishers: ["yen"], volumes: 3, dates: [monthsAgo(7), monthsAgo(5), 20991231] },
+      { title: "Charlie", publishers: ["seas"], volumes: 8, dates: [monthsAgo(30), monthsAgo(24)] },
+      { title: "Delta", publishers: ["viz", "yen"], volumes: 20, dates: [monthsAgo(10)], altTitles: ["Dérapage Contrôlé"] },
+      { title: "Echo", publishers: ["kodansha"], volumes: 2, dates: [] },
+      { title: "Foxtrot", publishers: ["seas"], volumes: 1, dates: [monthsAgo(30)], sourceStatus: "ongoing" },
+    ]);
+  const titles = (page: { items: Array<{ title: string }> }) => page.items.map((i) => i.title);
+
+  it("records the last release already out beside the next one", async () => {
+    const t = await shelf();
+    const bravo = await t.run((ctx) => ctx.db.query("seriesStats").withIndex("by_publicId", (q) => q.eq("publicId", 2)).unique());
+    expect(bravo).toMatchObject({ lastReleasedSort: monthsAgo(5), nextReleaseSort: 20991231, latestReleaseSort: 20991231 });
+  });
+
+  it("matches any of several publishers, with an exact total", async () => {
+    const t = await shelf();
+    const page = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["viz", "yen"] });
+    expect(titles(page)).toEqual(["Alpha", "Bravo", "Delta"]);
+    expect(page.total).toBe(3);
+    const one = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["kodansha"] });
+    expect(titles(one)).toEqual(["Echo"]);
+    expect(one.total).toBe(1);
+  });
+
+  it("buckets volume counts", async () => {
+    const t = await shelf();
+    const bucket = async (volumes: "one" | "2-5" | "6-15" | "16-plus") =>
+      titles(await t.query(api.seriesBrowse.browse, { sort: "title", volumes }));
+    expect(await bucket("one")).toEqual(["Alpha", "Foxtrot"]);
+    expect(await bucket("2-5")).toEqual(["Bravo", "Echo"]);
+    expect(await bucket("6-15")).toEqual(["Charlie"]);
+    expect(await bucket("16-plus")).toEqual(["Delta"]);
+  });
+
+  it("filters by release timing", async () => {
+    const t = await shelf();
+    const timing = async (timing: "upcoming" | "past-3m" | "past-6m" | "past-12m" | "finished") =>
+      titles(await t.query(api.seriesBrowse.browse, { sort: "title", timing }));
+    expect(await timing("upcoming")).toEqual(["Bravo"]);
+    expect(await timing("past-3m")).toEqual(["Alpha"]);
+    expect(await timing("past-6m")).toEqual(["Alpha", "Bravo"]);
+    expect(await timing("past-12m")).toEqual(["Alpha", "Bravo", "Delta"]);
+    // Quiet for a year with nothing announced; Foxtrot's source is still
+    // ongoing and Echo has never had a dated release.
+    expect(await timing("finished")).toEqual(["Charlie"]);
+  });
+
+  it("sorts and pages a combined filter to the end, keeping the total", async () => {
+    const t = await shelf();
+    const args = { sort: "volumes" as const, publishers: ["viz", "yen", "seas"], pageSize: 2 };
+    const p1 = await t.query(api.seriesBrowse.browse, args);
+    const p2 = await t.query(api.seriesBrowse.browse, { ...args, cursor: p1.nextCursor });
+    const p3 = await t.query(api.seriesBrowse.browse, { ...args, cursor: p2.nextCursor });
+    // Most volumes first; the one-volume tie breaks by newest publicId.
+    expect([titles(p1), titles(p2), titles(p3)]).toEqual([["Delta", "Charlie"], ["Bravo", "Foxtrot"], ["Alpha"]]);
+    expect([p1.total, p2.total, p3.total]).toEqual([5, 5, 5]);
+    expect(p3.nextCursor).toBeNull();
+
+    const narrow = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["seas"], volumes: "one", timing: "past-12m" });
+    expect(narrow).toMatchObject({ items: [], total: 0, nextCursor: null });
+  });
+
+  it("keeps nothing-announced last on a filtered upcoming sort", async () => {
+    const t = await shelf();
+    const page = await t.query(api.seriesBrowse.browse, { sort: "upcoming", publishers: ["yen", "kodansha"] });
+    expect(titles(page)).toEqual(["Bravo", "Delta", "Echo"]);
+  });
+
+  it("searches titles and alt titles by word prefix as you type", async () => {
+    const t = await shelf();
+    const q = async (q: string, extra: { publishers?: Array<string> } = {}) =>
+      titles(await t.query(api.seriesBrowse.browse, { sort: "title", q, ...extra }));
+    expect(await q("del")).toEqual(["Delta"]);
+    expect(await q("derapage contr")).toEqual(["Delta"]);
+    expect(await q("elta")).toEqual([]);
+    expect(await q("a", { publishers: ["viz"] })).toEqual(["Alpha"]);
+    // Only a real word counts: punctuation alone filters nothing.
+    const all = await t.query(api.seriesBrowse.browse, { sort: "title", q: " - " });
+    expect(all.total).toBeNull();
+  });
+
+  it("packs every row once, by publicId block, and drops emptied packs", async () => {
+    const t = await shelf();
+    const packs = await t.run((ctx) => ctx.db.query("seriesStatsPacks").collect());
+    expect(packs.map((p) => [p.block, p.entries.map((e) => e.publicId)])).toEqual([[0, [1, 2, 3, 4, 5, 6]]]);
+    expect(packs[0]!.entries[3]).toMatchObject({ titleSort: "delta", searchKey: "delta derapage controle", volumeCount: 20 });
+    // A stale pack past the catalog's last block goes on the next rebuild.
+    await t.run((ctx) => ctx.db.insert("seriesStatsPacks", { block: 7, entries: [] }));
+    await t.action(internal.seriesBrowse.rebuild, {});
+    const blocks = await t.run(async (ctx) => (await ctx.db.query("seriesStatsPacks").collect()).map((p) => p.block));
+    expect(blocks).toEqual([0]);
+  });
+
+  it("filters from the rows themselves before any pack is written", async () => {
+    const t = await shelf();
+    await t.run(async (ctx) => {
+      for (const pack of await ctx.db.query("seriesStatsPacks").collect()) await ctx.db.delete(pack._id);
+    });
+    const page = await t.query(api.seriesBrowse.browse, { sort: "title", publishers: ["viz", "yen"] });
+    expect(titles(page)).toEqual(["Alpha", "Bravo", "Delta"]);
+    expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(6);
+  });
+
+  it("counts Series per publisher in the facets", async () => {
+    const t = await shelf();
+    const f = await t.query(api.seriesBrowse.facets, {});
+    expect(f.total).toBe(6);
+    expect(f.publishers.map((p) => [p.slug, p.count])).toEqual([
+      ["kodansha", 1],
+      ["seas", 2],
+      ["viz", 2],
+      ["yen", 2],
+    ]);
   });
 });

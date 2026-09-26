@@ -46,6 +46,7 @@ import type * as lib_repair_entries from "../lib/repair/entries.js";
 import type * as lib_repair_metrics from "../lib/repair/metrics.js";
 import type * as lib_repair_ops from "../lib/repair/ops.js";
 import type * as lib_roles from "../lib/roles.js";
+import type * as lib_searchMatch from "../lib/searchMatch.js";
 import type * as lib_sensitiveOps from "../lib/sensitiveOps.js";
 import type * as lib_sevenSeas from "../lib/sevenSeas.js";
 import type * as lib_text from "../lib/text.js";
@@ -117,6 +118,7 @@ declare const fullApi: ApiFromModules<{
   "lib/repair/metrics": typeof lib_repair_metrics;
   "lib/repair/ops": typeof lib_repair_ops;
   "lib/roles": typeof lib_roles;
+  "lib/searchMatch": typeof lib_searchMatch;
   "lib/sensitiveOps": typeof lib_sensitiveOps;
   "lib/sevenSeas": typeof lib_sevenSeas;
   "lib/text": typeof lib_text;

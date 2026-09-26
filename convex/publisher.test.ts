@@ -300,3 +300,231 @@ describe("publisherPage — imprint family", () => {
     });
   });
 });
+
+describe("publisher.monthBoard", () => {
+  // Fixture for September 2026: Seven Seas (parent) debuts one series and
+  // continues another, plus a Deluxe-line Vol. 1 that is a repackaging, not
+  // a debut; its imprint Ghost Ship has one release; a defunct Publisher and
+  // one with only August activity round out the directory. Hidden rows and
+  // other months stay out of the counts.
+  async function board() {
+    const t = convexTest(schema);
+    await t.run(async (ctx) => {
+      const sevenSeas = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+      });
+      const ghostShip = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Ghost Ship",
+        slug: "ghost-ship",
+        parentPublisherId: sevenSeas,
+      });
+      const tokyopop = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Tokyopop",
+        slug: "tokyopop",
+      });
+      await ctx.db.insert("publishers", {
+        status: "active",
+        name: "CMX",
+        slug: "cmx",
+        defunct: true,
+      });
+      await ctx.db.insert("publishers", {
+        status: "hidden",
+        name: "Hidden Press",
+        slug: "hidden-press",
+      });
+
+      let publicId = 0;
+      // One Series with the given Volume positions; returns Volume IDs.
+      const seriesWith = async (title: string, positions: number[]) => {
+        const seriesId = await ctx.db.insert("series", {
+          status: "active",
+          publicId: ++publicId,
+          title,
+          altTitles: [],
+          searchText: title,
+        });
+        const volumes = [];
+        for (const position of positions) {
+          volumes.push(
+            await ctx.db.insert("volumes", {
+              status: "active",
+              publicId: ++publicId,
+              seriesId,
+              position,
+              label: String(position),
+            }),
+          );
+        }
+        return { seriesId, volumes };
+      };
+      // An Edition covering one Volume, with one Release per date given.
+      const release = async (args: {
+        publisherId: Id<"publishers">;
+        series: { seriesId: Id<"series">; volumes: Array<Id<"volumes">> };
+        volume: number;
+        sort: number;
+        format?: "physical" | "digital";
+        lineName?: string;
+        status?: "active" | "hidden";
+        isbn13?: string;
+      }) => {
+        const editionLineId = args.lineName
+          ? await ctx.db.insert("editionLines", {
+              status: "active",
+              seriesId: args.series.seriesId,
+              publisherId: args.publisherId,
+              name: args.lineName,
+            })
+          : undefined;
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: ++publicId,
+          publisherId: args.publisherId,
+          editionLineId,
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId: args.series.volumes[args.volume]!,
+          order: 1,
+          extent: "complete",
+        });
+        const year = Math.floor(args.sort / 10000);
+        const month = Math.floor(args.sort / 100) % 100;
+        await ctx.db.insert("releases", {
+          status: args.status ?? "active",
+          editionId,
+          format: args.format ?? "physical",
+          language: "en",
+          isbn13: args.isbn13,
+          pubDate: { year, month, day: args.sort % 100, sort: args.sort },
+          publisherId: args.publisherId,
+          seriesIds: [args.series.seriesId],
+        });
+      };
+
+      const debut = await seriesWith("New Thing", [1]);
+      const ongoing = await seriesWith("Long Runner", [1, 2, 3, 4, 5]);
+      const classic = await seriesWith("Old Classic", [1]);
+      const ghostly = await seriesWith("Ghostly", [3]);
+      const august = await seriesWith("August Only", [2]);
+
+      // Seven Seas, September: a debut in two Formats (one Series), a
+      // continuing Volume, and a Deluxe-line Vol. 1 of an old Series.
+      await release({ publisherId: sevenSeas, series: debut, volume: 0, sort: 20260908, isbn13: "9780000000001" });
+      await release({ publisherId: sevenSeas, series: debut, volume: 0, sort: 20260908, format: "digital" });
+      await release({ publisherId: sevenSeas, series: ongoing, volume: 4, sort: 20260915 });
+      await release({ publisherId: sevenSeas, series: classic, volume: 0, sort: 20260900, lineName: "Deluxe Edition" });
+      // Out of September's counts: hidden, and another month.
+      await release({ publisherId: sevenSeas, series: ongoing, volume: 3, sort: 20260920, status: "hidden" });
+      await release({ publisherId: sevenSeas, series: ongoing, volume: 3, sort: 20261001 });
+      // August, for the delta.
+      await release({ publisherId: sevenSeas, series: ongoing, volume: 3, sort: 20260811 });
+      await release({ publisherId: tokyopop, series: august, volume: 0, sort: 20260804 });
+      // Ghost Ship, September.
+      await release({ publisherId: ghostShip, series: ghostly, volume: 0, sort: 20260922, format: "digital" });
+    });
+    return t;
+  }
+
+  it("groups the month by Publisher, busiest first, with counts and a delta", async () => {
+    const t = await board();
+    const { board: cards } = await t.query(api.publisher.monthBoard, {
+      year: 2026,
+      month: 9,
+    });
+    expect(
+      cards.map(({ covers, ...card }) => ({ ...card, covers: covers.length })),
+    ).toEqual([
+      {
+        publisher: { name: "Seven Seas Entertainment", slug: "seven-seas", parent: null },
+        releases: 4,
+        physical: 3,
+        digital: 1,
+        series: 3,
+        // The Deluxe-line Vol. 1 repackages an old Series: not a debut.
+        newSeries: 1,
+        previousReleases: 1,
+        // One cover per Series.
+        covers: 3,
+      },
+      {
+        publisher: {
+          name: "Ghost Ship",
+          slug: "ghost-ship",
+          parent: { name: "Seven Seas Entertainment", slug: "seven-seas" },
+        },
+        releases: 1,
+        physical: 0,
+        digital: 1,
+        series: 1,
+        // Its only Volume is Vol. 3: continuing.
+        newSeries: 0,
+        previousReleases: 0,
+        covers: 1,
+      },
+    ]);
+    // The debut with an ISBN leads the cover strip.
+    expect(cards[0]!.covers[0]).toMatchObject({
+      series: [{ title: "New Thing" }],
+      coverIsbn: "9780000000001",
+    });
+  });
+
+  it("lists every active Publisher A–Z, imprints nested, defunct flagged", async () => {
+    const t = await board();
+    const { directory } = await t.query(api.publisher.monthBoard, {
+      year: 2026,
+      month: 9,
+    });
+    expect(directory).toEqual([
+      { name: "CMX", slug: "cmx", defunct: true, releases: 0, imprints: [] },
+      {
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+        defunct: false,
+        releases: 4,
+        imprints: [
+          { name: "Ghost Ship", slug: "ghost-ship", defunct: false, releases: 1 },
+        ],
+      },
+      // Quiet this month, still listed.
+      { name: "Tokyopop", slug: "tokyopop", defunct: false, releases: 0, imprints: [] },
+    ]);
+  });
+
+  it("wraps January's delta to the previous December", async () => {
+    const t = await board();
+    await t.run(async (ctx) => {
+      // Copies of an existing (visible) Seven Seas Release, re-dated.
+      const [template] = await ctx.db.query("releases").take(1);
+      if (!template) throw new Error("fixture has releases");
+      const { _id, _creationTime, ...fields } = template;
+      for (const [month, sort] of [
+        [12, 20251210],
+        [1, 20260105],
+      ] as const) {
+        await ctx.db.insert("releases", {
+          ...fields,
+          pubDate: { year: Math.floor(sort / 10000), month, day: sort % 100, sort },
+        });
+      }
+    });
+    const { board: cards } = await t.query(api.publisher.monthBoard, {
+      year: 2026,
+      month: 1,
+    });
+    expect(cards.map((card) => [card.releases, card.previousReleases])).toEqual([[1, 1]]);
+  });
+
+  it("reads a malformed month as an empty board, directory intact", async () => {
+    const t = await board();
+    const result = await t.query(api.publisher.monthBoard, { year: 2026, month: 13 });
+    expect(result.board).toEqual([]);
+    expect(result.directory).toHaveLength(3);
+  });
+});

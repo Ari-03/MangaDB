@@ -136,8 +136,64 @@ describe("catalog.search", () => {
     await seed(t);
     const results = await t.query(api.catalog.search, { query: "Tokyo" });
     expect(results.series).toEqual([
-      { publicId: 1, title: "Tokyo Ghoul", altTitles: ["Toukyou Kushu"] },
+      {
+        publicId: 1,
+        title: "Tokyo Ghoul",
+        altTitles: ["Toukyou Kushu"],
+        altMatch: null,
+        coverUrl: null,
+        coverIsbn: null,
+        volumeCount: null,
+        publisher: null,
+      },
     ]);
+    expect(results.didYouMean).toEqual([]);
+  });
+
+  it("carries the Series library's jacket, count, and publisher", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    await t.run(async (ctx) => {
+      const series = await ctx.db
+        .query("series")
+        .withIndex("by_publicId", (q) => q.eq("publicId", 2))
+        .unique();
+      await ctx.db.insert("seriesStats", {
+        seriesId: series!._id,
+        publicId: 2,
+        title: "Witch Hat Atelier",
+        titleSort: "witch hat atelier",
+        letter: "w",
+        sourceStatus: "ongoing",
+        publishers: [{ name: "Kodansha", slug: "kodansha" }],
+        hasPhysical: true,
+        hasDigital: true,
+        volumeCount: 13,
+        releaseCount: 26,
+        firstReleaseSort: 20190409,
+        latestReleaseSort: 20250101,
+        nextReleaseSort: 0,
+        followers: 0,
+        collectors: 0,
+        coverUrl: null,
+        coverIsbn: "9781632367709",
+        rebuiltAt: 0,
+      });
+    });
+    const [hit] = (await t.query(api.catalog.search, { query: "witch" })).series;
+    expect(hit).toMatchObject({
+      title: "Witch Hat Atelier",
+      coverIsbn: "9781632367709",
+      volumeCount: 13,
+      publisher: "Kodansha",
+    });
+  });
+
+  it("offers near-miss titles when nothing contains the query", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const results = await t.query(api.catalog.search, { query: "tokyo ghool" });
+    expect(results.didYouMean.map((s) => s.title)).toEqual(["Tokyo Ghoul"]);
   });
 
   it("matches Series by alt title through the searchText index", async () => {
@@ -161,6 +217,89 @@ describe("catalog.search", () => {
     await seed(t);
     expect(await t.query(api.catalog.search, { query: "   " })).toEqual({
       series: [],
+      publishers: [],
+      didYouMean: [],
+    });
+  });
+});
+
+describe("catalog.suggest", () => {
+  const seed = async (t: ReturnType<typeof convexTest>) => {
+    await t.run(async (ctx) => {
+      const rows: Array<[number, string, string[], "active" | "merged"]> = [
+        [1, "Berserk of Gluttony", [], "active"],
+        [2, "Berserk", ["Berserk Max"], "active"],
+        [3, "Chainsaw Man", ["Chensoman"], "active"],
+        [4, "Berserk Duplicate", [], "merged"],
+      ];
+      for (const [publicId, title, altTitles, status] of rows) {
+        await ctx.db.insert("series", {
+          status,
+          publicId,
+          title,
+          altTitles,
+          searchText: [title, ...altTitles].join(" "),
+        });
+      }
+      await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+      });
+      await ctx.db.insert("publishers", {
+        status: "active",
+        name: "VIZ Media",
+        slug: "viz-media",
+      });
+    });
+  };
+
+  it("lists whole-query matches, the exact title first, active only", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const results = await t.query(api.catalog.suggest, { query: "berserk" });
+    expect(results.series.map((s) => s.title)).toEqual([
+      "Berserk",
+      "Berserk of Gluttony",
+    ]);
+    expect(results.didYouMean).toEqual([]);
+  });
+
+  it("names the alt title a Series matched through", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const [hit] = (await t.query(api.catalog.suggest, { query: "chensoman" })).series;
+    expect(hit).toMatchObject({ title: "Chainsaw Man", altMatch: "Chensoman" });
+  });
+
+  it("suggests near misses for a typo instead of loose matches", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const berzerk = await t.query(api.catalog.suggest, { query: "berzerk" });
+    expect(berzerk.series).toEqual([]);
+    expect(berzerk.didYouMean.map((s) => s.title)).toEqual([
+      "Berserk",
+      "Berserk of Gluttony",
+    ]);
+    const chainsawman = await t.query(api.catalog.suggest, { query: "chainsawman" });
+    expect(chainsawman.didYouMean.map((s) => s.title)).toEqual(["Chainsaw Man"]);
+  });
+
+  it("finds publishers by the opening of their name", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    expect((await t.query(api.catalog.suggest, { query: "Seven" })).publishers).toEqual([
+      { name: "Seven Seas Entertainment", slug: "seven-seas" },
+    ]);
+    expect((await t.query(api.catalog.suggest, { query: "seas" })).publishers).toEqual([]);
+  });
+
+  it("returns nothing for a blank query", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    expect(await t.query(api.catalog.suggest, { query: " " })).toEqual({
+      series: [],
+      didYouMean: [],
       publishers: [],
     });
   });
