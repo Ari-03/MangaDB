@@ -17,7 +17,7 @@ This use of a bulk dump fits Open Library's guidance. Its [dump documentation](h
 - Impossible dates such as `2026-02-31` previously survived as exact publication dates. Invalid days now retain the valid month precision. Tests cover leap years and century exceptions.
 - Audio identified only through `physical_format` previously became a physical manga Release. Audio CD, audiobook, cassette and MP3 formats are now excluded even when the title lacks an audio marker.
 - Invalid line limits are rejected before starting a run. Zero previously could schedule continuations without progress. The accepted range is now 1 to 20,000 whole lines.
-- Malformed dump envelopes, invalid edition JSON and mismatched edition identities previously disappeared silently. They now produce line-specific import errors. The action continues processing valid records but finishes as failed when any processing error occurred, allowing source health tracking to see the failure.
+- Malformed dump envelopes, invalid edition JSON and mismatched edition identities previously disappeared silently. They now produce line-specific import errors. The action continues processing valid records but finishes as failed when any processing error occurred, allowing source health tracking to see the failure. A title-less edition is a sparse record rather than a malformed one (the offline filter selects by publisher and ISBN only), so it is skipped without an error, and the line number in an error is 0-based to match the `startLine` an operator would resume from.
 
 ## Live evidence
 

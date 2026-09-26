@@ -79,6 +79,7 @@ import {
 } from "./lib/pipeline";
 import type { CanonicalPublisher } from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
+import { sameValue } from "./lib/values";
 
 export const SOURCE_KEY = "kodansha";
 /** The backlist crawl's registry row: its runs, cadence, health, and crawl state. */
@@ -276,15 +277,27 @@ export const backlistPlan = internalQuery({
   },
 });
 
-/** Remember one finished series crawl; the observation's lastSeenAt is the crawl time. */
+/**
+ * Remember one finished series crawl; the observation's lastSeenAt is the
+ * crawl time. `fullCrawledAt` is bookkeeping, not a fact about the series:
+ * a crawl that found nothing else changed patches it in place, so a routine
+ * full refresh never writes a snapshot-history row.
+ */
 export const recordSeriesCrawl = internalMutation({
   args: { slug: v.string(), crawl: seriesCrawlValidator },
   handler: async (ctx, { slug, crawl }) => {
+    const now = Date.now();
+    const existing = await getObservation(ctx, BACKLIST_KEY, slug);
+    const stored = existing?.snapshot as SeriesCrawl | undefined;
+    if (existing && sameValue({ ...stored, fullCrawledAt: crawl.fullCrawledAt }, crawl)) {
+      await ctx.db.patch(existing._id, { snapshot: crawl, lastSeenAt: now, withdrawn: false });
+      return;
+    }
     await upsertObservation(ctx, {
       sourceKey: BACKLIST_KEY,
       sourceRecordId: slug,
       snapshot: crawl,
-      now: Date.now(),
+      now,
     });
   },
 });
@@ -523,6 +536,7 @@ export const backlistSync = internalAction({
           fetched: fetchedTotal,
           continued: true,
           errorCount: errors.length,
+          ...(failures > 0 ? { failed: true } : {}),
         };
       }
       return await finish(failures > 0 ? "failed" : "succeeded");

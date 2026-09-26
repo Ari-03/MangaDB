@@ -32,11 +32,34 @@ const API = `<ann><manga id="24449" gid="2959400328" type="manga" name="Frieren:
 
 describe("parseReport", () => {
   it("enumerates manga items, decoding entities and skipping non-manga", () => {
-    const items = parseReport(REPORT);
+    const { items, malformed, rawCount } = parseReport(REPORT);
     expect(items.map((i) => i.id)).toEqual(["40451", "40447"]);
     expect(items[1]!.name).toBe(
       "There's No Freaking Way I'll Be Your Lover! Unless... Second Season",
     );
+    expect(malformed).toEqual([]);
+    // Paging counts the anime row too.
+    expect(rawCount).toBe(3);
+  });
+
+  it("skips a row without id/name and reports its position; the rest parse", () => {
+    const { items, malformed, rawCount } = parseReport(
+      `<report skipped="0" listed="3"><item><id>1</id><type>manga</type><name>A</name></item>
+<item><name>Missing id</name></item>
+<item><id>3</id><type>manga</type><name>C</name></item></report>`,
+    );
+    expect(items.map((i) => i.id)).toEqual(["1", "3"]);
+    expect(malformed).toEqual([1]);
+    expect(rawCount).toBe(3);
+  });
+
+  it("rejects an untrustworthy page: not a report, or listed disagreeing with the items", () => {
+    expect(() => parseReport("<html>Temporarily unavailable</html>")).toThrow(
+      /invalid report document/,
+    );
+    expect(() =>
+      parseReport('<report listed="2"><item><id>1</id><name>A</name></item></report>'),
+    ).toThrow(/listed count/);
   });
 });
 
@@ -145,6 +168,16 @@ describe("parseApiResponse", () => {
 
   it("tolerates warnings and empty responses", () => {
     expect(parseApiResponse("<ann><warning>no result</warning></ann>")).toEqual([]);
+  });
+
+  it("falls back to the name attribute when the Main title is absent or empty", () => {
+    const records = parseApiResponse(`<ann><manga id="1" name="No Main Title &#039;Here&#039;"><info type="Genres">x</info></manga>
+<manga id="2" name="Empty Main Title"><info gid="1" type="Main title" lang="EN">  </info></manga>
+<manga id="3" name=""><info gid="1" type="Main title" lang="EN"></info></manga></ann>`);
+    expect(records.map((r) => [r.id, r.title])).toEqual([
+      ["1", "No Main Title 'Here'"],
+      ["2", "Empty Main Title"],
+    ]);
   });
 });
 

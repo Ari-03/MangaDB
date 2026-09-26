@@ -248,9 +248,28 @@ describe("parseTitleList", () => {
     ).toMatchObject({ titles: [], rawCount: 1 });
   });
 
-  it.each([null, {}, { error: "unauthorized" }, { data: {} }, { data: { titles: null } }])(
-    "rejects malformed envelopes: %j",
-    (raw) => expect(() => parseTitleList(raw)).toThrow("titles array"),
+  it.each([
+    null,
+    {},
+    { error: "unauthorized" },
+    { recordCount: 5, data: {} },
+    { recordCount: 3, data: { titles: null } },
+    { data: { titles: "nope" } },
+  ])("rejects malformed and truncated envelopes: %j", (raw) =>
+    expect(() => parseTitleList(raw)).toThrow("titles array"),
+  );
+
+  // The real empty-imprint envelope is unverified (live probe was a 403), so
+  // a missing titles array reads as an empty page whenever no records are
+  // reported.
+  it.each([
+    { recordCount: 0 },
+    { recordCount: 0, data: {} },
+    { data: { recordCount: 0, titles: null } },
+    { data: {} },
+    { data: { titles: null } },
+  ])("tolerates a zero-record envelope without titles: %j", (raw) =>
+    expect(parseTitleList(raw)).toMatchObject({ titles: [], rawCount: 0 }),
   );
 
   it("reads the data.titles envelope with recordCount", () => {

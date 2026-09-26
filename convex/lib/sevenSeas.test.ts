@@ -93,6 +93,13 @@ describe("parseBookPage", () => {
     expect(page.creators).toEqual([]);
   });
 
+  it("finds the cover before a single-quoted volume-meta id", () => {
+    const page = parseBookPage(
+      `<img src="https://sevenseasentertainment.com/wp-content/uploads/c.jpg"><div id='volume-meta'><img src="https://sevenseasentertainment.com/wp-content/uploads/after.jpg"></div>`,
+    );
+    expect(page.coverUrl).toBe("https://sevenseasentertainment.com/wp-content/uploads/c.jpg");
+  });
+
   it("rejects successful HTTP error pages instead of importing empty facts", () => {
     expect(() => parseBookPage("<html>Just a moment...</html>")).toThrow("volume-meta");
     expect(() => parseBookPage("<html>Page not found</html>")).toThrow("volume-meta");

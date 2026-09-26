@@ -81,6 +81,13 @@ export const finishRun = internalMutation({
     recordsSeen: v.number(),
     recordsChanged: v.number(),
     errors: v.array(v.string()),
+    /**
+     * A success that must not reset the source's failure streak: a follow-on
+     * run chained after a failed parent (ANN's page pass after an incomplete
+     * mirror) would otherwise hide the parent's recurring failure from the
+     * unhealthy alert. A failure still counts.
+     */
+    healthNeutral: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
@@ -92,6 +99,7 @@ export const finishRun = internalMutation({
       recordsChanged: args.recordsChanged,
       errors: args.errors.slice(0, MAX_RUN_ERRORS),
     });
+    if (args.healthNeutral && args.status === "succeeded") return;
     await recordSourceOutcome(
       ctx,
       run.sourceKey,

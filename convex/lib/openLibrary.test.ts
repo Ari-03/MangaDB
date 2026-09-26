@@ -206,7 +206,15 @@ describe("parseEditionJson / parseDumpLine", () => {
     expect(() => parseDumpLine("garbage")).toThrow("dump envelope");
     expect(() => parseDumpLine("/type/edition\t/books/OL1M\t1\t2026\t{")).toThrow();
     expect(() => parseDumpLine(dumpLine({ ...EDITION, key: "/books/OL2M" }))).toThrow("identity");
-    expect(() => parseDumpLine(dumpLine({ ...EDITION, title: "" }))).toThrow("title");
+  });
+
+  it("skips a sparse edition without a title rather than failing the line", () => {
+    // The offline filter keeps editions by publisher + ISBN only, so
+    // title-less records legitimately reach the parser.
+    const { title: _title, ...untitled } = EDITION;
+    expect(parseDumpLine(dumpLine(untitled))).toBeNull();
+    expect(parseDumpLine(dumpLine({ ...EDITION, title: "" }))).toBeNull();
+    expect(parseDumpLine(dumpLine({ ...EDITION, title: 42 }))).toBeNull();
   });
 
   it("classifies e-book physical_format as digital", () => {

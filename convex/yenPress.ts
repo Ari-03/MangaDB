@@ -4,12 +4,12 @@
 // it; before this adapter its books reached the catalog only through
 // OpenLibrary's patchy records.
 //
-// One run: fetch the sitemap, plan title URLs by ISBN (some print and
-// digital ISBNs share one page), skip slugs that name prose/audio, and
-// fetch each remaining page that is new or due — at most one request per
-// second. A page yields one snapshot per format; every snapshot is
-// observed (keyed on its ISBN — the fetch state), and in-scope ones go
-// through the shared catalog-title placement (lib/catalogTitle.ts): the
+// One run: fetch the sitemap, plan one entry per title URL (keyed slug +
+// ISBN; some print and digital ISBNs share one page), skip slugs that name
+// prose/audio, and fetch each remaining page that is new or due — at most
+// one request per second. A page yields one snapshot per format; every
+// snapshot is observed (keyed on its ISBN — the fetch state), and in-scope
+// ones go through the shared catalog-title placement (lib/catalogTitle.ts): the
 // matching ladder, authority reconciliation at Yen's own-catalog
 // authority, or the creation boundaries under the imprint's publisher row.
 //
@@ -70,10 +70,10 @@ function isDue(snapshot: YenTitleSnapshot, lastSeenAt: number, now: number): boo
 }
 
 /**
- * Which of these books (ISBN groups, one per slug) need a page fetch: a book
- * any of whose ISBNs is unobserved or due. Print and digital share a page, so
- * a format listed after the other was observed is fetched straight away
- * rather than waiting for the older observation to expire.
+ * Which of these books need a page fetch: a book any of whose ISBNs is
+ * unobserved or due. The sync passes one single-ISBN group per sitemap URL
+ * (a shared page is deduplicated only after its other ISBN was actually
+ * observed this run), so every ISBN gets its own fetch decision.
  */
 export const booksToFetch = internalQuery({
   args: { books: v.array(v.array(v.string())), now: v.number() },
@@ -209,10 +209,12 @@ export const sync = internalAction({
               }
             }
           } catch (e) {
-            // A removed title (404) or a transient failure: the book stays
-            // unobserved/due and is retried next run.
-            pageFailed = true;
-            errors.push(`page ${book.url}: ${errorMessage(e)}`);
+            // The book stays unobserved/due and is retried next run either
+            // way. A removed title (404) is only a notice; any other error
+            // fails the run.
+            const message = errorMessage(e);
+            if (!message.startsWith("HTTP 404")) pageFailed = true;
+            errors.push(`page ${book.url}: ${message}`);
           }
           lastSlug = slug;
         }

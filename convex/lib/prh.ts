@@ -213,7 +213,14 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   };
 }
 
-/** The title-list envelope → its parsed titles + the total record count. */
+/**
+ * The title-list envelope → its parsed titles + the total record count.
+ * The zero-record envelope is unverified (the live probe was a 403), so a
+ * missing `titles` is tolerated as an empty page when the envelope reports
+ * no records — recordCount 0, or a `data` object with no count. A missing
+ * `titles` under a positive recordCount is a truncated page, and a body
+ * with neither `data` nor a count (an error object) is no title list at all.
+ */
 export function parseTitleList(raw: unknown): {
   titles: PrhTitleSnapshot[];
   recordCount?: number;
@@ -221,9 +228,15 @@ export function parseTitleList(raw: unknown): {
   rawCount: number;
 } {
   const root = raw as Record<string, unknown> | null;
-  const data = (root?.data ?? root) as Record<string, unknown> | null;
+  const envelope = typeof root?.data === "object" && root.data !== null;
+  const data = (envelope ? root.data : root) as Record<string, unknown> | null;
+  const count = root?.recordCount ?? data?.recordCount;
+  const recordCount = typeof count === "number" ? count : undefined;
   const list = data?.titles;
   if (!Array.isArray(list)) {
+    if (list == null && (recordCount === 0 || (recordCount === undefined && envelope))) {
+      return { titles: [], rawCount: 0, recordCount };
+    }
     throw new Error("PRH response is missing its titles array");
   }
   const titles: PrhTitleSnapshot[] = [];
@@ -231,10 +244,5 @@ export function parseTitleList(raw: unknown): {
     const parsed = parseTitle(entry);
     if (parsed) titles.push(parsed);
   }
-  const count = root?.recordCount ?? data?.recordCount;
-  return {
-    titles,
-    rawCount: list.length,
-    recordCount: typeof count === "number" ? count : undefined,
-  };
+  return { titles, rawCount: list.length, recordCount };
 }

@@ -168,7 +168,8 @@ function metaLine(html: string, label: string): string | undefined {
  * individual facts remain optional. Error pages must never become books.
  */
 export function parseBookPage(html: string): BookPageDetails {
-  if (!/\bid\s*=\s*["']volume-meta["']/i.test(html)) {
+  const meta = /\bid\s*=\s*["']volume-meta["']/i.exec(html);
+  if (!meta) {
     throw new Error("Seven Seas book page is missing volume-meta");
   }
   const details: BookPageDetails = { creators: [] };
@@ -207,8 +208,7 @@ export function parseBookPage(html: string): BookPageDetails {
   }
 
   // The cover is the last uploads image before the volume-meta block.
-  const metaIdx = html.indexOf('id="volume-meta"');
-  const head = metaIdx >= 0 ? html.slice(0, metaIdx) : html;
+  const head = html.slice(0, meta.index);
   let coverUrl: string | undefined;
   for (const m of head.matchAll(/<img[^>]+src="([^"]*\/wp-content\/uploads\/[^"]+)"/gi)) {
     coverUrl = m[1]!;

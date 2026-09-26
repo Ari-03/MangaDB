@@ -61,6 +61,6 @@ That separation is worth preserving. A response that parses is not necessarily a
 
 ## Validation
 
-The combined suite passed all 687 tests across 52 files. The repository TypeScript check passed. Oxlint reported no warnings on changed TypeScript files, which were formatted with Prettier. `git diff --check` passed. No repository lint or formatter configuration existed, so those tools were run without adding dependencies or configuration to the project.
+The combined suite passed all 708 tests across 52 files after the follow-up review fixes. The repository TypeScript check passed. Oxlint reported no warnings on changed TypeScript files, which were formatted with Prettier. `git diff --check` passed. No repository lint or formatter configuration existed, so those tools were run without adding dependencies or configuration to the project.
 
 Unit and integration tests use local fixtures and Convex's test environment. They do not call a deployed database. Source reports record the separate live checks and their limitations.

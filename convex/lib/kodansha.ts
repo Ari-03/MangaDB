@@ -126,12 +126,14 @@ export function parseCreators(byline: unknown): string[] {
     .filter((name) => name !== "");
 }
 
-/** "2026-08-04" or "2026-08-18T04:00:00+00:00" → a full-precision date. */
+/**
+ * "2026-08-04" or "2026-08-18T04:00:00+00:00" → a full-precision date. The
+ * calendar day must exist; whatever follows a `T` or space separator (time,
+ * any zone shape, none at all) is ignored, since only the day is kept.
+ */
 export function parseIsoDate(text: unknown): Ymd | undefined {
   if (typeof text !== "string") return undefined;
-  const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$)/.exec(
-    text,
-  );
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/.exec(text);
   if (!m) return undefined;
   const year = Number(m[1]);
   const month = Number(m[2]);
@@ -246,8 +248,11 @@ function parseFormats(raw: unknown): Array<"physical" | "digital"> {
   return formats;
 }
 
-/** A broken envelope must fail the run instead of reporting a healthy empty feed. */
-function feedData(raw: unknown): unknown[] {
+/**
+ * A feed's envelope: its data array and, on paged feeds, the reported total.
+ * A broken envelope must fail the run instead of reporting a healthy empty feed.
+ */
+function feedEnvelope(raw: unknown): { data: unknown[]; totalCount: number | undefined } {
   if (
     typeof raw !== "object" ||
     raw === null ||
@@ -257,7 +262,11 @@ function feedData(raw: unknown): unknown[] {
   ) {
     throw new Error("Kodansha feed failed or changed shape: expected a data array");
   }
-  return raw.data;
+  return {
+    data: raw.data,
+    totalCount:
+      "total_count" in raw && typeof raw.total_count === "number" ? raw.total_count : undefined,
+  };
 }
 
 /**
@@ -266,7 +275,7 @@ function feedData(raw: unknown): unknown[] {
  * release date of every item in it.
  */
 export function parseCalendar(raw: unknown): KodanshaItem[] {
-  const data = feedData(raw);
+  const { data } = feedEnvelope(raw);
   const items: KodanshaItem[] = [];
   for (const bucket of data) {
     if (typeof bucket !== "object" || bucket === null) continue;
@@ -298,7 +307,7 @@ export function parseCalendar(raw: unknown): KodanshaItem[] {
  * (the digital storefront flag).
  */
 export function parseNewReleases(raw: unknown): KodanshaItem[] {
-  const data = feedData(raw);
+  const { data } = feedEnvelope(raw);
   const items: KodanshaItem[] = [];
   for (const entry of data) {
     if (typeof entry !== "object" || entry === null) continue;
@@ -383,8 +392,7 @@ export function parseSeriesListing(raw: unknown): {
   pageLength: number;
   total: number | undefined;
 } {
-  const body = (raw ?? {}) as { data?: unknown; total_count?: unknown };
-  const data = feedData(raw);
+  const { data, totalCount: total } = feedEnvelope(raw);
   const entries: SeriesListingEntry[] = [];
   for (const row of data) {
     if (typeof row !== "object" || row === null) continue;
@@ -402,7 +410,7 @@ export function parseSeriesListing(raw: unknown): {
   return {
     entries,
     pageLength: data.length,
-    total: typeof body.total_count === "number" ? body.total_count : undefined,
+    total,
   };
 }
 

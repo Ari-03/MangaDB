@@ -10,8 +10,8 @@
 // batches (Convex actions are time-limited) and schedules itself to
 // continue, carrying the Import Run and counters; the run closes — and the
 // post-sweep withdrawal pass fires — only when the final link of the chain
-// reaches the end of the report. A completed mirror then chains the
-// release-page pass (below).
+// reaches the end of the report. A finished mirror — error-free or not —
+// then chains the release-page pass (below); only an aborted one does not.
 //
 // What the mirror writes:
 // - one manga entry = one Series (linked via the manga observation itself;
@@ -118,7 +118,7 @@ export const sync = internalAction({
     politeDelayMs: v.optional(v.number()),
     /** Detail batches (50 manga each) per invocation before continuing. */
     maxBatches: v.optional(v.number()),
-    /** Chain the release-page pass after a completed mirror (default true). */
+    /** Chain the release-page pass after a finished mirror (default true). */
     releasePages: v.optional(v.boolean()),
     // ----- continuation state (never passed by callers) -----
     nskip: v.optional(v.number()),
@@ -160,12 +160,21 @@ export const sync = internalAction({
         );
         const reportXml = await reportRes.text();
         // Paging and the end-of-enumeration signal follow the page's RAW
-        // <item> count: parseReport filters non-manga rows, so its length
-        // under-counts the page and would end the mirror at the first page
-        // containing any filtered row (and desync nskip).
-        const rawCount = (reportXml.match(/<item>/g) ?? []).length;
-        const ids = parseReport(reportXml).map((item) => item.id);
+        // <item> count: parseReport filters non-manga and malformed rows, so
+        // its item count under-counts the page and would end the mirror at
+        // the first page containing any filtered row (and desync nskip).
+        const report = parseReport(reportXml);
+        const rawCount = report.rawCount;
+        // A row without id/name is an entry this sweep cannot see: skipped
+        // so the enumeration goes on, reported so withdrawal stays off.
+        for (const at of report.malformed) {
+          errors.push(`report @${nskip + at}: item without id/name`);
+        }
+        const ids = report.items.map((item) => item.id);
         if (rawCount === 0) {
+          // A well-formed but empty FIRST page is not an empty catalog: the
+          // clean sweep would otherwise withdraw every ANN observation.
+          if (nskip === 0) throw new Error("ANN report enumeration was empty");
           reachedEnd = true;
           break;
         }
@@ -182,8 +191,14 @@ export const sync = internalAction({
             }
             const records = parseApiResponse(apiXml);
             const returnedIds = new Set(records.map((record) => record.id));
-            if (records.length !== batch.length || batch.some((id) => !returnedIds.has(id))) {
-              throw new Error("ANN detail response did not return every requested manga");
+            const missing = batch.filter((id) => !returnedIds.has(id));
+            if (missing.length > 0) {
+              throw new Error(`ANN detail response is missing manga ${missing.join(", ")}`);
+            }
+            if (records.length !== batch.length) {
+              throw new Error(
+                `ANN detail response has ${records.length} manga for ${batch.length} requested`,
+              );
             }
             for (const manga of records) {
               // Entries with no English book release contribute nothing to
@@ -234,27 +249,38 @@ export const sync = internalAction({
       }
 
       // Missing details or a rejected observation make disappearance unknowable.
-      // Preserve prior observations until a complete, error-free sweep succeeds.
-      if (errors.length > 0) throw new Error("ANN mirror was incomplete; withdrawal skipped");
-
-      // The full mirror completed: entries the sweep no longer lists have
-      // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
-      await ctx.runMutation(internal.imports.markWithdrawn, {
-        sourceKey: SOURCE_KEY,
-        notSeenSince: runStartedAt,
-      });
+      // Preserve prior observations until a complete, error-free sweep succeeds;
+      // an errored sweep finishes failed (visible on the dashboard) but is
+      // still a finished sweep, so the page pass below chains either way.
+      const complete = errors.length === 0;
+      if (complete) {
+        // The full mirror completed: entries the sweep no longer lists have
+        // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
+        await ctx.runMutation(internal.imports.markWithdrawn, {
+          sourceKey: SOURCE_KEY,
+          notSeenSince: runStartedAt,
+        });
+      } else {
+        errors.push("ANN mirror was incomplete; withdrawal skipped");
+      }
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: "succeeded",
+        status: complete ? "succeeded" : "failed",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
       });
-      // The mirror refreshed every line: now place the unlinked ones.
+      // The mirror refreshed the lines it could: now place the unlinked
+      // ones. The page pass walks unlinked lines on its own and must not
+      // wait on a mirror one persistently failing entry would never let
+      // complete. (An aborted enumeration — the catch below — does not
+      // chain: ANN itself is likely down, and each failed page fetch would
+      // park its line for ERROR_RETRY_MS.)
       if (args.releasePages !== false) {
         await ctx.runMutation(internal.ann.chainReleasePages, {
           afterRunId: runId,
           politeDelayMs: args.politeDelayMs,
+          ...(complete ? {} : { afterFailedMirror: true }),
         });
       }
       return {
@@ -263,6 +289,7 @@ export const sync = internalAction({
         recordsChanged: changed,
         continued: false,
         errorCount: errors.length,
+        ...(complete ? {} : { failed: true }),
       };
     } catch (e) {
       errors.push(errorMessage(e));
@@ -810,12 +837,15 @@ export const chainReleasePages = internalMutation({
   args: {
     afterRunId: v.id("importRuns"),
     politeDelayMs: v.optional(v.number()),
+    /** The mirror finished failed: the page pass's success must not reset source health. */
+    afterFailedMirror: v.optional(v.boolean()),
   },
-  handler: async (ctx, { afterRunId, politeDelayMs }) => {
+  handler: async (ctx, { afterRunId, politeDelayMs, afterFailedMirror }) => {
     const runId = await openFollowOnRun(ctx, afterRunId, SOURCE_KEY);
     await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
       politeDelayMs,
       runId,
+      ...(afterFailedMirror ? { afterFailedMirror: true } : {}),
     });
   },
 });
@@ -825,7 +855,8 @@ export const chainReleasePages = internalMutation({
  * Encyclopedia page once (1 req/s), and places it (`applyReleasePage`).
  * Lines whose page is already stored are re-placed without a fetch — a
  * newly seeded publisher or Volume can unblock them. Chained after each
- * completed mirror; self-continues across the action time limit.
+ * finished mirror, complete or errored; self-continues across the action
+ * time limit.
  *
  *   npx convex run ann:syncReleasePages '{}'
  */
@@ -841,6 +872,8 @@ export const syncReleasePages = internalAction({
     changed: v.optional(v.number()),
     fetched: v.optional(v.number()),
     errors: v.optional(v.array(v.string())),
+    /** Set by chainReleasePages after a failed mirror (see imports.finishRun). */
+    afterFailedMirror: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<PageSyncResult> => {
     const source: Doc<"approvedSources"> | null = await ctx.runQuery(
@@ -908,6 +941,7 @@ export const syncReleasePages = internalAction({
           changed,
           fetched: fetchedTotal,
           errors: errors.slice(0, MAX_CARRIED_ERRORS),
+          afterFailedMirror: args.afterFailedMirror,
         });
         return {
           runId,
@@ -925,6 +959,7 @@ export const syncReleasePages = internalAction({
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
+        healthNeutral: args.afterFailedMirror,
       });
       return {
         runId,

@@ -609,7 +609,17 @@ describe("withdrawal lifts suppressions", () => {
     });
     await new Promise((r) => setTimeout(r, 5));
 
-    stubSite([]); // the book disappears; the sweep is still complete
+    // Volume 1 disappears while another book keeps the listing non-empty
+    // (an empty listing is rejected, never treated as a complete sweep).
+    stubSite([
+      {
+        ...ALPHA_1,
+        id: 102,
+        slug: "alpha-manga-vol-2",
+        title: "Alpha Adventures (Manga) Vol. 2",
+        isbn: "978-1-9990001-1-0",
+      },
+    ]);
     await sync(t);
     await t.run(async (ctx) => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(

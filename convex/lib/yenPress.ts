@@ -212,7 +212,11 @@ function scopeReason(
     return "single chapter";
   }
   const category = page.category;
-  if (/^jy$/i.test(imprint ?? "") && category !== "manga") return "JY non-manga";
+  // JY mixes manga with prose: its page must not label itself something
+  // else. A page without genre labels falls through, as for any imprint.
+  if (/^jy$/i.test(imprint ?? "") && category !== undefined && category !== "manga") {
+    return "JY non-manga";
+  }
   if (category === "light-novels" || category === "audio-books") return `category ${category}`;
   if (category === "comics" && !/^ize press$/i.test(imprint ?? "")) return "western comics";
   return outOfScopeReason(page.title);

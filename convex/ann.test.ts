@@ -381,6 +381,109 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     },
   );
 
+  it("skips a malformed report row but enumerates the rest", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("reports.xml")) {
+        return new Response(
+          `<report skipped="0" listed="2"><item><name>Missing id</name></item>
+<item><id>200</id><type>manga</type><name>Beta Blade</name></item></report>`,
+        );
+      }
+      return new Response(apiXml([BETA], ["200"]));
+    });
+    expect(await sync(t, { releasePages: false })).toMatchObject({
+      failed: true,
+      recordsSeen: 1,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      const run = (await ctx.db.query("importRuns").collect()).at(-1)!;
+      expect(run.status).toBe("failed");
+      expect(run.errors).toContain("report @0: item without id/name");
+    });
+  });
+
+  it("fails an empty first report page and withdraws nothing", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ALPHA]);
+    await sync(t, { releasePages: false });
+    await t.run(async (ctx) => {
+      for (const obs of await ctx.db.query("sourceObservations").collect()) {
+        await ctx.db.patch(obs._id, { lastSeenAt: 1 });
+      }
+    });
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response('<report skipped="0" listed="0"><args><type>manga</type></args></report>'),
+    );
+    expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.every((obs) => !obs.withdrawn)).toBe(true);
+      const runs = await ctx.db.query("importRuns").collect();
+      // The aborted enumeration chains no page pass.
+      expect(runs).toHaveLength(2);
+      expect(runs.at(-1)).toMatchObject({ status: "failed" });
+      expect(runs.at(-1)!.errors).toContain("ANN report enumeration was empty");
+    });
+  });
+
+  it("an incomplete mirror skips withdrawal, fails the run, and still chains the page pass", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ALPHA, BETA]);
+    await sync(t, { releasePages: false });
+    await t.run(async (ctx) => {
+      for (const obs of await ctx.db.query("sourceObservations").collect()) {
+        await ctx.db.patch(obs._id, { lastSeenAt: 1 });
+      }
+    });
+    // ALPHA's details go missing, which rejects its whole batch (BETA is in
+    // it too); release pages are gone.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("reports.xml")) return new Response(reportXml([ALPHA, BETA], 0, 500));
+      if (url.includes("api.xml")) return new Response(apiXml([BETA], ["100", "200"]));
+      return new Response("not found", { status: 404 });
+    });
+    expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.every((obs) => !obs.withdrawn)).toBe(true);
+      const runs = await ctx.db.query("importRuns").collect();
+      // First mirror, the failed mirror, then the page pass it chained.
+      expect(runs).toHaveLength(3);
+      expect(runs[1]).toMatchObject({ status: "failed", automatic: true });
+      expect(runs[1]!.errors).toEqual([
+        "batch @0: ANN detail response is missing manga 100",
+        "ANN mirror was incomplete; withdrawal skipped",
+      ]);
+      expect(runs[2]).toMatchObject({ status: "succeeded", automatic: true });
+      // Every line's page was fetched (404 → notFound, not a failure).
+      const pages = observations.flatMap((obs) =>
+        obs.sourceRecordId.startsWith("release:")
+          ? [(obs.snapshot as { page?: { status: string } }).page?.status]
+          : [],
+      );
+      expect(pages).toHaveLength(5);
+      expect(pages.every((status) => status === "notFound")).toBe(true);
+      // The chained pass's success does not hide the mirror's failure from
+      // the health streak: a weekly-failing mirror still reaches "unhealthy".
+      const source = (await ctx.db.query("approvedSources").collect()).find(
+        (row) => row.key === "ann",
+      )!;
+      expect(source.consecutiveFailures).toBe(1);
+    });
+  });
+
   it("defaults to ANN's 1 req/s etiquette", async () => {
     const t = makeT();
     await seedRegistry(t, true);

@@ -122,18 +122,20 @@ describe("small parsers", () => {
     expect(parseCreators(undefined)).toEqual([]);
   });
 
-  it("parses both ISO date shapes", () => {
+  it("parses the ISO date shapes, ignoring the time part", () => {
     expect(parseIsoDate("2026-08-04")).toEqual({
       year: 2026,
       month: 8,
       day: 4,
     });
-    expect(parseIsoDate("2026-08-18T04:00:00+00:00")).toEqual({
-      year: 2026,
-      month: 8,
-      day: 18,
-    });
+    const aug18 = { year: 2026, month: 8, day: 18 };
+    expect(parseIsoDate("2026-08-18T04:00:00+00:00")).toEqual(aug18);
+    expect(parseIsoDate("2026-08-18T04:00:00")).toEqual(aug18);
+    expect(parseIsoDate("2026-08-18T04:00:00.000Z")).toEqual(aug18);
+    expect(parseIsoDate("2026-08-18T04:00:00+0000")).toEqual(aug18);
+    expect(parseIsoDate("2026-08-18 04:00:00")).toEqual(aug18);
     expect(parseIsoDate("soon")).toBeUndefined();
+    expect(parseIsoDate("08/18/2026")).toBeUndefined();
     expect(parseIsoDate("2025-02-29")).toBeUndefined();
     expect(parseIsoDate("2026-04-31")).toBeUndefined();
     expect(parseIsoDate("2026-08-04garbage")).toBeUndefined();

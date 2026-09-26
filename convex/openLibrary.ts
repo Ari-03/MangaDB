@@ -147,9 +147,10 @@ export const sync = internalAction({
       let done = false;
 
       const handleLine = async (line: string) => {
-        const isTarget = lineNo >= startLine;
-        lineNo++;
-        if (!isTarget) return;
+        // 0-based, like startLine/nextLine: an error's line number is the
+        // startLine an operator passes to reprocess it.
+        const index = lineNo++;
+        if (index < startLine) return;
         processed++;
         try {
           const snapshot = parseDumpLine(line);
@@ -160,7 +161,7 @@ export const sync = internalAction({
           });
           if (result.changed) changed++;
         } catch (e) {
-          errors.push(`dump line ${lineNo}: ${errorMessage(e)}`);
+          errors.push(`dump line ${index}: ${errorMessage(e)}`);
         }
       };
 

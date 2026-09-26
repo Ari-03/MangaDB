@@ -24,7 +24,7 @@ Previously, `queueCreationProposal` created a Volume operation for every parsed 
 
 The proposal builder now references existing active Volumes, follows same-Series merge survivors, and creates only missing labels. Equivalent repeated labels such as `3` and `03` produce one Volume and one coverage row. Tests pass the generated proposal through the real creation planner and application functions and assert the resulting catalog and coverage. An additional test checks a merged unnumbered Volume.
 
-This fixes the state known when a proposal is queued. If another import creates a missing Volume before approval, approval still needs an explicit stale-creation identity check. Existing manual proposals and old queued proposals are not retroactively rewritten.
+This fixes the state known when a proposal is queued. Approval's stale check now also covers the records a create op references by ID (reused Volumes, the series, the publisher): one merged or hidden before review returns the graceful stale result instead of throwing from the creation planner. If another import creates a missing Volume before approval, approval still needs an explicit stale-creation identity check. Existing manual proposals and old queued proposals are not retroactively rewritten.
 
 ## Remaining issues, ranked by data impact
 

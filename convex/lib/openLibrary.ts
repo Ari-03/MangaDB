@@ -250,7 +250,13 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   };
 }
 
-/** One dump line (type\tkey\trevision\tlast_modified\tjson) → a snapshot. */
+/**
+ * One dump line (type\tkey\trevision\tlast_modified\tjson) → a snapshot.
+ * A malformed envelope (column count, JSON, or an edition key that is not
+ * the line's key) throws; a sparse edition — no title, say, which the
+ * offline filter keeps since it selects by publisher and ISBN only — is
+ * simply skipped by parseEditionJson.
+ */
 export function parseDumpLine(line: string): OlEditionSnapshot | null {
   const columns = line.split("\t");
   if (columns.length !== 5) throw new Error("Invalid Open Library dump envelope");
@@ -262,12 +268,9 @@ export function parseDumpLine(line: string): OlEditionSnapshot | null {
     !("key" in edition) ||
     typeof edition.key !== "string" ||
     !/^\/books\/OL\d+M$/.test(edition.key) ||
-    edition.key !== columns[1] ||
-    !("title" in edition) ||
-    typeof edition.title !== "string" ||
-    edition.title.trim() === ""
+    edition.key !== columns[1]
   ) {
-    throw new Error("Invalid Open Library edition identity or title");
+    throw new Error("Invalid Open Library edition identity");
   }
   return parseEditionJson(edition);
 }

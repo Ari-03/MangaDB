@@ -18,10 +18,10 @@ Four complete live HTML responses parsed successfully:
 ## Fixed
 
 1. Same-slug URLs were assumed to expose identical formats. Nightschool disproves this: choosing one page lost the other ISBN indefinitely. Planning now retains each ISBN URL and suppresses a fetch only when that ISBN is fresh or was actually observed through another page. The continuation cursor includes ISBN, so a page budget cannot skip the second format.
-2. The JY denylist rejected manga even when its page explicitly identified it as manga. JY manga now passes; JY books without manga category stay excluded. JY has its own canonical Publisher row under Yen Press. The [publisher describes JY as a mixed manga and graphic-novel imprint](https://yenpress.com/imprint/jy), and explicitly distinguishes [its new prose books from Little Witch Academia manga](https://yenpress.com/news/jy-for-kids-to-publish-four-prose-titles-fall-2023).
+2. The JY denylist rejected manga even when its page explicitly identified it as manga. JY manga now passes; JY books whose page labels another category stay excluded, and a JY page with no genre labels falls through to the title rules like any other imprint. JY has its own canonical Publisher row under Yen Press. The [publisher describes JY as a mixed manga and graphic-novel imprint](https://yenpress.com/imprint/jy), and explicitly distinguishes [its new prose books from Little Witch Academia manga](https://yenpress.com/news/jy-for-kids-to-publish-four-prose-titles-fall-2023).
 3. February 29 in a non-leap year and April 31 passed date parsing. Calendar round-trip validation now rejects impossible dates.
 4. An empty or changed sitemap response silently ended a successful run. It now fails if no eligible title URLs can be parsed. A title page yielding no usable ISBN now records a page error.
-5. Page failures previously left the Import Run successful. A separate failure flag now survives continuation and makes the final run fail. Review conflicts remain review outcomes, not fetch failures.
+5. Page failures previously left the Import Run successful. A separate failure flag now survives continuation and makes the final run fail. A removed title page (HTTP 404) is logged as a notice without failing the run, since it is retried while the sitemap lists it. Review conflicts remain review outcomes, not fetch failures.
 
 ## Validation and limits
 

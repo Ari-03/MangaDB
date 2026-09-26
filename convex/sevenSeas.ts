@@ -112,7 +112,9 @@ export const sync = internalAction({
     let seen = 0;
     let changed = 0;
     let completeSweep = true;
-    let detailFailures = 0;
+    // Invalid listing items plus detail fetch/parse failures: any of them
+    // fails the run so source health notices a recurring problem.
+    let failures = 0;
 
     try {
       let page = 1;
@@ -143,11 +145,21 @@ export const sync = internalAction({
         if (items.length === 0 && totalPages >= page) {
           throw new Error("Seven Seas listing ended before its declared page count");
         }
+        // A catalog of 6,000+ books never legitimately empties: an empty
+        // listing would otherwise pass as a complete sweep and withdraw all.
+        if (page === 1 && items.length === 0) {
+          throw new Error("Seven Seas listing was empty");
+        }
 
         for (const raw of items) {
           const listing = parseBookListing(raw);
           if (!listing) {
-            throw new Error(`Seven Seas listing page ${page} contains an invalid book`);
+            // One bad item never aborts the sweep, but it may hide a book,
+            // so absence is not evidence this run.
+            failures++;
+            completeSweep = false;
+            errors.push(`listing page ${page}: invalid book item`);
+            continue;
           }
           const note = await ctx.runMutation(internal.sevenSeas.noteListing, {
             sourceRecordId: listing.sourceRecordId,
@@ -202,8 +214,13 @@ export const sync = internalAction({
               }
             }
           } catch (e) {
-            detailFailures++;
-            errors.push(`book ${listing.slug}: ${errorMessage(e)}`);
+            // A removed page (404) is a notice, not a failure: the book stays
+            // unobserved and is simply retried while it remains listed.
+            // Other transport errors and a page without volume-meta (likely
+            // a challenge page) are failures.
+            const message = errorMessage(e);
+            if (!message.startsWith("HTTP 404")) failures++;
+            errors.push(`book ${listing.slug}: ${message}`);
           }
         }
         page++;
@@ -221,7 +238,7 @@ export const sync = internalAction({
 
       await ctx.runMutation(internal.imports.finishRun, {
         runId,
-        status: detailFailures > 0 ? "failed" : "succeeded",
+        status: failures > 0 ? "failed" : "succeeded",
         recordsSeen: seen,
         recordsChanged: changed,
         errors,
@@ -232,7 +249,7 @@ export const sync = internalAction({
         recordsChanged: changed,
         completeSweep,
         errorCount: errors.length,
-        ...(detailFailures > 0 ? { failed: true } : {}),
+        ...(failures > 0 ? { failed: true } : {}),
       };
     } catch (e) {
       errors.push(errorMessage(e));

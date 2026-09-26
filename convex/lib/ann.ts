@@ -63,8 +63,23 @@ export type AnnMangaSnapshot = Infer<typeof annMangaValidator>;
 
 export type AnnReportItem = { id: string; name: string };
 
-/** One reports.xml page → its manga items (id + name). */
-export function parseReport(xml: string): AnnReportItem[] {
+export type AnnReport = {
+  /** The page's manga items (non-manga and malformed rows excluded). */
+  items: AnnReportItem[];
+  /** Page-relative positions of rows missing an id or name — skipped, but
+   * the caller must report them: an unknown entry makes withdrawal unsafe. */
+  malformed: number[];
+  /** Every `<item>` on the page, whatever its shape: what paging counts. */
+  rawCount: number;
+};
+
+/**
+ * One reports.xml page → its manga items. Throws when the page itself is
+ * untrustworthy (not a report document, `listed` disagreeing with the item
+ * count, a truncated item); a single malformed row only lands in `malformed`
+ * so the enumeration can go on.
+ */
+export function parseReport(xml: string): AnnReport {
   if (!/^\s*(?:<\?xml[^>]*>\s*)?<report\b[^>]*>[\s\S]*<\/report>\s*$/.test(xml)) {
     throw new Error("ANN returned an invalid report document");
   }
@@ -74,21 +89,23 @@ export function parseReport(xml: string): AnnReportItem[] {
     throw new Error("ANN report item count does not match its listed count");
   }
   const items: AnnReportItem[] = [];
+  const malformed: number[] = [];
   let parsedCount = 0;
   for (const m of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
-    parsedCount++;
+    const at = parsedCount++;
     const body = m[1]!;
     const id = /<id>(\d+)<\/id>/.exec(body)?.[1];
     const type = /<type>([^<]*)<\/type>/.exec(body)?.[1];
     const name = /<name>([\s\S]*?)<\/name>/.exec(body)?.[1];
     if (id === undefined || name === undefined) {
-      throw new Error("ANN report contains an item without an id or name");
+      malformed.push(at);
+      continue;
     }
     if (type !== undefined && type !== "manga") continue;
     items.push({ id, name: cleanTitleText(name) });
   }
   if (parsedCount !== rawCount) throw new Error("ANN report contains an incomplete item");
-  return items;
+  return { items, malformed, rawCount };
 }
 
 // ---------- release lines ----------
@@ -231,7 +248,9 @@ const MAX_ALT_TITLES = 12;
 
 /**
  * One api.xml batch response → its manga records. Tolerant: `<warning>`
- * elements ("no result for manga=…") and malformed blocks are skipped.
+ * elements ("no result for manga=…") and malformed blocks are skipped. The
+ * title is the Main title, or the block's `name` attribute when that is
+ * absent or empty after cleaning.
  */
 export function parseApiResponse(xml: string): AnnManga[] {
   const records: AnnManga[] = [];
@@ -243,7 +262,7 @@ export function parseApiResponse(xml: string): AnnManga[] {
 
     const mainTitle = /<info[^>]*type="Main title"[^>]*>([\s\S]*?)<\/info>/.exec(body)?.[1];
     const nameAttr = /\bname="([^"]*)"/.exec(attrs)?.[1];
-    const title = cleanTitleText(mainTitle ?? nameAttr ?? "");
+    const title = cleanTitleText(mainTitle ?? "") || cleanTitleText(nameAttr ?? "");
     if (title === "") continue;
 
     const altTitles: string[] = [];

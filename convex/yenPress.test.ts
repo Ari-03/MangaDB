@@ -150,6 +150,10 @@ describe("parseTitlePage / toSnapshots", () => {
     expect(
       toSnapshots({ ...page, category: "light-novels" }, "https://yenpress.com")[0]!.outOfScope,
     ).toBeDefined();
+    // No genre labels at all: JY falls through to the title rules like any imprint.
+    expect(
+      toSnapshots({ ...page, category: undefined }, "https://yenpress.com")[0]!.outOfScope,
+    ).toBeUndefined();
   });
 
   it("rejects impossible calendar dates", () => {
@@ -332,6 +336,21 @@ describe("yenPress.sync", () => {
       const [run] = await ctx.db.query("importRuns").collect();
       expect(run!.status).toBe("failed");
       expect(run!.errors.some((error) => error.includes("not a title page"))).toBe(true);
+    });
+  });
+
+  it("notes a removed title page (HTTP 404) without failing the run", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    // The manga's digital URL is in the sitemap but its page is gone.
+    stubYen({ [DELUXE_URL]: DELUXE_PAGE });
+    const result = await sync(t);
+    expect(result).toMatchObject({ continued: false, fetched: 2, errorCount: 1 });
+    expect((result as { failed?: boolean }).failed).toBeUndefined();
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run!.status).toBe("succeeded");
+      expect(run!.errors[0]).toContain("HTTP 404");
     });
   });
 

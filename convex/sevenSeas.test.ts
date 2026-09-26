@@ -590,6 +590,97 @@ describe("sevenSeas.sync — failure handling", () => {
     },
   );
 
+  it("skips an invalid listing item, imports the rest, and fails without withdrawing", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, ALPHA_2]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      for (const observation of await ctx.db.query("sourceObservations").collect()) {
+        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+      }
+    });
+
+    // Vol. 2's rendered title comes back empty; Vol. 1 is still listed after it.
+    stubSite([ALPHA_1]);
+    const siteFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const res = await siteFetch(input);
+      if (!String(input).includes("/wp-json/")) return res;
+      const items = (await res.json()) as unknown[];
+      const blank = { id: 102, status: "publish", slug: "x", link: "x", title: { rendered: "" } };
+      return new Response(JSON.stringify([blank, ...items]), { headers: res.headers });
+    });
+    expect(await sync(t)).toMatchObject({
+      failed: true,
+      completeSweep: false,
+      recordsSeen: 1,
+      errorCount: 1,
+    });
+    await t.run(async (ctx) => {
+      const run = (await ctx.db.query("importRuns").collect())[1]!;
+      expect(run.status).toBe("failed");
+      expect(run.errors).toEqual(["listing page 1: invalid book item"]);
+      const observations = await ctx.db.query("sourceObservations").collect();
+      const byId = new Map(observations.map((o) => [o.sourceRecordId, o]));
+      // Vol. 1 was processed after the bad item; Vol. 2 was not withdrawn.
+      expect(byId.get("101")?.lastSeenAt).toBeGreaterThan(1);
+      expect(byId.get("102")?.withdrawn).toBe(false);
+    });
+  });
+
+  it("fails an empty listing and withdraws nothing", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      for (const observation of await ctx.db.query("sourceObservations").collect()) {
+        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+      }
+    });
+    stubSite([]); // X-WP-TotalPages: 0 and an empty first page
+    expect(await sync(t)).toMatchObject({ failed: true, completeSweep: false });
+    await t.run(async (ctx) => {
+      const run = (await ctx.db.query("importRuns").collect())[1]!;
+      expect(run.errors[0]).toContain("listing was empty");
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.every((o) => o.withdrawn === false)).toBe(true);
+    });
+  });
+
+  it("notes a removed book page (HTTP 404) without failing the run", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, ALPHA_2]);
+    const siteFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).includes("/books/alpha-manga-vol-2/")) {
+        return new Response("gone", { status: 404 });
+      }
+      return siteFetch(input);
+    });
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsSeen: 2, recordsChanged: 1, errorCount: 1 });
+    expect((result as { failed?: boolean }).failed).toBeUndefined();
+    await t.run(async (ctx) => {
+      const run = (await ctx.db.query("importRuns").collect())[0]!;
+      expect(run.status).toBe("succeeded");
+      expect(run.errors[0]).toContain("HTTP 404");
+      // The missing book stays unobserved (retried while listed); Vol. 1 imported.
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId).sort()).toEqual([
+        "101",
+        "series:alpha-manga",
+      ]);
+      const source = await ctx.db
+        .query("approvedSources")
+        .withIndex("by_key", (q) => q.eq("key", "sevenseas"))
+        .unique();
+      expect(source?.consecutiveFailures).toBe(0);
+    });
+  });
+
   it("records a failed detail run without creating a book from an HTTP 200 error page", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);

@@ -10,6 +10,7 @@ import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
 const BASE = "https://kodansha.us";
@@ -1050,6 +1051,42 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     requested.length = 0;
     await backlist(t);
     expect(requested).toContain(`${BASE}/series/blue-lock/volume-1/`);
+  });
+
+  it("a no-change full re-crawl advances fullCrawledAt without a history row", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
+    await backlist(t);
+    const day = 24 * 60 * 60 * 1000;
+    const staleFull = Date.now() - 181 * day;
+    const crawlObs = async () =>
+      (await t.run((ctx) => ctx.db.query("sourceObservations").collect())).find(
+        (o) => o.sourceKey === "kodansha-backlist",
+      )!;
+    const historyRows = async (observationId: Id<"sourceObservations">) =>
+      (await t.run((ctx) => ctx.db.query("observationSnapshots").collect())).filter(
+        (row) => row.observationId === observationId,
+      );
+    let obs = await crawlObs();
+    await t.run(async (ctx) => {
+      await ctx.db.patch(obs._id, {
+        lastSeenAt: staleFull,
+        snapshot: { ...(obs.snapshot as object), fullCrawledAt: staleFull },
+      });
+    });
+
+    // Due for a full refresh; every page is re-read, but nothing about the series changed.
+    requested.length = 0;
+    expect(await backlist(t)).toMatchObject({ fetched: 3, seriesCrawled: 1 });
+    obs = await crawlObs();
+    expect((obs.snapshot as { fullCrawledAt: number }).fullCrawledAt).toBeGreaterThan(staleFull);
+    expect(await historyRows(obs._id)).toHaveLength(0);
+
+    // A changed listing stamp is a real change: the prior state goes to history.
+    stubBacklist([{ ...BLUE_LOCK, stamp: "2026-09-01T00:00:00+00:00" }], BACKLIST_PAGES);
+    expect(await backlist(t)).toMatchObject({ seriesCrawled: 1 });
+    expect(await historyRows(obs._id)).toHaveLength(1);
   });
 
   it("skips fresh series, re-checks moving volumes a week on, and chains under one run", async () => {

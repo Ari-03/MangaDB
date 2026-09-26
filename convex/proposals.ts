@@ -34,6 +34,7 @@ import { evidence, recordRef } from "./schema";
 import {
   applyCreatePlan,
   planCreateOps,
+  unavailableCreateRefs,
   CREATABLE_TABLES,
   type CreateOpInput,
 } from "./lib/proposalCreates";
@@ -236,10 +237,12 @@ type StaleRecord = { type: string; id: string; reason: "baseChanged" | "unavaila
 
 /**
  * Which records an op set can no longer be applied to as reviewed: the base
- * Revision moved (someone else's change landed first) or the record itself
- * left ordinary editing (hidden, merged, locked, deleted). Spec §5: any base
- * change before approval makes the version stale — explicit rebase and
- * resubmit, never a silent rebase.
+ * Revision moved (someone else's change landed first), the record itself
+ * left ordinary editing (hidden, merged, locked, deleted), or a record a
+ * create op references by ID — an importer's coverage over existing Volumes,
+ * a new volume's series — is no longer active. Spec §5: any base change
+ * before approval makes the version stale — explicit rebase and resubmit,
+ * never a silent rebase.
  */
 async function staleRecordsOf(
   ctx: QueryCtx | MutationCtx,
@@ -258,6 +261,10 @@ async function staleRecordsOf(
     if ((latest?._id ?? null) !== (op.baseRevisionId ?? null)) {
       stale.push({ type: ref.type, id: ref.id as string, reason: "baseChanged" });
     }
+  }
+  const creates = ops.filter((op): op is CreateOpInput => op.kind === "create");
+  for (const ref of await unavailableCreateRefs(ctx, creates)) {
+    stale.push({ ...ref, reason: "unavailable" });
   }
   return stale;
 }

@@ -29,15 +29,15 @@ Neither feed is a complete withdrawal sweep. Missing a rolling calendar entry or
 
 ## Repairs in this change
 
-- Weekly rechecks previously updated the only crawl timestamp. For an ongoing Series, this could indefinitely postpone the promised 180-day full refresh and leave old Volume facts stale. Crawl observations now retain `fullCrawledAt` separately, preserving it through partial rechecks. Older observations use their last known crawl timestamp until a full crawl establishes the new field.
+- Weekly rechecks previously updated the only crawl timestamp. For an ongoing Series, this could indefinitely postpone the promised 180-day full refresh and leave old Volume facts stale. Crawl observations now retain `fullCrawledAt` separately, preserving it through partial rechecks. Older observations use their last known crawl timestamp until a full crawl establishes the new field. Because the stamp is bookkeeping rather than a fact about the series, a full re-crawl that finds nothing else changed patches it in place and writes no snapshot-history row.
 - API errors and malformed top-level payloads previously became empty arrays. The daily job could record a successful run while importing nothing. All three feed parsers now reject failed or missing data envelopes while permitting explicitly empty arrays.
-- Dates previously admitted impossible days such as February 29 in a non-leap year and April 31. Date parsing now validates calendar days and the accepted date/timestamp shapes.
+- Dates previously admitted impossible days such as February 29 in a non-leap year and April 31. Date parsing now validates calendar days; the time part after a `T` or space separator is ignored whatever its zone shape, so a timezone-less or `+0000` timestamp still yields its day instead of an undated volume that is re-checked weekly forever.
 - Backlist series/page/application failures previously ended with a successful run. Operational failures now make the final run fail, including failures carried across continuation actions. Review notices remain separate from operational failure counts. Daily application failures also fail the daily run; optional cover-download errors remain diagnostic notices.
 - Reaching the listing page cap previously silently returned a partial catalog. It now fails before crawling from that incomplete listing. An empty page before the reported total is also an error.
 
 ## Validation
 
-The focused suite passes 54 tests across `convex/lib/kodansha.test.ts` and `convex/kodansha.test.ts`. New regressions reproduce refresh starvation, failed API envelopes, impossible dates, failure propagation through scheduled continuations, and a listing that never terminates before the cap. Existing fixture tests cover ISBN matching, scope, packaging, human review and feed overlap. The existing fixture with three missing pages now correctly expects a failed run while retaining successfully imported records.
+The focused suite passes 55 tests across `convex/lib/kodansha.test.ts` and `convex/kodansha.test.ts`. New regressions reproduce refresh starvation, failed API envelopes, impossible dates, failure propagation through scheduled continuations, and a listing that never terminates before the cap. Existing fixture tests cover ISBN matching, scope, packaging, human review and feed overlap. The existing fixture with three missing pages now correctly expects a failed run while retaining successfully imported records.
 
 Changed TypeScript files were formatted with Prettier and passed Oxlint. Final Convex type checking passed with `tsc --noEmit -p convex/tsconfig.json`.
 

@@ -142,7 +142,21 @@ describe("openLibrary.sync — configuration", () => {
       expect((await ctx.db.get(releaseId!))?.isbn13).toBe("9781974766512");
       const [run] = await ctx.db.query("importRuns").collect();
       expect(run?.status).toBe("failed");
-      expect(run?.errors?.[0]).toContain("dump line 1");
+      // 0-based, matching the startLine an operator would resume from.
+      expect(run?.errors?.[0]).toContain("dump line 0");
+    });
+  });
+
+  it("skips a title-less edition line without failing the run", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: true });
+    const { title: _title, ...untitled } = CHAINSAW_22;
+    stubDump([untitled, CHAINSAW_22]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("succeeded");
     });
   });
 
