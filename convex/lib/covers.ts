@@ -78,11 +78,13 @@ function rasterType(bytes: Uint8Array): string | null {
  * it to a Release through `imports.attachCover`, which keeps one blob per
  * Edition and URL. A cover this invocation already handled for the Edition
  * is not fetched again: callers charging downloads to a budget check
- * `stored.has(coverKey(cover))` first. A placeholder (SVG, under
- * MIN_COVER_BYTES, or not an image by header or, failing a usable header,
- * by its bytes) is recorded on the Release without storing anything, and
- * returns a notice the first time this invocation meets it; art is stored
- * and returns null. Throws only when the download itself fails.
+ * `stored.has(coverKey(cover))` first. A placeholder image (an SVG, or
+ * under MIN_COVER_BYTES) is recorded on the Release without storing
+ * anything, and returns a notice the first time this invocation meets it;
+ * art is stored and returns null. A failed download, or a body that is no
+ * image at all by header or, failing a usable header, by its bytes (a
+ * challenge page behind a 200), throws: nothing is recorded and the cover
+ * is tried again next run.
  */
 export async function storeCover(
   ctx: ActionCtx,
@@ -90,29 +92,36 @@ export async function storeCover(
   args: CoverRequest & { attribution: string; delayMs: number },
 ): Promise<string | null> {
   const key = coverKey(args);
-  let held = stored.get(key);
+  const cached = stored.get(key);
+  let held = cached;
   let notice: string | null = null;
   if (held === undefined) {
     const res = await politeFetch(args.sourceUrl, args.delayMs);
     const bytes = new Uint8Array(await res.arrayBuffer());
     const header = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
     const type = header.startsWith("image/") ? header : rasterType(bytes);
-    if (type === null || type === "image/svg+xml" || bytes.length < MIN_COVER_BYTES) {
-      notice = `placeholder, not stored (${type ?? (header || "no type")}, ${bytes.length} bytes)`;
+    if (type === null) {
+      throw new Error(`not an image (${header || "no type"}, ${bytes.length} bytes)`);
+    }
+    if (type === "image/svg+xml" || bytes.length < MIN_COVER_BYTES) {
+      notice = `placeholder, not stored (${type}, ${bytes.length} bytes)`;
       held = "placeholder";
     } else {
       held = await ctx.storage.store(new Blob([bytes], { type }));
     }
   }
-  const result: { held: Id<"_storage"> | "placeholder" | null } = await ctx.runMutation(
-    internal.imports.attachCover,
-    {
+  const result: { held: Id<"_storage"> | "placeholder" | null; stale?: true } =
+    await ctx.runMutation(internal.imports.attachCover, {
       releaseId: args.releaseId,
       storageId: held === "placeholder" ? undefined : held,
       sourceUrl: args.sourceUrl,
       attribution: args.attribution,
-    },
-  );
+    });
+  if (result.stale) {
+    // An overlapping run replaced the blob this one remembered: forget it and fetch afresh.
+    stored.delete(key);
+    return cached === undefined ? notice : await storeCover(ctx, stored, args);
+  }
   if (result.held === null) stored.delete(key);
   else stored.set(key, result.held);
   return notice;

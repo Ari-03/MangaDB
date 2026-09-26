@@ -17,7 +17,7 @@ const partialDate = v.object({
 });
 
 const cover = v.object({
-  storageId: v.id("_storage"),
+  storageId: v.optional(v.id("_storage")),
   sourceUrl: v.optional(v.string()),
   attribution: v.optional(v.string()),
 });

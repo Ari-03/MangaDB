@@ -23,7 +23,8 @@
 // Covers land in Convex file storage as {storageId, sourceUrl, attribution}
 // through the shared attach path (lib/covers.ts `storeCover`), and are
 // replaced when the book's cover URL changes. A placeholder image is recorded
-// on the Release instead, and not fetched again until its URL changes.
+// on the Release instead, keeping any art already shown, and not fetched again
+// until its URL changes.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";

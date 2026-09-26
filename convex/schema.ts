@@ -352,7 +352,9 @@ export default defineSchema({
     .index("by_isbn10", ["isbn10"])
     .index("by_date", ["pubDate.sort"])
     .index("by_publisher_date", ["publisherId", "pubDate.sort"])
-    .index("by_bootstrap", ["bootstrapUnreviewed"]),
+    .index("by_bootstrap", ["bootstrapUnreviewed"])
+    // Who shows a stored cover, so replacing one never strands a sharer.
+    .index("by_cover", ["coverImage.storageId"]),
 
   releaseVariants: defineTable({
     ...canonical("releaseVariants"),
@@ -378,7 +380,8 @@ export default defineSchema({
     .index("by_isbn13", ["isbn13"])
     .index("by_isbn10", ["isbn10"])
     .index("by_date", ["pubDate.sort"])
-    .index("by_bootstrap", ["bootstrapUnreviewed"]),
+    .index("by_bootstrap", ["bootstrapUnreviewed"])
+    .index("by_cover", ["coverImage.storageId"]),
 
   bundleMemberships: defineTable({
     bundleId: v.id("releaseBundles"),

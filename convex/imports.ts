@@ -323,18 +323,17 @@ export const runScheduled = internalAction({
  * Attach a cover {storageId, sourceUrl, attribution} (spec §6), the one
  * attach path for publisher art (lib/covers.ts `storeCover`). Without a
  * `storageId` the art at `sourceUrl` was a placeholder: the Release records
- * the URL with nothing stored, so it is not fetched again until the URL
- * changes. A missing or inactive Release, or one whose cover already came
- * from `sourceUrl`, is refused. Otherwise the Release takes the blob of an
- * active sibling in its Edition with the same `sourceUrl` (print and digital
- * share one file), else the incoming one, replacing art the publisher has
- * since changed. A blob no Release uses any more, the incoming one or the
- * replaced one, is deleted; one this Release or a sibling still references
- * is kept (siblings are the only sharers: `storeCover` reuses a blob within
- * one Edition only). A vanished Release leaves the incoming blob alone,
- * since without it nothing says whether a sibling shares the file.
- * Returns what the Release now holds for `sourceUrl`: its blob,
- * "placeholder", or null when it holds nothing for that URL.
+ * the URL, keeps any art it already shows, and is not fetched again until
+ * the URL changes. Refused for a missing, inactive, or locked Release, one
+ * whose cover already came from `sourceUrl`, or an incoming blob that no
+ * longer exists (an overlapping run replaced it: `stale`). Otherwise the
+ * Release takes the blob of an active sibling in its Edition with the same
+ * `sourceUrl` (print and digital share one file), else the incoming one,
+ * replacing art the publisher has since changed. A blob nothing shows any
+ * more, the incoming one or the replaced one, is deleted; one another
+ * Release or a Bundle still shows is kept, wherever a split or merge has
+ * moved it (`by_cover`). Returns what the Release now holds for
+ * `sourceUrl`: its blob, "placeholder", or null when nothing.
  */
 export const attachCover = internalMutation({
   args: {
@@ -346,37 +345,56 @@ export const attachCover = internalMutation({
   handler: async (
     ctx,
     args,
-  ): Promise<{ attached: boolean; held: Id<"_storage"> | "placeholder" | null }> => {
+  ): Promise<{ attached: boolean; held: Id<"_storage"> | "placeholder" | null; stale?: true }> => {
     const incoming = args.storageId;
-    const release = await ctx.db.get(args.releaseId);
-    if (!release) return { attached: false, held: null };
-    const siblings = (
-      await ctx.db
+    // Shown by any Release but this one, or by a Bundle made from a Release.
+    const shown = async (id: Id<"_storage">) => {
+      const releases = await ctx.db
         .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
-        .collect()
-    ).filter((r) => r._id !== release._id);
-    const unused = (id: Id<"_storage">, keep: Id<"_storage"> | undefined) =>
-      id !== keep && !siblings.some((r) => r.coverImage?.storageId === id);
+        .withIndex("by_cover", (q) => q.eq("coverImage.storageId", id))
+        .collect();
+      if (releases.some((r) => r._id !== args.releaseId)) return true;
+      const bundle = await ctx.db
+        .query("releaseBundles")
+        .withIndex("by_cover", (q) => q.eq("coverImage.storageId", id))
+        .first();
+      return bundle !== null;
+    };
+    // Delete `id` unless it is `keep` or something still shows it.
+    const drop = async (id: Id<"_storage"> | undefined, keep: Id<"_storage"> | undefined) => {
+      if (id !== undefined && id !== keep && !(await shown(id))) await ctx.storage.delete(id);
+    };
 
+    if (incoming !== undefined && (await ctx.db.system.get(incoming)) === null) {
+      return { attached: false, held: null, stale: true };
+    }
+    const release = await ctx.db.get(args.releaseId);
+    if (!release) {
+      await drop(incoming, undefined);
+      return { attached: false, held: null };
+    }
     const current = release.coverImage;
     const same = current !== undefined && current.sourceUrl === args.sourceUrl;
-    if (release.status !== "active" || same) {
-      if (incoming !== undefined && unused(incoming, current?.storageId)) {
-        await ctx.storage.delete(incoming);
-      }
-      const held = same && release.status === "active" ? (current.storageId ?? "placeholder") : null;
-      return { attached: false, held };
+    const frozen = release.status !== "active" || release.locked === true;
+    if (frozen || same) {
+      await drop(incoming, current?.storageId);
+      return { attached: false, held: same && !frozen ? (current.storageId ?? "placeholder") : null };
     }
+    const siblings = await ctx.db
+      .query("releases")
+      .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
+      .collect();
     const storageId =
-      siblings.find((r) => r.status === "active" && r.coverImage?.sourceUrl === args.sourceUrl)
-        ?.coverImage?.storageId ?? incoming;
+      siblings.find(
+        (r) => r._id !== release._id && r.status === "active" && r.coverImage?.sourceUrl === args.sourceUrl,
+      )?.coverImage?.storageId ??
+      incoming ??
+      current?.storageId;
     await ctx.db.patch(release._id, {
       coverImage: { storageId, sourceUrl: args.sourceUrl, attribution: args.attribution },
     });
-    for (const id of new Set([incoming, current?.storageId])) {
-      if (id !== undefined && unused(id, storageId)) await ctx.storage.delete(id);
-    }
+    await drop(incoming, storageId);
+    await drop(current?.storageId, storageId);
     return { attached: true, held: storageId ?? "placeholder" };
   },
 });

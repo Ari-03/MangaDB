@@ -28,8 +28,8 @@
 //
 // Both feeds store Kodansha's art (lib/covers.ts `storeCover`): one blob per
 // Edition and image URL, shared by print and digital, and replaced when the
-// URL changes. A placeholder image is recorded on the Release instead, and
-// not fetched again until its URL changes.
+// URL changes. A placeholder image is recorded on the Release instead, keeping
+// any art already shown, and not fetched again until its URL changes.
 //
 // Both feeds share one scope gate: a novel, children's picture book, or
 // other non-manga volume (lib/kodansha.ts `outOfScope`) is observed and

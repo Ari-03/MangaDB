@@ -528,12 +528,60 @@ describe("kodansha covers — stored once, kept current", () => {
     expect(await exists(old)).toBe(false);
     expect(await exists(fresh)).toBe(true);
 
-    // A hidden Release offered the very blob it alone holds keeps it; a
-    // Release that vanished leaves the blob alone too.
-    await t.run(async (ctx) => {
-      await ctx.db.patch(digital!._id, { status: "hidden" });
-      await ctx.db.patch(print!._id, { coverImage: undefined });
+    // A locked Release is left alone; the offered blob goes.
+    await t.run((ctx) => ctx.db.patch(print!._id, { locked: true }));
+    const offered = await upload();
+    expect(await attach(print!._id, offered, "https://img.example/locked.webp")).toEqual({
+      attached: false,
+      held: null,
     });
+    expect(await exists(offered)).toBe(false);
+    await t.run((ctx) => ctx.db.patch(print!._id, { locked: false }));
+
+    // A blob an overlapping run has since deleted is never attached.
+    const gone = await upload();
+    await t.run((ctx) => ctx.storage.delete(gone));
+    expect(await attach(digital!._id, gone, "https://img.example/gone.webp")).toEqual({
+      attached: false,
+      held: null,
+      stale: true,
+    });
+
+    // Digital split off into its own Edition still shows `fresh`, so new art
+    // on print cannot delete it; a Bundle made from print holds a blob too.
+    await t.run(async (ctx) => {
+      const edition = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 9,
+        publisherId: print!.publisherId,
+      });
+      await ctx.db.patch(digital!._id, { editionId: edition });
+    });
+    const split = await upload();
+    expect(await attach(print!._id, split, "https://img.example/split.webp")).toEqual({
+      attached: true,
+      held: split,
+    });
+    expect(await exists(fresh)).toBe(true);
+    await t.run((ctx) =>
+      ctx.db.insert("releaseBundles", {
+        status: "active",
+        publicId: 9,
+        name: "Box",
+        publisherId: print!.publisherId,
+        coverImage: { storageId: split },
+      }),
+    );
+    const boxed = await upload();
+    expect(await attach(print!._id, boxed, "https://img.example/boxed.webp")).toEqual({
+      attached: true,
+      held: boxed,
+    });
+    expect(await exists(split)).toBe(true);
+
+    // A hidden Release offered the very blob it alone holds keeps it; a
+    // Release that vanished frees a blob nothing else shows.
+    await t.run((ctx) => ctx.db.patch(digital!._id, { status: "hidden" }));
     expect(await attach(digital!._id, fresh, "https://img.example/other.webp")).toEqual({
       attached: false,
       held: null,
@@ -544,7 +592,31 @@ describe("kodansha covers — stored once, kept current", () => {
       attached: false,
       held: null,
     });
-    expect(await exists(fresh)).toBe(true);
+    expect(await exists(fresh)).toBe(false);
+  });
+
+  it("a placeholder at a new URL keeps the art already shown and is not fetched again", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubSite([IRUMA]);
+    await sync(t);
+    const before = await coverOf(t, "physical");
+
+    const tiny = "https://production.image.azuki.co/tiny/800.webp";
+    stubSite([{ ...IRUMA, image: tiny }]);
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 1 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([tiny]);
+    const after = await coverOf(t, "physical");
+    expect(after).toEqual({ ...before, sourceUrl: tiny });
+    expect(await coverOf(t, "digital")).toEqual(after);
+    await t.run(async (ctx) => {
+      expect(await ctx.storage.getUrl(before.storageId!)).not.toBeNull();
+    });
+
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(requested.filter((u) => u.includes("azuki.co"))).toEqual([]);
   });
 
   it("trusts the bytes when the image comes without a usable content type", async () => {
@@ -558,17 +630,28 @@ describe("kodansha covers — stored once, kept current", () => {
         ? new Response("<html>not an image</html>", { headers: { "content-type": "text/html" } })
         : new Response(jpeg),
     );
-    expect(await sync(t)).toMatchObject({ errorCount: 1 });
+    expect(await sync(t)).toMatchObject({ errorCount: 2 });
     await t.run(async (ctx) => {
-      // Volume 21's jacket is stored under the sniffed type; 22's page is a placeholder.
+      // Volume 21's jacket is stored under the sniffed type. Volume 22's page
+      // is an error, not a placeholder: nothing recorded, one notice per format.
       const files = await ctx.db.system.query("_storage").collect();
       expect(files).toHaveLength(1);
       expect((await ctx.storage.get(files[0]!._id))?.type).toBe("image/jpeg");
       const releases = await ctx.db.query("releases").collect();
       expect(releases.filter((r) => r.coverImage?.storageId === files[0]!._id)).toHaveLength(2);
-      expect(releases.filter((r) => r.coverImage && !r.coverImage.storageId)).toHaveLength(2);
+      expect(releases.filter((r) => r.coverImage === undefined)).toHaveLength(2);
       const [run] = await ctx.db.query("importRuns").collect();
-      expect(run!.errors).toEqual([expect.stringContaining("placeholder, not stored (text/html")]);
+      expect(run!.errors).toHaveLength(2);
+      expect(run!.errors[0]).toContain("not an image (text/html");
+    });
+
+    // The page clears up: the next run stores the jacket.
+    stubSite([IRUMA, vol22], () => new Response(jpeg));
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_storage").collect()).toHaveLength(2);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.every((r) => r.coverImage?.storageId !== undefined)).toBe(true);
     });
   });
 
