@@ -123,8 +123,22 @@ export const sync = internalAction({
         "The approved-source registry has no \"prh\" row. Run: npx convex run importSources:seedRegistry '{}'",
       );
     }
-    if (!source.enabled) return { skipped: "disabled" as const };
-
+    // A continuation link whose source was disabled or unconfigured between
+    // links must not leave its run open forever: close it as failed, saying why.
+    const closeResumed = async (why: string) => {
+      if (args.runId === undefined) return;
+      await ctx.runMutation(internal.imports.finishRun, {
+        runId: args.runId,
+        status: "failed",
+        recordsSeen: args.seen ?? 0,
+        recordsChanged: args.changed ?? 0,
+        errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
+      });
+    };
+    if (!source.enabled) {
+      await closeResumed("the source was disabled.");
+      return { skipped: "disabled" as const };
+    }
     const apiKey = process.env.PRH_API_KEY;
     const configured = (process.env.PRH_IMPRINT_CODES ?? "")
       .split(",")
@@ -135,9 +149,9 @@ export const sync = internalAction({
       console.warn(
         "[imports] PRH adapter is unconfigured (set PRH_API_KEY and PRH_IMPRINT_CODES) — skipping",
       );
+      await closeResumed("PRH_API_KEY / PRH_IMPRINT_CODES were removed.");
       return { skipped: "unconfigured" as const };
     }
-
     const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
     const runId: Id<"importRuns"> =
       args.runId ??
@@ -156,6 +170,37 @@ export const sync = internalAction({
     let completeSweep = args.completeSweep ?? (mode === "full" && args.imprints === undefined);
     const todayKey = todaySortKey();
     const firstImprint = args.imprintIndex ?? 0;
+    // Schedule the next link with the run state. The EFFECTIVE imprint list
+    // travels with it: a configured list re-read from the environment could
+    // change between links and shift imprintIndex onto another imprint.
+    const handOff = async (imprintIndex: number, start: number, pages: number): Promise<SyncResult> => {
+      await ctx.scheduler.runAfter(0, internal.prh.sync, {
+        mode,
+        imprints,
+        maxPages: args.maxPages,
+        politeDelayMs: args.politeDelayMs,
+        linkBudgetMs: args.linkBudgetMs,
+        runId,
+        runStartedAt,
+        imprintIndex,
+        start,
+        pages,
+        seen,
+        changed,
+        recordFailures,
+        completeSweep,
+        errors,
+      });
+      return {
+        runId,
+        recordsSeen: seen,
+        recordsChanged: changed,
+        mode,
+        completeSweep: false,
+        errorCount: errors.length,
+        continued: true,
+      };
+    };
 
     try {
       for (let index = firstImprint; index < imprints.length; index++) {
@@ -218,37 +263,14 @@ export const sync = internalAction({
           const exhausted =
             rawCount === 0 || (recordCount !== undefined && start >= recordCount) || pastReached;
           if (exhausted) break;
-          if (Date.now() - linkStartedAt >= linkBudgetMs) {
-            await ctx.scheduler.runAfter(0, internal.prh.sync, {
-              mode,
-              imprints: args.imprints,
-              maxPages: args.maxPages,
-              politeDelayMs: args.politeDelayMs,
-              linkBudgetMs: args.linkBudgetMs,
-              runId,
-              runStartedAt,
-              imprintIndex: index,
-              start,
-              pages,
-              seen,
-              changed,
-              recordFailures,
-              completeSweep,
-              errors,
-            });
-            return {
-              runId,
-              recordsSeen: seen,
-              recordsChanged: changed,
-              mode,
-              completeSweep: false,
-              errorCount: errors.length,
-              continued: true,
-            };
-          }
+          if (Date.now() - linkStartedAt >= linkBudgetMs) return await handOff(index, start, pages);
+        }
+        // An imprint that fits on one page never reaches the check above; a
+        // sweep of many small imprints would run past the action limit.
+        if (index + 1 < imprints.length && Date.now() - linkStartedAt >= linkBudgetMs) {
+          return await handOff(index + 1, 0, 0);
         }
       }
-
       // Disappearance → withdrawn, only after a COMPLETE full-catalog sweep
       // (absence is never evidence on a future-only or capped run).
       if (mode === "full" && completeSweep) {

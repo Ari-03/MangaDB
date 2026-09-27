@@ -25,9 +25,11 @@ export const unmappedQueue = query({
   args: {},
   handler: async (ctx) => {
     await requireDataTeam(ctx);
+    // Hidden/merged Editions keep the flag; they must not use page slots.
     const flagged = await ctx.db
       .query("editions")
       .withIndex("by_coverageUnmapped", (q) => q.eq("coverageUnmapped", true))
+      .filter((q) => q.eq(q.field("status"), "active"))
       .take(QUEUE_PAGE + 1);
     const rows = [];
     for (const edition of flagged.slice(0, QUEUE_PAGE)) {
@@ -143,9 +145,11 @@ export const booklessQueue = query({
   args: {},
   handler: async (ctx) => {
     await requireDataTeam(ctx);
+    // A hidden/merged Series the rebuild no longer visits keeps the flag.
     const flagged = await ctx.db
       .query("series")
       .withIndex("by_bookless", (q) => q.eq("bookless", true))
+      .filter((q) => q.eq(q.field("status"), "active"))
       .take(QUEUE_PAGE + 1);
     const rows = [];
     for (const series of flagged.slice(0, QUEUE_PAGE)) {

@@ -618,7 +618,7 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     });
   });
 
-  it("leaves a bare multi-volume range with no line name on its observation", async () => {
+  it("treats a bare multi-volume range as stated coverage and creates the missing Volume", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     await backbone(t, "Negima!", ["4"]);
@@ -836,6 +836,47 @@ describe("prh.sync — hidden Series stay hidden", () => {
 });
 
 describe("prh.sync — continuation links", () => {
+  it("hands off between imprints too, carrying the effective imprint list", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
+    // Two one-page imprints and a zero budget: the first link must hand off
+    // after imprint one even though no page boundary triggered a check.
+    const first = await sync(t, { imprints: ["AA", "BB"], linkBudgetMs: 0 });
+    expect(first).toMatchObject({ continued: true });
+    expect(requestedUrls).toHaveLength(1);
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    expect(requestedUrls).toHaveLength(2);
+    expect(requestedUrls[1]).toContain("/imprints/BB/");
+    await t.run(async (ctx) => {
+      if (!("runId" in first)) throw new Error("Expected an import run");
+      expect((await ctx.db.get(first.runId))?.status).toBe("succeeded");
+    });
+  });
+
+  it("closes a resumed run when the source was disabled between links", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      ...Array.from({ length: 200 }, () => ({ isbn: "9781646519811", title: "Excluded Story (Light Novel) Vol. 1" })),
+      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
+    ]);
+    const first = await sync(t, { linkBudgetMs: 0 });
+    expect(first).toMatchObject({ continued: true });
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      if (!("runId" in first)) throw new Error("Expected an import run");
+      const run = await ctx.db.get(first.runId);
+      expect(run?.status).toBe("failed");
+      expect(run?.errors?.some((e) => e.includes("disabled"))).toBe(true);
+    });
+  });
+
   it("hands off at a page boundary when the link budget is spent and finishes the sweep in the next link", async () => {
     const t = makeT();
     await seedRegistry(t, true);

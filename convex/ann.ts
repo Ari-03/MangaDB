@@ -1215,9 +1215,14 @@ export const applyReleasePage = internalMutation({
         );
       }
       const unmapped = labels.length === 0;
-      if (unmapped && !(await getBootstrapMode(ctx))) {
+      // An Edition-Line-shaped creation is a steady-state review gate
+      // (pipeline.ts creationGates, as catalogTitle applies it); Bootstrap
+      // Mode creates it and tags it for the post-launch backlog.
+      if (!(await getBootstrapMode(ctx))) {
         return await hold(
-          `${packaging.name} of unknown size: steady state leaves unmapped packaging to review.`,
+          unmapped
+            ? `${packaging.name} of unknown size: steady state leaves unmapped packaging to review.`
+            : `${packaging.name} ${packaging.position ?? ""}: steady state leaves Edition Line creation to review.`,
         );
       }
       const packagedDate = page.date ?? line.date;
@@ -1242,7 +1247,7 @@ export const applyReleasePage = internalMutation({
               : undefined,
           publisher: { name: publisher.name, slug: publisher.slug },
         },
-        tagBootstrapUnreviewed: unmapped,
+        tagBootstrapUnreviewed: true,
         now,
       });
       return { status: "created", changed: true, releaseId: creation.releaseId };
