@@ -123,6 +123,14 @@ export const sync = internalAction({
     maxBatches: v.optional(v.number()),
     /** Chain the release-page pass after a finished mirror (default true). */
     releasePages: v.optional(v.boolean()),
+    /**
+     * Operator-targeted run: refresh only these ANN manga ids (detail API
+     * only, no report walk, no withdrawal — a subset proves no absence),
+     * then chain the page pass. Minutes instead of a full mirror:
+     *
+     *   npx convex run ann:sync '{"onlyManga":["1223","1825"]}'
+     */
+    onlyManga: v.optional(v.array(v.string())),
     // ----- continuation state (never passed by callers) -----
     nskip: v.optional(v.number()),
     runId: v.optional(v.id("importRuns")),
@@ -154,35 +162,46 @@ export const sync = internalAction({
     let changed = args.changed ?? 0;
     let nskip = args.nskip ?? 0;
     let detailsReached = args.detailsReached ?? false;
+    const targeted = args.onlyManga !== undefined;
 
     try {
       let batchesDone = 0;
       let reachedEnd = false;
 
       while (batchesDone < maxBatches && !reachedEnd) {
-        const reportRes = await politeFetch(
-          `${REPORT_URL}&nlist=${REPORT_PAGE}&nskip=${nskip}`,
-          delay,
-        );
-        const reportXml = await reportRes.text();
-        // Paging and the end-of-enumeration signal follow the page's RAW
-        // <item> count: parseReport filters non-manga and malformed rows, so
-        // its item count under-counts the page and would end the mirror at
-        // the first page containing any filtered row (and desync nskip).
-        const report = parseReport(reportXml);
-        const rawCount = report.rawCount;
-        // A row without id/name is an entry this sweep cannot see: skipped
-        // so the enumeration goes on, reported so withdrawal stays off.
-        for (const at of report.malformed) {
-          errors.push(`report @${nskip + at}: item without id/name`);
-        }
-        const ids = report.items.map((item) => item.id);
-        if (rawCount === 0) {
-          // A well-formed but empty FIRST page is not an empty catalog: the
-          // clean sweep would otherwise withdraw every ANN observation.
-          if (nskip === 0) throw new Error("ANN report enumeration was empty");
+        let ids: string[];
+        let rawCount: number;
+        if (targeted) {
+          // One pass over the named entries; the report is never read.
+          ids = [...new Set(args.onlyManga!.map((id) => id.trim()).filter((id) => /^\d+$/.test(id)))];
+          rawCount = ids.length;
           reachedEnd = true;
-          break;
+          if (ids.length === 0) break;
+        } else {
+          const reportRes = await politeFetch(
+            `${REPORT_URL}&nlist=${REPORT_PAGE}&nskip=${nskip}`,
+            delay,
+          );
+          const reportXml = await reportRes.text();
+          // Paging and the end-of-enumeration signal follow the page's RAW
+          // <item> count: parseReport filters non-manga and malformed rows, so
+          // its item count under-counts the page and would end the mirror at
+          // the first page containing any filtered row (and desync nskip).
+          const report = parseReport(reportXml);
+          rawCount = report.rawCount;
+          // A row without id/name is an entry this sweep cannot see: skipped
+          // so the enumeration goes on, reported so withdrawal stays off.
+          for (const at of report.malformed) {
+            errors.push(`report @${nskip + at}: item without id/name`);
+          }
+          ids = report.items.map((item) => item.id);
+          if (rawCount === 0) {
+            // A well-formed but empty FIRST page is not an empty catalog: the
+            // clean sweep would otherwise withdraw every ANN observation.
+            if (nskip === 0) throw new Error("ANN report enumeration was empty");
+            reachedEnd = true;
+            break;
+          }
         }
 
         // Budget is checked per page (a page is ≤10 batches), so nskip stays
@@ -268,14 +287,14 @@ export const sync = internalAction({
         errors.push("ANN detail API unreachable; release-page pass skipped");
       }
       const complete = errors.length === 0;
-      if (complete) {
+      if (complete && !targeted) {
         // The full mirror completed: entries the sweep no longer lists have
         // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
         await ctx.runMutation(internal.imports.markWithdrawn, {
           sourceKey: SOURCE_KEY,
           notSeenSince: runStartedAt,
         });
-      } else {
+      } else if (!complete) {
         errors.push("ANN mirror was incomplete; withdrawal skipped");
       }
       await ctx.runMutation(internal.imports.finishRun, {

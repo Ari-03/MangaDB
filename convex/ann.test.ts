@@ -71,6 +71,7 @@ ${releases}
 }
 
 const pageRequests: string[] = [];
+const reportRequests: string[] = [];
 
 /** Serves the report + API for `manga`, and release pages from `pages`. */
 function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
@@ -85,6 +86,7 @@ function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
         : new Response("not found", { status: 404 });
     }
     if (url.includes("/encyclopedia/reports.xml")) {
+      reportRequests.push(url);
       const params = new URL(url).searchParams;
       const nskip = Number(params.get("nskip") ?? 0);
       const nlist = Number(params.get("nlist") ?? 50);
@@ -105,6 +107,7 @@ function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
 afterEach(() => {
   vi.unstubAllGlobals();
   pageRequests.length = 0;
+  reportRequests.length = 0;
 });
 
 function makeT() {
@@ -1415,5 +1418,25 @@ describe("ann.syncReleasePages — packaging lines (#47)", () => {
     const held = await obsFor(t, 9103);
     expect(held?.recordRef).toBeUndefined();
     expect(held?.conflicts?.[0]?.reason).toMatch(/would cover Volumes 25–27/);
+  });
+});
+
+describe("ann.sync — onlyManga (operator-targeted refresh)", () => {
+  it("refreshes just the named entries through the detail API, never reads the report, and never withdraws", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ALPHA, BETA]);
+    // A full mirror first, so ALPHA has observations that a subset run must not withdraw.
+    await sync(t, { releasePages: false });
+    expect(await t.run((ctx) => ctx.db.query("series").collect())).toHaveLength(2);
+    reportRequests.length = 0;
+    const result = await sync(t, { releasePages: false, onlyManga: [String(BETA.id)] });
+    expect(result).toMatchObject({ recordsSeen: 1, continued: false });
+    expect(reportRequests).toHaveLength(0);
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.every((o) => o.withdrawn !== true)).toBe(true);
+      expect(await ctx.db.query("series").collect()).toHaveLength(2);
+    });
   });
 });
