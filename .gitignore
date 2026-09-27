@@ -10,3 +10,7 @@ worker-configuration.d.ts
 .tanstack/
 filtered.txt
 .scratch/
+
+# Convex local backend state (or a symlink to it)
+.convex
+.env.staging

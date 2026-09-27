@@ -59,6 +59,14 @@ A publisher-named family of Releases, such as "Deluxe Edition" or "3-in-1," with
 **Edition Line Position**:
 An Edition's sequence label within its Edition Line, independent of the identities and numbers of the Volumes it covers.
 
+**Bookless Series**:
+An active Series whose Volumes are known but to which no English book has attached — no Edition covers any Volume and no Edition Line has a member. Usually a backbone a source built (ANN) whose releases could not be placed: an unknown distributor, packaging-only releases, no ISBN. The Series library rebuild derives and clears the flag; while it stands, the Series is kept out of browse, search, the home page and the sitemap, its page stays reachable, and the Data Team reviews it. Not a Hidden Record: imports keep attaching books to it.
+_Avoid_: empty series, orphan series
+
+**Unmapped Packaging**:
+An Edition Line member whose source never stated which Volumes it collects — no title range, no blurb statement, no line name with a fixed size. It has no Volume Coverage yet, shows under its line in the publisher's own numbering, and waits in the Data Team's unmapped queue for a Moderator to map its Volumes. Ownership and reading progress follow the Volumes only once mapped.
+_Avoid_: unplaced, orphan edition
+
 **Volume Coverage**:
 The ordered mapping from an Edition to the Volumes whose content it contains, including whether each Volume is covered completely or partially. A Release inherits the coverage of its Edition; this lets split and omnibus Editions retain the identity of their source Volumes.
 
@@ -95,9 +103,20 @@ A user's view of Upcoming Releases that either belong to a followed Series and m
 **Tracking Visibility**:
 A user's private-by-default sharing policy for Ownership and Reading, with separate defaults for each and per-Series overrides. Visibility is not configured separately for individual Volumes or Releases.
 
+**User**:
+A person with a MangaDB account who owns personal tracking state and visibility choices. A User remains the same person across linked sign-in methods or email-address changes.
+_Avoid_: Clerk user, account
+
 **Publisher**:
 The company issuing a Release (e.g. VIZ Media, Seven Seas). One company is one Publisher, whatever strings sources use for it ("Kodansha Comics" is Kodansha). An imprint (e.g. Ghost Ship) is a Publisher of its own that names its parent company; imprints nest one level only. A Publisher that no longer publishes English manga (ADV, Tokyopop's Blu, CMX) stays a Publisher, marked defunct; its Releases remain in the catalog.
 _Avoid_: brand
+
+**Approved Source**:
+An external data source registered for imports, with a defined scope of records it may speak about, per-field Field Authority levels, and an import cadence. Only Approved Sources produce Source Observations.
+_Avoid_: scraper, feed
+
+**Field Authority**:
+An Approved Source's per-field trust rank — authoritative, standard, or weak — within its scope. An observed value automatically updates a Canonical Record only over a strictly lower-Authority value; equal-Authority disagreement requires human review, and lower-Authority disagreement is recorded without review.
 
 **Bootstrap Mode**:
 A pre-launch import state in which Approved Sources may create Canonical Records directly, including new Series, without queued review; quality is checked by sampling instead. It is switched off permanently before public launch, after which steady-state review rules apply.
@@ -123,8 +142,26 @@ MangaDB's currently approved representation of a Series, Volume, or Release. Thi
 **Human Override**:
 An approved field-level correction to a Canonical Record. Imports may report a conflicting Source Observation but cannot replace the corrected value until a Moderator explicitly clears the override.
 
+**Proposal**:
+A coherent, atomic data-maintenance intent submitted for review. A Proposal may affect multiple Canonical Records when all of its changes must succeed or fail together; unrelated changes belong in separate Proposals.
+
+**Proposal Version**:
+An immutable snapshot of a Proposal submitted for review. Requested changes return the Proposal to Draft, and its next submission creates another Proposal Version.
+
 **Revision**:
 An immutable entry in a Canonical Record's public history describing an approved change, who or what made it, and why.
+
+**Data Team**:
+The Editors, Moderators, and Administrators who maintain Canonical Records. All members may inspect submitted Proposals, while only Moderators and Administrators may approve or reject them.
+
+**Hidden Record**:
+A Canonical Record removed from public discovery without losing its identity, history, tracking references, or data-team visibility. Restoring it reactivates the same record.
+
+**Merged Record**:
+A former Canonical Record atomically subsumed into a surviving Canonical Record. Its identity and history remain available for audit, while its public URLs redirect to the survivor.
+
+**Locked Record**:
+A Canonical Record temporarily closed to ordinary changes during a dispute or incident. Hidden Records and Merged Records are locked by their nature, while an active record may be unlocked when the concern is resolved.
 
 **Editor**:
 A trusted contributor appointed by an Administrator or Moderator. Editors propose changes to Canonical Records; their proposals require Moderator approval.
