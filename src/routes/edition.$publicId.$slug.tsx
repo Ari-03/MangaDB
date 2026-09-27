@@ -216,7 +216,14 @@ function EditionPage() {
             </span>
           </p>
 
-          {coverage.length > 0 ? <CoverageChips coverage={coverage} /> : null}
+          {coverage.length > 0 ? (
+            <CoverageChips coverage={coverage} />
+          ) : edition.coverageUnmapped ? (
+            <p className="detail-note">
+              Which volumes this book collects is not mapped yet — it is listed in the
+              publisher's own numbering until the data team maps it.
+            </p>
+          ) : null}
 
           <p className="detail-note">
             One publisher, one packaging of the content. Paste an ISBN into

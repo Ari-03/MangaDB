@@ -102,6 +102,7 @@ function Launch({ canAct }: { canAct: boolean }) {
       <nav className="mod-tools" aria-label="Data team tools">
         <Link to="/mod/imports">Imports</Link>
         <Link to="/mod/queue">Review queue</Link>
+        <Link to="/mod/packaging">Catalog gaps</Link>
       </nav>
 
       <Checklist />

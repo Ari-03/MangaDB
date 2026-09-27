@@ -267,6 +267,11 @@ export async function refreshReleaseDenorms(ctx: MutationCtx, editionId: Id<"edi
     const volume = await ctx.db.get(row.volumeId);
     if (volume && !seriesIds.includes(volume.seriesId)) seriesIds.push(volume.seriesId);
   }
+  // Unmapped Packaging covers nothing yet; its line still names the Series.
+  if (seriesIds.length === 0 && edition.editionLineId) {
+    const line = await ctx.db.get(edition.editionLineId);
+    if (line) seriesIds.push(line.seriesId);
+  }
   for (const release of await releasesOf(ctx, editionId)) {
     if (sameValue(release.seriesIds, seriesIds) && release.publisherId === edition.publisherId) continue;
     await ctx.db.patch(release._id, { seriesIds, publisherId: edition.publisherId });

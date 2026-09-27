@@ -70,7 +70,8 @@ export const sitemapPage = query({
       case "series": {
         const result = await ctx.db.query("series").paginate(paginationOpts);
         for (const doc of result.page) {
-          if (doc.status !== "active") continue;
+          // Bookless Series are reachable but not advertised.
+          if (doc.status !== "active" || doc.bookless === true) continue;
           entries.push({
             publicId: doc.publicId,
             slug: null,
@@ -85,8 +86,9 @@ export const sitemapPage = query({
         for (const doc of result.page) {
           if (doc.status !== "active") continue;
           const series = await ctx.db.get(doc.seriesId);
-          // A hidden Series hides its Volumes from the public site.
-          if (!series || series.status !== "active") continue;
+          // A hidden Series hides its Volumes from the public site; a
+          // Bookless one is not advertised.
+          if (!series || series.status !== "active" || series.bookless === true) continue;
           entries.push({
             publicId: doc.publicId,
             slug: null,

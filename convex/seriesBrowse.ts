@@ -223,6 +223,35 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
       if (!firstPosition.has(row.editionId)) firstPosition.set(row.editionId, volume.position);
     }
   }
+  // Edition Line members whose Volumes are not mapped yet (Unmapped
+  // Packaging) still count as the Series' books — same walk as the series
+  // page (catalog.ts seriesPage).
+  const lines = await ctx.db
+    .query("editionLines")
+    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+    .collect();
+  for (const line of lines) {
+    if (line.status !== "active") continue;
+    const members = await ctx.db
+      .query("editions")
+      .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+      .collect();
+    for (const member of members) editionIds.add(member._id);
+  }
+
+  // A Bookless Series (no Edition at all) leaves the library: its stats row
+  // goes and the Series carries the derived flag until a book lands. Derived
+  // data, no Revision — like the release denorms.
+  if (editionIds.size === 0) {
+    if (series.bookless !== true) await ctx.db.patch(series._id, { bookless: true });
+    const stale = await ctx.db
+      .query("seriesStats")
+      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+      .unique();
+    if (stale) await ctx.db.delete(stale._id);
+    return;
+  }
+  if (series.bookless === true) await ctx.db.patch(series._id, { bookless: undefined });
 
   const publishers = new Map<string, { name: string; slug: string }>();
   let hasPhysical = false;

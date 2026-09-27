@@ -1279,3 +1279,42 @@ describe("ann.sync — the Plot Summary as the Series synopsis", () => {
     });
   });
 });
+
+describe("ann.sync — a publisher's Series under the full title", () => {
+  it("links the entry through an alternative title instead of building a bookless twin", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // A publisher feed (PRH) already created the Series under the full title.
+    const seriesId = await t.run((ctx) =>
+      ctx.db.insert("series", {
+        status: "active",
+        publicId: 264,
+        title: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!",
+        altTitles: [],
+        searchText: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!",
+      }),
+    );
+    stubAnn([
+      {
+        id: 26068,
+        title: "7th Time Loop: The Villainess Enjoys a Carefree Life",
+        altTitles: [
+          { lang: "EN", text: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!" },
+          { lang: "JA", text: "ループ7回目の悪役令嬢は" },
+        ],
+        releases: [{ annId: 43861, date: "2022-03-08", designator: "GN 1" }],
+      },
+    ]);
+    await sync(t, { releasePages: false });
+    await t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      expect(series.map((s) => s._id)).toEqual([seriesId]);
+      const link = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "manga:26068",
+      );
+      expect(link?.recordRef).toEqual({ type: "series", id: seriesId });
+      // The backbone Volume lands under the publisher's Series.
+      expect((await ctx.db.query("volumes").collect()).map((v) => [v.seriesId, v.label])).toEqual([[seriesId, "1"]]);
+    });
+  });
+});

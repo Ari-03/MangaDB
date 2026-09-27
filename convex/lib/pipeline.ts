@@ -474,6 +474,12 @@ export type CreationArgs = {
    */
   editionLine?: { name: string; position: string | null };
   /**
+   * With `editionLine` and no `labels`: create the member as Unmapped
+   * Packaging — an Edition with no coverage rows, flagged for a Moderator to
+   * map — instead of refusing. Never creates a Volume.
+   */
+  coverageUnmapped?: true;
+  /**
    * The Release to create, with its publisher. Absent for series-structured
    * backbone creation (ANN): only the Series and its Volumes are created.
    */
@@ -637,6 +643,32 @@ async function findSiblingEdition(
   return null;
 }
 
+/**
+ * The sibling of an Unmapped Packaging Release: the line member at the same
+ * position from the same publisher that is itself still unmapped (print and
+ * digital of "Deluxe 14" share one Edition). Coverage cannot tell them
+ * apart yet, so the position does.
+ */
+async function findUnmappedSibling(
+  ctx: MutationCtx,
+  publisherId: Id<"publishers">,
+  line: { id: Id<"editionLines">; position: string | null },
+): Promise<Id<"editions"> | null> {
+  const members = await ctx.db
+    .query("editions")
+    .withIndex("by_line", (q) => q.eq("editionLineId", line.id))
+    .collect();
+  const sibling = members.find(
+    (edition) =>
+      edition.status === "active" &&
+      !edition.locked &&
+      edition.publisherId === publisherId &&
+      edition.coverageUnmapped === true &&
+      (edition.linePosition ?? null) === line.position,
+  );
+  return sibling?._id ?? null;
+}
+
 /** Find-or-create the base Series' Edition Line for one publisher (spec §2). */
 async function ensureEditionLine(
   ctx: MutationCtx,
@@ -747,7 +779,8 @@ export async function createCanonicalRecords(
   const created: CreatedRecord[] = [];
   const evidence: Id<"sourceObservations">[] = [args.observation._id];
 
-  if (args.editionLine !== undefined && args.labels.length === 0) {
+  const unmapped = args.editionLine !== undefined && args.labels.length === 0;
+  if (unmapped && args.coverageUnmapped !== true) {
     throw new Error(
       "An Edition Line member needs its covered Volumes; packaging never becomes a Volume.",
     );
@@ -808,8 +841,9 @@ export async function createCanonicalRecords(
     }
   }
 
+  // Unmapped packaging covers nothing yet; it must not become an unlabeled Volume.
   const volumeLabels: Array<string | undefined> =
-    args.labels.length > 0 ? args.labels : args.seriesOnly ? [] : [undefined];
+    args.labels.length > 0 ? args.labels : args.seriesOnly || unmapped ? [] : [undefined];
   const volumeIds = await ensureVolumes(
     ctx,
     seriesId,
@@ -847,7 +881,10 @@ export async function createCanonicalRecords(
           }
         : null;
 
-    let editionId = await findSiblingEdition(ctx, publisher.id, volumeIds, line);
+    let editionId =
+      unmapped && line
+        ? await findUnmappedSibling(ctx, publisher.id, line)
+        : await findSiblingEdition(ctx, publisher.id, volumeIds, line);
     if (editionId === null) {
       const editionPublicId = await allocatePublicId(ctx, "edition");
       editionId = await ctx.db.insert("editions", {
@@ -856,6 +893,7 @@ export async function createCanonicalRecords(
         publicId: editionPublicId,
         publisherId: publisher.id,
         ...(line ? { editionLineId: line.id, linePosition: line.position ?? undefined } : {}),
+        ...(unmapped ? { coverageUnmapped: true as const } : {}),
       });
       for (const [i, volumeId] of volumeIds.entries()) {
         await ctx.db.insert("volumeCoverages", {
@@ -875,6 +913,7 @@ export async function createCanonicalRecords(
             order: i + 1,
             extent: "complete",
           })),
+          ...(unmapped ? { coverageUnmapped: true } : {}),
         },
       });
     }

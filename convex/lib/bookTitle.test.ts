@@ -426,6 +426,33 @@ describe("parseBookTitle — packaging", () => {
     ).toMatchObject({ coverRange: { from: "9", to: "9" } });
   });
 
+  it("reads the publishers' premium line names (2026 survey)", () => {
+    const cases: Array<[string, string, string | null]> = [
+      ["Death Note Black Edition, Vol. 3", "Black Edition", "3"],
+      ["Fullmetal Alchemist: Fullmetal Edition, Vol. 16", "Fullmetal Edition", "16"],
+      ["Witch Hat Atelier: Grimoire Edition 2", "Grimoire Edition", "2"],
+      ["Vagabond Definitive Edition, Vol. 4", "Definitive Edition", "4"],
+      // tidyLineName drops binding words: "Hardcover" is not part of the line name.
+      ["Attack on Titan Definitive Hardcover Collection 1 (Vol. 1-3)", "Definitive Collection", "1"],
+      ["The Legend of Zelda: Legendary Edition, Vol. 2", "Legendary Edition", "2"],
+      ["Fruits Basket Ultimate Edition Volume 6", "Ultimate Edition", "6"],
+      ["Parasyte Full Color Collection 1", "Full Color Collection", "1"],
+      ["PandoraHearts Limited Edition Omnibus 3", "Limited Edition Omnibus", "3"],
+      ["Uzumaki (3-in-1 Deluxe Edition)", "3-in-1 Deluxe Edition", null],
+      ["Death Note (All-in-One Edition)", "All-in-One Edition", null],
+    ];
+    for (const [title, lineName, linePosition] of cases) {
+      expect(packaging(title).packaging, title).toMatchObject({ lineName, linePosition });
+    }
+    expect(packaging("Attack on Titan Definitive Hardcover Collection 1 (Vol. 1-3)").packaging).toMatchObject({
+      coverRange: { from: "1", to: "3" },
+    });
+    // Reprints and variants are not packaging.
+    for (const title of ["Black Jack Volume 3, Special Edition", "Usagi Yojimbo Saga Volume 1 Limited Edition"]) {
+      expect(packaging(title).packaging, title).toBeNull();
+    }
+  });
+
   it("marks box sets and slipcases as bundles", () => {
     expect(packaging("Fire Force Manga Box Set 1 (Vol. 1-6)", 1)).toEqual({
       seriesTitle: "Fire Force",

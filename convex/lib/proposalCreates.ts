@@ -573,6 +573,11 @@ export async function applyCreatePlan(
           seriesIds.push(volume.seriesId);
         }
       }
+      // Unmapped Packaging covers nothing yet; its line still names the Series.
+      if (seriesIds.length === 0 && edition.editionLineId) {
+        const line = await ctx.db.get(edition.editionLineId);
+        if (line) seriesIds.push(line.seriesId);
+      }
       const id = await ctx.db.insert("releases", {
         status: "active",
         editionId,

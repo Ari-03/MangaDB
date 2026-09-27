@@ -13,6 +13,7 @@ import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
 import { packagingValidator, rangeLabels } from "./bookTitle";
+import { inferCoverage } from "./coverage";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./matching";
 import { upsertObservation } from "./observations";
 import {
@@ -57,6 +58,12 @@ export const catalogTitleFields = {
   priceCents: v.optional(v.number()),
   /** The book's blurb (PRH flap copy, Yen's page text) — the Release Description. */
   description: v.optional(v.string()),
+  /**
+   * Further publisher text that may state a packaged book's coverage
+   * ("Collects volumes 40, 41"), e.g. PRH's positioning and keynote. Only
+   * carried for packaging whose title leaves the coverage unstated.
+   */
+  coverageHints: v.optional(v.array(v.string())),
 };
 
 const catalogTitleValidator = v.object(catalogTitleFields);
@@ -171,12 +178,16 @@ export async function applyCatalogTitle(
   const seriesId = candidates.length === 1 ? candidates[0]!._id : null;
 
   // Packaging maps onto the base Series' real Volumes — never a Volume or
-  // Series of its own. Without a stated coverage it links by ISBN or not
-  // at all.
+  // Series of its own. The coverage comes from the title, else the blurbs,
+  // else a line name that declares its size (lib/coverage.ts); without any
+  // of those it links by ISBN or not at all.
   const packaging = snapshot.packaging ?? null;
+  const coverRange = packaging
+    ? inferCoverage(packaging, [snapshot.description, ...(snapshot.coverageHints ?? [])])
+    : null;
   const labels = packaging
-    ? packaging.coverRange
-      ? rangeLabels(packaging.coverRange)
+    ? coverRange
+      ? rangeLabels(coverRange)
       : []
     : volumeLabel !== null
       ? [volumeLabel]
@@ -261,7 +272,24 @@ export async function applyCatalogTitle(
     return { status: "linked", changed: true, releaseId: release._id };
   }
 
-  if (packaging && labels.length === 0) {
+  const editionLine =
+    packaging?.lineName != null
+      ? { name: packaging.lineName, position: packaging.linePosition }
+      : undefined;
+  // Packaging with no coverage from any signal. In Bootstrap Mode a named
+  // line's member is still created, as Unmapped Packaging under its line
+  // (CONTEXT.md): the book shows in the publisher's own numbering and a
+  // Moderator maps its Volumes later. A bare range with no line name, an
+  // ambiguous Series, or steady state (whose review queue cannot yet carry
+  // an Edition Line) keeps the book on its observation instead.
+  const unmapped =
+    packaging !== null &&
+    labels.length === 0 &&
+    editionLine !== undefined &&
+    bootstrap &&
+    candidates.length <= 1 &&
+    publisherRow !== undefined;
+  if (packaging && labels.length === 0 && !unmapped) {
     await recordUnplaced(
       ctx,
       observation,
@@ -271,10 +299,6 @@ export async function applyCatalogTitle(
     return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
   }
 
-  const editionLine =
-    packaging?.lineName != null
-      ? { name: packaging.lineName, position: packaging.linePosition }
-      : undefined;
   const linePosition = packaging?.linePosition ?? undefined;
   const queue = async (comment: string, reason?: string): Promise<ApplyResult> => {
     if (await alreadyHandled(ctx, observation)) {
@@ -356,6 +380,7 @@ export async function applyCatalogTitle(
     seriesTitle,
     labels,
     editionLine,
+    ...(unmapped ? { coverageUnmapped: true as const } : {}),
     release: { ...releasePayload, publisher: publisherRow },
     tagBootstrapUnreviewed: bootstrap && gates.length > 0,
     now,

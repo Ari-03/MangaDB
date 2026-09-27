@@ -294,10 +294,18 @@ export default defineSchema({
         v.literal("cancelled"),
       ),
     ),
+    // Bookless Series (CONTEXT.md): active, but no Edition covers any of its
+    // Volumes and no Edition Line member exists — a backbone a source built
+    // whose books never attached. Derived by the Series library rebuild
+    // (seriesBrowse.upsertStats), which also clears it the moment a book
+    // lands. Public discovery (browse, search, home, sitemap) skips it; the
+    // page stays reachable by URL; the Data Team reviews it (/mod/packaging).
+    bookless: v.optional(v.literal(true)),
   })
     .index("by_publicId", ["publicId"])
     .index("by_family", ["familyId"])
     .index("by_bootstrap", ["bootstrapUnreviewed"])
+    .index("by_bookless", ["bookless"])
     .searchIndex("search_title", { searchField: "searchText" }),
 
   // Stored once per edge, read as "from is a {type} of to"; the reverse
@@ -351,11 +359,17 @@ export default defineSchema({
     editionLineId: v.optional(v.id("editionLines")),
     // "Omnibus 1" — a label, never a sort key.
     linePosition: v.optional(v.string()),
+    // Unmapped Packaging (CONTEXT.md): an Edition Line member whose source
+    // never stated which Volumes it collects. It has no volumeCoverages
+    // rows and shows under its line in the publisher's own numbering until
+    // a Moderator maps it (moderation.mapEditionCoverage clears the flag).
+    coverageUnmapped: v.optional(v.literal(true)),
   })
     .index("by_publicId", ["publicId"])
     .index("by_line", ["editionLineId"])
     .index("by_publisher", ["publisherId"])
-    .index("by_bootstrap", ["bootstrapUnreviewed"]),
+    .index("by_bootstrap", ["bootstrapUnreviewed"])
+    .index("by_coverageUnmapped", ["coverageUnmapped"]),
 
   volumeCoverages: defineTable({
     editionId: v.id("editions"),
