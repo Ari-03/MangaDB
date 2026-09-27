@@ -24,6 +24,22 @@ async function setup(t: ReturnType<typeof convexTest>) {
   await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
 }
 
+describe("imports.runScheduled", () => {
+  it("seeds the canonical publisher rows before starting sources, so a fresh deployment can place VIZ and Dark Horse books", async () => {
+    const t = convexTest(schema);
+    await t.mutation(internal.importSources.seedRegistry, {});
+    vi.stubGlobal("fetch", async () => new Response("", { status: 503 }));
+    expect(await t.run((ctx) => ctx.db.query("publishers").collect())).toHaveLength(0);
+    await t.action(internal.imports.runScheduled, {});
+    const slugs = (await t.run((ctx) => ctx.db.query("publishers").collect())).map((p) => p.slug);
+    expect(slugs).toContain("viz-media");
+    expect(slugs).toContain("dark-horse");
+    // Running again is a no-op.
+    await t.action(internal.imports.runScheduled, {});
+    expect(await t.run((ctx) => ctx.db.query("publishers").collect())).toHaveLength(slugs.length);
+  });
+});
+
 describe("importSources.seedRegistry", () => {
   it("seeds the five v1 sources plus Yen Press and the Kodansha backlist per the spec authority table", async () => {
     const t = convexTest(schema);

@@ -50,6 +50,7 @@ import {
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { coverKey, coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
+import { applyRetrying } from "./lib/occ";
 import { runToContinue } from "./lib/importRuns";
 import {
   crawlMode,
@@ -185,7 +186,7 @@ export const sync = internalAction({
       for (const [recordId, { snapshot }] of items) {
         seen++;
         try {
-          const result = await ctx.runMutation(internal.kodansha.applyVolume, {
+          const result = await applyRetrying(ctx, internal.kodansha.applyVolume, {
             sourceRecordId: recordId,
             snapshot,
           });
@@ -255,8 +256,10 @@ export const backlistPlan = internalQuery({
   args: {
     entries: v.array(v.object({ slug: v.string(), lastUpdatedAt: v.string() })),
     now: v.number(),
+    /** Ignore cadence: a known series rechecks its pending volumes now, an unknown one crawls in full. */
+    force: v.optional(v.boolean()),
   },
-  handler: async (ctx, { entries, now }) => {
+  handler: async (ctx, { entries, now, force }) => {
     const due: Array<{
       slug: string;
       mode: "full" | "recheck";
@@ -267,7 +270,7 @@ export const backlistPlan = internalQuery({
       const state = obs
         ? { snapshot: obs.snapshot as SeriesCrawl, crawledAt: obs.lastSeenAt }
         : null;
-      const mode = crawlMode(entry, state, now);
+      const mode = force ? (state ? "recheck" : "full") : crawlMode(entry, state, now);
       if (mode !== null) {
         due.push({
           slug: entry.slug,
@@ -362,6 +365,14 @@ export const backlistSync = internalAction({
     politeDelayMs: v.optional(v.number()),
     /** Page fetches per invocation before continuing (a series in progress finishes). */
     maxFetches: v.optional(v.number()),
+    /**
+     * Operator-targeted run: crawl only these listing slugs, ignoring cadence
+     * (known series recheck their pending volumes, unknown ones crawl in full).
+     * Recovers records a previous run failed to apply without a full crawl:
+     *
+     *   npx convex run kodansha:backlistSync '{"onlySeries":["blue-lock"]}'
+     */
+    onlySeries: v.optional(v.array(v.string())),
     // ----- continuation state (never passed by callers) -----
     afterSlug: v.optional(v.string()),
     runId: v.optional(v.id("importRuns")),
@@ -420,8 +431,11 @@ export const backlistSync = internalAction({
     };
 
     try {
+      const only = args.onlySeries === undefined ? null : new Set(args.onlySeries);
       const listing = (await fetchListing(delay)).filter(
-        (entry) => args.afterSlug === undefined || entry.slug > args.afterSlug,
+        (entry) =>
+          (args.afterSlug === undefined || entry.slug > args.afterSlug) &&
+          (only === null || only.has(entry.slug)),
       );
 
       let budgetSpent = false;
@@ -437,6 +451,7 @@ export const backlistSync = internalAction({
             lastUpdatedAt,
           })),
           now: Date.now(),
+          force: only !== null,
         });
         const plans = new Map(due.map((plan) => [plan.slug, plan]));
 
@@ -485,7 +500,7 @@ export const backlistSync = internalAction({
               )) {
                 seen++;
                 try {
-                  const result = await ctx.runMutation(internal.kodansha.applyVolume, {
+                  const result = await applyRetrying(ctx, internal.kodansha.applyVolume, {
                     sourceRecordId: recordId,
                     snapshot,
                   });
@@ -549,6 +564,7 @@ export const backlistSync = internalAction({
         await ctx.scheduler.runAfter(0, internal.kodansha.backlistSync, {
           politeDelayMs: args.politeDelayMs,
           maxFetches: args.maxFetches,
+          onlySeries: args.onlySeries,
           afterSlug: lastSlug,
           runId,
           seen,

@@ -166,8 +166,21 @@ const BOX = /\bbox(?:ed)?\s+set\b|\bslipcase\b/i;
  * counts ("IruMafia Edition" is a real spinoff).
  */
 const PACKAGING_PHRASE = [
-  "omnibus(?:\\s+(?:edition|collection))?",
-  "\\d-in-1(?:\\s+edition)?",
+  "(?:limited\\s+edition\\s+|complete\\s+)?omnibus(?:\\s+(?:edition|collection))?",
+  "\\d-in-1(?:\\s+(?:deluxe\\s+)?edition)?",
+  "all-in-one(?:\\s+edition)?",
+  // Publisher-specific premium lines (VIZ, Kodansha, Yen, Dark Horse, Seven Seas).
+  "black\\s+edition",
+  "fullmetal\\s+edition",
+  "grimoire\\s+edition",
+  "legendary\\s+edition",
+  "definitive(?:\\s+hardcover)?\\s+(?:edition|collection)",
+  "ultimate\\s+edition",
+  "library\\s+edition",
+  "full\\s+colou?r\\s+(?:edition|collection)",
+  "premium\\s+collection",
+  "naoko\\s+takeuchi\\s+collection",
+  "fully\\s+compiled",
   "(?:complete\\s+)?collector['’]?s\\s+(?:edition|box\\s+set)",
   "deluxe(?:\\s+edition)?(?:\\s+hardcover)?(?:\\s+collection)?",
   "(?:the\\s+)?complete(?:\\s+manga)?\\s+(?:collection|series\\s+box\\s+set)",

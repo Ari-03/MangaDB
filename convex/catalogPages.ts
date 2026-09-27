@@ -80,13 +80,30 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
     });
   }
 
+  // Unmapped Packaging covers nothing yet: its Series is its line's.
+  const lineSeries =
+    coverage.length === 0 && line && line.status === "active"
+      ? await ctx.db.get(line.seriesId)
+      : null;
+  const series =
+    coverage[0]?.series ??
+    (lineSeries && lineSeries.status === "active"
+      ? { publicId: lineSeries.publicId, title: lineSeries.title }
+      : null);
   const title = editionTitle({
-    seriesTitle: coverage[0]?.series.title ?? null,
+    seriesTitle: series?.title ?? null,
     lineName,
     linePosition: edition.linePosition ?? null,
     covered: coverage.map((c) => ({ label: c.label, position: c.position })),
   });
-  return { title, lineName, coverage };
+  return {
+    title,
+    lineName,
+    coverage,
+    /** The Edition's Series: the covered Volumes' (first), else its line's. */
+    series,
+    coverageUnmapped: edition.coverageUnmapped === true,
+  };
 }
 
 /**
@@ -249,10 +266,17 @@ export const editionPage = query({
     if (!edition) return null;
 
     const publisher = await ctx.db.get(edition.publisherId);
-    const { title, lineName, coverage } = await editionCoverage(ctx, edition);
+    const {
+      title,
+      lineName,
+      coverage,
+      series: lineSeries,
+      coverageUnmapped,
+    } = await editionCoverage(ctx, edition);
     const releases = await editionReleases(ctx, edition._id);
 
-    // Distinct Series of the covered Volumes, for breadcrumbs/backlinks.
+    // Distinct Series of the covered Volumes, for breadcrumbs/backlinks;
+    // Unmapped Packaging falls back to its line's Series.
     const series = [];
     const seen = new Set<number>();
     for (const cov of coverage) {
@@ -260,6 +284,7 @@ export const editionPage = query({
       seen.add(cov.series.publicId);
       series.push(cov.series);
     }
+    if (series.length === 0 && lineSeries) series.push(lineSeries);
 
     return {
       edition: {
@@ -267,6 +292,7 @@ export const editionPage = query({
         title,
         lineName,
         linePosition: edition.linePosition ?? null,
+        coverageUnmapped,
         publisher:
           publisher && publisher.status === "active"
             ? { name: publisher.name, slug: publisher.slug }

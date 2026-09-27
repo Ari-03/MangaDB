@@ -58,8 +58,18 @@ describe("parseReport", () => {
       /invalid report document/,
     );
     expect(() =>
-      parseReport('<report listed="2"><item><id>1</id><name>A</name></item></report>'),
+      parseReport(
+        '<report listed="1"><item><id>1</id><name>A</name></item><item><id>2</id><name>B</name></item></report>',
+      ),
     ).toThrow(/listed count/);
+  });
+
+  it("accepts the final page, where ANN's listed count is the page size, not the item count", () => {
+    const { items, rawCount } = parseReport(
+      '<report skipped="24000" listed="500"><args><type>manga</type></args><item><id>1223</id><type>manga</type><name>One Piece</name></item></report>',
+    );
+    expect(rawCount).toBe(1);
+    expect(items).toEqual([{ id: "1223", name: "One Piece" }]);
   });
 });
 
@@ -120,6 +130,14 @@ describe("splitReleaseTitle", () => {
     expect(splitReleaseTitle("Oneshot Story (GN)")).toMatchObject({
       label: undefined,
       multi: false,
+    });
+    // VIZ's One Piece omnibus shape: the designator states the collected range.
+    expect(splitReleaseTitle("One Piece - [Omnibus] 33 - Wano (GN 97-99)", "One Piece")).toMatchObject({
+      title: "One Piece - [Omnibus] 33 - Wano",
+      label: undefined,
+      multi: true,
+      editionLineHint: true,
+      coverRange: { from: "97", to: "99" },
     });
   });
 

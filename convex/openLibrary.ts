@@ -34,6 +34,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, type MutationCtx } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
+import { applyRetrying } from "./lib/occ";
 import { runToContinue } from "./lib/importRuns";
 import { candidateSeries, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
@@ -157,7 +158,7 @@ export const sync = internalAction({
           const snapshot = parseDumpLine(line);
           if (!snapshot) return;
           seen++;
-          const result = await ctx.runMutation(internal.openLibrary.applyEdition, {
+          const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, {
             snapshot,
           });
           if (result.changed) changed++;

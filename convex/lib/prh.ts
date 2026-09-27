@@ -102,18 +102,19 @@ function priceCents(entry: Record<string, unknown>): number | undefined {
   return undefined;
 }
 
-/**
- * The title's blurb from the content zoom (`_embeds[].content`): the flap
- * copy, else the one-line positioning. An embed naming another EAN is
- * ignored.
- */
-function flapCopy(entry: Record<string, unknown>, isbn13: string): string | undefined {
-  const contents = (Array.isArray(entry._embeds) ? entry._embeds : []).flatMap((embed) => {
+/** The content zoom's embeds (`_embeds[].content`) for this EAN; one naming another EAN is ignored. */
+function contentEmbeds(entry: Record<string, unknown>, isbn13: string): Record<string, unknown>[] {
+  return (Array.isArray(entry._embeds) ? entry._embeds : []).flatMap((embed) => {
     const content = (embed as { content?: unknown } | null)?.content;
     if (typeof content !== "object" || content === null) return [];
     const fields = content as Record<string, unknown>;
     return fields.ean === undefined || String(fields.ean) === isbn13 ? [fields] : [];
   });
+}
+
+/** The title's blurb from the content zoom: the flap copy, else the one-line positioning. */
+function flapCopy(entry: Record<string, unknown>, isbn13: string): string | undefined {
+  const contents = contentEmbeds(entry, isbn13);
   for (const key of ["flapcopy", "positioning"]) {
     for (const content of contents) {
       const text = cleanBlurb(content[key]);
@@ -121,6 +122,24 @@ function flapCopy(entry: Record<string, unknown>, isbn13: string): string | unde
     }
   }
   return undefined;
+}
+
+/**
+ * Every content text that might state a packaged book's coverage, in order
+ * of trust: flap copy, positioning, then the keynote ("Collects Berserk
+ * Volumes 40, 41, and Berserk Official Guidebook") — lib/coverage.ts reads
+ * them when the title leaves the coverage unstated.
+ */
+function coverageHints(entry: Record<string, unknown>, isbn13: string): string[] {
+  const contents = contentEmbeds(entry, isbn13);
+  const hints: string[] = [];
+  for (const key of ["flapcopy", "positioning", "keynote"]) {
+    for (const content of contents) {
+      const text = cleanBlurb(content[key]);
+      if (text !== undefined && !hints.includes(text)) hints.push(text);
+    }
+  }
+  return hints;
 }
 
 // ---------- title records ----------
@@ -240,6 +259,10 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
     imprint,
     priceCents: priceCents(entry),
     description: flapCopy(entry, isbn13),
+    // Only packaging with an unstated coverage needs the extra texts.
+    ...(parsed.packaging && parsed.packaging.coverRange === null
+      ? { coverageHints: coverageHints(entry, isbn13) }
+      : {}),
   };
 }
 

@@ -66,6 +66,9 @@ describe("parseSitemap / skipsWithoutFetch", () => {
     expect(skipsWithoutFetch("the-novelist-s-manga-vol-1")).toBe(false);
     expect(skipsWithoutFetch("toilet-bound-hanako-kun-chapter-134")).toBe(true);
     expect(skipsWithoutFetch("reborn-as-a-vending-machine-chapter-21-manga")).toBe(true);
+    // x.5 extra chapters (staging 2026-09-27: these reached the page fetch and failed every run).
+    expect(skipsWithoutFetch("goblin-slayer-chapter-64-5-manga")).toBe(true);
+    expect(skipsWithoutFetch("kakegurui-compulsive-gambler-chapter-80-5")).toBe(true);
     expect(
       skipsWithoutFetch("re-starting-life-in-another-world-chapter-5-the-city-of-water-vol-2"),
     ).toBe(false);
@@ -439,11 +442,25 @@ describe("yenPress.sync", () => {
     await t.run(async (ctx) => {
       const releases = await ctx.db.query("releases").collect();
       const isbns = releases.map((r) => r.isbn13).sort();
-      // Vol. 4 print + digital; the Deluxe hardback + digital (an Edition
-      // Line member whose coverage the title never states stays unplaced).
-      expect(isbns).toEqual(["9798855438611", "9798855438628"]);
+      // Vol. 4 print + digital, plus the Deluxe hardback + digital: an
+      // Edition Line member whose coverage the title never states is created
+      // as Unmapped Packaging under its line (Bootstrap Mode).
+      expect(isbns).toEqual(["9798855431483", "9798855431490", "9798855438611", "9798855438628"]);
+      const deluxe = (await ctx.db.query("editions").collect()).filter((e) => e.coverageUnmapped);
+      expect(deluxe).toHaveLength(1);
+      expect(await ctx.db.get(deluxe[0]!.editionLineId!)).toMatchObject({ name: "Deluxe Edition" });
+      expect(
+        await ctx.db
+          .query("volumeCoverages")
+          .withIndex("by_edition", (q) => q.eq("editionId", deluxe[0]!._id))
+          .collect(),
+      ).toHaveLength(0);
+      // The Deluxe-only work gets its base Series (no Volumes yet) for the line to hang on.
       const series = await ctx.db.query("series").collect();
-      expect(series.map((s) => s.title)).toEqual(["A Misanthrope Teaches a Class for Demi-Humans"]);
+      expect(series.map((s) => s.title).sort()).toEqual([
+        "A Misanthrope Teaches a Class for Demi-Humans",
+        "Battle Royale",
+      ]);
       const yen = await ctx.db
         .query("publishers")
         .withIndex("by_slug", (q) => q.eq("slug", "yen-press"))

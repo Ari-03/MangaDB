@@ -99,6 +99,7 @@ function Imports() {
       <nav className="mod-tools" aria-label="Data team tools">
         <Link to="/mod/queue">Review queue</Link>
         <Link to="/mod/launch">Launch</Link>
+        <Link to="/mod/packaging">Catalog gaps</Link>
       </nav>
 
       <h2>Sources</h2>

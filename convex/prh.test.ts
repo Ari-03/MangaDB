@@ -23,6 +23,8 @@ type FixtureTitle = {
   priceUsd?: number;
   /** The content zoom's flap copy (HTML), embedded as the live API does. */
   flapcopy?: string;
+  /** The content zoom's keynote (HTML). */
+  keynote?: string;
 };
 
 const requestedUrls: string[] = [];
@@ -46,7 +48,9 @@ function stubApi(titles: FixtureTitle[]) {
         },
         priceUsd: t.priceUsd,
         _embeds:
-          t.flapcopy !== undefined ? [{ content: { ean: t.isbn, flapcopy: t.flapcopy } }] : null,
+          t.flapcopy !== undefined || t.keynote !== undefined
+            ? [{ content: { ean: t.isbn, flapcopy: t.flapcopy, keynote: t.keynote } }]
+            : null,
       }));
       return new Response(
         JSON.stringify({
@@ -527,18 +531,102 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     });
   });
 
-  it("never turns an omnibus number into a Volume when coverage is unknown", async () => {
+  it("places deluxe/omnibus books by the coverage their blurb states", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await backbone(t, "Berserk", ["1", "2", "3", "40", "41"]);
+    stubApi([
+      {
+        isbn: "9781506711980",
+        title: "Berserk Deluxe Volume 1",
+        imprint: "Dark Horse Manga",
+        flapcopy:
+          "<p>A stunning deluxe edition collecting volumes 1&ndash;3 of the <i>New York Times</i> bestselling manga.</p>",
+      },
+      {
+        isbn: "9781506741062",
+        title: "Berserk Deluxe Volume 14",
+        imprint: "Dark Horse Manga",
+        flapcopy: "<p>Guts' greatest creation lives on in this final deluxe volume.</p>",
+        keynote: "<p>Collects <i>Berserk</i> Volumes 40, 41, and <i>Berserk Official Guidebook</i>.</p>",
+      },
+    ]);
+    const result = await sync(t);
+    expect(result).toMatchObject({ recordsSeen: 2, recordsChanged: 2 });
+    await t.run(async (ctx) => {
+      // "Berserk Deluxe Volume N" names the line "Deluxe" (lib/bookTitle.ts tidyLineName).
+      const lines = await ctx.db.query("editionLines").collect();
+      expect(lines.map((l) => l.name)).toEqual(["Deluxe"]);
+      const editions = await ctx.db.query("editions").collect();
+      expect(editions.map((e) => e.linePosition).sort()).toEqual(["1", "14"]);
+      const volumes = new Map(
+        (await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]),
+      );
+      const coverage = await ctx.db.query("volumeCoverages").collect();
+      const byEdition = new Map<string, string[]>();
+      for (const c of coverage) {
+        byEdition.set(c.editionId, [...(byEdition.get(c.editionId) ?? []), volumes.get(c.volumeId)!]);
+      }
+      const first = editions.find((e) => e.linePosition === "1")!;
+      const last = editions.find((e) => e.linePosition === "14")!;
+      expect(byEdition.get(first._id)?.sort()).toEqual(["1", "2", "3"]);
+      expect(byEdition.get(last._id)?.sort()).toEqual(["40", "41"]);
+    });
+  });
+
+  it("places N-in-1 books by their declared size when nothing states the coverage", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await backbone(t, "One Piece", ["4", "5", "6"]);
+    stubApi([{ isbn: "9781421536262", title: "One Piece 3-in-1 Edition Vol. 2", imprint: "VIZ Media" }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const [line] = await ctx.db.query("editionLines").collect();
+      expect(line).toMatchObject({ name: "3-in-1 Edition" });
+      const volumes = new Map(
+        (await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]),
+      );
+      const covered = (await ctx.db.query("volumeCoverages").collect()).map((c) => volumes.get(c.volumeId));
+      expect(covered.sort()).toEqual(["4", "5", "6"]);
+    });
+  });
+
+  it("creates packaging of unknown coverage as an Unmapped line member, never as a Volume", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     await backbone(t, "Negima!", ["4"]);
-    stubApi([{ isbn: "9781612620015", title: "Negima! Omnibus 4", seriesNumber: 4 }]);
+    stubApi([
+      { isbn: "9781612620015", title: "Negima! Omnibus 4", seriesNumber: 4 },
+      { isbn: "9781612620016", title: "Negima! Omnibus 4", seriesNumber: 4, format: "eBook" },
+    ]);
     await sync(t);
     await t.run(async (ctx) => {
-      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
-      expect(await ctx.db.query("editions").collect()).toHaveLength(0);
-      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
-      expect(obs.recordRef).toBeUndefined();
-      expect(obs.conflicts?.[0]).toMatchObject({ field: "placement" });
+      // "Omnibus 4" is not Volume 4: nothing covers the backbone's Volume,
+      // and no Volume was created for the omnibus number.
+      expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(0);
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label)).toEqual(["4"]);
+      // One unmapped Edition under the "Omnibus" line, shared by print + digital.
+      const [edition, ...more] = await ctx.db.query("editions").collect();
+      expect(more).toHaveLength(0);
+      expect(edition).toMatchObject({ coverageUnmapped: true, linePosition: "4" });
+      const line = await ctx.db.get(edition!.editionLineId!);
+      expect(line).toMatchObject({ name: "Omnibus" });
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.format).sort()).toEqual(["digital", "physical"]);
+      // The Series is still known through the line, so calendars and the library keep the book.
+      expect(releases.every((r) => r.seriesIds.length === 1 && r.seriesIds[0] === line!.seriesId)).toBe(true);
+    });
+  });
+
+  it("treats a bare multi-volume range as stated coverage and creates the missing Volume", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await backbone(t, "Negima!", ["4"]);
+    stubApi([{ isbn: "9781612620015", title: "Negima! Vols. 4-5", seriesNumber: 4 }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      // A stated range is coverage — it creates normally (Volume 5 joins the backbone).
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual(["4", "5"]);
     });
   });
 
@@ -745,4 +833,83 @@ describe("prh.sync — hidden Series stay hidden", () => {
       });
     });
   }
+});
+
+describe("prh.sync — continuation links", () => {
+  it("hands off between imprints too, carrying the effective imprint list", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
+    // Two one-page imprints and a zero budget: the first link must hand off
+    // after imprint one even though no page boundary triggered a check.
+    const first = await sync(t, { imprints: ["AA", "BB"], linkBudgetMs: 0 });
+    expect(first).toMatchObject({ continued: true });
+    expect(requestedUrls).toHaveLength(1);
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    expect(requestedUrls).toHaveLength(2);
+    expect(requestedUrls[1]).toContain("/imprints/BB/");
+    await t.run(async (ctx) => {
+      if (!("runId" in first)) throw new Error("Expected an import run");
+      expect((await ctx.db.get(first.runId))?.status).toBe("succeeded");
+    });
+  });
+
+  it("closes a resumed run when the source was disabled between links", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      ...Array.from({ length: 200 }, () => ({ isbn: "9781646519811", title: "Excluded Story (Light Novel) Vol. 1" })),
+      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
+    ]);
+    const first = await sync(t, { linkBudgetMs: 0 });
+    expect(first).toMatchObject({ continued: true });
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      if (!("runId" in first)) throw new Error("Expected an import run");
+      const run = await ctx.db.get(first.runId);
+      expect(run?.status).toBe("failed");
+      expect(run?.errors?.some((e) => e.includes("disabled"))).toBe(true);
+    });
+  });
+
+  it("hands off at a page boundary when the link budget is spent and finishes the sweep in the next link", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // Two list pages: 200 out-of-scope titles, then one manga.
+    stubApi([
+      ...Array.from({ length: 200 }, () => ({
+        isbn: "9781646519811",
+        title: "Excluded Story (Light Novel) Vol. 1",
+      })),
+      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
+    ]);
+    // A zero budget hands off after the first page instead of fetching the second.
+    const first = await sync(t, { linkBudgetMs: 0 });
+    expect(first).toMatchObject({ continued: true, recordsSeen: 0, completeSweep: false });
+    expect(requestedUrls).toHaveLength(1);
+    if (!("runId" in first)) throw new Error("Expected an import run");
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(first.runId))?.status).toBe("running");
+    });
+
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+
+    // The second link resumed at page two under the same run: one more
+    // fetch, the manga applied, and the complete sweep's withdrawal pass ran.
+    expect(requestedUrls).toHaveLength(2);
+    await t.run(async (ctx) => {
+      const run = await ctx.db.get(first.runId);
+      expect(run).toMatchObject({ status: "succeeded", recordsSeen: 1 });
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519828"]);
+      expect(await ctx.db.query("importRuns").collect()).toHaveLength(1);
+    });
+  });
 });

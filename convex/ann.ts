@@ -64,8 +64,10 @@ import {
   type AnnReleasePage,
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
+import { applyRetrying } from "./lib/occ";
 import { openFollowOnRun, runToContinue } from "./lib/importRuns";
-import { canonicalLabel } from "./lib/bookTitle";
+import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
+import { coverageFromLine } from "./lib/coverage";
 import { candidateSeries, labelsEqual, survivorOf } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
@@ -121,6 +123,14 @@ export const sync = internalAction({
     maxBatches: v.optional(v.number()),
     /** Chain the release-page pass after a finished mirror (default true). */
     releasePages: v.optional(v.boolean()),
+    /**
+     * Operator-targeted run: refresh only these ANN manga ids (detail API
+     * only, no report walk, no withdrawal — a subset proves no absence),
+     * then chain the page pass. Minutes instead of a full mirror:
+     *
+     *   npx convex run ann:sync '{"onlyManga":["1223","1825"]}'
+     */
+    onlyManga: v.optional(v.array(v.string())),
     // ----- continuation state (never passed by callers) -----
     nskip: v.optional(v.number()),
     runId: v.optional(v.id("importRuns")),
@@ -152,35 +162,46 @@ export const sync = internalAction({
     let changed = args.changed ?? 0;
     let nskip = args.nskip ?? 0;
     let detailsReached = args.detailsReached ?? false;
+    const targeted = args.onlyManga !== undefined;
 
     try {
       let batchesDone = 0;
       let reachedEnd = false;
 
       while (batchesDone < maxBatches && !reachedEnd) {
-        const reportRes = await politeFetch(
-          `${REPORT_URL}&nlist=${REPORT_PAGE}&nskip=${nskip}`,
-          delay,
-        );
-        const reportXml = await reportRes.text();
-        // Paging and the end-of-enumeration signal follow the page's RAW
-        // <item> count: parseReport filters non-manga and malformed rows, so
-        // its item count under-counts the page and would end the mirror at
-        // the first page containing any filtered row (and desync nskip).
-        const report = parseReport(reportXml);
-        const rawCount = report.rawCount;
-        // A row without id/name is an entry this sweep cannot see: skipped
-        // so the enumeration goes on, reported so withdrawal stays off.
-        for (const at of report.malformed) {
-          errors.push(`report @${nskip + at}: item without id/name`);
-        }
-        const ids = report.items.map((item) => item.id);
-        if (rawCount === 0) {
-          // A well-formed but empty FIRST page is not an empty catalog: the
-          // clean sweep would otherwise withdraw every ANN observation.
-          if (nskip === 0) throw new Error("ANN report enumeration was empty");
+        let ids: string[];
+        let rawCount: number;
+        if (targeted) {
+          // One pass over the named entries; the report is never read.
+          ids = [...new Set(args.onlyManga!.map((id) => id.trim()).filter((id) => /^\d+$/.test(id)))];
+          rawCount = ids.length;
           reachedEnd = true;
-          break;
+          if (ids.length === 0) break;
+        } else {
+          const reportRes = await politeFetch(
+            `${REPORT_URL}&nlist=${REPORT_PAGE}&nskip=${nskip}`,
+            delay,
+          );
+          const reportXml = await reportRes.text();
+          // Paging and the end-of-enumeration signal follow the page's RAW
+          // <item> count: parseReport filters non-manga and malformed rows, so
+          // its item count under-counts the page and would end the mirror at
+          // the first page containing any filtered row (and desync nskip).
+          const report = parseReport(reportXml);
+          rawCount = report.rawCount;
+          // A row without id/name is an entry this sweep cannot see: skipped
+          // so the enumeration goes on, reported so withdrawal stays off.
+          for (const at of report.malformed) {
+            errors.push(`report @${nskip + at}: item without id/name`);
+          }
+          ids = report.items.map((item) => item.id);
+          if (rawCount === 0) {
+            // A well-formed but empty FIRST page is not an empty catalog: the
+            // clean sweep would otherwise withdraw every ANN observation.
+            if (nskip === 0) throw new Error("ANN report enumeration was empty");
+            reachedEnd = true;
+            break;
+          }
         }
 
         // Budget is checked per page (a page is ≤10 batches), so nskip stays
@@ -212,7 +233,7 @@ export const sync = internalAction({
               if (manga.releases.length === 0) continue;
               seen++;
               try {
-                const result = await ctx.runMutation(internal.ann.applyManga, {
+                const result = await applyRetrying(ctx, internal.ann.applyManga, {
                   snapshot: toSnapshot(manga),
                 });
                 if (result.changed) changed++;
@@ -266,14 +287,14 @@ export const sync = internalAction({
         errors.push("ANN detail API unreachable; release-page pass skipped");
       }
       const complete = errors.length === 0;
-      if (complete) {
+      if (complete && !targeted) {
         // The full mirror completed: entries the sweep no longer lists have
         // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
         await ctx.runMutation(internal.imports.markWithdrawn, {
           sourceKey: SOURCE_KEY,
           notSeenSince: runStartedAt,
         });
-      } else {
+      } else if (!complete) {
         errors.push("ANN mirror was incomplete; withdrawal skipped");
       }
       await ctx.runMutation(internal.imports.finishRun, {
@@ -612,7 +633,21 @@ export const applyManga = internalMutation({
         }
       }
     } else {
-      const candidates = await candidateSeries(ctx, snapshot.title);
+      let candidates = await candidateSeries(ctx, snapshot.title);
+      if (candidates.length === 0) {
+        // ANN often names a work by a short title and carries the
+        // publisher's full title only as an alternative ("7th Time Loop:
+        // The Villainess Enjoys a Carefree Life" vs "… Married to Her Worst
+        // Enemy!"). A Series a publisher feed created under that full title
+        // is the same work; missing it built 123 bookless twins on the
+        // first staging import. Any alternative title that names exactly
+        // one active Series links it.
+        const byAlt = new Map<string, Doc<"series">>();
+        for (const alt of snapshot.altTitles) {
+          for (const series of await candidateSeries(ctx, alt)) byAlt.set(series._id, series);
+        }
+        candidates = [...byAlt.values()];
+      }
       if (candidates.length === 1) {
         seriesId = candidates[0]!._id;
         await ctx.db.patch(observation._id, {
@@ -786,10 +821,39 @@ const DEFAULT_MAX_FETCHES = 300;
 // Distributor strings that are prose imprints: their lines never create
 // manga Releases, whatever their designator says.
 const NOVEL_DISTRIBUTORS = /^(?:yen on|j-novel club novels?|seven seas airship|airship)$/i;
+// ANN's encyclopedia is worldwide: a release line under a French or German
+// house is a real book, just not an English one. Out of this catalog's scope,
+// so it is skipped rather than reported as a missing publisher row (#48).
+const FOREIGN_DISTRIBUTORS =
+  /^(?:kana|panini(?: comics| manga)?|bruno gm[üu]nder(?: verlag)?|glénat|glenat|carlsen(?: manga)?|egmont(?: manga)?|pika(?: [ée]dition)?|ki-oon|tokyopop gmbh|star comics|planeta(?: c[oó]mic)?|norma editorial|ivrea)$/i;
 
 // A store-exclusive or variant cover is a second ISBN of the same volume
 // ("Jujutsu Kaisen - [Walmart Exclusive Cover] (GN 30)"): never a leaf.
 const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
+
+/**
+ * ANN's packaged line titles come in two shapes: "Naruto [3-in-1 Edition]"
+ * (the designator number is the line position) and "One Piece - [Omnibus]
+ * 33 - Wano" (the position follows the tag; the designator holds the volume
+ * range). Both yield the line name and position; a bare "(GN 1-3)" range
+ * with no tag is an Omnibus. Box sets are bundles, never lines: null.
+ */
+function packagingOf(line: {
+  title: string;
+  label?: string;
+  multi: boolean;
+  coverRange?: { from: string; to: string };
+}): { name: string; position: string | null } | null {
+  const tagged =
+    /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(line.title);
+  const probe = tagged ? `${tagged[1]!.trim()} [${tagged[2]!.trim()}]` : line.title;
+  const parsed = parseBookTitle(probe);
+  if (parsed.isBox) return null;
+  const name = parsed.packaging?.lineName ?? (line.multi && line.coverRange ? "Omnibus" : null);
+  if (name === null) return null;
+  const position = tagged?.[3] ?? line.label ?? null;
+  return { name, position: position === null ? null : canonicalLabel(position) };
+}
 
 /** Whether a line needs (another) page fetch, per its stored fetch state. */
 function needsFetch(page: PageState | undefined, now: number): boolean {
@@ -936,7 +1000,7 @@ export const syncReleasePages = internalAction({
             fetchedTotal++;
           }
           try {
-            const result = await ctx.runMutation(internal.ann.applyReleasePage, {
+            const result = await applyRetrying(ctx, internal.ann.applyReleasePage, {
               annId: candidate.annId,
               page: state,
             });
@@ -1102,7 +1166,14 @@ export const applyReleasePage = internalMutation({
       return await link(byIsbn);
     }
 
-    if (line.multi || line.editionLineHint) {
+    // Packaging: an Edition Line member, never a Volume. A packaged line is
+    // placed below by the best signal it carries: the designator's stated
+    // range ("One Piece - [Omnibus] 33 - Wano (GN 97-99)" → volumes 97–99),
+    // else the line name's declared size (lib/coverage.ts: "[3-in-1
+    // Edition]" at GN 5 → 13–15), else as Unmapped Packaging. Box sets and
+    // variant covers still only link by ISBN.
+    const packaging = line.editionLineHint || line.multi ? packagingOf(line) : null;
+    if ((line.multi || line.editionLineHint) && packaging === null) {
       return await hold("Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
     }
     if (VARIANT_LINE.test(line.title)) {
@@ -1118,16 +1189,70 @@ export const applyReleasePage = internalMutation({
     if (NOVEL_DISTRIBUTORS.test(distributor)) {
       return await hold(`"${distributor}" is a prose imprint: out of manga scope.`);
     }
+    if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
+      return await hold(`"${distributor}" publishes in another language: out of English scope.`);
+    }
     const publisher = await findPublisherByName(ctx, distributor);
     if (!publisher) {
       return await hold(`Distributor "${distributor}" resolves to no publisher row.`);
     }
 
-    // Leaf boundary: the Volume must already exist under the Series.
     const volumes = await ctx.db
       .query("volumes")
       .withIndex("by_series", (q) => q.eq("seriesId", series._id))
       .collect();
+    if (packaging !== null) {
+      const range = line.coverRange ?? coverageFromLine(packaging.name, packaging.position);
+      const labels = range ? rangeLabels(range) : [];
+      // Leaf boundary holds for packaging too: every collected Volume must
+      // already exist under the Series (the backbone the mirror built).
+      const covered = labels.filter((label) =>
+        volumes.some((vol) => vol.status === "active" && labelsEqual(vol.label, label)),
+      );
+      if (labels.length > 0 && covered.length !== labels.length) {
+        return await hold(
+          `${packaging.name} ${packaging.position ?? ""} would cover Volumes ${range!.from}–${range!.to}, but the Series lacks ${labels.filter((l) => !covered.includes(l)).join(", ")}.`,
+        );
+      }
+      const unmapped = labels.length === 0;
+      // An Edition-Line-shaped creation is a steady-state review gate
+      // (pipeline.ts creationGates, as catalogTitle applies it); Bootstrap
+      // Mode creates it and tags it for the post-launch backlog.
+      if (!(await getBootstrapMode(ctx))) {
+        return await hold(
+          unmapped
+            ? `${packaging.name} of unknown size: steady state leaves unmapped packaging to review.`
+            : `${packaging.name} ${packaging.position ?? ""}: steady state leaves Edition Line creation to review.`,
+        );
+      }
+      const packagedDate = page.date ?? line.date;
+      const creation = await createCanonicalRecords(ctx, {
+        sourceKey: SOURCE_KEY,
+        observation,
+        citation,
+        importComment: IMPORT_COMMENT,
+        seriesId: series._id,
+        seriesTitle: series.title,
+        labels,
+        editionLine: { name: packaging.name, position: packaging.position },
+        ...(unmapped ? { coverageUnmapped: true as const } : {}),
+        release: {
+          format: line.format,
+          isbn13,
+          isbn10: page.isbn10,
+          pubDate: packagedDate ? toPartialDate(packagedDate) : undefined,
+          price:
+            page.priceCents !== undefined
+              ? { amountCents: page.priceCents, currency: "USD" }
+              : undefined,
+          publisher: { name: publisher.name, slug: publisher.slug },
+        },
+        tagBootstrapUnreviewed: true,
+        now,
+      });
+      return { status: "created", changed: true, releaseId: creation.releaseId };
+    }
+    // Leaf boundary: the Volume must already exist under the Series.
     const volume = volumes.find(
       (vol) => vol.status === "active" && labelsEqual(vol.label, line.label ?? null),
     );

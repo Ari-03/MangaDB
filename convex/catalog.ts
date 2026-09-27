@@ -115,7 +115,7 @@ export const listSeries = query({
       .withIndex("by_publicId")
       .take(COUNT_CAP);
     return docs
-      .filter((doc) => doc.status === "active")
+      .filter((doc) => doc.status === "active" && doc.bookless !== true)
       .map((doc) => ({ publicId: doc.publicId, title: doc.title }));
   },
 });
@@ -148,7 +148,8 @@ export const recentSeries = query({
     const jacketed: Array<Shelved> = [];
     const cloth: Array<Shelved> = [];
     for (const doc of docs) {
-      if (doc.status !== "active") continue;
+      // Bookless Series (no books yet) are not a taste of the catalog.
+      if (doc.status !== "active" || doc.bookless === true) continue;
       const entry = { publicId: doc.publicId, title: doc.title, ...(await seriesCover(ctx, doc._id)) };
       (entry.coverUrl || entry.coverIsbn ? jacketed : cloth).push(entry);
       if (jacketed.length === take) break;
@@ -191,7 +192,8 @@ async function titleHits(ctx: QueryCtx, query: string, take: number) {
     .query("series")
     .withSearchIndex("search_title", (q) => q.search("searchText", query))
     .take(take);
-  const active = docs.filter((doc) => doc.status === "active");
+  // Bookless Series stay out of search until a book lands (CONTEXT.md).
+  const active = docs.filter((doc) => doc.status === "active" && doc.bookless !== true);
   const whole = sortByTitleMatch(
     query,
     active.filter((doc) => matchesAllWords(query, doc.searchText)),
@@ -216,7 +218,7 @@ async function nearMisses(ctx: QueryCtx, query: string, seen: ReadonlyArray<Doc<
     ),
   );
   for (const doc of probes.flat()) {
-    if (doc.status === "active") pool.set(doc._id, doc);
+    if (doc.status === "active" && doc.bookless !== true) pool.set(doc._id, doc);
   }
   return rankNearMisses(query, [...pool.values()], NEAR_MISS_LIMIT);
 }
@@ -605,6 +607,8 @@ export const seriesPage = query({
         altTitles: series.altTitles,
         sourceStatus: series.sourceStatus ?? null,
         synopsis: series.synopsis ?? null,
+        /** Bookless Series (CONTEXT.md): volumes known, no English book attached yet. */
+        bookless: series.bookless === true,
       },
       family,
       volumes,

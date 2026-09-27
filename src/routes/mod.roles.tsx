@@ -123,6 +123,7 @@ function ModRolesContent() {
         <Link to="/mod/queue">Review queue</Link>
         <Link to="/mod/imports">Imports</Link>
         <Link to="/mod/launch">Launch</Link>
+        <Link to="/mod/packaging">Catalog gaps</Link>
       </nav>
 
       <section className="mod-panel">

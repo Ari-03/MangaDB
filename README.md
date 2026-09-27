@@ -1303,6 +1303,84 @@ npm run build       # production client + Worker bundles into dist/
 npm run preview     # serve the production build locally in workerd
 ```
 
+## Environments
+
+| | Convex | Frontend | Data |
+|---|---|---|---|
+| **Production** | project `mangadb`, deployment `intent-curlew-625` | Worker `mangadb` at mangadb.org | live |
+| **Staging** | project `mangadb-staging`, deployment `brave-kingfisher-844` | Worker `mangadb-staging` at https://mangadb-staging.mangadb.workers.dev | prod snapshot, refreshed by hand |
+| **Local** | `npx convex dev` local backend (`.convex/local/default`, SQLite) | `npm run dev` | prod snapshot, refreshed by hand |
+
+Staging is a separate Convex project so it has its own env vars, deploy
+history, and dashboard. It deploys with `npm run deploy:staging`, which reads
+`.env.staging` (gitignored; `CONVEX_DEPLOYMENT=dev:<staging dev deployment>`)
+to pick the staging project, builds the Worker with `CLOUDFLARE_ENV=staging` so
+the `env.staging` block in `wrangler.jsonc` applies, and deploys it. Staging
+has only the two Clerk variables set on Convex — no importer keys, no Resend —
+and every Approved Source is disabled there, so it never scrapes publishers or
+emails anyone. In the Clerk dashboard the staging origin must be allowed for
+sign-in to work there.
+
+Refreshing staging or local from production (read-only against prod):
+
+```sh
+npx convex export --prod --path snapshot.zip --include-file-storage
+npx convex import --replace-all snapshot.zip                                   # local
+npx convex import --replace-all --deployment brave-kingfisher-844 snapshot.zip # staging
+```
+
+After a refresh the imported `approvedSources` rows are enabled again (they
+come from prod); disable them from the admin source registry, or leave them
+off in local by never running the hourly tick for long.
+
+The hourly cadence tick seeds the canonical publisher rows (`launch:seedPublishers`,
+idempotent) before starting any source: ANN's release pages and Open Library
+resolve a distributor name against those rows and create nothing for an
+unknown one, so a fresh deployment without them imports series and no VIZ or
+Dark Horse releases.
+
+Packaged books (omnibus, deluxe, 3-in-1) become Edition Line members only
+with a known coverage. The title's own range ("Omnibus 7 (Vol. 19-21)")
+comes first; else `convex/lib/coverage.ts` reads the publisher blurb
+("collecting volumes 1–3", "Collects Volumes 40, 41", PRH's flap copy,
+positioning and keynote) and finally a line name that declares its size
+("3-in-1", VIZBIG → three volumes per position; the full fixed-size list is
+`FIXED_LINE_SIZES` there — names whose size varies by series, like "Deluxe"
+or "Collector's Edition", never guess). Plain "Omnibus"/"Deluxe" with none of
+those is still created in Bootstrap Mode, as **Unmapped Packaging**: an
+Edition under its line with no Volume Coverage, visible on the series page in
+the publisher's own numbering. Moderators map them at `/mod/packaging`
+(`convex/packaging.ts`), which writes the coverage and a Revision. Outside
+Bootstrap Mode such a book stays on its observation, because the review queue
+cannot yet carry an Edition Line.
+
+**Bookless Series.** A Series with Volumes but no book at all (a backbone whose
+releases never placed) is flagged `bookless` by the six-hourly Series library
+rebuild and dropped from browse, search, the home shelf and the sitemap; its
+page still loads with a notice. The flag clears on the next rebuild after a
+book attaches, and `/mod/packaging` lists the current set with the ANN entry
+that built each one. Unlike hiding, imports keep working on a bookless Series.
+On the first staging import 227 of 6,123 Series were bookless. 123 of them
+were twins: ANN built the backbone under its short name while a publisher
+feed had created the same work under the full title, so ANN's release lines
+held with "ISBN already on a Release of another Series". ANN now also matches
+a Series by any of its alternative titles (ann.ts), and the existing pairs
+were loaded into the duplicate queue at `/mod/launch` for a Moderator to
+merge. The rest: 86 lines named a distributor with no publisher row, 83 were
+packaging-only, 19 had no ISBN.
+
+Import runs apply one record per mutation and retry Convex write conflicts
+(`convex/lib/occ.ts`), so concurrent sources no longer skip records. If a run
+still reports skipped records, rerun that source with `npx convex run
+<source>:sync '{}'`: every adapter is presence-based and fetches only what it
+has not observed. The Kodansha backlist is the exception (a series is marked
+crawled even when a volume failed to apply), so target it instead of
+recrawling everything:
+
+```sh
+npx convex run kodansha:backlistSync '{"onlySeries":["blue-lock","initial-d"]}'
+```
+
 ## Deployment
 
 One command deploys both halves — Convex first (schema + functions), which

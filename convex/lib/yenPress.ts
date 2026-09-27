@@ -73,7 +73,8 @@ export function parseSitemap(xml: string): YenTitleUrl[] {
  */
 export function skipsWithoutFetch(slug: string): boolean {
   if (/(?:^|-)(?:light-novel|novel|audio|audiobook|v-scroll)(?:-|$)/.test(slug)) return true;
-  return /-chapter-\d+(?:-manga)?$/.test(slug) && !/-vol(?:ume)?-\d/.test(slug);
+  // Simulpub chapters, including x.5 extras ("chapter-64-5"), have no volume page.
+  return /-chapter-\d+(?:-\d+)?(?:-manga)?$/.test(slug) && !/-vol(?:ume)?-\d/.test(slug);
 }
 
 // ---------- the title page ----------

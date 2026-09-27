@@ -71,6 +71,7 @@ ${releases}
 }
 
 const pageRequests: string[] = [];
+const reportRequests: string[] = [];
 
 /** Serves the report + API for `manga`, and release pages from `pages`. */
 function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
@@ -85,6 +86,7 @@ function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
         : new Response("not found", { status: 404 });
     }
     if (url.includes("/encyclopedia/reports.xml")) {
+      reportRequests.push(url);
       const params = new URL(url).searchParams;
       const nskip = Number(params.get("nskip") ?? 0);
       const nlist = Number(params.get("nlist") ?? 50);
@@ -105,6 +107,7 @@ function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
 afterEach(() => {
   vi.unstubAllGlobals();
   pageRequests.length = 0;
+  reportRequests.length = 0;
 });
 
 function makeT() {
@@ -1277,5 +1280,189 @@ describe("ann.sync — the Plot Summary as the Series synopsis", () => {
       const proposals = await ctx.db.query("proposals").collect();
       expect(proposals.filter((p) => p.state === "inReview")).toHaveLength(0);
     });
+  });
+});
+
+describe("ann.sync — a publisher's Series under the full title", () => {
+  it("links the entry through an alternative title instead of building a bookless twin", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // A publisher feed (PRH) already created the Series under the full title.
+    const seriesId = await t.run((ctx) =>
+      ctx.db.insert("series", {
+        status: "active",
+        publicId: 264,
+        title: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!",
+        altTitles: [],
+        searchText: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!",
+      }),
+    );
+    stubAnn([
+      {
+        id: 26068,
+        title: "7th Time Loop: The Villainess Enjoys a Carefree Life",
+        altTitles: [
+          { lang: "EN", text: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!" },
+          { lang: "JA", text: "ループ7回目の悪役令嬢は" },
+        ],
+        releases: [{ annId: 43861, date: "2022-03-08", designator: "GN 1" }],
+      },
+    ]);
+    await sync(t, { releasePages: false });
+    await t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      expect(series.map((s) => s._id)).toEqual([seriesId]);
+      const link = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "manga:26068",
+      );
+      expect(link?.recordRef).toEqual({ type: "series", id: seriesId });
+      // The backbone Volume lands under the publisher's Series.
+      expect((await ctx.db.query("volumes").collect()).map((v) => [v.seriesId, v.label])).toEqual([[seriesId, "1"]]);
+    });
+  });
+});
+
+describe("ann.syncReleasePages — packaging lines (#47)", () => {
+  const NARUTO: FixtureManga = {
+    id: 1825,
+    title: "Naruto",
+    releases: [
+      { annId: 9001, date: "2003-08-16", designator: "GN 1" },
+      { annId: 9002, date: "2003-12-16", designator: "GN 2" },
+      { annId: 9003, date: "2004-04-06", designator: "GN 3" },
+      { annId: 9004, date: "2004-08-03", designator: "GN 4" },
+      { annId: 9005, date: "2004-12-07", designator: "GN 5" },
+      { annId: 9006, date: "2005-04-05", designator: "GN 6" },
+      // VIZ's omnibus line: the designator number is the line position.
+      { annId: 9101, date: "2011-05-03", designator: "GN 1", title: "Naruto [3-in-1 Edition]" },
+      { annId: 9102, date: "2011-08-02", designator: "GN 2", title: "Naruto [3-in-1 Edition]" },
+      // A line whose size no rule knows.
+      { annId: 9201, date: "2020-01-07", designator: "GN 1", title: "Naruto [Omnibus]" },
+      // Would reach past the backbone: held, not invented.
+      { annId: 9103, date: "2012-02-07", designator: "GN 9", title: "Naruto [3-in-1 Edition]" },
+    ],
+  };
+  const pages = {
+    9101: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "1", distributor: "Viz Media", date: "2011-05-03", isbn13: "9781421539898", mangaId: 1825 }),
+    9102: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "2", distributor: "Viz Media", date: "2011-08-02", isbn13: "9781421539904", mangaId: 1825 }),
+    9201: releasePage({ title: "Naruto [Omnibus]", volume: "1", distributor: "Viz Media", date: "2020-01-07", isbn13: "9781974700004", mangaId: 1825 }),
+    9103: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "9", distributor: "Viz Media", date: "2012-02-07", isbn13: "9781421554891", mangaId: 1825 }),
+  };
+
+  it("places a line by the range its designator states — One Piece's omnibus shape", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const ONE_PIECE: FixtureManga = {
+      id: 1223,
+      title: "One Piece",
+      releases: [
+        { annId: 8097, date: "2020-11-03", designator: "GN 97" },
+        { annId: 8098, date: "2021-02-02", designator: "GN 98" },
+        { annId: 8099, date: "2021-05-04", designator: "GN 99" },
+        { annId: 8833, date: "2022-01-04", designator: "GN 97-99", title: "One Piece - [Omnibus] 33 - Wano" },
+      ],
+    };
+    stubAnn([ONE_PIECE], {
+      8833: releasePage({ title: "One Piece - [Omnibus] 33 - Wano", volume: "33", distributor: "Viz Media", date: "2022-01-04", isbn13: "9781974726585", mangaId: 1223 }),
+    });
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    await t.run(async (ctx) => {
+      const [line] = await ctx.db.query("editionLines").collect();
+      expect(line).toMatchObject({ name: "Omnibus" });
+      const [edition] = (await ctx.db.query("editions").collect()).filter((e) => e.editionLineId === line!._id);
+      expect(edition).toMatchObject({ linePosition: "33" });
+      expect(edition!.coverageUnmapped).toBeUndefined();
+      const volumes = new Map((await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]));
+      const covered = (await ctx.db.query("volumeCoverages").collect())
+        .filter((c) => c.editionId === edition!._id)
+        .sort((a, b) => a.order - b.order)
+        .map((c) => volumes.get(c.volumeId));
+      expect(covered).toEqual(["97", "98", "99"]);
+      expect([...volumes.values()].sort()).toEqual(["97", "98", "99"]);
+    });
+  });
+
+  it("places N-in-1 books by their declared size, leaves unknown sizes unmapped, and never invents Volumes", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    stubAnn([NARUTO], pages);
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    await t.run(async (ctx) => {
+      const volumes = new Map((await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]));
+      expect([...volumes.values()].sort()).toEqual(["1", "2", "3", "4", "5", "6"]);
+      const lines = await ctx.db.query("editionLines").collect();
+      expect(lines.map((l) => l.name).sort()).toEqual(["3-in-1 Edition", "Omnibus"]);
+      const threeIn1 = lines.find((l) => l.name === "3-in-1 Edition")!;
+      const members = (await ctx.db.query("editions").collect()).filter((e) => e.editionLineId === threeIn1._id);
+      expect(members.map((e) => e.linePosition).sort()).toEqual(["1", "2"]);
+      const coverage = await ctx.db.query("volumeCoverages").collect();
+      const covered = (position: string) =>
+        coverage
+          .filter((c) => c.editionId === members.find((e) => e.linePosition === position)!._id)
+          .sort((a, b) => a.order - b.order)
+          .map((c) => volumes.get(c.volumeId));
+      expect(covered("1")).toEqual(["1", "2", "3"]);
+      expect(covered("2")).toEqual(["4", "5", "6"]);
+      // The size-less "[Omnibus]" line is an Unmapped Packaging member.
+      const omnibus = lines.find((l) => l.name === "Omnibus")!;
+      const unmapped = (await ctx.db.query("editions").collect()).find((e) => e.editionLineId === omnibus._id)!;
+      expect(unmapped).toMatchObject({ coverageUnmapped: true, linePosition: "1" });
+      // Position 9 would cover 25–27; the backbone stops at 6.
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.isbn13).sort()).toEqual(["9781421539898", "9781421539904", "9781974700004"]);
+    });
+    const held = await obsFor(t, 9103);
+    expect(held?.recordRef).toBeUndefined();
+    expect(held?.conflicts?.[0]?.reason).toMatch(/would cover Volumes 25–27/);
+  });
+});
+
+describe("ann.sync — onlyManga (operator-targeted refresh)", () => {
+  it("refreshes just the named entries through the detail API, never reads the report, and never withdraws", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([ALPHA, BETA]);
+    // A full mirror first, so ALPHA has observations that a subset run must not withdraw.
+    await sync(t, { releasePages: false });
+    expect(await t.run((ctx) => ctx.db.query("series").collect())).toHaveLength(2);
+    reportRequests.length = 0;
+    const result = await sync(t, { releasePages: false, onlyManga: [String(BETA.id)] });
+    expect(result).toMatchObject({ recordsSeen: 1, continued: false });
+    expect(reportRequests).toHaveLength(0);
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.every((o) => o.withdrawn !== true)).toBe(true);
+      expect(await ctx.db.query("series").collect()).toHaveLength(2);
+    });
+  });
+});
+
+describe("ann.syncReleasePages — non-English distributors (#48)", () => {
+  it("skips a French or German house as out of English scope instead of reporting a missing publisher", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const KANA: FixtureManga = {
+      id: 777,
+      title: "Some Manga",
+      releases: [
+        { annId: 7001, date: "2010-01-01", designator: "GN 1" },
+        { annId: 7002, date: "2011-01-01", designator: "GN 1", title: "Some Manga (Kana)" },
+      ],
+    };
+    stubAnn([KANA], {
+      7002: releasePage({ title: "Some Manga", volume: "1", distributor: "Kana", date: "2011-01-01", isbn13: "9782505000013", mangaId: 777 }),
+      7001: releasePage({ title: "Some Manga", volume: "1", distributor: "Toyspress, Inc.", date: "2010-01-01", isbn13: "9784900000001", mangaId: 777 }),
+    });
+    await sync(t, { releasePages: false });
+    // Without the publisher rows, nothing places; seed them as the cadence tick would.
+    await t.mutation(internal.launch.seedPublishers, {});
+    await syncPages(t);
+    expect((await obsFor(t, 7002))?.conflicts?.[0]?.reason).toMatch(/another language: out of English scope/);
+    // The Toyspress line places now that the row exists.
+    expect((await obsFor(t, 7001))?.recordRef?.type).toBe("release");
   });
 });

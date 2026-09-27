@@ -120,6 +120,7 @@ function Queue() {
         <Link to="/mod/proposals">My proposals</Link>
         <Link to="/mod/imports">Imports</Link>
         <Link to="/mod/launch">Launch</Link>
+        <Link to="/mod/packaging">Catalog gaps</Link>
       </nav>
 
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>

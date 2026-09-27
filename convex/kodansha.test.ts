@@ -1638,3 +1638,33 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     expect(await sync(t)).toEqual({ skipped: "disabled" });
   });
 });
+
+describe("kodansha.backlistSync — onlySeries (operator-targeted recovery)", () => {
+  it("recrawls just the named series' pending volumes, ignoring cadence", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK, NEEDLES, NOVEL], BACKLIST_PAGES);
+    await backlist(t);
+    // Nothing is due again this soon…
+    expect(await backlist(t)).toMatchObject({ seriesCrawled: 0, fetched: 0 });
+
+    // …but a targeted run rechecks Blue Lock now: its series page plus the
+    // one volume left in `recheck` (40, upcoming), and no other series.
+    requested.length = 0;
+    const result = await backlist(t, { onlySeries: ["blue-lock"] });
+    expect(result).toMatchObject({ continued: false, seriesCrawled: 1 });
+    const pages = requested.filter((u) => u.includes("/series/"));
+    expect(pages).toEqual([`${BASE}/series/blue-lock/`, `${BASE}/series/blue-lock/volume-40/`]);
+  });
+
+  it("crawls a named series it has never seen in full", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK, NEEDLES, NOVEL], BACKLIST_PAGES);
+    const result = await backlist(t, { onlySeries: ["7-billion-needles"] });
+    expect(result).toMatchObject({ seriesCrawled: 1 });
+    const series = requested.filter((u) => u.includes("/series/")).map((u) => new URL(u).pathname);
+    expect(series.every((p) => p.startsWith("/series/7-billion-needles/"))).toBe(true);
+    expect(series).toContain("/series/7-billion-needles/volume-1/");
+  });
+});

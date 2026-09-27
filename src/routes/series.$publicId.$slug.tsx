@@ -223,6 +223,15 @@ function SeriesPage() {
                 {volumes.length} in the canonical sequence
               </dd>
             </div>
+            {page.series.bookless ? (
+              <div>
+                <dt className="fact-term">English packaging</dt>
+                <dd className="fact-def">
+                  No English books on file yet — the volumes are known, but no release has
+                  attached to them. This series is kept out of browse and search until one does.
+                </dd>
+              </div>
+            ) : null}
             {facts.editionCount > 0 ? (
               <div>
                 <dt className="fact-term">English packaging</dt>

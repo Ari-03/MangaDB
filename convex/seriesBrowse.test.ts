@@ -485,3 +485,70 @@ describe("seriesBrowse filters first, then the sort", () => {
     ]);
   });
 });
+
+describe("seriesBrowse.rebuild — Bookless Series", () => {
+  it("flags a Series with Volumes but no book, keeps it out of discovery, and clears the flag once a book lands", async () => {
+    const { t } = await seeded();
+    // An ANN-style backbone: Series + Volumes, nothing covering them.
+    const { seriesId, volumeId, viz } = await t.run(async (ctx) => {
+      const viz = (await ctx.db.query("publishers").collect()).find((p) => p.slug === "viz-media")!._id;
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 9,
+        title: "Backbone Only",
+        altTitles: [],
+        searchText: "Backbone Only",
+      });
+      const volumeId = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 901,
+        seriesId,
+        position: 1,
+        label: "1",
+      });
+      await ctx.db.insert("volumes", { status: "active", publicId: 902, seriesId, position: 2, label: "2" });
+      return { seriesId, volumeId, viz };
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(seriesId))?.bookless).toBe(true);
+      const rows = await ctx.db.query("seriesStats").collect();
+      expect(rows.map((r) => r.title).sort()).toEqual(["The Quiet Cartographer", "Tokyo Ghoul"]);
+    });
+    // Browse, search, the home list and the sitemap all skip it; the page itself still resolves.
+    const browse = await t.query(api.seriesBrowse.browse, { sort: "title" });
+    expect(browse.items.map((i) => i.title)).not.toContain("Backbone Only");
+    const search = await t.query(api.catalog.search, { query: "Backbone Only" });
+    expect(JSON.stringify(search)).not.toContain("Backbone Only");
+    expect((await t.query(api.catalog.listSeries, {})).map((s) => s.title)).not.toContain("Backbone Only");
+    const sitemap = await t.query(api.seo.sitemapPage, {
+      entity: "series",
+      paginationOpts: { numItems: 50, cursor: null },
+    });
+    expect(sitemap.entries.map((e) => e.title)).not.toContain("Backbone Only");
+    const page = await t.query(api.catalog.seriesPage, { publicId: 9 });
+    expect(page?.series).toMatchObject({ title: "Backbone Only", bookless: true });
+
+    // A book attaches (as an import would): the next rebuild restores the Series.
+    await t.run(async (ctx) => {
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9001, publisherId: viz });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        publisherId: viz,
+        seriesIds: [seriesId],
+        format: "physical",
+        language: "en",
+        isbn13: "9781999009999",
+      });
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(seriesId))?.bookless).toBeUndefined();
+      expect((await ctx.db.query("seriesStats").collect()).map((r) => r.title)).toContain("Backbone Only");
+    });
+    const after = await t.query(api.seriesBrowse.browse, { sort: "title" });
+    expect(after.items.map((i) => i.title)).toContain("Backbone Only");
+  });
+});

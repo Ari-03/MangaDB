@@ -245,9 +245,12 @@ describe("series pages that are packaging lines", () => {
     expect(item("Am I Actually the Strongest? (Manga)", "am-i")?.seriesTitle).toBe(
       "Am I Actually the Strongest?",
     );
-    expect(item("Witch Hat Atelier: Grimoire Edition", "grimoire")?.seriesTitle).toBe(
-      "Witch Hat Atelier: Grimoire Edition",
-    );
+    // "Grimoire Edition" is Kodansha's three-volume hardcover line (2026
+    // survey), so the listing is packaging OF Witch Hat Atelier, not a series.
+    expect(item("Witch Hat Atelier: Grimoire Edition", "grimoire")).toMatchObject({
+      seriesTitle: "Witch Hat Atelier",
+      packaging: { lineName: "Grimoire Edition" },
+    });
     expect(item("The Seven Deadly Sins (Novel)", "sds-novel")?.outOfScope).toBe("novel");
     expect(item("Blue Lock", "blue-lock")?.outOfScope).toBeUndefined();
   });

@@ -33,6 +33,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
+import { applyRetrying } from "./lib/occ";
 import { rangeLabels } from "./lib/bookTitle";
 import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
@@ -197,7 +198,7 @@ export const sync = internalAction({
               continue;
             }
 
-            const result = await ctx.runMutation(internal.sevenSeas.applyBook, {
+            const result = await applyRetrying(ctx, internal.sevenSeas.applyBook, {
               sourceRecordId: listing.sourceRecordId,
               snapshot,
             });

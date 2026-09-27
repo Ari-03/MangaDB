@@ -460,9 +460,8 @@ async function libraryBook(
 ) {
   const edition = await followMerges(ctx, "editions", await ctx.db.get(release.editionId));
   if (!edition) return null;
-  const { title, lineName, coverage } = await editionCoverage(ctx, edition);
-  const series = coverage[0]?.series ?? null;
-  if (!series) return null; // nothing to shelve it under
+  const { title, lineName, coverage, series } = await editionCoverage(ctx, edition);
+  if (!series) return null; // nothing to shelve it under (no coverage and no line)
   const publisherDoc = await ctx.db.get(edition.publisherId);
   const publisher =
     publisherDoc && publisherDoc.status === "active"

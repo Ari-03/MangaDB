@@ -29,5 +29,24 @@
   "routes": [
     { "pattern": "mangadb.org", "custom_domain": true },
     { "pattern": "www.mangadb.org", "custom_domain": true }
-  ]
+  ],
+  // Staging: `npm run deploy:staging`. Separate Worker on its workers.dev URL,
+  // backed by the mangadb-staging Convex project (its production deployment)
+  // and its own cover cache. No custom domain, so no canonical-host redirect.
+  // Per-environment keys are not inherited, so vars and bindings repeat here.
+  "env": {
+    "staging": {
+      "name": "mangadb-staging",
+      // No custom domains here — without this, staging would inherit the
+      // production routes above and steal mangadb.org from the "mangadb" Worker.
+      "routes": [],
+      "workers_dev": true,
+      "r2_buckets": [{ "binding": "COVERS", "bucket_name": "mangadb-covers-staging" }],
+      "vars": {
+        "CANONICAL_HOST": "",
+        "VITE_CONVEX_URL": "https://brave-kingfisher-844.convex.cloud",
+        "VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cHJlc2VudC1ncmFja2xlLTk1NjQuY2xlcmsuYWNjb3VudHMuZGV2JA"
+      }
+    }
+  }
 }

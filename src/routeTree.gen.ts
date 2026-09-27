@@ -18,6 +18,7 @@ import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
 import { Route as ModImportsRouteImport } from './routes/mod.imports'
 import { Route as ModLaunchRouteImport } from './routes/mod.launch'
+import { Route as ModPackagingRouteImport } from './routes/mod.packaging'
 import { Route as ModProposalsRouteImport } from './routes/mod.proposals'
 import { Route as ModQueueRouteImport } from './routes/mod.queue'
 import { Route as ModRolesRouteImport } from './routes/mod.roles'
@@ -87,6 +88,11 @@ const ModImportsRoute = ModImportsRouteImport.update({
 const ModLaunchRoute = ModLaunchRouteImport.update({
   id: '/mod/launch',
   path: '/mod/launch',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ModPackagingRoute = ModPackagingRouteImport.update({
+  id: '/mod/packaging',
+  path: '/mod/packaging',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModProposalsRoute = ModProposalsRouteImport.update({
@@ -225,6 +231,7 @@ export interface FileRoutesByFullPath {
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/imports': typeof ModImportsRoute
   '/mod/launch': typeof ModLaunchRoute
+  '/mod/packaging': typeof ModPackagingRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -260,6 +267,7 @@ export interface FileRoutesByTo {
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/imports': typeof ModImportsRoute
   '/mod/launch': typeof ModLaunchRoute
+  '/mod/packaging': typeof ModPackagingRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -297,6 +305,7 @@ export interface FileRoutesById {
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/imports': typeof ModImportsRoute
   '/mod/launch': typeof ModLaunchRoute
+  '/mod/packaging': typeof ModPackagingRoute
   '/mod/proposals': typeof ModProposalsRoute
   '/mod/queue': typeof ModQueueRoute
   '/mod/roles': typeof ModRolesRoute
@@ -335,6 +344,7 @@ export interface FileRouteTypes {
     | '/isbn/$isbn'
     | '/mod/imports'
     | '/mod/launch'
+    | '/mod/packaging'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -370,6 +380,7 @@ export interface FileRouteTypes {
     | '/isbn/$isbn'
     | '/mod/imports'
     | '/mod/launch'
+    | '/mod/packaging'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -406,6 +417,7 @@ export interface FileRouteTypes {
     | '/isbn/$isbn'
     | '/mod/imports'
     | '/mod/launch'
+    | '/mod/packaging'
     | '/mod/proposals'
     | '/mod/queue'
     | '/mod/roles'
@@ -443,6 +455,7 @@ export interface RootRouteChildren {
   IsbnIsbnRoute: typeof IsbnIsbnRoute
   ModImportsRoute: typeof ModImportsRoute
   ModLaunchRoute: typeof ModLaunchRoute
+  ModPackagingRoute: typeof ModPackagingRoute
   ModProposalsRoute: typeof ModProposalsRoute
   ModQueueRoute: typeof ModQueueRoute
   ModRolesRoute: typeof ModRolesRoute
@@ -533,6 +546,13 @@ declare module '@tanstack/react-router' {
       path: '/mod/launch'
       fullPath: '/mod/launch'
       preLoaderRoute: typeof ModLaunchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mod/packaging': {
+      id: '/mod/packaging'
+      path: '/mod/packaging'
+      fullPath: '/mod/packaging'
+      preLoaderRoute: typeof ModPackagingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/mod/proposals': {
@@ -732,6 +752,7 @@ const rootRouteChildren: RootRouteChildren = {
   IsbnIsbnRoute: IsbnIsbnRoute,
   ModImportsRoute: ModImportsRoute,
   ModLaunchRoute: ModLaunchRoute,
+  ModPackagingRoute: ModPackagingRoute,
   ModProposalsRoute: ModProposalsRoute,
   ModQueueRoute: ModQueueRoute,
   ModRolesRoute: ModRolesRoute,

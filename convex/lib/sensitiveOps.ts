@@ -272,6 +272,11 @@ async function recomputeReleaseDenorms(
       seriesIds.push(volume.seriesId);
     }
   }
+  // Unmapped Packaging covers nothing yet; its line still names the Series.
+  if (seriesIds.length === 0 && edition.editionLineId) {
+    const line = await ctx.db.get(edition.editionLineId);
+    if (line) seriesIds.push(line.seriesId);
+  }
   const releases = await ctx.db
     .query("releases")
     .withIndex("by_edition", (q) => q.eq("editionId", editionId))

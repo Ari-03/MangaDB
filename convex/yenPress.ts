@@ -26,6 +26,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { errorMessage, politeFetch } from "./lib/http";
+import { applyRetrying } from "./lib/occ";
 import { runToContinue } from "./lib/importRuns";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
@@ -200,7 +201,7 @@ export const sync = internalAction({
               }
               for (const snapshot of snapshots) {
                 seen++;
-                const result = await ctx.runMutation(internal.yenPress.applyTitle, { snapshot });
+                const result = await applyRetrying(ctx, internal.yenPress.applyTitle, { snapshot });
                 observedHere.add(snapshot.isbn13);
                 if (result.changed) changed++;
                 if (result.status === "needsReview") {
