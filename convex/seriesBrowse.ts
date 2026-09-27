@@ -236,7 +236,10 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
       .query("editions")
       .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
       .collect();
-    for (const member of members) editionIds.add(member._id);
+    // Only an active member is a book; a hidden one must not clear `bookless`.
+    for (const member of members) {
+      if (member.status === "active") editionIds.add(member._id);
+    }
   }
 
   // A Bookless Series (no Edition at all) leaves the library: its stats row
