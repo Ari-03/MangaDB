@@ -36,12 +36,15 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
+import { applyRetrying } from "./lib/occ";
 import { parseTitleList, prhTitleValidator } from "./lib/prh";
 
 export const SOURCE_KEY = "prh";
 const API_BASE = "https://api.penguinrandomhouse.com/resources/v2/title/domains/PRH.US";
 const IMPORT_COMMENT = "Imported from the Penguin Random House API.";
 const ROWS_PER_PAGE = 200;
+/** Per-link wall-clock budget, well inside Convex's 10-minute action limit. */
+const LINK_BUDGET_MS = 4 * 60 * 1000;
 /** The list endpoint's content zoom: each title embeds its flap copy (lib/prh.ts). */
 const CONTENT_ZOOM = "https://api.penguinrandomhouse.com/title/titles/content/definition";
 
@@ -67,12 +70,17 @@ type SyncResult =
       completeSweep: boolean;
       errorCount: number;
       failed?: boolean;
+      /** This link ran out of time budget and scheduled the next one. */
+      continued?: true;
     };
 
 /**
- * One PRH import run. Daily runs filter future-dated titles client-side;
- * UTC-Sunday runs (or {mode: "full"}) sweep each configured
- * imprint's whole catalog.
+ * One link of a PRH import run. Daily runs filter future-dated titles
+ * client-side; UTC-Sunday runs (or {mode: "full"}) sweep each configured
+ * imprint's whole catalog. A full sweep is far longer than one action may
+ * run (14 imprints, up to 50 pages of 200 titles each), so a link hands off
+ * to the next through the scheduler at a page boundary once it has used its
+ * time budget; continuation links carry the run state.
  *
  *   npx convex run prh:sync '{"mode":"full"}'
  */
@@ -89,8 +97,22 @@ export const sync = internalAction({
     maxPages: v.optional(v.number()),
     /** Pause before every request; tests pass 0. */
     politeDelayMs: v.optional(v.number()),
+    /** Wall-clock budget per link before handing off; tests pass 0 to force a hand-off. */
+    linkBudgetMs: v.optional(v.number()),
+    // ----- continuation state (never passed by callers) -----
+    runId: v.optional(v.id("importRuns")),
+    runStartedAt: v.optional(v.number()),
+    imprintIndex: v.optional(v.number()),
+    start: v.optional(v.number()),
+    pages: v.optional(v.number()),
+    seen: v.optional(v.number()),
+    changed: v.optional(v.number()),
+    recordFailures: v.optional(v.number()),
+    completeSweep: v.optional(v.boolean()),
+    errors: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args): Promise<SyncResult> => {
+    const linkStartedAt = Date.now();
     // Explicit annotations break the type cycle with imports.ts's adapter map.
     const source: Doc<"approvedSources"> | null = await ctx.runQuery(
       internal.importSources.getByKey,
@@ -117,24 +139,30 @@ export const sync = internalAction({
     }
 
     const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
-    const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
-      sourceKey: SOURCE_KEY,
-    });
-    const runStartedAt = Date.now();
+    const runId: Id<"importRuns"> =
+      args.runId ??
+      (await ctx.runMutation(internal.imports.startRun, {
+        sourceKey: SOURCE_KEY,
+      }));
+    const runStartedAt = args.runStartedAt ?? linkStartedAt;
     const delay = args.politeDelayMs ?? 350;
     const maxPages = args.maxPages ?? 50;
-    const errors: string[] = [];
-    let seen = 0;
-    let changed = 0;
-    let recordFailures = 0;
+    const linkBudgetMs = args.linkBudgetMs ?? LINK_BUDGET_MS;
+    const errors: string[] = [...(args.errors ?? [])];
+    let seen = args.seen ?? 0;
+    let changed = args.changed ?? 0;
+    let recordFailures = args.recordFailures ?? 0;
     // A subset sweep can't prove absence, so it never withdraws.
-    let completeSweep = mode === "full" && args.imprints === undefined;
+    let completeSweep = args.completeSweep ?? (mode === "full" && args.imprints === undefined);
     const todayKey = todaySortKey();
+    const firstImprint = args.imprintIndex ?? 0;
 
     try {
-      for (const imprint of imprints) {
-        let start = 0;
-        let pages = 0;
+      for (let index = firstImprint; index < imprints.length; index++) {
+        const imprint = imprints[index]!;
+        // A continuation link resumes its imprint mid-listing.
+        let start = index === firstImprint ? (args.start ?? 0) : 0;
+        let pages = index === firstImprint ? (args.pages ?? 0) : 0;
         for (;;) {
           if (pages >= maxPages) {
             completeSweep = false;
@@ -172,7 +200,7 @@ export const sync = internalAction({
           for (const snapshot of toApply) {
             seen++;
             try {
-              const result = await ctx.runMutation(internal.prh.applyTitle, {
+              const result = await applyRetrying(ctx, internal.prh.applyTitle, {
                 snapshot,
               });
               if (result.changed) changed++;
@@ -190,6 +218,34 @@ export const sync = internalAction({
           const exhausted =
             rawCount === 0 || (recordCount !== undefined && start >= recordCount) || pastReached;
           if (exhausted) break;
+          if (Date.now() - linkStartedAt >= linkBudgetMs) {
+            await ctx.scheduler.runAfter(0, internal.prh.sync, {
+              mode,
+              imprints: args.imprints,
+              maxPages: args.maxPages,
+              politeDelayMs: args.politeDelayMs,
+              linkBudgetMs: args.linkBudgetMs,
+              runId,
+              runStartedAt,
+              imprintIndex: index,
+              start,
+              pages,
+              seen,
+              changed,
+              recordFailures,
+              completeSweep,
+              errors,
+            });
+            return {
+              runId,
+              recordsSeen: seen,
+              recordsChanged: changed,
+              mode,
+              completeSweep: false,
+              errorCount: errors.length,
+              continued: true,
+            };
+          }
         }
       }
 

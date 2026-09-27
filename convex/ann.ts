@@ -64,6 +64,7 @@ import {
   type AnnReleasePage,
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
+import { applyRetrying } from "./lib/occ";
 import { openFollowOnRun, runToContinue } from "./lib/importRuns";
 import { canonicalLabel } from "./lib/bookTitle";
 import { candidateSeries, labelsEqual, survivorOf } from "./lib/matching";
@@ -212,7 +213,7 @@ export const sync = internalAction({
               if (manga.releases.length === 0) continue;
               seen++;
               try {
-                const result = await ctx.runMutation(internal.ann.applyManga, {
+                const result = await applyRetrying(ctx, internal.ann.applyManga, {
                   snapshot: toSnapshot(manga),
                 });
                 if (result.changed) changed++;
@@ -612,7 +613,21 @@ export const applyManga = internalMutation({
         }
       }
     } else {
-      const candidates = await candidateSeries(ctx, snapshot.title);
+      let candidates = await candidateSeries(ctx, snapshot.title);
+      if (candidates.length === 0) {
+        // ANN often names a work by a short title and carries the
+        // publisher's full title only as an alternative ("7th Time Loop:
+        // The Villainess Enjoys a Carefree Life" vs "… Married to Her Worst
+        // Enemy!"). A Series a publisher feed created under that full title
+        // is the same work; missing it built 123 bookless twins on the
+        // first staging import. Any alternative title that names exactly
+        // one active Series links it.
+        const byAlt = new Map<string, Doc<"series">>();
+        for (const alt of snapshot.altTitles) {
+          for (const series of await candidateSeries(ctx, alt)) byAlt.set(series._id, series);
+        }
+        candidates = [...byAlt.values()];
+      }
       if (candidates.length === 1) {
         seriesId = candidates[0]!._id;
         await ctx.db.patch(observation._id, {
@@ -936,7 +951,7 @@ export const syncReleasePages = internalAction({
             fetchedTotal++;
           }
           try {
-            const result = await ctx.runMutation(internal.ann.applyReleasePage, {
+            const result = await applyRetrying(ctx, internal.ann.applyReleasePage, {
               annId: candidate.annId,
               page: state,
             });

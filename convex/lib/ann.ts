@@ -87,8 +87,12 @@ export function parseReport(xml: string): AnnReport {
     throw new Error("ANN returned an invalid report document");
   }
   const rawCount = (xml.match(/<item>/g) ?? []).length;
+  // `listed` echoes the page size asked for (nlist), not the item count: the
+  // report's final page carries listed="500" with fewer items (2026-09-27:
+  // 333 items holding One Piece, Berserk, Vagabond and every other 1990s
+  // series). A short page is legitimate; more items than listed is not.
   const listed = /<report\b[^>]*\blisted="(\d+)"/.exec(xml)?.[1];
-  if (listed !== undefined && Number(listed) !== rawCount) {
+  if (listed !== undefined && rawCount > Number(listed)) {
     throw new Error("ANN report item count does not match its listed count");
   }
   const items: AnnReportItem[] = [];

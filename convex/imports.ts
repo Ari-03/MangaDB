@@ -296,6 +296,13 @@ export const enabledSources = internalQuery({
 export const runScheduled = internalAction({
   args: {},
   handler: async (ctx) => {
+    // The canonical publisher rows (launch.ts) must exist before any source
+    // runs: ANN's release pages and Open Library resolve a distributor NAME
+    // against them and create nothing for an unknown one. A fresh
+    // deployment that was never seeded (staging, 2026-09-27) imported 5,600
+    // series and not one VIZ release. Idempotent by slug, so every tick may
+    // call it.
+    await ctx.runMutation(internal.launch.seedPublishers, {});
     const sources = await ctx.runQuery(internal.imports.enabledSources, {});
     const now = Date.now();
     const started: string[] = [];
