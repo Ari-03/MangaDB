@@ -219,6 +219,9 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
       .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
       .collect();
     for (const row of rows) {
+      // Only an active Edition is a book; a hidden one must not clear `bookless`.
+      const edition = await ctx.db.get(row.editionId);
+      if (!edition || edition.status !== "active") continue;
       editionIds.add(row.editionId);
       if (!firstPosition.has(row.editionId)) firstPosition.set(row.editionId, volume.position);
     }
