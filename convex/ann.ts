@@ -66,7 +66,8 @@ import {
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { openFollowOnRun, runToContinue } from "./lib/importRuns";
-import { canonicalLabel } from "./lib/bookTitle";
+import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
+import { coverageFromLine } from "./lib/coverage";
 import { candidateSeries, labelsEqual, survivorOf } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
@@ -1117,7 +1118,16 @@ export const applyReleasePage = internalMutation({
       return await link(byIsbn);
     }
 
-    if (line.multi || line.editionLineHint) {
+    // Packaging: an Edition Line member, never a Volume. A named line
+    // ("Naruto [3-in-1 Edition]" at GN 5) is placed below — by its declared
+    // size (lib/coverage.ts: 3-in-1 → volumes 13–15) or, size unknown, as
+    // Unmapped Packaging. A bare range or a box set still only links by ISBN.
+    const parsedLine = line.editionLineHint || line.multi ? parseBookTitle(line.title) : null;
+    const packaging =
+      parsedLine && !parsedLine.isBox && parsedLine.packaging?.lineName != null && !line.multi
+        ? { name: parsedLine.packaging.lineName, position: line.label ?? null }
+        : null;
+    if ((line.multi || line.editionLineHint) && packaging === null) {
       return await hold("Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
     }
     if (VARIANT_LINE.test(line.title)) {
@@ -1138,11 +1148,57 @@ export const applyReleasePage = internalMutation({
       return await hold(`Distributor "${distributor}" resolves to no publisher row.`);
     }
 
-    // Leaf boundary: the Volume must already exist under the Series.
     const volumes = await ctx.db
       .query("volumes")
       .withIndex("by_series", (q) => q.eq("seriesId", series._id))
       .collect();
+    if (packaging !== null) {
+      const range = coverageFromLine(packaging.name, packaging.position);
+      const labels = range ? rangeLabels(range) : [];
+      // Leaf boundary holds for packaging too: every collected Volume must
+      // already exist under the Series (the backbone the mirror built).
+      const covered = labels.filter((label) =>
+        volumes.some((vol) => vol.status === "active" && labelsEqual(vol.label, label)),
+      );
+      if (labels.length > 0 && covered.length !== labels.length) {
+        return await hold(
+          `${packaging.name} ${packaging.position ?? ""} would cover Volumes ${range!.from}–${range!.to}, but the Series lacks ${labels.filter((l) => !covered.includes(l)).join(", ")}.`,
+        );
+      }
+      const unmapped = labels.length === 0;
+      if (unmapped && !(await getBootstrapMode(ctx))) {
+        return await hold(
+          `${packaging.name} of unknown size: steady state leaves unmapped packaging to review.`,
+        );
+      }
+      const packagedDate = page.date ?? line.date;
+      const creation = await createCanonicalRecords(ctx, {
+        sourceKey: SOURCE_KEY,
+        observation,
+        citation,
+        importComment: IMPORT_COMMENT,
+        seriesId: series._id,
+        seriesTitle: series.title,
+        labels,
+        editionLine: { name: packaging.name, position: packaging.position },
+        ...(unmapped ? { coverageUnmapped: true as const } : {}),
+        release: {
+          format: line.format,
+          isbn13,
+          isbn10: page.isbn10,
+          pubDate: packagedDate ? toPartialDate(packagedDate) : undefined,
+          price:
+            page.priceCents !== undefined
+              ? { amountCents: page.priceCents, currency: "USD" }
+              : undefined,
+          publisher: { name: publisher.name, slug: publisher.slug },
+        },
+        tagBootstrapUnreviewed: unmapped,
+        now,
+      });
+      return { status: "created", changed: true, releaseId: creation.releaseId };
+    }
+    // Leaf boundary: the Volume must already exist under the Series.
     const volume = volumes.find(
       (vol) => vol.status === "active" && labelsEqual(vol.label, line.label ?? null),
     );

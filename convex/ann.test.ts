@@ -1318,3 +1318,67 @@ describe("ann.sync — a publisher's Series under the full title", () => {
     });
   });
 });
+
+describe("ann.syncReleasePages — packaging lines (#47)", () => {
+  const NARUTO: FixtureManga = {
+    id: 1825,
+    title: "Naruto",
+    releases: [
+      { annId: 9001, date: "2003-08-16", designator: "GN 1" },
+      { annId: 9002, date: "2003-12-16", designator: "GN 2" },
+      { annId: 9003, date: "2004-04-06", designator: "GN 3" },
+      { annId: 9004, date: "2004-08-03", designator: "GN 4" },
+      { annId: 9005, date: "2004-12-07", designator: "GN 5" },
+      { annId: 9006, date: "2005-04-05", designator: "GN 6" },
+      // VIZ's omnibus line: the designator number is the line position.
+      { annId: 9101, date: "2011-05-03", designator: "GN 1", title: "Naruto [3-in-1 Edition]" },
+      { annId: 9102, date: "2011-08-02", designator: "GN 2", title: "Naruto [3-in-1 Edition]" },
+      // A line whose size no rule knows.
+      { annId: 9201, date: "2020-01-07", designator: "GN 1", title: "Naruto [Omnibus]" },
+      // Would reach past the backbone: held, not invented.
+      { annId: 9103, date: "2012-02-07", designator: "GN 9", title: "Naruto [3-in-1 Edition]" },
+    ],
+  };
+  const pages = {
+    9101: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "1", distributor: "Viz Media", date: "2011-05-03", isbn13: "9781421539898", mangaId: 1825 }),
+    9102: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "2", distributor: "Viz Media", date: "2011-08-02", isbn13: "9781421539904", mangaId: 1825 }),
+    9201: releasePage({ title: "Naruto [Omnibus]", volume: "1", distributor: "Viz Media", date: "2020-01-07", isbn13: "9781974700004", mangaId: 1825 }),
+    9103: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "9", distributor: "Viz Media", date: "2012-02-07", isbn13: "9781421554891", mangaId: 1825 }),
+  };
+
+  it("places N-in-1 books by their declared size, leaves unknown sizes unmapped, and never invents Volumes", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    stubAnn([NARUTO], pages);
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    await t.run(async (ctx) => {
+      const volumes = new Map((await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]));
+      expect([...volumes.values()].sort()).toEqual(["1", "2", "3", "4", "5", "6"]);
+      const lines = await ctx.db.query("editionLines").collect();
+      expect(lines.map((l) => l.name).sort()).toEqual(["3-in-1 Edition", "Omnibus"]);
+      const threeIn1 = lines.find((l) => l.name === "3-in-1 Edition")!;
+      const members = (await ctx.db.query("editions").collect()).filter((e) => e.editionLineId === threeIn1._id);
+      expect(members.map((e) => e.linePosition).sort()).toEqual(["1", "2"]);
+      const coverage = await ctx.db.query("volumeCoverages").collect();
+      const covered = (position: string) =>
+        coverage
+          .filter((c) => c.editionId === members.find((e) => e.linePosition === position)!._id)
+          .sort((a, b) => a.order - b.order)
+          .map((c) => volumes.get(c.volumeId));
+      expect(covered("1")).toEqual(["1", "2", "3"]);
+      expect(covered("2")).toEqual(["4", "5", "6"]);
+      // The size-less "[Omnibus]" line is an Unmapped Packaging member.
+      const omnibus = lines.find((l) => l.name === "Omnibus")!;
+      const unmapped = (await ctx.db.query("editions").collect()).find((e) => e.editionLineId === omnibus._id)!;
+      expect(unmapped).toMatchObject({ coverageUnmapped: true, linePosition: "1" });
+      // Position 9 would cover 25–27; the backbone stops at 6.
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.isbn13).sort()).toEqual(["9781421539898", "9781421539904", "9781974700004"]);
+    });
+    const held = await obsFor(t, 9103);
+    expect(held?.recordRef).toBeUndefined();
+    expect(held?.conflicts?.[0]?.reason).toMatch(/would cover Volumes 25–27/);
+  });
+});
