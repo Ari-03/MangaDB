@@ -102,6 +102,26 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "Cross Infinite World", slug: "cross-infinite-world" },
   { name: "NBM Publishing", slug: "nbm-publishing" },
   { name: "Sol Press", slug: "sol-press" },
+  // Distributors ANN named on the first full staging import (2026-09-27)
+  // whose lines held with "resolves to no publisher row" (#48): the
+  // English-market publishers among them. Non-English ones (Kana, Panini,
+  // Bruno Gmünder) are skipped in ann.ts instead of seeded.
+  { name: "Toyspress", slug: "toyspress", defunct: true },
+  { name: "Mangamo", slug: "mangamo" },
+  { name: "Yaoi Generation", slug: "yaoi-generation", defunct: true },
+  { name: "Nakama Press", slug: "nakama-press" },
+  { name: "Image Comics", slug: "image-comics" },
+  { name: "Pantheon Books", slug: "pantheon-books" },
+  { name: "New York Review Comics", slug: "new-york-review-comics" },
+  { name: "Top Cow Productions", slug: "top-cow" },
+  { name: "Noir Caesar Entertainment", slug: "noir-caesar" },
+  { name: "Blast Books", slug: "blast-books" },
+  { name: "Creation Books", slug: "creation-books", defunct: true },
+  { name: "ALC Publishing", slug: "alc-publishing", defunct: true },
+  { name: "Manga 18", slug: "manga-18", defunct: true },
+  { name: "Mahjong Pros", slug: "mahjong-pros" },
+  { name: "RedLight Manga", slug: "redlight-manga" },
+  { name: "The Right Stuf International", slug: "right-stuf", defunct: true },
 ];
 
 /** Slugs of the rows above that no longer publish (seedPublishers marks them). */
@@ -136,6 +156,12 @@ export const IMPRINT_PARENTS: Record<string, string> = Object.fromEntries(
  * "dark-horse-manga", "dark-horse-manhwa") into their company.
  */
 export const DUPLICATE_ALIASES: Record<string, string> = {
+  // ANN's distributor strings for imprints the list already knows (#48).
+  "dc comics": "cmx",
+  "be beautiful manga": "central-park-media",
+  "be beautiful": "central-park-media",
+  "toyspress inc": "toyspress",
+  "top cow productions inc": "top-cow",
   "kodansha comics": "kodansha",
   "vertical comics": "vertical",
   "square enix manga": "square-enix",

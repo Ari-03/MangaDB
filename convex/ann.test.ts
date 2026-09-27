@@ -1440,3 +1440,29 @@ describe("ann.sync — onlyManga (operator-targeted refresh)", () => {
     });
   });
 });
+
+describe("ann.syncReleasePages — non-English distributors (#48)", () => {
+  it("skips a French or German house as out of English scope instead of reporting a missing publisher", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const KANA: FixtureManga = {
+      id: 777,
+      title: "Some Manga",
+      releases: [
+        { annId: 7001, date: "2010-01-01", designator: "GN 1" },
+        { annId: 7002, date: "2011-01-01", designator: "GN 1", title: "Some Manga (Kana)" },
+      ],
+    };
+    stubAnn([KANA], {
+      7002: releasePage({ title: "Some Manga", volume: "1", distributor: "Kana", date: "2011-01-01", isbn13: "9782505000013", mangaId: 777 }),
+      7001: releasePage({ title: "Some Manga", volume: "1", distributor: "Toyspress, Inc.", date: "2010-01-01", isbn13: "9784900000001", mangaId: 777 }),
+    });
+    await sync(t, { releasePages: false });
+    // Without the publisher rows, nothing places; seed them as the cadence tick would.
+    await t.mutation(internal.launch.seedPublishers, {});
+    await syncPages(t);
+    expect((await obsFor(t, 7002))?.conflicts?.[0]?.reason).toMatch(/another language: out of English scope/);
+    // The Toyspress line places now that the row exists.
+    expect((await obsFor(t, 7001))?.recordRef?.type).toBe("release");
+  });
+});

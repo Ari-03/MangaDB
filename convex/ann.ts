@@ -821,6 +821,11 @@ const DEFAULT_MAX_FETCHES = 300;
 // Distributor strings that are prose imprints: their lines never create
 // manga Releases, whatever their designator says.
 const NOVEL_DISTRIBUTORS = /^(?:yen on|j-novel club novels?|seven seas airship|airship)$/i;
+// ANN's encyclopedia is worldwide: a release line under a French or German
+// house is a real book, just not an English one. Out of this catalog's scope,
+// so it is skipped rather than reported as a missing publisher row (#48).
+const FOREIGN_DISTRIBUTORS =
+  /^(?:kana|panini(?: comics| manga)?|bruno gm[üu]nder(?: verlag)?|glénat|glenat|carlsen(?: manga)?|egmont(?: manga)?|pika(?: [ée]dition)?|ki-oon|tokyopop gmbh|star comics|planeta(?: c[oó]mic)?|norma editorial|ivrea)$/i;
 
 // A store-exclusive or variant cover is a second ISBN of the same volume
 // ("Jujutsu Kaisen - [Walmart Exclusive Cover] (GN 30)"): never a leaf.
@@ -1183,6 +1188,9 @@ export const applyReleasePage = internalMutation({
     if (distributor === undefined) return await hold("The release page names no distributor.");
     if (NOVEL_DISTRIBUTORS.test(distributor)) {
       return await hold(`"${distributor}" is a prose imprint: out of manga scope.`);
+    }
+    if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
+      return await hold(`"${distributor}" publishes in another language: out of English scope.`);
     }
     const publisher = await findPublisherByName(ctx, distributor);
     if (!publisher) {

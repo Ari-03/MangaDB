@@ -96,3 +96,14 @@ describe("the exported tables", () => {
     expect(publisherNameKey("Drawn & Quarterly")).toBe("drawn and quarterly");
   });
 });
+
+describe("canonicalPublisherFor — ANN distributor strings (#48)", () => {
+  it("resolves ANN's distributor names for imprints and legacy houses the list knows", () => {
+    expect(canonicalPublisherFor("DC Comics")?.slug).toBe("cmx");
+    expect(canonicalPublisherFor("Be Beautiful Manga")?.slug).toBe("central-park-media");
+    expect(canonicalPublisherFor("Toyspress, Inc.")?.slug).toBe("toyspress");
+    expect(canonicalPublisherFor("Top Cow Productions, Inc.")?.slug).toBe("top-cow");
+    expect(canonicalPublisherFor("Mangamo")?.slug).toBe("mangamo");
+    expect(canonicalPublisherFor("Kana")).toBeNull();
+  });
+});
