@@ -131,6 +131,14 @@ describe("splitReleaseTitle", () => {
       label: undefined,
       multi: false,
     });
+    // VIZ's One Piece omnibus shape: the designator states the collected range.
+    expect(splitReleaseTitle("One Piece - [Omnibus] 33 - Wano (GN 97-99)", "One Piece")).toMatchObject({
+      title: "One Piece - [Omnibus] 33 - Wano",
+      label: undefined,
+      multi: true,
+      editionLineHint: true,
+      coverRange: { from: "97", to: "99" },
+    });
   });
 
   it("flags omnibus/box-set packaging and ranges; rejects non-book lines", () => {

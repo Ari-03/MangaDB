@@ -1346,6 +1346,41 @@ describe("ann.syncReleasePages — packaging lines (#47)", () => {
     9103: releasePage({ title: "Naruto [3-in-1 Edition]", volume: "9", distributor: "Viz Media", date: "2012-02-07", isbn13: "9781421554891", mangaId: 1825 }),
   };
 
+  it("places a line by the range its designator states — One Piece's omnibus shape", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    const ONE_PIECE: FixtureManga = {
+      id: 1223,
+      title: "One Piece",
+      releases: [
+        { annId: 8097, date: "2020-11-03", designator: "GN 97" },
+        { annId: 8098, date: "2021-02-02", designator: "GN 98" },
+        { annId: 8099, date: "2021-05-04", designator: "GN 99" },
+        { annId: 8833, date: "2022-01-04", designator: "GN 97-99", title: "One Piece - [Omnibus] 33 - Wano" },
+      ],
+    };
+    stubAnn([ONE_PIECE], {
+      8833: releasePage({ title: "One Piece - [Omnibus] 33 - Wano", volume: "33", distributor: "Viz Media", date: "2022-01-04", isbn13: "9781974726585", mangaId: 1223 }),
+    });
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    await t.run(async (ctx) => {
+      const [line] = await ctx.db.query("editionLines").collect();
+      expect(line).toMatchObject({ name: "Omnibus" });
+      const [edition] = (await ctx.db.query("editions").collect()).filter((e) => e.editionLineId === line!._id);
+      expect(edition).toMatchObject({ linePosition: "33" });
+      expect(edition!.coverageUnmapped).toBeUndefined();
+      const volumes = new Map((await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]));
+      const covered = (await ctx.db.query("volumeCoverages").collect())
+        .filter((c) => c.editionId === edition!._id)
+        .sort((a, b) => a.order - b.order)
+        .map((c) => volumes.get(c.volumeId));
+      expect(covered).toEqual(["97", "98", "99"]);
+      expect([...volumes.values()].sort()).toEqual(["97", "98", "99"]);
+    });
+  });
+
   it("places N-in-1 books by their declared size, leaves unknown sizes unmapped, and never invents Volumes", async () => {
     const t = makeT();
     await seedRegistry(t, true);

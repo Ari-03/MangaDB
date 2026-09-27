@@ -807,6 +807,30 @@ const NOVEL_DISTRIBUTORS = /^(?:yen on|j-novel club novels?|seven seas airship|a
 // ("Jujutsu Kaisen - [Walmart Exclusive Cover] (GN 30)"): never a leaf.
 const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
 
+/**
+ * ANN's packaged line titles come in two shapes: "Naruto [3-in-1 Edition]"
+ * (the designator number is the line position) and "One Piece - [Omnibus]
+ * 33 - Wano" (the position follows the tag; the designator holds the volume
+ * range). Both yield the line name and position; a bare "(GN 1-3)" range
+ * with no tag is an Omnibus. Box sets are bundles, never lines: null.
+ */
+function packagingOf(line: {
+  title: string;
+  label?: string;
+  multi: boolean;
+  coverRange?: { from: string; to: string };
+}): { name: string; position: string | null } | null {
+  const tagged =
+    /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(line.title);
+  const probe = tagged ? `${tagged[1]!.trim()} [${tagged[2]!.trim()}]` : line.title;
+  const parsed = parseBookTitle(probe);
+  if (parsed.isBox) return null;
+  const name = parsed.packaging?.lineName ?? (line.multi && line.coverRange ? "Omnibus" : null);
+  if (name === null) return null;
+  const position = tagged?.[3] ?? line.label ?? null;
+  return { name, position: position === null ? null : canonicalLabel(position) };
+}
+
 /** Whether a line needs (another) page fetch, per its stored fetch state. */
 function needsFetch(page: PageState | undefined, now: number): boolean {
   if (page === undefined) return true;
@@ -1118,15 +1142,13 @@ export const applyReleasePage = internalMutation({
       return await link(byIsbn);
     }
 
-    // Packaging: an Edition Line member, never a Volume. A named line
-    // ("Naruto [3-in-1 Edition]" at GN 5) is placed below — by its declared
-    // size (lib/coverage.ts: 3-in-1 → volumes 13–15) or, size unknown, as
-    // Unmapped Packaging. A bare range or a box set still only links by ISBN.
-    const parsedLine = line.editionLineHint || line.multi ? parseBookTitle(line.title) : null;
-    const packaging =
-      parsedLine && !parsedLine.isBox && parsedLine.packaging?.lineName != null && !line.multi
-        ? { name: parsedLine.packaging.lineName, position: line.label ?? null }
-        : null;
+    // Packaging: an Edition Line member, never a Volume. A packaged line is
+    // placed below by the best signal it carries: the designator's stated
+    // range ("One Piece - [Omnibus] 33 - Wano (GN 97-99)" → volumes 97–99),
+    // else the line name's declared size (lib/coverage.ts: "[3-in-1
+    // Edition]" at GN 5 → 13–15), else as Unmapped Packaging. Box sets and
+    // variant covers still only link by ISBN.
+    const packaging = line.editionLineHint || line.multi ? packagingOf(line) : null;
     if ((line.multi || line.editionLineHint) && packaging === null) {
       return await hold("Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
     }
@@ -1153,7 +1175,7 @@ export const applyReleasePage = internalMutation({
       .withIndex("by_series", (q) => q.eq("seriesId", series._id))
       .collect();
     if (packaging !== null) {
-      const range = coverageFromLine(packaging.name, packaging.position);
+      const range = line.coverRange ?? coverageFromLine(packaging.name, packaging.position);
       const labels = range ? rangeLabels(range) : [];
       // Leaf boundary holds for packaging too: every collected Volume must
       // already exist under the Series (the backbone the mirror built).

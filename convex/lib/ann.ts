@@ -22,6 +22,7 @@
 // release-page pass).
 
 import { v, type Infer } from "convex/values";
+import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
 import { toIsbn13 } from "./openLibrary";
 import { cleanBlurb, cleanTitleText, decodeEntities, stripHtml } from "./text";
 
@@ -56,6 +57,8 @@ export const annMangaValidator = v.object({
       editionLineHint: v.boolean(),
       /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
       isbn13: v.optional(v.string()),
+      /** The Volumes a "(GN 97-99)" designator says the book collects. */
+      coverRange: v.optional(coverRangeValidator),
     }),
   ),
 });
@@ -132,6 +135,8 @@ export type AnnRelease = {
   editionLineHint: boolean;
   /** The book's ISBN-13, from the line's `ean` attribute. */
   isbn13?: string;
+  /** The Volumes a "(GN 97-99)" designator says the book collects. */
+  coverRange?: CoverRange;
 };
 
 // Before 2010 ANN recorded month-only dates as the 1st (day 1 is a third of
@@ -185,6 +190,8 @@ export function splitReleaseTitle(
   multi: boolean;
   format: "physical" | "digital";
   editionLineHint: boolean;
+  /** "(GN 97-99)": the stated coverage, the best placement signal there is. */
+  coverRange?: CoverRange;
 } | null {
   const m = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(text.trim());
   if (!m) return null;
@@ -207,6 +214,7 @@ export function splitReleaseTitle(
     multi: range !== undefined,
     format: isEbook ? "digital" : "physical",
     editionLineHint,
+    ...(range ? { coverRange: { from: canonicalLabel(range[1]!), to: canonicalLabel(range[2]!) } } : {}),
   };
 }
 
@@ -245,6 +253,7 @@ function parseReleases(body: string, entryName: string, mangaId: string): AnnRel
       format: split.format,
       editionLineHint: split.editionLineHint,
       ...(isbn13 !== undefined ? { isbn13 } : {}),
+      ...(split.coverRange ? { coverRange: split.coverRange } : {}),
     });
   }
   return releases;
