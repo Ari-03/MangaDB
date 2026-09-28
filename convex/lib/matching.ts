@@ -237,8 +237,7 @@ export type WorkEvidence = {
   annPersonIds: string[];
 };
 
-// Bounds on the Series walk below; a long Series answers well before them.
-const EVIDENCE_ISBNS = 60;
+// Bound on the Series walk below; a long Series answers well before it.
 const EVIDENCE_VOLUMES = 150;
 
 /**
@@ -256,7 +255,7 @@ export async function workMatch(
   seriesId: Id<"series">,
   evidence: WorkEvidence,
 ): Promise<"same" | "different" | "unknown"> {
-  const isbns = new Set(evidence.books.slice(0, EVIDENCE_ISBNS).map((book) => book.isbn13));
+  const isbns = new Set(evidence.books.map((book) => book.isbn13));
   for (const isbn13 of isbns) {
     const releases = await ctx.db
       .query("releases")
