@@ -700,6 +700,33 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     });
   });
 
+  it("splits a trailing number without seriesNumber only onto an existing base Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // The catalog knows the work; PRH's row for its next book has no seriesNumber.
+    const tower = await backbone(t, "Tower Dungeon", ["6"]);
+    stubApi([
+      { isbn: "9781647297091", title: "Tower Dungeon 7", imprint: "Vertical Comics" },
+      // No base Series "Omega": a new work keeps its whole name.
+      { isbn: "9781506731780", title: "Omega 6", imprint: "Dark Horse Manga" },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      expect(series.map((s) => s.title).sort()).toEqual(["Omega 6", "Tower Dungeon"]);
+      const volumes = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", tower))
+        .collect();
+      expect(volumes.map((v) => [v.label, v.position])).toEqual([
+        ["6", 6],
+        ["7", 7],
+      ]);
+      const release = (await ctx.db.query("releases").collect()).find((r) => r.isbn13 === "9781647297091");
+      expect(release?.seriesIds).toEqual([tower]);
+    });
+  });
+
   it("splits a trailing roman numeral only onto an existing base Series", async () => {
     const t = makeT();
     await seedRegistry(t, true);

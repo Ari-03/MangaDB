@@ -63,6 +63,13 @@ export type ParsedBookTitle = {
   bareNumber: boolean;
   /** The bare number was a roman numeral: split only onto an existing base Series. */
   bareRoman: boolean;
+  /**
+   * The split an unlicensed trailing number would have made ("Tower Dungeon
+   * 7" with no seriesNumber and no tag): offered, not taken. Callers with
+   * catalog access accept it only when an existing base Series claims it
+   * (lib/catalogTitle.ts); a new work keeps its whole name ("Omega 6").
+   */
+  bareSplit: { seriesTitle: string; volumeLabel: string } | null;
 };
 
 export type ParseOptions = {
@@ -448,6 +455,7 @@ export function parseBookTitle(
   let range: CoverRange | null = null;
   let bareNumber = false;
   let bareRoman = false;
+  let bareSplit: ParsedBookTitle["bareSplit"] = null;
   let packagingName: string | null = null;
   let linePosition: string | null = null;
 
@@ -522,6 +530,8 @@ export function parseBookTitle(
         if (rangeHere) range = rangeHere;
         else volumeLabel = canonicalLabel(designation);
         volumeSubtitle = bare[3]?.trim() || null;
+      } else if (!rangeHere) {
+        bareSplit = { seriesTitle: tidySeries(bare[1]!), volumeLabel: canonicalLabel(designation) };
       }
     }
   }
@@ -582,6 +592,7 @@ export function parseBookTitle(
     formatTags: peel.formatTags,
     bareNumber,
     bareRoman,
+    bareSplit,
   };
 }
 
