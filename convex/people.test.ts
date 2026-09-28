@@ -54,6 +54,8 @@ async function catalog() {
       { personId: "127179", name: "Gan Sunaaku", task: "Story" },
       { ...isayama, task: "Original creator" },
       { personId: "1", name: "Designer", task: "Original Character Design" },
+      // Credited only for the idea: listed on pages, not ranked.
+      { personId: "555", name: "Idea Person", task: "Original Concept" },
     ]);
     await observe("99999", duplicate, [{ personId: "127178", name: "Hikaru Suruga", task: "Art" }]);
     await observe("20000", bookless, [{ ...isayama, task: "Original creator" }]);
@@ -94,6 +96,7 @@ describe("people.rebuild", () => {
       ["Gan Sunaaku", "story"],
       ["Hikaru Suruga", "art"],
       ["Hajime Isayama", "original"],
+      ["Idea Person", "original"],
     ]);
     const people = await t.run((ctx) => ctx.db.query("people").collect());
     // One row per ANN person; character design credits no one.
@@ -101,10 +104,20 @@ describe("people.rebuild", () => {
       "Gan Sunaaku",
       "Hajime Isayama",
       "Hikaru Suruga",
+      "Idea Person",
     ]);
     const isayama = people.find((p) => p.name === "Hajime Isayama")!;
-    // The bookless Series is credited but not counted or shown.
-    expect(isayama).toMatchObject({ seriesCount: 2, coverIsbn: "9781612620244" });
+    // He made Attack on Titan and originated No Regrets; the bookless
+    // Series is credited but neither counted nor shown.
+    expect(isayama).toMatchObject({
+      seriesCount: 1,
+      originalCount: 1,
+      coverIsbn: "9781612620244",
+    });
+    expect(people.find((p) => p.name === "Idea Person")).toMatchObject({
+      seriesCount: 0,
+      originalCount: 1,
+    });
     const credits = await t.run((ctx) =>
       ctx.db
         .query("seriesCredits")
@@ -155,16 +168,20 @@ describe("people.authorPage and people.authors", () => {
     expect(await t.query(api.people.authorPage, { publicId: 999 })).toBeNull();
   });
 
-  it("pages authors most prolific first", async () => {
+  it("pages authors who wrote or drew something, most prolific first", async () => {
     const { t } = await catalog();
     const first = await t.query(api.people.authors, {
-      paginationOpts: { numItems: 1, cursor: null },
+      paginationOpts: { numItems: 2, cursor: null },
     });
-    expect(first.page.map((a) => [a.name, a.seriesCount])).toEqual([["Hajime Isayama", 2]]);
     const rest = await t.query(api.people.authors, {
       paginationOpts: { numItems: 10, cursor: first.continueCursor },
     });
-    expect(rest.page.map((a) => a.seriesCount)).toEqual([1, 1]);
+    // Idea Person only originated a Series, so isn't ranked.
+    expect([...first.page, ...rest.page].map((a) => a.name).sort()).toEqual([
+      "Gan Sunaaku",
+      "Hajime Isayama",
+      "Hikaru Suruga",
+    ]);
   });
 });
 
@@ -172,7 +189,10 @@ describe("author search", () => {
   it("finds authors by name in search and suggestions", async () => {
     const { t } = await catalog();
     const search = await t.query(api.catalog.search, { query: "isayama" });
-    expect(search.authors.map((a) => [a.name, a.seriesCount])).toEqual([["Hajime Isayama", 2]]);
+    expect(search.authors.map((a) => [a.name, a.seriesCount])).toEqual([["Hajime Isayama", 1]]);
+    // An original creator is still findable.
+    const idea = await t.query(api.catalog.search, { query: "idea person" });
+    expect(idea.authors).toMatchObject([{ name: "Idea Person", seriesCount: 0, originalCount: 1 }]);
     const suggest = await t.query(api.catalog.suggest, { query: "hajime isa" });
     expect(suggest.authors.map((a) => a.name)).toEqual(["Hajime Isayama"]);
   });

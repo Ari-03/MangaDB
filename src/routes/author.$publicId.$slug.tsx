@@ -81,8 +81,15 @@ function roleSummary(series: ReadonlyArray<AuthorSeries>): string {
     .join(" · ");
 }
 
+/** Wrote or drew it (people.ts `isMaker`), as opposed to only originating it. */
+const made = (entry: AuthorSeries) => entry.roles.some((role) => role !== "original");
+
 function AuthorPage() {
-  const { author, series } = Route.useLoaderData();
+  const { author, series: all } = Route.useLoaderData();
+  // Their own work leads; Series they only originated (a spinoff someone
+  // else writes and draws) follow in their own section.
+  const series = all.filter(made);
+  const originals = all.filter((entry) => !made(entry));
   const volumes = series.reduce((sum, entry) => sum + entry.volumeCount, 0);
   return (
     <main className="author-page">
@@ -95,14 +102,15 @@ function AuthorPage() {
         <p className="page-kicker">Author</p>
         <h1 className="author-name">{author.name}</h1>
         <p className="chips">
-          <span className="chip">
-            {series.length} series
-          </span>
+          <span className="chip">{series.length} series</span>
           <span className="chip">
             {volumes.toLocaleString("en-US")} {volumes === 1 ? "volume" : "volumes"}
           </span>
+          {originals.length > 0 ? (
+            <span className="chip">Original creator of {originals.length} more</span>
+          ) : null}
         </p>
-        {series.length > 0 ? <p className="author-roles">{roleSummary(series)}</p> : null}
+        {all.length > 0 ? <p className="author-roles">{roleSummary(all)}</p> : null}
         <p className="note author-credit">
           Credits from the{" "}
           <a href={author.annUrl} rel="noopener" target="_blank">
@@ -119,7 +127,9 @@ function AuthorPage() {
         </div>
         {series.length === 0 ? (
           <p className="notice">
-            None of {author.name}'s series has an English book in the catalog yet.
+            {originals.length > 0
+              ? `${author.name} is credited as the original creator below; the catalog has none of their own series in English yet.`
+              : `None of ${author.name}'s series has an English book in the catalog yet.`}
           </p>
         ) : (
           <div className="shelf">
@@ -129,6 +139,22 @@ function AuthorPage() {
           </div>
         )}
       </section>
+
+      {originals.length > 0 ? (
+        <section className="section">
+          <div className="section-head">
+            <h2 className="section-title">Original work</h2>
+            <p className="section-note">
+              Series others write or draw from {author.name}'s original work
+            </p>
+          </div>
+          <div className="shelf">
+            {originals.map((entry) => (
+              <AuthorSeriesItem key={entry.publicId} entry={entry} eager={false} />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </main>
   );
 }

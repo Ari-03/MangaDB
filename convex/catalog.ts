@@ -276,7 +276,7 @@ export const SUGGEST_AUTHORS = 3;
 /**
  * Authors whose name the query opens, word by word (`matchesAllWords`), off
  * the people name index, the most prolific first. Authors with no visible
- * Series are left out.
+ * Series, as maker or original creator, are left out.
  */
 async function authorHits(ctx: QueryCtx, query: string, limit: number) {
   const docs = await ctx.db
@@ -284,10 +284,18 @@ async function authorHits(ctx: QueryCtx, query: string, limit: number) {
     .withSearchIndex("search_name", (q) => q.search("name", query))
     .take(limit * 4);
   return docs
-    .filter((doc) => doc.seriesCount > 0 && matchesAllWords(query, doc.name))
+    .filter(
+      (doc) =>
+        doc.seriesCount + (doc.originalCount ?? 0) > 0 && matchesAllWords(query, doc.name),
+    )
     .sort((a, b) => b.seriesCount - a.seriesCount)
     .slice(0, limit)
-    .map((doc) => ({ publicId: doc.publicId, name: doc.name, seriesCount: doc.seriesCount }));
+    .map((doc) => ({
+      publicId: doc.publicId,
+      name: doc.name,
+      seriesCount: doc.seriesCount,
+      originalCount: doc.originalCount ?? 0,
+    }));
 }
 
 /** The alt title a hit matched through, or null when its title matched. */

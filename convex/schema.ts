@@ -234,13 +234,16 @@ export default defineSchema({
   // Authors (people.ts): the creators ANN credits on each Series, derived by
   // `people.rebuild` from the stored ANN manga observations, like
   // seriesStats. ANN's person id is the identity, so one author keeps one
-  // row across entries and spellings. `seriesCount` and the jacket (their
-  // biggest Series') are derived for the Authors tab.
+  // row across entries and spellings. `seriesCount` (Series they wrote or
+  // drew), `originalCount` (Series they are only the original creator of),
+  // and the jacket (their biggest Series') are derived for the Authors tab.
   people: defineTable({
     publicId: v.number(),
     name: v.string(),
     annId: v.string(),
     seriesCount: v.number(),
+    // Optional only until the first rebuild after it arrived; readers read 0.
+    originalCount: v.optional(v.number()),
     coverUrl: v.union(v.string(), v.null()),
     coverIsbn: v.union(v.string(), v.null()),
   })

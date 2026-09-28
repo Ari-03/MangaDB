@@ -26,7 +26,7 @@ type SeriesCard = Suggestions["series"][number];
 type Option =
   | { kind: "series"; href: string; card: SeriesCard }
   | { kind: "publisher"; href: string; name: string }
-  | { kind: "author"; href: string; name: string; seriesCount: number }
+  | { kind: "author"; href: string; name: string; meta: string }
   | { kind: "isbn"; href: string; isbn: string }
   | { kind: "all"; href: string; query: string };
 
@@ -86,7 +86,7 @@ function suggestionGroups(query: string, data: Suggestions | null, stale: boolea
         kind: "author" as const,
         href: authorPath(a.publicId, a.name),
         name: a.name,
-        seriesCount: a.seriesCount,
+        meta: authorMeta(a),
       })),
       stale,
     },
@@ -106,6 +106,13 @@ function suggestionGroups(query: string, data: Suggestions | null, stale: boolea
     },
   ];
   return groups.filter((group) => group.options.length > 0);
+}
+
+/** "12 series", or "Original creator of 5 series" for someone who made none. */
+export function authorMeta(author: { seriesCount: number; originalCount: number }): string {
+  return author.seriesCount > 0
+    ? `${author.seriesCount} series`
+    : `Original creator of ${author.originalCount} series`;
 }
 
 /** A suggested Series' second line: the alt title it matched, size, publisher. */
@@ -158,9 +165,7 @@ function OptionBody({ option }: { option: Option }) {
           </span>
           <span className="suggest-text">
             <span className="suggest-title">{option.name}</span>
-            <span className="suggest-meta">
-              Author · {option.seriesCount} series
-            </span>
+            <span className="suggest-meta">Author · {option.meta}</span>
           </span>
         </>
       );

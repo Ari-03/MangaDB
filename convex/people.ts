@@ -31,6 +31,13 @@ export type CreditRole = Doc<"seriesCredits">["role"];
 export const ROLE_ORDER: ReadonlyArray<CreditRole> = ["story_art", "story", "art", "original"];
 
 /**
+ * Whether a credit makes someone the Series' maker: they wrote or drew it.
+ * An original creator of a spinoff (Hajime Yatate across Gundam) did
+ * neither, so those Series don't count toward how prolific they are.
+ */
+export const isMaker = (role: CreditRole) => role !== "original";
+
+/**
  * The role an ANN staff task credits, or null for tasks that don't make
  * someone an author of the Series here (character design, concept art).
  * ANN's manga staff lists no translators or letterers.
@@ -190,6 +197,7 @@ async function upsertPerson(ctx: MutationCtx, credit: AnnCredit): Promise<Id<"pe
     name: credit.name,
     annId: credit.personId,
     seriesCount: 0,
+    originalCount: 0,
     coverUrl: null,
     coverIsbn: null,
   });
@@ -210,7 +218,9 @@ export const sweepCredits = internalMutation({
 
 /**
  * Refresh a batch of authors' derived facts: how many visible Series they
- * are credited on, and the jacket of the biggest one (most Volumes).
+ * wrote or drew (`isMaker`), how many more they are only the original
+ * creator of, and the jacket of their biggest (most Volumes), preferring
+ * one they made.
  */
 export const statsBatch = internalMutation({
   args: { afterPublicId: v.union(v.number(), v.null()) },
@@ -223,18 +233,21 @@ export const statsBatch = internalMutation({
       .take(STATS_BATCH);
     for (const person of docs) {
       const shelf = await visibleSeriesOf(ctx, person._id);
-      const biggest = shelf.reduce<(typeof shelf)[number] | null>(
+      const made = shelf.filter((entry) => entry.roles.some(isMaker));
+      const biggest = (made.length > 0 ? made : shelf).reduce<(typeof shelf)[number] | null>(
         (best, entry) =>
           (entry.stats?.volumeCount ?? 0) > (best?.stats?.volumeCount ?? -1) ? entry : best,
         null,
       );
       const facts = {
-        seriesCount: shelf.length,
+        seriesCount: made.length,
+        originalCount: shelf.length - made.length,
         coverUrl: biggest?.stats?.coverUrl ?? null,
         coverIsbn: biggest?.stats?.coverIsbn ?? null,
       };
       if (
         facts.seriesCount !== person.seriesCount ||
+        facts.originalCount !== person.originalCount ||
         facts.coverUrl !== person.coverUrl ||
         facts.coverIsbn !== person.coverIsbn
       ) {
@@ -438,8 +451,8 @@ export const authorPage = query({
 });
 
 /**
- * The Authors tab (`/authors`): authors with at least one visible Series,
- * the most prolific first, a page at a time.
+ * The Authors tab (`/authors`): authors who wrote or drew at least one
+ * visible Series, the most prolific first, a page at a time.
  */
 export const authors = query({
   args: { paginationOpts: paginationOptsValidator },

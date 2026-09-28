@@ -5,7 +5,7 @@ import { api } from "../../convex/_generated/api";
 import { catalogQuery, type SearchResults } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
-import { isbnInProgress, useDebounced } from "~/lib/searchSuggest";
+import { authorMeta, isbnInProgress, useDebounced } from "~/lib/searchSuggest";
 import { slugParams } from "~/lib/slug";
 import { useUrlDraft } from "~/lib/urlDraft";
 
@@ -260,9 +260,7 @@ function SearchResultsView({
                 </span>
                 <span>
                   <span className="pub-hit-name">{a.name}</span>
-                  <span className="pub-hit-meta">
-                    {a.seriesCount} series
-                  </span>
+                  <span className="pub-hit-meta">{authorMeta(a)}</span>
                 </span>
               </Link>
             ))}
