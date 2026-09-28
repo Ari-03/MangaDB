@@ -15,10 +15,12 @@ export const NEAR_MISS_MIN_LENGTH = 4;
 /**
  * Lower-cased, accent-free words of a text, split on anything that is not a
  * letter or digit: "Pokémon: Red & Blue" → ["pokemon", "red", "blue"]. Only
- * Latin accents are dropped; kana keep their voicing marks.
+ * Latin accents are dropped; kana keep their voicing marks. A "×" is the word
+ * "x" readers type, so "SPY×FAMILY" is ["spy", "x", "family"].
  */
 export function searchWords(text: string): string[] {
   return text
+    .replace(/×/g, " x ")
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .normalize("NFC")

@@ -149,6 +149,8 @@ describe("catalog.search", () => {
         ["Attack on Titan", ["Shingeki no Kyojin", "SnK"]],
         ["Chainsaw Man", []],
         ["Jujutsu Kaisen", ["JJK"]],
+        ["Four Lives Remain", ["Four Lives Remain: Tatsuya Endo Before Spy x Family"]],
+        ["SPY×FAMILY", []],
       ] as const) {
         await ctx.db.insert("series", {
           status: "active",
@@ -165,6 +167,9 @@ describe("catalog.search", () => {
     expect((await titles("snk"))[0]).toBe("Attack on Titan");
     expect((await titles("chainsawman"))[0]).toBe("Chainsaw Man");
     expect(await titles("jjk")).toEqual(["Jujutsu Kaisen"]);
+    // "×" reads as "x": the title itself leads, not the one that names it.
+    expect((await titles("spy x family"))[0]).toBe("SPY×FAMILY");
+    expect(await titles("sxf")).toEqual(["SPY×FAMILY"]);
     const suggested = await t.query(api.catalog.suggest, { query: "jk" });
     expect(suggested.series.map((s) => s.title)).toEqual(["Jujutsu Kaisen"]);
   });

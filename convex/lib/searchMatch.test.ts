@@ -19,6 +19,11 @@ describe("searchWords", () => {
     expect(searchWords("Tokyo Ghoul:re")).toEqual(["tokyo", "ghoul", "re"]);
   });
 
+  it("reads a multiplication sign as the word x", () => {
+    expect(searchWords("SPY×FAMILY")).toEqual(["spy", "x", "family"]);
+    expect(searchWords("Hunter × Hunter")).toEqual(["hunter", "x", "hunter"]);
+  });
+
   it("keeps non-Latin words whole", () => {
     expect(searchWords("ワンピース")).toEqual(["ワンピース"]);
   });
@@ -93,6 +98,9 @@ describe("nicknameKeys", () => {
     expect(nicknameKeys(["Attack on Titan"])).toEqual(["aot", "attackontitan"]);
     expect(nicknameKeys(["Spy x Family"])).toContain("sxf");
     expect(nicknameKeys(["Hunter x Hunter"])).toContain("hxh");
+    expect(nicknameKeys(["Hunter × Hunter", "SPY×FAMILY"])).toEqual(
+      expect.arrayContaining(["hxh", "sxf", "spyxfamily"]),
+    );
     expect(nicknameKeys(["One-Punch Man"])).toContain("opm");
     expect(nicknameKeys(["Chainsaw Man"])).toContain("chainsawman");
   });
