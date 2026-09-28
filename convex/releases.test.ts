@@ -256,6 +256,17 @@ describe("releases.monthBrowse", () => {
     expect(unknown.publishers.length).toBeGreaterThan(0);
   });
 
+  it("names the current slug for an old one, for the pages' in-memory filter", async () => {
+    const { t, ids } = await seeded();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("publisherSlugRedirects", { fromSlug: "viz", publisherId: ids.viz });
+    });
+    const slug = (s: string) => t.query(api.releases.canonicalPublisherSlug, { slug: s });
+    expect(await slug("viz")).toBe("viz-media");
+    expect(await slug("viz-media")).toBe("viz-media");
+    expect(await slug("no-such-publisher")).toBeNull();
+  });
+
   it("labels rows from Coverage: single volume, omnibus range, partial", async () => {
     const { t, ids } = await seeded();
     await t.run(async (ctx) => {

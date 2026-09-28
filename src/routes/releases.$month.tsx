@@ -4,6 +4,8 @@ import { api } from "../../convex/_generated/api";
 import { catalogQuery } from "~/lib/catalogData";
 import { currentMonth, monthParam, monthTitle, parseMonthParam } from "~/lib/month";
 import {
+  followPublisherSlug,
+  isFiltered,
   ReleasesBrowser,
   validateBrowseFilters,
   type BrowseFilters,
@@ -35,25 +37,15 @@ export const Route = createFileRoute("/releases/$month")({
     ...validateBrowseFilters(search),
     view: search.view === "agenda" ? "agenda" : undefined,
   }),
-  loaderDeps: ({ search }) => ({
-    format: search.format,
-    publisher: search.publisher,
-    followed: search.followed,
-    view: search.view,
-  }),
-  loader: async ({ params, deps }) => {
+  // Filters and the view apply in memory over the month
+  // (lib/releasesBrowser.tsx), so the loader depends on the month alone and
+  // neither a filter change nor a view switch reloads.
+  loader: async ({ params, location }) => {
     const anchor = parseMonthParam(params.month);
     if (!anchor) throw notFound();
-    // The followed filter (#29) never reaches the server query — it is a
-    // signed-in client overlay over the same public window; here it only
-    // marks the view as filtered/noindex.
-    const data = await catalogQuery(api.releases.monthBrowse, { ...anchor, format: deps.format, publisher: deps.publisher });
-    return {
-      anchor,
-      today: currentMonth(),
-      data,
-      filtered: Boolean(deps.format || deps.publisher || deps.followed || deps.view),
-    };
+    const data = await catalogQuery(api.releases.monthBrowse, anchor);
+    await followPublisherSlug(location, data);
+    return { anchor, today: currentMonth(), data };
   },
   // Indexing policy (spec §11): unfiltered month views are the evergreen
   // "manga releases {month}" landing pages; filtered combinations are
@@ -61,9 +53,10 @@ export const Route = createFileRoute("/releases/$month")({
   // query-string variant — including a stray `?page=N` — is ever indexed.
   // JSON-LD: BreadcrumbList + an ItemList of the month's Releases, each
   // linking its Edition page anchored at the Release row (ticket #39).
-  head: ({ loaderData }) => {
+  head: ({ loaderData, match }) => {
     if (!loaderData) return {};
-    const { anchor, data, filtered } = loaderData;
+    const { anchor, data } = loaderData;
+    const filtered = isFiltered(match.search) || match.search.view !== undefined;
     const path = `/releases/${monthParam(anchor)}`;
     return {
       ...pageHead({

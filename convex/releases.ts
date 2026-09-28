@@ -1,6 +1,9 @@
 // The public Releases browser (ticket #24, spec §10): one month-window query
 // serving both the Release Agenda (`/releases`) and the Month Grid
-// (`/releases/{yyyy-mm}`) over the same Canonical Releases.
+// (`/releases/{yyyy-mm}`) over the same Canonical Releases. The pages load a
+// month unfiltered and apply the Format and Publisher filters in memory, so
+// changing a filter never waits on the network; the filter arguments below
+// remain for other callers.
 //
 // Recorded schema trade-off (spec §8): the scan is always a date-window over
 // an index — `by_publisher_date` when a Publisher filter is present, else
@@ -282,5 +285,19 @@ export const monthBrowse = query({
     );
 
     return { releases: await joinBrowseRows(ctx, refined), publishers };
+  },
+});
+
+/**
+ * The current slug for a Publisher-filter slug (`resolvePublisher`: renamed
+ * and merged Publishers follow to their survivor), or null when it names no
+ * active Publisher. The Releases pages filter by slug in memory, so a shared
+ * link with an old slug redirects to the current one first.
+ */
+export const canonicalPublisherSlug = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const publisher = await resolvePublisher(ctx, slug);
+    return publisher?.status === "active" ? publisher.slug : null;
   },
 });

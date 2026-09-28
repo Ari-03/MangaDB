@@ -10,6 +10,8 @@ import {
   pageHead,
 } from "~/lib/seo";
 import {
+  followPublisherSlug,
+  isFiltered,
   ReleasesBrowser,
   validateBrowseFilters,
   type BrowseFilters,
@@ -29,36 +31,29 @@ import {
  */
 export const Route = createFileRoute("/releases/")({
   validateSearch: validateBrowseFilters,
-  loaderDeps: ({ search }) => ({
-    format: search.format,
-    publisher: search.publisher,
-    followed: search.followed,
-  }),
-  loader: async ({ deps }) => {
+  // Filters apply in memory over the month (lib/releasesBrowser.tsx), so
+  // the loader depends on nothing but today's month and a filter change
+  // never reloads.
+  loader: async ({ location }) => {
     // The Agenda anchors on the month containing today (UTC), computed on the
-    // server so SSR and hydration agree. The followed filter (#29) never
-    // reaches the server query — it is a signed-in client overlay over the
-    // same public window; here it only marks the view as filtered/noindex.
+    // server so SSR and hydration agree.
     const anchor = currentMonth();
-    const data = await catalogQuery(api.releases.monthBrowse, { ...anchor, format: deps.format, publisher: deps.publisher });
-    return {
-      anchor,
-      data,
-      filtered: Boolean(deps.format || deps.publisher || deps.followed),
-    };
+    const data = await catalogQuery(api.releases.monthBrowse, anchor);
+    await followPublisherSlug(location, data);
+    return { anchor, data };
   },
   // Indexing policy (spec §11): the unfiltered browser is indexable; any
   // filtered combination — including the personal followed filter, which is
   // never indexed — is noindex/follow. The canonical always points at the
   // bare `/releases`, so no query-string variant — including a stray
   // `?page=N` — is ever the indexed URL.
-  head: ({ loaderData }) => ({
+  head: ({ match }) => ({
     ...pageHead({
       title: browserTitleTag(),
       description:
         "English manga releases day by day: every volume publishing this month, with format, publisher, and edition details.",
       path: "/releases",
-      robots: loaderData?.filtered ? "noindex, follow" : undefined,
+      robots: isFiltered(match.search) ? "noindex, follow" : undefined,
     }),
     scripts: [
       jsonLdScript(
