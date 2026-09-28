@@ -21,6 +21,7 @@ import { useRouter } from "@tanstack/react-router";
 import { createIsomorphicFn } from "@tanstack/react-start";
 import { getCookie } from "@tanstack/react-start/server";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 const COOKIE = "mangadb-mature";
 const YEAR_SECONDS = 60 * 60 * 24 * 365;
@@ -106,11 +107,13 @@ function MatureNotice() {
 
 /**
  * The 18+ confirmation that turning the choice on always goes through.
- * A native <dialog>, opened modal as it mounts.
+ * A native <dialog>, opened modal as it mounts, portalled to <body>: it
+ * holds a <form method="dialog">, and the Series filters that open it are
+ * a form themselves. Only ever mounted in the browser (on a click).
  */
 function AgeConfirm({ onClose }: { onClose: () => void }) {
   const { setShowMature } = useMature();
-  return (
+  return createPortal(
     <dialog
       className="age-confirm"
       aria-labelledby="age-confirm-title"
@@ -132,7 +135,8 @@ function AgeConfirm({ onClose }: { onClose: () => void }) {
           I'm 18 or older
         </button>
       </form>
-    </dialog>
+    </dialog>,
+    document.body,
   );
 }
 
