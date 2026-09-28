@@ -1,7 +1,9 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+
+import { catalogQuery } from "~/lib/catalogData";
 import { parsePublicId, seriesPath } from "~/lib/slug";
-import { fetchSeriesPage } from "~/server/seriesPage";
 
 /**
  * Slugless `/series/{id}` (and any merged loser's ID): permanent redirect to
@@ -12,7 +14,7 @@ export const Route = createFileRoute("/series/$publicId/")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await fetchSeriesPage({ data: publicId });
+    const page = await catalogQuery(api.catalog.seriesPage, { publicId });
     if (!page) throw notFound();
     throw redirect({
       href: seriesPath(page.series.publicId, page.series.title),

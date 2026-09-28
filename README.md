@@ -101,8 +101,9 @@ in memory with an exact keyset cursor and total (a filtered page reads about
 and the limits). After deploying a change to either table's shape, run the
 rebuild so the packs follow; until packs exist, filtered views fall back to
 reading every row. The timing filters that count back from today (past
-3/6/12 months, finished) use today's UTC date, which the server function
-passes as `todaySort`, so a cached query never serves an earlier day's
+3/6/12 months, finished) use today's UTC date by the loader's clock (the
+Worker on SSR, the browser on client navigations), which `fetchSeriesBrowse`
+(`src/lib/catalogData.ts`) passes as `todaySort`, so a cached query never serves an earlier day's
 cutoff; later pages keep the first page's date, which their cursor carries,
 so a view paged across midnight stays one set. Other views get no date and
 keep one cache key. Popularity is the signals the catalog has — Series
@@ -206,7 +207,8 @@ catalog page below.
 ## Volume, Edition, and Bundle pages + `/isbn` (ticket #23)
 
 The rest of the public catalog surface (spec §2, §10, §11), served by the
-queries in `convex/catalogPages.ts` through `src/server/catalogPages.ts`:
+queries in `convex/catalogPages.ts`, read by the route loaders through
+`catalogQuery` (`src/lib/catalogData.ts`):
 
 - **`/volume/{id}/{slug}`** reveals every Release covering that Volume,
   grouped under its Edition and split into **Complete releases** vs
@@ -469,7 +471,7 @@ Follows are always private in v1 — the profile never shows them.
 Spec §3: personal tracking is **private by default**, with separate
 visibility defaults for Ownership and Reading plus per-Series overrides
 (`convex/sharing.ts`; UI in `src/lib/sharing.tsx`; profile page at
-`src/routes/u.$username.tsx` reading through `src/server/profile.ts`).
+`src/routes/u.$username.tsx`, a public read through `src/lib/catalogData.ts`).
 
 - **Defaults** live on the User (`ownershipVisibility` /
   `readingVisibility`, both `private` at account creation). `/me` → Sharing
@@ -1246,10 +1248,10 @@ functions authorize in Convex via `ctx.auth.getUserIdentity()`
 (`convex/lib/auth.ts` has the `requireUser` gate for the tracking slices).
 
 Requests flow: `clerkMiddleware()` (`src/start.ts`) authenticates every server
-request → the root route's `beforeLoad` server function exposes
-`{ userId, convexToken }` (a JWT minted from the Clerk template named
-`convex`) → SSR loaders put that token on the Convex HTTP client
-(`convexServerClient(token)`), while the browser uses
+request → the gated routes' `beforeLoad` server functions (`/me`,
+`/claim-username`) read `{ userId, convexToken }` via `ssrAuth()` (a JWT
+minted from the Clerk template named `convex`) and put that token on the
+Convex HTTP client (`convexServerClient(token)`), while the browser uses
 `ConvexProviderWithClerk` (`src/providers.tsx`). Convex validates both via
 OIDC (`convex/auth.config.ts`).
 

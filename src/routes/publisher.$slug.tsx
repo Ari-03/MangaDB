@@ -5,6 +5,8 @@ import {
   redirect,
 } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery, type PublisherPageData } from "~/lib/catalogData";
 import {
   addMonths,
   currentMonth,
@@ -23,7 +25,6 @@ import {
   pageHead,
   publisherTitleTag,
 } from "~/lib/seo";
-import { fetchPublisherPage, type PublisherPageData } from "~/server/publisher";
 
 // The bounded lane's horizon: today through the end of the month three months
 // out (~a 90-day shelf, prototype #17). The Releases browser owns everything
@@ -47,14 +48,12 @@ export const Route = createFileRoute("/publisher/$slug")({
     // Lane bounds are computed here (UTC) so SSR and hydration agree,
     // mirroring the Releases browser's month anchor.
     const now = new Date();
-    const page = await fetchPublisherPage({
-      data: {
-        slug: params.slug,
-        todaySort: todaySortKey(now),
-        horizonSort: monthEndSortKey(
-          addMonths(currentMonth(now), LANE_HORIZON_MONTHS),
-        ),
-      },
+    const page = await catalogQuery(api.publisher.publisherPage, {
+      slug: params.slug,
+      todaySort: todaySortKey(now),
+      horizonSort: monthEndSortKey(
+        addMonths(currentMonth(now), LANE_HORIZON_MONTHS),
+      ),
     });
     if (!page) throw notFound();
     if ("redirectTo" in page) {

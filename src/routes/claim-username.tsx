@@ -3,12 +3,20 @@ import {
   redirect,
   useNavigate,
 } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
 import { useState, type FormEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { clerkEnabled, convexClient } from "~/providers";
+import { ssrAuth } from "~/server/auth";
+
+// Runs on the server for SSR and as an RPC on client navigations, so the
+// gate holds both ways (spec §9).
+const fetchSignedIn = createServerFn({ method: "GET" }).handler(
+  async () => (await ssrAuth()).userId !== null,
+);
 
 /**
  * The forced first-sign-in step (ticket #26) and the username-change screen.
@@ -18,8 +26,8 @@ import { clerkEnabled, convexClient } from "~/providers";
  * just relays its ConvexError messages.
  */
 export const Route = createFileRoute("/claim-username")({
-  beforeLoad: ({ context }) => {
-    if (clerkEnabled && !context.userId) throw redirect({ href: "/sign-in" });
+  beforeLoad: async () => {
+    if (clerkEnabled && !(await fetchSignedIn())) throw redirect({ href: "/sign-in" });
   },
   head: () => ({
     meta: [

@@ -1,5 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery, type SeriesPageData } from "~/lib/catalogData";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { SeriesFollowControls } from "~/lib/follows";
 import {
@@ -27,7 +29,6 @@ import {
 } from "~/lib/seriesShelf";
 import { SeriesVisibilityControls } from "~/lib/sharing";
 import { parsePublicId, seriesPath } from "~/lib/slug";
-import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
 /**
  * The Series page (ticket #22): `/series/{id}/{slug}`, server-rendered from
@@ -50,7 +51,7 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await fetchSeriesPage({ data: publicId });
+    const page = await catalogQuery(api.catalog.seriesPage, { publicId });
     if (!page) throw notFound();
     const canonical = seriesPath(page.series.publicId, page.series.title);
     if (`/series/${params.publicId}/${params.slug}` !== canonical) {

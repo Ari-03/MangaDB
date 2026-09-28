@@ -1,5 +1,8 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+
+import { catalogQuery } from "~/lib/catalogData";
 import { currentMonth, monthParam, monthTitle, parseMonthParam } from "~/lib/month";
 import { PublishersBoard } from "~/lib/publishersBoard";
 import {
@@ -8,7 +11,6 @@ import {
   pageHead,
   SITE_NAME,
 } from "~/lib/seo";
-import { fetchPublishersBoard } from "~/server/publisher";
 
 /**
  * `/publishers/{yyyy-mm}` — the Publishers board for any month, so last
@@ -20,7 +22,7 @@ export const Route = createFileRoute("/publishers/$month")({
   loader: async ({ params }) => {
     const anchor = parseMonthParam(params.month);
     if (!anchor) throw notFound();
-    const data = await fetchPublishersBoard({ data: anchor });
+    const data = await catalogQuery(api.publisher.monthBoard, anchor);
     return { anchor, today: currentMonth(), data };
   },
   head: ({ loaderData }) => {

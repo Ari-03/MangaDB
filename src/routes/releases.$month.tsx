@@ -1,5 +1,7 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery } from "~/lib/catalogData";
 import { currentMonth, monthParam, monthTitle, parseMonthParam } from "~/lib/month";
 import {
   ReleasesBrowser,
@@ -14,7 +16,6 @@ import {
   pageHead,
 } from "~/lib/seo";
 import { editionPath } from "~/lib/slug";
-import { fetchMonthReleases } from "~/server/releases";
 
 /**
  * `/releases/{yyyy-mm}` — the Month Grid sibling of the Release Agenda
@@ -46,9 +47,7 @@ export const Route = createFileRoute("/releases/$month")({
     // The followed filter (#29) never reaches the server query — it is a
     // signed-in client overlay over the same public window; here it only
     // marks the view as filtered/noindex.
-    const data = await fetchMonthReleases({
-      data: { ...anchor, format: deps.format, publisher: deps.publisher },
-    });
+    const data = await catalogQuery(api.releases.monthBrowse, { ...anchor, format: deps.format, publisher: deps.publisher });
     return {
       anchor,
       today: currentMonth(),

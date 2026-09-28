@@ -5,6 +5,8 @@ import {
   redirect,
 } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover, coverIsbns } from "~/lib/cover";
 import {
@@ -22,7 +24,6 @@ import {
   truncateDescription,
 } from "~/lib/seo";
 import { editionPath, parsePublicId, seriesPath, slugParams } from "~/lib/slug";
-import { fetchEditionPage } from "~/server/catalogPages";
 
 /**
  * The Edition page — the book detail page (ticket #23, spec §2/§10/§11):
@@ -41,7 +42,7 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await fetchEditionPage({ data: publicId });
+    const page = await catalogQuery(api.catalogPages.editionPage, { publicId });
     if (!page) throw notFound();
     const canonical = editionPath(page.edition.publicId, page.edition.title);
     if (`/edition/${params.publicId}/${params.slug}` !== canonical) {

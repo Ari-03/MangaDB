@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery } from "~/lib/catalogData";
 import { currentMonth } from "~/lib/month";
 import {
   breadcrumbListJsonLd,
@@ -12,7 +14,6 @@ import {
   validateBrowseFilters,
   type BrowseFilters,
 } from "~/lib/releasesBrowser";
-import { fetchMonthReleases } from "~/server/releases";
 
 /**
  * `/releases` — the Release Agenda (ticket #24, spec §10): the first-visit
@@ -39,9 +40,7 @@ export const Route = createFileRoute("/releases/")({
     // reaches the server query — it is a signed-in client overlay over the
     // same public window; here it only marks the view as filtered/noindex.
     const anchor = currentMonth();
-    const data = await fetchMonthReleases({
-      data: { ...anchor, format: deps.format, publisher: deps.publisher },
-    });
+    const data = await catalogQuery(api.releases.monthBrowse, { ...anchor, format: deps.format, publisher: deps.publisher });
     return {
       anchor,
       data,

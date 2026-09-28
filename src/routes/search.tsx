@@ -1,12 +1,13 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery, type SearchResults } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
 import { isbnInProgress, useDebounced } from "~/lib/searchSuggest";
 import { slugParams } from "~/lib/slug";
 import { useUrlDraft } from "~/lib/urlDraft";
-import { fetchSearchResults, type SearchResults } from "~/server/search";
 
 /**
  * v1 search (ticket #38, spec §8/§11): `/search?q=…` over Series via the
@@ -34,7 +35,7 @@ export const Route = createFileRoute("/search")({
       throw redirect({ href: `/isbn/${isbn}`, statusCode: 302 });
     }
     if (q === "") return { q, results: emptyResults() };
-    return { q, results: await fetchSearchResults({ data: q }) };
+    return { q, results: await catalogQuery(api.catalog.search, { query: q }) };
   },
   head: ({ loaderData }) => ({
     meta: [

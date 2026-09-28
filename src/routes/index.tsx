@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
 import type { CSSProperties, ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { catalogQuery, type BrowseRelease } from "~/lib/catalogData";
 import { clothColor, Cover } from "~/lib/cover";
 import {
   addMonths,
@@ -15,41 +15,26 @@ import {
 } from "~/lib/month";
 import { pageHead, SITE_NAME } from "~/lib/seo";
 import { slugify, slugParams } from "~/lib/slug";
-import { convexServerClient } from "~/server/convex";
-import { fetchMonthReleases, type BrowseRelease } from "~/server/releases";
 
-// Scaffold proof (#21): the home page server-renders the result of a Convex
-// query. Runs only on the server; the Convex URL never reaches the client
-// bundle by way of this function. #22 adds the browse list of Series so the
-// catalog is reachable by link, not just by URL.
 /** Two ledges of the newest Series in the catalog. */
 const SERIES_SHELF_LIMIT = 14;
 
-const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
-  const convex = convexServerClient();
-  if (!convex) return null;
-  const [stats, series] = await Promise.all([
-    convex.query(api.catalog.stats, {}),
-    convex.query(api.catalog.recentSeries, { limit: SERIES_SHELF_LIMIT }),
-  ]);
-  return { stats, series };
-});
-
 export const Route = createFileRoute("/")({
   // The shelves are server-rendered from the same public month window the
-  // Releases browser uses (src/server/releases.ts) — never a client-side
-  // Convex read for public catalog data.
+  // Releases browser uses (lib/catalogData.ts) — a loader read, never a
+  // reactive subscription for public catalog data.
   loader: async () => {
     const month = currentMonth();
-    const [home, releases, nextReleases] = await Promise.all([
-      fetchHomeData(),
-      fetchMonthReleases({ data: month }),
+    const [stats, series, releases, nextReleases] = await Promise.all([
+      catalogQuery(api.catalog.stats, {}),
+      catalogQuery(api.catalog.recentSeries, { limit: SERIES_SHELF_LIMIT }),
+      catalogQuery(api.releases.monthBrowse, month),
       // The hero wall runs on into next month when this one is nearly done.
-      fetchMonthReleases({ data: addMonths(month, 1) }),
+      catalogQuery(api.releases.monthBrowse, addMonths(month, 1)),
     ]);
     // The "today" boundary travels with the loader data so SSR and hydration
     // group the shelves identically.
-    return { home, month, todaySort: todaySortKey(), releases, nextReleases };
+    return { stats, series, month, todaySort: todaySortKey(), releases, nextReleases };
   },
   // Canonical + social card for the home page (ticket #39); the title and
   // description templates live in the root route's defaults.
@@ -81,9 +66,9 @@ const SHELF_LIMIT = 14;
 const NEXT_SHELF_LIMIT = 7;
 
 function Home() {
-  const { home, month, todaySort, releases, nextReleases } = Route.useLoaderData();
-  const stats = home?.stats ?? null;
-  const series = home?.series ?? [];
+  const { stats, series: newest, month, todaySort, releases, nextReleases } =
+    Route.useLoaderData();
+  const series = newest ?? [];
   // A book's physical and digital Releases are one cover on a shelf.
   const monthBooks = oneCoverPer(releases?.releases ?? [], (r) => r.edition.publicId);
   const heroCovers = heroBooks(

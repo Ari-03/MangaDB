@@ -15,6 +15,7 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 
 import { api } from "../../convex/_generated/api";
+import type { BrowseRelease, MonthReleasesData } from "~/lib/catalogData";
 import { convexClient } from "~/providers";
 import { Cover } from "~/lib/cover";
 import {
@@ -29,7 +30,6 @@ import {
   type YearMonth,
 } from "~/lib/month";
 import { slugParams } from "~/lib/slug";
-import type { BrowseRelease, MonthReleasesData } from "~/server/releases";
 
 export type ReleaseFormat = "physical" | "digital";
 export type BrowseFilters = {
