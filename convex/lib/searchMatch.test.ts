@@ -4,6 +4,7 @@ import {
   allowedEdits,
   editDistance,
   matchesAllWords,
+  matchesSeries,
   matchNames,
   nicknameKeys,
   probePrefixes,
@@ -94,36 +95,55 @@ describe("sortByTitleMatch", () => {
 });
 
 describe("nicknameKeys", () => {
+  const keys = (...names: string[]) => {
+    const { initials, runs } = nicknameKeys(names);
+    return [...initials, ...runs];
+  };
+
   it("takes the initials of every multi-word name, and the name run together", () => {
-    expect(nicknameKeys(["Attack on Titan"])).toEqual(["aot", "attackontitan"]);
-    expect(nicknameKeys(["Spy x Family"])).toContain("sxf");
-    expect(nicknameKeys(["Hunter x Hunter"])).toContain("hxh");
-    expect(nicknameKeys(["Hunter × Hunter", "SPY×FAMILY"])).toEqual(
+    expect(nicknameKeys(["Attack on Titan"])).toEqual({ initials: ["aot"], runs: ["attackontitan"] });
+    expect(keys("Spy x Family")).toContain("sxf");
+    expect(keys("Hunter x Hunter")).toContain("hxh");
+    expect(keys("Hunter × Hunter", "SPY×FAMILY")).toEqual(
       expect.arrayContaining(["hxh", "sxf", "spyxfamily"]),
     );
-    expect(nicknameKeys(["One-Punch Man"])).toContain("opm");
-    expect(nicknameKeys(["Chainsaw Man"])).toContain("chainsawman");
+    expect(keys("One-Punch Man")).toContain("opm");
+    expect(keys("Chainsaw Man")).toContain("chainsawman");
   });
 
   it("keeps numbers whole, folds apostrophes, and drops a leading article", () => {
-    expect(nicknameKeys(["Mob Psycho 100"])).toContain("mp100");
-    expect(nicknameKeys(["JoJo's Bizarre Adventure"])).toContain("jba");
-    expect(nicknameKeys(["The Apothecary Diaries"])).toEqual(
+    expect(keys("Mob Psycho 100")).toContain("mp100");
+    expect(keys("JoJo's Bizarre Adventure")).toContain("jba");
+    expect(keys("The Apothecary Diaries")).toEqual(
       expect.arrayContaining(["tad", "ad", "apothecarydiaries"]),
     );
   });
 
   it("reads each part of a subtitled name as a name of its own", () => {
-    expect(nicknameKeys(["Demon Slayer: Kimetsu no Yaiba"])).toEqual(
+    expect(nicknameKeys(["Demon Slayer: Kimetsu no Yaiba"]).initials).toEqual(
       expect.arrayContaining(["dskny", "ds", "kny"]),
     );
-    expect(nicknameKeys(["My Hero Academia", "Boku no Hero Academia"])).toEqual(
+    expect(nicknameKeys(["My Hero Academia", "Boku no Hero Academia"]).initials).toEqual(
       expect.arrayContaining(["mha", "bnha"]),
     );
   });
 
   it("derives nothing from a one-word name", () => {
-    expect(nicknameKeys(["Berserk", "JJK"])).toEqual([]);
+    expect(keys("Berserk", "JJK")).toEqual([]);
+  });
+});
+
+describe("matchesSeries", () => {
+  const series = (title: string, altTitles: string[] = []) => ({ title, altTitles });
+
+  it("takes initials only whole, and words and run-together names by their opening", () => {
+    expect(matchesSeries("aot", series("Attack on Titan"))).toBe(true);
+    expect(matchesSeries("aot", series("Ace of the Diamond"))).toBe(false);
+    expect(matchesSeries("ao", series("Attack on Titan"))).toBe(false);
+    expect(matchesSeries("chainsaw", series("Chainsaw Man"))).toBe(true);
+    expect(matchesSeries("chainsawm", series("Chainsaw Man"))).toBe(true);
+    expect(matchesSeries("spy x family", series("SPY×FAMILY"))).toBe(true);
+    expect(matchesSeries("jjk", series("Jujutsu Kaisen", ["JJK"]))).toBe(true);
   });
 });
 

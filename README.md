@@ -304,7 +304,9 @@ in the site header. It is deliberately narrow:
   those names (`seriesSearchText` in `convex/lib/searchMatch.ts`): the word
   initials ("aot" → Attack on Titan, "sxf" → Spy x Family, "kny" → Demon
   Slayer: Kimetsu no Yaiba) and the words run together ("chainsawman").
-  A query that is exactly a name's initials ranks as an exact match. Fan
+  Initials count only when typed whole ("aot" is not Ace of the Diamond's
+  "aotd"); a three-plus-letter query that is exactly a name's initials ranks
+  as an exact match. A "×" reads as the word "x" ("SPY×FAMILY"). Fan
   nicknames that are not initials ("JJK") work once they are an alt title.
   Every writer of a title or alt titles goes through `seriesSearchText`, and
   the Series library rebuild brings older rows up to the current rule, so

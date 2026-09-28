@@ -33,7 +33,7 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
-import { searchWords, seriesSearchText } from "./lib/searchMatch";
+import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
 
 export const SORTS = [
   "title",
@@ -353,7 +353,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     latestReleaseSort: latest,
     nextReleaseSort: next,
     lastReleasedSort: lastReleased,
-    searchKey: searchKeyFor([seriesSearchText(series.title, series.altTitles)]),
+    searchKey: searchKeyFor([series.title, ...series.altTitles]),
     followers,
     collectors: collectors.size,
     coverUrl: storedCover,
@@ -386,13 +386,19 @@ export function sortKeyFor(title: string): string {
 }
 
 /**
- * Title and alt titles (with their nickname keys, via `seriesSearchText`) as
- * the distinct `searchWords` the library's title filter matches against:
- * ["Pokémon: Red", "Pokemon"] → "pokemon red". The filter splits a query
- * with `searchWords` too, so both sides agree.
+ * Title and alt titles as the distinct `searchWords` the library's title
+ * filter matches against, with their run-together names and, marked "=",
+ * their initials: ["Pokémon: Red", "Pokemon"] → "pokemon red pokemonred =pr".
+ * A typed word matches by opening a word, or an initialism exactly, as in
+ * search (`matchesSeries`). The filter splits a query with `searchWords` too,
+ * so both sides agree.
  */
-export function searchKeyFor(texts: ReadonlyArray<string>): string {
-  return [...new Set(searchWords(texts.join(" ")))].join(" ");
+export function searchKeyFor(names: ReadonlyArray<string>): string {
+  const { initials, runs } = nicknameKeys(names);
+  return [
+    ...new Set([...searchWords(names.join(" ")), ...runs]),
+    ...initials.map((key) => `=${key}`),
+  ].join(" ");
 }
 
 export function letterFor(titleSort: string): string {
@@ -576,8 +582,8 @@ function matcher(f: Filters, today: number | undefined): ((entry: Entry) => bool
   const words = searchWords(f.q ?? "");
   if (words.length > 0) {
     tests.push((entry) => {
-      const key = ` ${entry.searchKey}`;
-      return words.every((word) => key.includes(` ${word}`));
+      const key = ` ${entry.searchKey} `;
+      return words.every((word) => key.includes(` ${word}`) || key.includes(` =${word} `));
     });
   }
   return tests.length > 0 ? (entry) => tests.every((test) => test(entry)) : null;

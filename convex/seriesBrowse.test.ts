@@ -100,7 +100,7 @@ describe("seriesBrowse.rebuild", () => {
       latestReleaseSort: 20991231,
       nextReleaseSort: 20991231,
       lastReleasedSort: 20170101,
-      searchKey: "tokyo ghoul tg tokyoghoul",
+      searchKey: "tokyo ghoul tokyoghoul =tg",
       followers: 1,
       collectors: 1,
       publishers: [{ name: "VIZ Media", slug: "viz-media" }],
@@ -430,15 +430,18 @@ describe("seriesBrowse filters first, then the sort", () => {
   it("finds Series by initials, bringing old searchText up to date on rebuild", async () => {
     // `library` writes searchText the old way (names only); the rebuild syncs it.
     const t = await library([
+      { title: "Ace of the Diamond", publishers: ["kodansha"], volumes: 1, dates: [] },
       { title: "Ao Haru Ride", publishers: ["seas"], volumes: 1, dates: [] },
       { title: "Attack on Titan", publishers: ["kodansha"], volumes: 1, dates: [] },
-      { title: "Spy x Family", publishers: ["viz"], volumes: 1, dates: [] },
+      { title: "SPY×FAMILY", publishers: ["viz"], volumes: 1, dates: [] },
     ]);
     const q = async (q: string) => titles(await t.query(api.seriesBrowse.browse, { sort: "title", q }));
+    // Initials count only whole: "aotd" (Ace of the Diamond) is not "aot".
     expect(await q("aot")).toEqual(["Attack on Titan"]);
-    expect(await q("sxf")).toEqual(["Spy x Family"]);
-    expect(await q("ao")).toEqual(["Ao Haru Ride", "Attack on Titan"]);
-    const aot = await t.run((ctx) => ctx.db.query("series").withIndex("by_publicId", (q) => q.eq("publicId", 2)).unique());
+    expect(await q("sxf")).toEqual(["SPY×FAMILY"]);
+    expect(await q("spy x")).toEqual(["SPY×FAMILY"]);
+    expect(await q("ao")).toEqual(["Ao Haru Ride"]);
+    const aot = await t.run((ctx) => ctx.db.query("series").withIndex("by_publicId", (q) => q.eq("publicId", 3)).unique());
     expect(aot?.searchText).toBe(seriesSearchText("Attack on Titan", []));
   });
 
@@ -446,7 +449,7 @@ describe("seriesBrowse filters first, then the sort", () => {
     const t = await shelf();
     const packs = await t.run((ctx) => ctx.db.query("seriesStatsPacks").collect());
     expect(packs.map((p) => [p.block, p.entries.map((e) => e.publicId)])).toEqual([[0, [1, 2, 3, 4, 5, 6]]]);
-    expect(packs[0]!.entries[3]).toMatchObject({ titleSort: "delta", searchKey: "delta derapage controle dc derapagecontrole", volumeCount: 20 });
+    expect(packs[0]!.entries[3]).toMatchObject({ titleSort: "delta", searchKey: "delta derapage controle derapagecontrole =dc", volumeCount: 20 });
     // A stale pack past the catalog's last block goes on the next rebuild.
     await t.run((ctx) => ctx.db.insert("seriesStatsPacks", { block: 7, entries: [] }));
     await t.action(internal.seriesBrowse.rebuild, {});

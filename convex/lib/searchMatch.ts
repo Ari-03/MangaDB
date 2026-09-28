@@ -63,17 +63,23 @@ function keysOf(name: string): { initials: Set<string>; runs: Set<string> } {
 
 /**
  * Keys a reader types for a Series instead of its words (`keysOf` each of
- * its names): "aot" for Attack on Titan, "kny" for Demon Slayer: Kimetsu no
- * Yaiba, "chainsawman". Fan nicknames that are not initials ("JJK") are not
- * derivable; those come in as alt titles.
+ * its names): `initials` like "aot" for Attack on Titan or "kny" for Demon
+ * Slayer: Kimetsu no Yaiba, which count only when typed whole, and `runs`
+ * like "chainsawman", which open like any word. Fan nicknames that are not
+ * initials ("JJK") are not derivable; those come in as alt titles.
  */
-export function nicknameKeys(names: ReadonlyArray<string>): string[] {
-  const keys = new Set<string>();
+export function nicknameKeys(names: ReadonlyArray<string>): {
+  initials: string[];
+  runs: string[];
+} {
+  const initials = new Set<string>();
+  const runs = new Set<string>();
   for (const name of names) {
-    const { initials, runs } = keysOf(name);
-    for (const key of [...initials, ...runs]) keys.add(key);
+    const keys = keysOf(name);
+    for (const key of keys.initials) initials.add(key);
+    for (const key of keys.runs) runs.add(key);
   }
-  return [...keys];
+  return { initials: [...initials], runs: [...runs] };
 }
 
 /**
@@ -84,7 +90,8 @@ export function nicknameKeys(names: ReadonlyArray<string>): string[] {
  */
 export function seriesSearchText(title: string, altTitles: ReadonlyArray<string>): string {
   const names = [title, ...altTitles];
-  return [...names, ...nicknameKeys(names)].join(" ");
+  const { initials, runs } = nicknameKeys(names);
+  return [...names, ...initials, ...runs].join(" ");
 }
 
 /** True when every query word starts some word of `words`: the one match rule. */
@@ -101,6 +108,26 @@ function everyWordOpens(queryWords: ReadonlyArray<string>, words: ReadonlyArray<
 export function matchesAllWords(query: string, text: string): boolean {
   const queryWords = searchWords(query);
   return queryWords.length > 0 && everyWordOpens(queryWords, searchWords(text));
+}
+
+/**
+ * `matchesAllWords` for a Series: every query word starts a word of its
+ * names or a run-together name, or is one of its initials exactly. So "aot"
+ * finds Attack on Titan but not Ace of the Diamond ("aotd"), and typing
+ * "chainsaw" still finds "chainsawman".
+ */
+export function matchesSeries(
+  query: string,
+  series: { title: string; altTitles: ReadonlyArray<string> },
+): boolean {
+  const queryWords = searchWords(query);
+  const names = [series.title, ...series.altTitles];
+  const { initials, runs } = nicknameKeys(names);
+  const words = [...searchWords(names.join(" ")), ...runs];
+  return (
+    queryWords.length > 0 &&
+    queryWords.every((q) => initials.includes(q) || words.some((w) => w.startsWith(q)))
+  );
 }
 
 /**

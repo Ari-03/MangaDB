@@ -13,6 +13,7 @@ import { groupEditions } from "./lib/editionGroups";
 import { canonicalPublisherFor } from "./lib/publishers";
 import {
   matchesAllWords,
+  matchesSeries,
   matchNames,
   probePrefixes,
   rankNearMisses,
@@ -182,8 +183,8 @@ const PROBE_TAKE = 8;
 
 /**
  * Active Series the title search index returns for a query, and among them
- * the `whole` hits whose titles contain every typed word, exact and opening
- * matches first (`sortByTitleMatch`). The index matches any one term ("one
+ * the `whole` hits whose titles contain every typed word (or its initials,
+ * `matchesSeries`), exact and opening matches first (`sortByTitleMatch`). The index matches any one term ("one
  * peice" finds every "One …"), so `whole` is what tells a real match from a
  * shared word. Reads `take` documents.
  */
@@ -196,7 +197,7 @@ async function titleHits(ctx: QueryCtx, query: string, take: number) {
   const active = docs.filter((doc) => doc.status === "active" && doc.bookless !== true);
   const whole = sortByTitleMatch(
     query,
-    active.filter((doc) => matchesAllWords(query, doc.searchText)),
+    active.filter((doc) => matchesSeries(query, doc)),
   );
   return { active, whole };
 }
