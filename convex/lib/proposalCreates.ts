@@ -19,6 +19,7 @@ import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { volumePositionFor } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
+import { seriesSearchText } from "./searchMatch";
 import {
   fieldDescriptor,
   normalizeFieldValue,
@@ -480,7 +481,7 @@ export async function applyCreatePlan(
         publicId,
         title: plan.fields.title,
         altTitles: plan.fields.altTitles,
-        searchText: [plan.fields.title, ...plan.fields.altTitles].join(" "),
+        searchText: seriesSearchText(plan.fields.title, plan.fields.altTitles),
         sourceStatus: plan.fields.sourceStatus as
           | Doc<"series">["sourceStatus"]
           | undefined,

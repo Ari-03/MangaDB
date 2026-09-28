@@ -132,7 +132,7 @@ describe("moderation.submitDirectEdit — the proposal write path", () => {
     const series = await t.run((ctx) => ctx.db.get(seriesId));
     expect(series?.title).toBe("Beta");
     // Derived search text is maintained by the shared write path.
-    expect(series?.searchText).toBe("Beta A-side");
+    expect(series?.searchText).toBe("Beta A-side as aside");
   });
 
   it("enforces staleness: the base Revision must be the record's latest", async () => {

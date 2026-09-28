@@ -33,7 +33,7 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
-import { searchWords } from "./lib/searchMatch";
+import { searchWords, seriesSearchText } from "./lib/searchMatch";
 
 export const SORTS = [
   "title",
@@ -67,7 +67,8 @@ const STALE_SWEEP = 200;
 /**
  * Rebuild every Series' stats row. Walks the series table in batches from an
  * action so no single mutation grows with the catalog, then sweeps rows whose
- * Series is no longer active. Idempotent; safe to run by hand:
+ * Series is no longer active. On the way it brings each active Series'
+ * `searchText` up to date (`syncSearchText`). Idempotent; safe to run by hand:
  * `npx convex run seriesBrowse:rebuild`.
  */
 export const rebuild = internalAction({
@@ -118,6 +119,7 @@ export const rebuildBatch = internalMutation({
     let count = 0;
     for (const series of docs) {
       if (series.status !== "active") continue;
+      await syncSearchText(ctx, series);
       await upsertStats(ctx, series, rebuiltAt);
       count++;
     }
@@ -125,6 +127,17 @@ export const rebuildBatch = internalMutation({
     return { next: docs.length < REBUILD_BATCH || !last ? null : last.publicId, count };
   },
 });
+
+/**
+ * Bring a Series' `searchText` up to the current `seriesSearchText` rule.
+ * Writers set it as they go; this catches Series written before the rule
+ * last changed (nickname keys arrived after most of the catalog), so a
+ * rebuild is also the backfill.
+ */
+async function syncSearchText(ctx: MutationCtx, series: Doc<"series">) {
+  const searchText = seriesSearchText(series.title, series.altTitles);
+  if (series.searchText !== searchText) await ctx.db.patch(series._id, { searchText });
+}
 
 /**
  * Rows this run did not touch are candidates, but a row only goes when its
@@ -340,7 +353,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     latestReleaseSort: latest,
     nextReleaseSort: next,
     lastReleasedSort: lastReleased,
-    searchKey: searchKeyFor([series.title, ...series.altTitles]),
+    searchKey: searchKeyFor([seriesSearchText(series.title, series.altTitles)]),
     followers,
     collectors: collectors.size,
     coverUrl: storedCover,
@@ -373,9 +386,10 @@ export function sortKeyFor(title: string): string {
 }
 
 /**
- * Title and alt titles as the distinct `searchWords` the library's title
- * filter matches against: ["Pokémon: Red", "Pokemon"] → "pokemon red". The
- * filter splits a query with `searchWords` too, so both sides agree.
+ * Title and alt titles (with their nickname keys, via `seriesSearchText`) as
+ * the distinct `searchWords` the library's title filter matches against:
+ * ["Pokémon: Red", "Pokemon"] → "pokemon red". The filter splits a query
+ * with `searchWords` too, so both sides agree.
  */
 export function searchKeyFor(texts: ReadonlyArray<string>): string {
   return [...new Set(searchWords(texts.join(" ")))].join(" ");

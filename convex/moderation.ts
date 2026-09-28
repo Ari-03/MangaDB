@@ -26,6 +26,7 @@ import {
   normalizeFieldValue,
   type RecordType,
 } from "./lib/moderationFields";
+import { seriesSearchText } from "./lib/searchMatch";
 import { volumeTitle } from "./lib/titles";
 import { sameValue } from "./lib/values";
 
@@ -196,7 +197,7 @@ export async function applyUpdate(
     const altTitles = ("altTitles" in patch
       ? patch.altTitles
       : series.altTitles) as string[];
-    patch.searchText = [title, ...altTitles].join(" ");
+    patch.searchText = seriesSearchText(title, altTitles);
   }
 
   // Implicit Human Override (spec §4): a human author's approved change to an

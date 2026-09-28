@@ -300,7 +300,17 @@ in the site header. It is deliberately narrow:
 
 - **Series** are matched through the `search_title` search index on
   `searchText` — the title and every alternate title concatenated on write —
-  so "Toukyou Kushu" finds Tokyo Ghoul. Results link the canonical
+  so "Toukyou Kushu" finds Tokyo Ghoul — plus nickname keys derived from
+  those names (`seriesSearchText` in `convex/lib/searchMatch.ts`): the word
+  initials ("aot" → Attack on Titan, "sxf" → Spy x Family, "kny" → Demon
+  Slayer: Kimetsu no Yaiba) and the words run together ("chainsawman").
+  A query that is exactly a name's initials ranks as an exact match. Fan
+  nicknames that are not initials ("JJK") work once they are an alt title.
+  Every writer of a title or alt titles goes through `seriesSearchText`, and
+  the Series library rebuild brings older rows up to the current rule, so
+  after a deploy that changes it, `npx convex run seriesBrowse:rebuild`
+  backfills. The `/series` library's title filter matches the same keys.
+  Results link the canonical
   `/series/{id}/{slug}` pages; hidden and merged records never appear (a
   merged Series is findable through its survivor).
 - **Publishers** match when every query word starts a word of their name,

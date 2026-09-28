@@ -5,9 +5,11 @@ import {
   editDistance,
   matchesAllWords,
   matchNames,
+  nicknameKeys,
   probePrefixes,
   rankNearMisses,
   searchWords,
+  seriesSearchText,
   sortByTitleMatch,
 } from "./searchMatch";
 
@@ -35,6 +37,29 @@ describe("matchesAllWords", () => {
 });
 
 describe("sortByTitleMatch", () => {
+  it("counts a query that is a name's initials as exact, a partial one not at all", () => {
+    const shelf = [
+      { title: "Ao Haru Ride", altTitles: [] },
+      { title: "Aot Hat Club", altTitles: [] },
+      { title: "Attack on Titan", altTitles: [] },
+    ];
+    const order = (query: string) => sortByTitleMatch(query, shelf).map((h) => h.title);
+    expect(order("aot")).toEqual(["Attack on Titan", "Aot Hat Club", "Ao Haru Ride"]);
+    expect(order("ao")[0]).toBe("Ao Haru Ride");
+  });
+
+  it("gives two-letter initials no lift over a title that opens with them", () => {
+    const shelf = [
+      { title: "Dear Emily", altTitles: [] },
+      { title: "Death Note", altTitles: [] },
+    ];
+    expect(sortByTitleMatch("de", shelf).map((h) => h.title)).toEqual(["Dear Emily", "Death Note"]);
+    expect(sortByTitleMatch("de", [...shelf].reverse()).map((h) => h.title)).toEqual([
+      "Death Note",
+      "Dear Emily",
+    ]);
+  });
+
   const hits = [
     { title: "Attack on Titan Anthology", altTitles: [] },
     { title: "The Science of Attack on Titan", altTitles: [] },
@@ -60,6 +85,45 @@ describe("sortByTitleMatch", () => {
       "The Science of Attack on Titan",
       "Attack on Titan: No Regrets",
     ]);
+  });
+});
+
+describe("nicknameKeys", () => {
+  it("takes the initials of every multi-word name, and the name run together", () => {
+    expect(nicknameKeys(["Attack on Titan"])).toEqual(["aot", "attackontitan"]);
+    expect(nicknameKeys(["Spy x Family"])).toContain("sxf");
+    expect(nicknameKeys(["Hunter x Hunter"])).toContain("hxh");
+    expect(nicknameKeys(["One-Punch Man"])).toContain("opm");
+    expect(nicknameKeys(["Chainsaw Man"])).toContain("chainsawman");
+  });
+
+  it("keeps numbers whole, folds apostrophes, and drops a leading article", () => {
+    expect(nicknameKeys(["Mob Psycho 100"])).toContain("mp100");
+    expect(nicknameKeys(["JoJo's Bizarre Adventure"])).toContain("jba");
+    expect(nicknameKeys(["The Apothecary Diaries"])).toEqual(
+      expect.arrayContaining(["tad", "ad", "apothecarydiaries"]),
+    );
+  });
+
+  it("reads each part of a subtitled name as a name of its own", () => {
+    expect(nicknameKeys(["Demon Slayer: Kimetsu no Yaiba"])).toEqual(
+      expect.arrayContaining(["dskny", "ds", "kny"]),
+    );
+    expect(nicknameKeys(["My Hero Academia", "Boku no Hero Academia"])).toEqual(
+      expect.arrayContaining(["mha", "bnha"]),
+    );
+  });
+
+  it("derives nothing from a one-word name", () => {
+    expect(nicknameKeys(["Berserk", "JJK"])).toEqual([]);
+  });
+});
+
+describe("seriesSearchText", () => {
+  it("is the names, then their keys", () => {
+    expect(seriesSearchText("Jujutsu Kaisen", ["JJK"])).toBe(
+      "Jujutsu Kaisen JJK jk jujutsukaisen",
+    );
   });
 });
 

@@ -618,7 +618,7 @@ describe("series split", () => {
 
     expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
     const target = (await splitOff(t))!;
-    expect(target).toMatchObject({ status: "active", altTitles: ["Rabbit Doubt"], searchText: "Doubt Rabbit Doubt" });
+    expect(target).toMatchObject({ status: "active", altTitles: ["Rabbit Doubt"], searchText: "Doubt Rabbit Doubt rd rabbitdoubt" });
     const state = await t.run(async (ctx) => ({
       targetVolumes: (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", target._id)).collect()).map(
         (v) => [v.label ?? null, v.position, v._id],
