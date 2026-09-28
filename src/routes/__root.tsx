@@ -37,6 +37,11 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { name: "color-scheme", content: "dark light" },
       { name: "theme-color", content: "#15110c" },
+      // The header's brand mark (public/): SVG for browsers that take it, the
+      // ICO for the rest, a full-bleed PNG for iOS home screens.
+      { rel: "icon", href: "/favicon.ico", sizes: "48x48" },
+      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
       { title: "MangaDB" },
       {
         name: "description",
