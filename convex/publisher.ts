@@ -34,11 +34,13 @@ import {
   type BrowseCache,
 } from "./releases";
 
-// The Spotlight lane is bounded (prototype #17): at most LANE_CAP rows within
-// the horizon the route requests (~3 months); the full calendar lives in the
-// Releases browser. The scan cap covers hidden-row attrition before the slice.
-export const LANE_CAP = 12;
-const LANE_SCAN_CAP = 100;
+// The Spotlight's months after this one are bounded (prototype #17): at most
+// LANE_CAP books within the horizon the route requests (~3 months), enough
+// for a busy publisher's next three months, which the page previews a dozen
+// at a time; the full calendar lives in the Releases browser. The scan cap
+// covers hidden-row attrition and formats folding into one book.
+export const LANE_CAP = 72;
+const LANE_SCAN_CAP = 300;
 
 /**
  * Find the Publisher a requested slug means: the current slug first, then the
@@ -64,12 +66,52 @@ async function resolveBySlug(
   return await followMerges(ctx, "publishers", doc);
 }
 
+type BrowseRow = Awaited<ReturnType<typeof joinBrowseRows>>[number];
+
+/** A book on the Spotlight: an Edition's Releases in one month, folded together. */
+export type SpotlightBook = BrowseRow & {
+  /** Every Format (and Binding) the book comes in that month, physical first. */
+  formats: Array<{ format: BrowseRow["format"]; binding: BrowseRow["binding"] }>;
+};
+
+/**
+ * Fold joined rows into one book per Edition per month: a volume out in
+ * paperback and digital is one book with two formats, not two cards. The
+ * book keeps its earliest date and, among same-day rows, the physical one's
+ * jacket. Input and output are in date order.
+ */
+export function foldFormats(rows: ReadonlyArray<BrowseRow>): SpotlightBook[] {
+  const ordered = [...rows].sort(
+    (a, b) => a.sort - b.sort || (a.format === "physical" ? 0 : 1) - (b.format === "physical" ? 0 : 1),
+  );
+  const books = new Map<string, SpotlightBook>();
+  for (const row of ordered) {
+    const key = `${row.edition.publicId}:${Math.floor(row.sort / 100)}`;
+    const format = { format: row.format, binding: row.binding };
+    const book = books.get(key);
+    if (!book) books.set(key, { ...row, formats: [format] });
+    else if (!book.formats.some((f) => f.format === format.format && f.binding === format.binding)) {
+      book.formats.push(format);
+      book.formats.sort((a, b) => (a.format === "physical" ? 0 : 1) - (b.format === "physical" ? 0 : 1));
+    }
+  }
+  return [...books.values()];
+}
+
+// This month's Releases read for the Spotlight: a busy Publisher puts out a
+// couple of hundred a month across formats.
+const MONTH_SCAN_CAP = 400;
+
 /**
  * Everything the Publisher Spotlight renders. `todaySort`/`horizonSort` are
- * yyyymmdd sort keys the route computes (spec §8 partial dates), bounding the
- * upcoming lane. The scan starts at the current month's yyyymm00 so a
- * this-month day-TBA Release still counts as upcoming; dated rows earlier in
- * the month are already out and drop in memory.
+ * yyyymmdd sort keys the route computes (spec §8 partial dates).
+ *
+ * - `thisMonth`: every active Release dated in the current month, already
+ *   out or still to come (day-TBA rows sort first at yyyymm00), folded into
+ *   books (`foldFormats`), with the Release count.
+ * - `upcoming`: the months after this one up to the horizon, as books,
+ *   bounded to LANE_CAP; the Releases browser has the rest.
+ * - `nextSort`: the next publication date from today on, if any.
  *
  * Returns `{ redirectTo }` when the requested slug is a renamed Publisher's
  * old slug or a merged Publisher's (the route 301s), null for unknown/hidden.
@@ -94,30 +136,27 @@ export const publisherPage = query({
       todaySort > 0 &&
       horizonSort >= todaySort;
 
-    let upcoming: Awaited<ReturnType<typeof joinBrowseRows>> = [];
-    let scanFull = false;
-    if (boundsOk) {
-      const monthStart = Math.floor(todaySort / 100) * 100;
-      const windowDocs = await ctx.db
+    const monthStart = Math.floor(todaySort / 100) * 100;
+    const window = async (from: number, to: number, cap: number) => {
+      const docs = await ctx.db
         .query("releases")
         .withIndex("by_publisher_date", (q) =>
-          q
-            .eq("publisherId", publisher._id)
-            .gte("pubDate.sort", monthStart)
-            .lte("pubDate.sort", horizonSort),
+          q.eq("publisherId", publisher._id).gte("pubDate.sort", from).lte("pubDate.sort", to),
         )
-        .take(LANE_SCAN_CAP);
-      scanFull = windowDocs.length === LANE_SCAN_CAP;
-      const refined = windowDocs.filter(
-        (doc) =>
-          doc.status === "active" &&
-          doc.pubDate !== undefined &&
-          // Still upcoming: dated today-or-later, or day-TBA (month/year
-          // precision) — past-month TBA rows sit below the index range.
-          (doc.pubDate.sort >= todaySort || doc.pubDate.day === undefined),
-      );
-      upcoming = await joinBrowseRows(ctx, refined);
-    }
+        .take(cap);
+      const active = docs.filter((doc) => doc.status === "active");
+      return { rows: await joinBrowseRows(ctx, active), full: docs.length === cap };
+    };
+    const [month, later] = boundsOk
+      ? await Promise.all([
+          window(monthStart, monthStart + 99, MONTH_SCAN_CAP),
+          window(monthStart + 100, horizonSort, LANE_SCAN_CAP),
+        ])
+      : [{ rows: [], full: false }, { rows: [], full: false }];
+    const upcoming = foldFormats(later.rows);
+    const next = [...month.rows, ...later.rows].find(
+      (row) => row.sort >= todaySort || row.day === null,
+    );
 
     // Imprint family, one level deep: the parent company, or the imprints.
     const parentDoc = publisher.parentPublisherId
@@ -153,9 +192,16 @@ export const publisherPage = query({
       },
       parent: parentDoc ? { name: parentDoc.name, slug: parentDoc.slug } : null,
       imprints,
+      thisMonth: {
+        books: foldFormats(month.rows),
+        releases: month.rows.length,
+        // The month holds more than the scan read (the browser shows all).
+        capped: month.full,
+      },
       upcoming: upcoming.slice(0, LANE_CAP),
       // More upcoming Releases exist beyond the lane (the browser shows all).
-      upcomingCapped: upcoming.length > LANE_CAP || scanFull,
+      upcomingCapped: upcoming.length > LANE_CAP || later.full,
+      nextSort: next?.sort ?? null,
       editionCount: {
         count: Math.min(activeEditions, COUNT_CAP),
         capped: editionDocs.length > COUNT_CAP,

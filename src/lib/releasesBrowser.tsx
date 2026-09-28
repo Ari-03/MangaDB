@@ -534,7 +534,7 @@ const LONG_WEEKDAYS: Record<string, string> = {
  * Spotlight's upcoming lane (ticket #25), which renders the same rows
  * month by month (without the followed overlay).
  */
-export function AgendaView({
+function AgendaView({
   anchor,
   releases,
   followedSeries = null,

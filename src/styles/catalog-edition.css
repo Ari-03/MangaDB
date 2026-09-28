@@ -400,25 +400,52 @@
   margin-top: 20px;
 }
 
-.publisher-lane-month + .publisher-lane-month {
-  margin-top: 44px;
+/* The numbers under the hero: series, books, this month, the next date. */
+.pub-stats {
+  margin-top: 0;
+  padding-bottom: 6px;
 }
-.publisher-lane-month h3 {
-  font-size: 1.02rem;
+/* The next date is words, not a count, so it sets smaller than the numbers. */
+.pub-stats .pub-next {
+  font-size: clamp(1.3rem, 1rem + 1vw, 1.8rem);
+  line-height: 1.5;
+}
+
+/* A titled shelf inside a section: this month's still-to-come and out-already
+   books, and each month after. */
+.pub-shelf + .pub-shelf {
+  margin-top: 40px;
+}
+.pub-shelf-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 20px;
   padding-bottom: 9px;
   border-bottom: 1px solid var(--line);
+  font-size: 1.02rem;
   color: var(--text-dim);
 }
-/* The agenda sets its own rhythm for a full month page; inside a bounded lane
-   it sits closer to the month it belongs to. */
-.publisher-lane-month .agenda {
-  margin: 8px 0 0;
-}
-.publisher-lane-month h3 a {
+.pub-shelf-title a {
   transition: color 140ms ease;
 }
-.publisher-lane-month h3 a:hover {
+.pub-shelf-title a:hover {
   color: var(--accent);
+}
+.pub-shelf-count {
+  font-family: var(--body);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-mute);
+}
+.pub-shelf-more {
+  margin-top: 24px;
+}
+/* Every format a book comes in that month, side by side. */
+.pub-formats {
+  gap: 6px;
+  flex-wrap: wrap;
+  white-space: normal;
 }
 
 .lane-more {
@@ -664,5 +691,15 @@
   .pub-cta .btn {
     width: 100%;
     justify-content: center;
+  }
+  /* Four numbers don't fit a phone's width: two by two. */
+  .pub-stats {
+    flex-wrap: wrap;
+    row-gap: 18px;
+  }
+  .pub-stats .stat {
+    flex: 1 1 50%;
+    padding-inline: 0;
+    border-left: 0;
   }
 }

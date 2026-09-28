@@ -112,24 +112,59 @@ describe("publisher.publisherPage", () => {
       description: "Publisher profile blurb.",
     });
     expect(page.editionCount).toEqual({ count: 1, capped: false });
-    // Day-TBA (sort yyyymm00) leads its month; already-published, hidden,
-    // out-of-horizon, and year-only rows are absent.
+    // This month is every active August release, out already or still to
+    // come; the fixture's one Edition makes them one book, dated by its
+    // earliest (the day-TBA row, which sorts first).
+    expect(page.thisMonth).toMatchObject({ releases: 3, capped: false });
+    expect(page.thisMonth.books.map((b) => [b.sort, b.day])).toEqual([[20260800, null]]);
+    // After this month: hidden, out-of-horizon, and year-only rows are absent.
     expect(page.upcoming.map((r) => [r.sort, r.day])).toEqual([
-      [20260800, null],
-      [20260819, 19],
       [20260901, 1],
       [20261130, 30],
     ]);
     expect(page.upcomingCapped).toBe(false);
+    expect(page.nextSort).toBe(20260800);
+  });
+
+  it("folds an Edition's formats in one month into one book, physical first", async () => {
+    const { t, ids } = await seeded();
+    await t.run(async (ctx) => {
+      for (const format of ["digital", "physical"] as const) {
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId: ids.edition,
+          format,
+          binding: format === "physical" ? "hardcover" : undefined,
+          language: "en",
+          pubDate: { year: 2026, month: 10, day: 6, sort: 20261006 },
+          publisherId: ids.viz,
+          seriesIds: [ids.series],
+        });
+      }
+    });
+    const page = await t.query(api.publisher.publisherPage, { slug: "viz-media", ...bounds });
+    if (!page || "redirectTo" in page) throw new Error("expected page data");
+    const october = page.upcoming.filter((b) => Math.floor(b.sort / 100) === 202610);
+    expect(october).toHaveLength(1);
+    expect(october[0]!.formats).toEqual([
+      { format: "physical", binding: "hardcover" },
+      { format: "digital", binding: null },
+    ]);
   });
 
   it("caps the lane at LANE_CAP and flags that more exist", async () => {
     const { t, ids } = await seeded();
     await t.run(async (ctx) => {
       for (let day = 1; day <= LANE_CAP; day++) {
+        // A book each: one Edition's releases in a month would fold into one.
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: 100 + day,
+          publisherId: ids.viz,
+        });
         await ctx.db.insert("releases", {
           status: "active",
-          editionId: ids.edition,
+          editionId,
           format: "digital",
           language: "en",
           pubDate: { year: 2026, month: 10, day, sort: 20261000 + day },
@@ -245,6 +280,7 @@ describe("publisher.publisherPage", () => {
     if (!page || "redirectTo" in page) throw new Error("expected page data");
     expect(page.upcoming).toEqual([]);
     expect(page.upcomingCapped).toBe(false);
+    expect(page.thisMonth.books).toEqual([]);
   });
 });
 

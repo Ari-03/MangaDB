@@ -4,20 +4,28 @@ import {
   notFound,
   redirect,
 } from "@tanstack/react-router";
+import { useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { catalogQuery, type PublisherPageData } from "~/lib/catalogData";
+import {
+  catalogQuery,
+  fetchSeriesBrowse,
+  type PublisherPageData,
+  type SeriesBrowseItem,
+} from "~/lib/catalogData";
+import { Cover } from "~/lib/cover";
 import {
   addMonths,
   currentMonth,
+  MONTH_NAMES,
   monthEndSortKey,
   monthParam,
   monthTitle,
   todaySortKey,
+  weekdayName,
   type YearMonth,
 } from "~/lib/month";
 import { ModEditLink } from "~/lib/moderation";
-import { AgendaView } from "~/lib/releasesBrowser";
 import {
   breadcrumbListJsonLd,
   jsonLdScript,
@@ -25,18 +33,24 @@ import {
   pageHead,
   publisherTitleTag,
 } from "~/lib/seo";
+import { slugParams } from "~/lib/slug";
 
-// The bounded lane's horizon: today through the end of the month three months
-// out (~a 90-day shelf, prototype #17). The Releases browser owns everything
-// beyond it.
+// The upcoming lane's horizon: the three months after this one (~a 90-day
+// shelf, prototype #17). The Releases browser owns everything beyond it.
 const LANE_HORIZON_MONTHS = 3;
+/** Top series shown: the publisher's biggest active series. */
+const TOP_SERIES = 12;
+/** Books a month shelf shows before "Show all". */
+const SHELF_PREVIEW = 12;
 
 /**
  * The Publisher Spotlight page (ticket #25, spec §10/§11): `/publisher/{slug}`
- * is a publisher-led profile — identity and context first, then a bounded
- * upcoming-Releases lane — with a clear route into the main Releases browser
- * pre-filtered to this Publisher. The cross-publisher overview is the
- * Publishers board (`/publishers`), a month of activity per Publisher.
+ * is a publisher-led profile. Identity and a few numbers first, then this
+ * month's books (still to come, then already out), the publisher's top
+ * series, and what lands in the months after, each book once however many
+ * formats it comes in (publisher.ts foldFormats). The Releases browser,
+ * pre-filtered to this Publisher, holds the full calendar. The
+ * cross-publisher overview is the Publishers board (`/publishers`).
  *
  * Publishers are the slug-only URL exception (spec §8): a renamed Publisher's
  * old slug 301s here via publisherSlugRedirects, and a merged Publisher's
@@ -48,13 +62,25 @@ export const Route = createFileRoute("/publisher/$slug")({
     // Lane bounds are computed here (UTC) so SSR and hydration agree,
     // mirroring the Releases browser's month anchor.
     const now = new Date();
-    const page = await catalogQuery(api.publisher.publisherPage, {
-      slug: params.slug,
-      todaySort: todaySortKey(now),
-      horizonSort: monthEndSortKey(
-        addMonths(currentMonth(now), LANE_HORIZON_MONTHS),
-      ),
-    });
+    const month = currentMonth(now);
+    const todaySort = todaySortKey(now);
+    // Top series come from the Series library: most volumes among those with
+    // a release in the past year. Popularity (follows, collectors) will be a
+    // better signal once the catalog has enough of it.
+    const [page, top, facets] = await Promise.all([
+      catalogQuery(api.publisher.publisherPage, {
+        slug: params.slug,
+        todaySort,
+        horizonSort: monthEndSortKey(addMonths(month, LANE_HORIZON_MONTHS)),
+      }),
+      fetchSeriesBrowse({
+        sort: "volumes",
+        publishers: [params.slug],
+        timing: "past-12m",
+        pageSize: TOP_SERIES,
+      }),
+      catalogQuery(api.seriesBrowse.facets, {}),
+    ]);
     if (!page) throw notFound();
     if ("redirectTo" in page) {
       throw redirect({
@@ -62,7 +88,15 @@ export const Route = createFileRoute("/publisher/$slug")({
         statusCode: 301,
       });
     }
-    return page;
+    return {
+      ...page,
+      month,
+      todaySort,
+      topSeries: top?.items ?? [],
+      activeSeries: top?.total ?? null,
+      seriesCount:
+        facets?.publishers.find((p) => p.slug === params.slug)?.count ?? null,
+    };
   },
   // Title/description formulas, canonical link, and BreadcrumbList +
   // Organization JSON-LD (spec §11, ticket #39).
@@ -109,25 +143,37 @@ function PublisherNotFound() {
   );
 }
 
-/**
- * Lane rows grouped for display: one group per month (rows carry yyyymmdd
- * sort keys, spec §8), with year-only-precision rows (month 0) in their own
- * "month to be announced" group.
- */
-function groupLaneByMonth(upcoming: PublisherPageData["upcoming"]) {
-  const groups: Array<{
-    key: string;
-    year: number;
-    month: number | null;
-    rows: PublisherPageData["upcoming"];
-  }> = [];
-  for (const row of upcoming) {
-    const year = Math.floor(row.sort / 10000);
-    const month = Math.floor(row.sort / 100) % 100 || null;
-    const key = `${year}-${month ?? "tba"}`;
-    const group = groups.find((g) => g.key === key);
-    if (group) group.rows.push(row);
-    else groups.push({ key, year, month, rows: [row] });
+
+type Book = PublisherPageData["upcoming"][number];
+
+/** Still to come: dated today or later, or dated only to this month. */
+const stillToCome = (book: Book, todaySort: number) =>
+  book.sort >= todaySort || book.day === null;
+
+/** "Tue, Sep 29", or "Sep, date TBA" for a book dated only to its month. */
+function bookDate(book: Book): string {
+  const year = Math.floor(book.sort / 10000);
+  const month = Math.floor(book.sort / 100) % 100;
+  const name = MONTH_NAMES[month - 1]?.slice(0, 3) ?? "";
+  return book.day === null
+    ? `${name}, date TBA`
+    : `${weekdayName({ year, month }, book.day)}, ${name} ${book.day}`;
+}
+
+/** Books after this month grouped by month, in date order. */
+function groupByMonth(books: ReadonlyArray<Book>) {
+  const groups: Array<{ month: YearMonth; books: Book[] }> = [];
+  for (const book of books) {
+    const month = {
+      year: Math.floor(book.sort / 10000),
+      month: Math.floor(book.sort / 100) % 100,
+    };
+    const group = groups.at(-1);
+    if (group && group.month.year === month.year && group.month.month === month.month) {
+      group.books.push(book);
+    } else {
+      groups.push({ month, books: [book] });
+    }
   }
   return groups;
 }
@@ -137,17 +183,32 @@ function PublisherPage() {
     publisher,
     parent,
     imprints,
+    thisMonth,
     upcoming,
     upcomingCapped,
+    nextSort,
     editionCount,
+    month,
+    todaySort,
+    topSeries,
+    seriesCount,
   } = Route.useLoaderData();
-  const groups = groupLaneByMonth(upcoming);
+  const toCome = thisMonth.books.filter((book) => stillToCome(book, todaySort));
+  // Already out: the most recent first.
+  const out = thisMonth.books.filter((book) => !stillToCome(book, todaySort)).reverse();
+  const next = [...thisMonth.books, ...upcoming].find((book) => book.sort === nextSort);
+  const monthName = MONTH_NAMES[month.month - 1];
+  const calendarMonth = (m: YearMonth) => ({
+    to: "/releases/$month" as const,
+    params: { month: monthParam(m) },
+    search: { publisher: publisher.slug },
+  });
 
   return (
     <main className="publisher-page">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
         <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Publisher</span>
+        <Link to="/publishers">Publishers</Link>
       </nav>
 
       <header className="pub-hero">
@@ -180,16 +241,6 @@ function PublisherPage() {
               ))}
             </p>
           ) : null}
-          {editionCount.count > 0 ? (
-            <p className="fact-chips">
-              <span className="chip">
-                {editionCount.count}
-                {editionCount.capped ? "+" : ""} edition
-                {editionCount.count === 1 && !editionCount.capped ? "" : "s"} in
-                the catalog
-              </span>
-            </p>
-          ) : null}
           {/* The clear route into the main Releases browser, pre-filtered
               (prototype #17): cross-publisher comparison lives there. */}
           <p className="pub-cta">
@@ -204,68 +255,120 @@ function PublisherPage() {
         </div>
       </header>
 
-      <hr className="rule" />
+      <div className="stat-row pub-stats">
+        {seriesCount !== null ? (
+          <div className="stat">
+            <div className="stat-num">{seriesCount.toLocaleString("en-US")}</div>
+            <div className="stat-label">series</div>
+          </div>
+        ) : null}
+        <div className="stat">
+          <div className="stat-num">
+            {editionCount.count.toLocaleString("en-US")}
+            {editionCount.capped ? "+" : ""}
+          </div>
+          <div className="stat-label">books in the catalog</div>
+        </div>
+        <div className="stat">
+          <div className="stat-num">
+            {thisMonth.releases}
+            {thisMonth.capped ? "+" : ""}
+          </div>
+          <div className="stat-label">releases in {monthName}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-num pub-next">{next ? bookDate(next) : "None"}</div>
+          <div className="stat-label">next release</div>
+        </div>
+      </div>
 
-      <section className="section publisher-upcoming">
+      <section className="section">
         <div className="section-head">
           <h2 className="section-title">
-            Landing in the next {LANE_HORIZON_MONTHS} months
+            {monthName} from {publisher.name}
           </h2>
           <p className="section-note">
-            Past months, other publishers and format filters live in the release
-            browser.
+            {toCome.length} still to come, {out.length} out already
+          </p>
+          <Link className="section-link" {...calendarMonth(month)}>
+            {monthName} in the calendar
+          </Link>
+        </div>
+        {toCome.length === 0 && out.length === 0 ? (
+          <p className="notice">
+            Nothing from {publisher.name} is dated in {monthTitle(month)}.
+          </p>
+        ) : null}
+        {toCome.length > 0 ? (
+          <BookShelf title="Still to come" books={toCome} eager />
+        ) : null}
+        {out.length > 0 ? <BookShelf title="Out already" books={out} /> : null}
+        {thisMonth.capped ? (
+          <p className="note lane-more">
+            A busy month: the calendar has every {publisher.name} release.
+          </p>
+        ) : null}
+      </section>
+
+      {topSeries.length > 0 ? (
+        <section className="section">
+          <div className="section-head">
+            <h2 className="section-title">Top series</h2>
+            <p className="section-note">
+              Their biggest series with a release in the past year
+            </p>
+            <Link
+              className="section-link"
+              to="/series"
+              search={{ publisher: publisher.slug }}
+            >
+              All {seriesCount ?? ""} {publisher.name} series
+            </Link>
+          </div>
+          <div className="shelf">
+            {topSeries.map((item) => (
+              <SeriesItem key={item.publicId} item={item} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="section">
+        <div className="section-head">
+          <h2 className="section-title">After {monthName}</h2>
+          <p className="section-note">
+            The next {LANE_HORIZON_MONTHS} months as announced so far
           </p>
           <Link
             className="section-link"
-            to="/releases"
-            search={{ publisher: publisher.slug }}
+            {...calendarMonth(addMonths(month, 1))}
           >
-            Open the release browser
+            Open the calendar
           </Link>
         </div>
-
-        {groups.length === 0 ? (
+        {upcoming.length === 0 ? (
           <p className="notice">
-            Nothing announced from {publisher.name} in the next{" "}
-            {LANE_HORIZON_MONTHS} months.{" "}
-            <Link to="/releases" search={{ publisher: publisher.slug }}>
-              See their full release calendar
-            </Link>
-            .
+            Nothing from {publisher.name} announced for the next{" "}
+            {LANE_HORIZON_MONTHS} months yet.
           </p>
         ) : (
-          groups.map((group) => {
-            const anchor: YearMonth = {
-              year: group.year,
-              month: group.month ?? 1,
-            };
-            return (
-              <section key={group.key} className="publisher-lane-month">
-                <h3>
-                  {group.month === null ? (
-                    `${group.year} — month to be announced`
-                  ) : (
-                    <Link
-                      to="/releases/$month"
-                      params={{ month: monthParam(anchor) }}
-                      search={{ publisher: publisher.slug }}
-                      rel="nofollow"
-                    >
-                      {monthTitle(anchor)}
-                    </Link>
-                  )}
-                </h3>
-                <AgendaView anchor={anchor} releases={group.rows} />
-              </section>
-            );
-          })
+          groupByMonth(upcoming).map((group) => (
+            <BookShelf
+              key={monthParam(group.month)}
+              title={
+                <Link {...calendarMonth(group.month)} rel="nofollow">
+                  {monthTitle(group.month)}
+                </Link>
+              }
+              books={group.books}
+            />
+          ))
         )}
-
         {upcomingCapped ? (
           <p className="note lane-more">
             Showing the next {upcoming.length}.{" "}
             <Link to="/releases" search={{ publisher: publisher.slug }}>
-              See every {publisher.name} release in the browser
+              See every {publisher.name} release in the calendar
             </Link>
             .
           </p>
@@ -276,5 +379,127 @@ function PublisherPage() {
           keyed by slug in the edit form. */}
       <ModEditLink type="publisher" editKey={publisher.slug} />
     </main>
+  );
+}
+
+/**
+ * A titled shelf of books, SHELF_PREVIEW at first and the rest on request,
+ * so a busy month stays a glance until the reader asks for it.
+ */
+function BookShelf({
+  title,
+  books,
+  eager = false,
+}: {
+  title: ReactNode;
+  books: ReadonlyArray<Book>;
+  eager?: boolean;
+}) {
+  const [all, setAll] = useState(false);
+  const shown = all ? books : books.slice(0, SHELF_PREVIEW);
+  return (
+    <div className="pub-shelf">
+      <h3 className="pub-shelf-title">
+        {title} <span className="pub-shelf-count">{books.length}</span>
+      </h3>
+      <div className="shelf">
+        {shown.map((book, i) => (
+          <BookItem key={book.id} book={book} eager={eager && i < 6} />
+        ))}
+      </div>
+      {books.length > shown.length ? (
+        <button type="button" className="btn btn-sm pub-shelf-more" onClick={() => setAll(true)}>
+          Show all {books.length}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+const formatLabel = ({ format, binding }: Book["formats"][number]) =>
+  format === "digital"
+    ? "Digital"
+    : binding
+      ? binding.charAt(0).toUpperCase() + binding.slice(1)
+      : "Print";
+
+/** One book: its cover to the Edition page, the Series, date, and formats. */
+function BookItem({ book, eager }: { book: Book; eager: boolean }) {
+  const lead = book.series[0];
+  const title = [lead?.title, book.volumeLabel].filter(Boolean).join(" ");
+  return (
+    <div className="shelf-item">
+      <div className="cover-wrap">
+        {/* The cover repeats the caption's link, so it stays out of the tab order. */}
+        <Link
+          className="cover-link"
+          to="/edition/$publicId/$slug"
+          params={slugParams(book.edition.publicId, book.edition.title)}
+          hash={book.anchor}
+          tabIndex={-1}
+          aria-hidden="true"
+        >
+          <Cover
+            src={book.coverUrl}
+            isbn13={book.coverIsbn}
+            title={title}
+            foot={[book.volumeLabel, book.publisher?.name]}
+            lazy={!eager}
+          />
+        </Link>
+      </div>
+      <div className="caption">
+        <Link
+          className="caption-title"
+          to="/edition/$publicId/$slug"
+          params={slugParams(book.edition.publicId, book.edition.title)}
+          hash={book.anchor}
+        >
+          {lead?.title ?? book.edition.title}
+        </Link>
+        <div className="caption-meta">
+          {book.volumeLabel ? <span>{book.volumeLabel}</span> : null}
+          {book.volumeLabel ? <span className="dot" /> : null}
+          <span>{bookDate(book)}</span>
+        </div>
+        <p className="caption-sub pub-formats">
+          {book.formats.map((format) => (
+            <span key={`${format.format}-${format.binding}`} className={`chip chip--${format.format}`}>
+              {formatLabel(format)}
+            </span>
+          ))}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** A top series: its jacket to the Series page, and how big it is. */
+function SeriesItem({ item }: { item: SeriesBrowseItem }) {
+  const params = slugParams(item.publicId, item.title);
+  return (
+    <div className="shelf-item">
+      <div className="cover-wrap">
+        <Link
+          className="cover-link"
+          to="/series/$publicId/$slug"
+          params={params}
+          tabIndex={-1}
+          aria-hidden="true"
+        >
+          <Cover src={item.coverUrl} isbn13={item.coverIsbn} title={item.title} />
+        </Link>
+      </div>
+      <div className="caption">
+        <Link className="caption-title" to="/series/$publicId/$slug" params={params}>
+          {item.title}
+        </Link>
+        <div className="caption-meta">
+          <span>
+            {item.volumeCount} {item.volumeCount === 1 ? "volume" : "volumes"}
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
