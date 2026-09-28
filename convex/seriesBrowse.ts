@@ -166,6 +166,32 @@ export const sweepStale = internalMutation({
   },
 });
 
+/**
+ * Carry a Series' new `mature` flag into its library row and pack entry at
+ * once, so a Data Team rating edit (moderation.applyUpdate) shows in the
+ * filtered library and its facets without waiting for the next rebuild.
+ * A Series without a row yet (never rebuilt, or bookless) has nothing to
+ * update.
+ */
+export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
+  const flag = mature ? { mature: true as const } : { mature: undefined };
+  const row = await ctx.db
+    .query("seriesStats")
+    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+    .unique();
+  if (row && (row.mature === true) !== mature) await ctx.db.patch(row._id, flag);
+  const pack = await ctx.db
+    .query("seriesStatsPacks")
+    .withIndex("by_block", (q) => q.eq("block", Math.floor(series.publicId / PACK_SPAN)))
+    .unique();
+  const at = pack?.entries.findIndex((entry) => entry.publicId === series.publicId) ?? -1;
+  if (!pack || at < 0 || (pack.entries[at]!.mature === true) === mature) return;
+  const entries = pack.entries.map((entry, i) =>
+    i === at ? { ...entry, mature: mature ? (true as const) : undefined } : entry,
+  );
+  await ctx.db.patch(pack._id, { entries });
+}
+
 /** Series per pack: block k covers publicIds [k * PACK_SPAN, (k + 1) * PACK_SPAN). */
 const PACK_SPAN = 1000;
 /** Packs a reader takes at most: room for 100k publicIds. */

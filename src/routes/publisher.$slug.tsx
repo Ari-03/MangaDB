@@ -111,6 +111,8 @@ export const Route = createFileRoute("/publisher/$slug")({
         title: publisherTitleTag(publisher.name),
         description: `${publisher.name} on MangaDB: publisher profile, upcoming English manga releases, and the full release calendar.`,
         path,
+        // An adult-only publisher is marked for safe-search (lib/mature.tsx).
+        mature: publisher.mature,
       }),
       scripts: [
         jsonLdScript(

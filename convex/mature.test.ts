@@ -216,6 +216,11 @@ describe("deriving series.mature (seriesBrowse.rebuild)", () => {
       });
     await edit("general");
     expect((await heat())?.mature).toBeUndefined();
+    // The library's packed projections follow the edit at once: the filtered
+    // path and the facets see it before any rebuild.
+    const filtered = await t.query(api.seriesBrowse.browse, { sort: "title", q: "heat" });
+    expect(filtered.items.map((item) => item.title)).toEqual(["Heat Garden"]);
+    expect((await t.query(api.seriesBrowse.facets, {})).total).toBe(2);
     await rebuild();
     expect((await heat())?.mature).toBeUndefined();
 

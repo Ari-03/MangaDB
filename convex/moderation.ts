@@ -28,6 +28,7 @@ import {
   type RecordType,
 } from "./lib/moderationFields";
 import { seriesSearchText } from "./lib/searchMatch";
+import { syncMatureProjection } from "./seriesBrowse";
 import { volumeTitle } from "./lib/titles";
 import { sameValue } from "./lib/values";
 
@@ -203,7 +204,11 @@ export async function applyUpdate(
     // library rebuild; clearing it hands the call back to the evidence,
     // which that rebuild re-reads (lib/mature.ts).
     const rated = "contentRating" in patch ? ratedByDataTeam(patch.contentRating as Doc<"series">["contentRating"]) : null;
-    if (rated !== null) patch.mature = rated ? true : undefined;
+    if (rated !== null) {
+      patch.mature = rated ? true : undefined;
+      // The library's projections follow now too, not at the next rebuild.
+      await syncMatureProjection(ctx, series, rated);
+    }
   }
 
   // Implicit Human Override (spec §4): a human author's approved change to an
