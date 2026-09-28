@@ -280,7 +280,18 @@ The cross-publisher overview: what every Publisher is releasing in one month.
   earlier (Edition Line repackagings such as a Deluxe Vol. 1 don't count,
   nor does this month's digital Release of a Vol. 1 in print since 2019; a
   year-only date in the same year is not "earlier").
-  No denormalized tables.
+- **Precomputed months**: computing a board reads thousands of documents
+  (~0.7 s on a cold cache), so `rebuildBoards` (`convex/crons.ts`) stores
+  each month with cards from January of last year through December two years
+  out (2025-01 … 2028-12 during 2026) in `publisherBoards` as JSON, rewriting
+  a month only when it changed. Last month through three months out rebuild
+  hourly, the rest every six hours. `monthBoard` serves the stored copy in
+  one read and computes any other month live, as it does an empty month, a
+  month whose build failed, or a row written under an older `BOARD_VERSION`
+  (bump it when the board's shape changes). After deploying,
+  `npx convex run publisher:rebuildBoards` fills the table without waiting
+  for the cron. The month strip's arrows preload the months either side as
+  soon as they are on screen.
 
 ## Search
 

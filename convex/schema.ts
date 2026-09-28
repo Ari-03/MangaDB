@@ -231,6 +231,17 @@ export default defineSchema({
     .index("by_collectors", ["collectors", "publicId"])
     .index("by_rebuiltAt", ["rebuiltAt"]),
 
+  // The Publishers board precomputed (publisher.ts rebuildBoards): monthBoard's
+  // result for each month in the rolling window, as JSON, so paging months is
+  // one document read. `month` is yyyymm; a payload is tens of KB.
+  publisherBoards: defineTable({
+    month: v.number(),
+    // publisher.ts BOARD_VERSION when written; another version is ignored.
+    version: v.number(),
+    payload: v.string(),
+    builtAt: v.number(),
+  }).index("by_month", ["month"]),
+
   // The library's filter-and-sort facts for every Series, packed many to a
   // document so a filtered view reads a handful of documents instead of one
   // per Series (seriesBrowse.browse). Block k holds the Series with

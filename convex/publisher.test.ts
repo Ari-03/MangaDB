@@ -1,10 +1,10 @@
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
-import { LANE_CAP } from "./publisher";
+import { boardWindow, LANE_CAP, nearMonths } from "./publisher";
 
 // Lane bounds for every test: "today" is Aug 19 2026, horizon end of Nov 2026
 // (~3 months), matching what the route computes.
@@ -691,5 +691,119 @@ describe("publisher.monthBoard", () => {
     const result = await t.query(api.publisher.monthBoard, { year: 2026, month: 13 });
     expect(result.board).toEqual([]);
     expect(result.directory).toHaveLength(3);
+  });
+});
+
+describe("publisher precomputed boards", () => {
+  afterEach(() => vi.useRealTimers());
+
+  // A Publisher with one September 2026 release; `more` adds another.
+  async function catalog() {
+    const t = convexTest(schema);
+    const ids = await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Yen Press",
+        slug: "yen-press",
+      });
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "Spice and Wolf",
+        altTitles: [],
+        searchText: "Spice and Wolf",
+      });
+      return { publisherId, seriesId };
+    });
+    let publicId = 10;
+    const more = (sort: number) =>
+      t.run(async (ctx) => {
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: ++publicId,
+          publisherId: ids.publisherId,
+        });
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format: "physical",
+          language: "en",
+          pubDate: { year: 2026, month: Math.floor(sort / 100) % 100, day: sort % 100, sort },
+          publisherId: ids.publisherId,
+          seriesIds: [ids.seriesId],
+        });
+      });
+    await more(20260910);
+    return { t, more };
+  }
+
+  const september = { year: 2026, month: 9 };
+  const releasesIn = async (t: ReturnType<typeof convexTest>) =>
+    (await t.query(api.publisher.monthBoard, september)).board[0]?.releases ?? 0;
+
+  it("keeps January of last year through December two years out", () => {
+    expect(boardWindow(new Date("2026-09-28T12:00:00Z"))).toEqual({ from: 202501, to: 202812 });
+    expect(boardWindow(new Date("2027-01-01T00:00:00Z"))).toEqual({ from: 202601, to: 202912 });
+  });
+
+  it("rebuilds last month through three months out hourly, across year ends", () => {
+    expect(nearMonths(new Date("2026-09-28T12:00:00Z"))).toEqual({ from: 202608, to: 202612 });
+    expect(nearMonths(new Date("2026-11-30T23:00:00Z"))).toEqual({ from: 202610, to: 202702 });
+    expect(nearMonths(new Date("2027-01-01T00:00:00Z"))).toEqual({ from: 202612, to: 202704 });
+  });
+
+  it("serves stored months until the next rebuild, which rewrites only what changed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-28T12:00:00Z"));
+    const { t, more } = await catalog();
+
+    // Only September has cards; empty months are left to compute live.
+    const first = await t.action(internal.publisher.rebuildBoards, {});
+    expect(first).toMatchObject({ changed: 1, failed: 0 });
+    const stored = await t.run((ctx) => ctx.db.query("publisherBoards").collect());
+    expect(stored.map((row) => row.month)).toEqual([202609]);
+    expect(await t.query(api.publisher.monthBoard, september)).toEqual(
+      await t.query(internal.publisher.computeBoard, september),
+    );
+    expect(await releasesIn(t)).toBe(1);
+
+    // A new release shows once the rebuild runs, not before, and only
+    // September's board changes (October has no card to carry a delta).
+    await more(20260920);
+    expect(await releasesIn(t)).toBe(1);
+    expect((await t.action(internal.publisher.rebuildBoards, { scope: "near" })).changed).toBe(1);
+    expect(await releasesIn(t)).toBe(2);
+    expect((await t.action(internal.publisher.rebuildBoards, {})).changed).toBe(0);
+  });
+
+  it("ignores a stored board written in an older shape", async () => {
+    const { t } = await catalog();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("publisherBoards", {
+        month: 202609,
+        version: 0,
+        payload: JSON.stringify({ board: [], directory: [] }),
+        builtAt: 0,
+      });
+    });
+    expect(await releasesIn(t)).toBe(1);
+  });
+
+  it("computes months outside the window live and drops their stored copies", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2028-06-01T00:00:00Z"));
+    const { t } = await catalog();
+    await t.run(async (ctx) => {
+      // A board stored back when 2026 was inside the window, now stale.
+      await ctx.db.insert("publisherBoards", {
+        month: 202609,
+        version: 1,
+        payload: JSON.stringify({ board: [], directory: [] }),
+        builtAt: 0,
+      });
+    });
+    const result = await t.action(internal.publisher.rebuildBoards, {});
+    expect(result.dropped).toBe(1);
+    expect(await releasesIn(t)).toBe(1);
   });
 });

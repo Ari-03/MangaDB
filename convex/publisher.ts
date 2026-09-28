@@ -16,7 +16,14 @@
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, type QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  query,
+  type QueryCtx,
+} from "./_generated/server";
 import { COUNT_CAP, PUBLISHER_SCAN_CAP } from "./catalog";
 import { followMerges } from "./catalogPages";
 import {
@@ -161,6 +168,9 @@ export const publisherPage = query({
 
 // Covers shown on each board card: a handful, the browser has the rest.
 export const BOARD_COVER_CAP = 5;
+// Stored boards dropped per rebuild: a year leaves the window at a time, so
+// twelve at most in normal running.
+const BOARD_DROP_CAP = 100;
 // Releases of one Edition read to tell a debut from a backfill (an Edition
 // has a Release per Format and Binding: a few, rarely more).
 const EDITION_RELEASE_CAP = 50;
@@ -211,9 +221,8 @@ async function visibleMonth(ctx: QueryCtx, cache: BrowseCache, fromSort: number 
 }
 
 /**
- * The Publishers board (`/publishers`, `/publishers/{yyyy-mm}`): what each
- * Publisher is releasing in one month, plus the A–Z directory of every
- * active Publisher.
+ * What each Publisher is releasing in one month, plus the A–Z directory of
+ * every active Publisher: the Publishers board's data (`monthBoard` below).
  *
  * `board` has one entry per Publisher with visible Releases that month,
  * busiest first: counts by Format, distinct Series, how many of those are
@@ -226,198 +235,346 @@ async function visibleMonth(ctx: QueryCtx, cache: BrowseCache, fromSort: number 
  * imprints nest under an active parent (one level, spec'd on the schema),
  * defunct ones are flagged. A malformed month reads as an empty board.
  */
+async function buildMonthBoard(ctx: QueryCtx, year: number, month: number) {
+  const fromSort = monthOk(year, month) ? year * 10000 + month * 100 : null;
+  const previousSort =
+    fromSort === null ? null : month === 1 ? fromSort - 10000 + 1100 : fromSort - 100;
+
+  const cache = browseCache(ctx);
+  const [publisherDocs, current, previous] = await Promise.all([
+    ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP),
+    visibleMonth(ctx, cache, fromSort),
+    visibleMonth(ctx, cache, previousSort),
+  ]);
+  const active = new Map(
+    publisherDocs
+      .filter((doc) => doc.status === "active")
+      .map((doc) => [doc._id, doc]),
+  );
+  const parentOf = (doc: Doc<"publishers">) =>
+    doc.parentPublisherId ? (active.get(doc.parentPublisherId) ?? null) : null;
+
+  // The Series an Edition debuts, or null. A debut is a standard Edition
+  // (no Edition Line, so not a Deluxe Vol. 1 repackaging) whose coverage
+  // includes an active Volume at Position 1, with no active Release dated
+  // before this month in that Edition (a digital Release of a 2019 print
+  // Vol. 1 is a backfill) nor anywhere in the Series (a relaunch of a 2005
+  // Series is not new). The Series-wide check reads the rebuilt
+  // `seriesStats.firstReleaseSort`, so it lags by up to a rebuild; a Series
+  // without a stats row yet has no known earlier Release. A year-only date
+  // this year (yyyy0000) may well be this month, so it is no evidence of
+  // an earlier Release; an earlier month of this year is. Memoized per
+  // Edition; the Release checks read only the few Vol. 1 Editions.
+  const debutSeries = memoize(async (editionId: Id<"editions">) => {
+    const edition = await cache.edition(editionId);
+    if (!edition || edition.editionLineId || fromSort === null) return null;
+    const earlier = (sort: number) => sort > 0 && sort < fromSort && sort !== year * 10000;
+    let seriesId: Id<"series"> | null = null;
+    for (const row of await cache.coverage(edition._id)) {
+      const volume = await cache.volume(row.volumeId);
+      if (volume?.status === "active" && volume.position === 1) {
+        seriesId = volume.seriesId;
+        break;
+      }
+    }
+    if (!seriesId) return null;
+    const siblings = await ctx.db
+      .query("releases")
+      .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+      .take(EDITION_RELEASE_CAP);
+    if (siblings.some((doc) => doc.status === "active" && earlier(doc.pubDate?.sort ?? 0))) {
+      return null;
+    }
+    const stats = await ctx.db
+      .query("seriesStats")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .unique();
+    return earlier(stats?.firstReleaseSort ?? 0) ? null : seriesId;
+  });
+
+  // Whether a Release has jacket art the strip can show: a stored cover,
+  // or an ISBN to fetch it by. Read through the cache, so joinBrowseRows
+  // reuses the lookup for the picks.
+  const hasArt = async (release: Doc<"releases">) => {
+    const cover = await cache.cover(release);
+    return cover.coverUrl !== null || cover.coverIsbn !== null;
+  };
+
+  const cards = await Promise.all(
+    [...current].map(async ([publisherId, rows]) => {
+      const publisher = active.get(publisherId);
+      // Rows of an inactive Publisher show unattributed in the browser;
+      // there is no card to hang them on.
+      if (!publisher) return null;
+
+      const series = new Set(rows.flatMap((row) => row.series.map((doc) => doc._id)));
+      const debuts = await Promise.all(
+        rows.map(async ({ release }) => {
+          const debut = await debutSeries(release.editionId);
+          return debut !== null && series.has(debut) ? debut : null;
+        }),
+      );
+      const newSeries = new Set(debuts.flatMap((debut) => (debut ? [debut] : [])));
+      const physical = rows.filter((row) => row.release.format === "physical").length;
+
+      // The cover strip: one Release per Series, preferring ones with art
+      // (stored, or an ISBN to fetch it by), then new series, then physical
+      // over digital (a shelf shows the jacket), else date then title order.
+      // Candidates are ranked before any join, then walked in (new series,
+      // Format) order in batches of BOARD_COVER_CAP tested for art in
+      // parallel. A batch holds only candidates that can still change the
+      // picks (a lead Series with no art found yet) and at most one per
+      // Series; a second one waits for the next batch, in case the first
+      // has no art. Stop at BOARD_COVER_CAP Series with art and fill from
+      // the best artless ones; only the picks get joined.
+      const ranked = rows
+        .map((row, index) => ({
+          ...row,
+          rank: (debuts[index] ? 0 : 2) + (row.release.format === "physical" ? 0 : 1),
+        }))
+        .sort(
+          (a, b) =>
+            a.rank - b.rank ||
+            (a.release.pubDate?.sort ?? 0) - (b.release.pubDate?.sort ?? 0) ||
+            (a.series[0]?.title ?? "").localeCompare(b.series[0]?.title ?? ""),
+        );
+      const withArt: Array<Doc<"releases">> = [];
+      const artless = new Map<Id<"series">, Doc<"releases">>();
+      const artSeries = new Set<Id<"series">>();
+      let next = 0;
+      while (withArt.length < BOARD_COVER_CAP && next < ranked.length) {
+        const batch: Array<{ release: Doc<"releases">; lead: Id<"series"> }> = [];
+        while (batch.length < BOARD_COVER_CAP && next < ranked.length) {
+          const { release, series: [lead] } = ranked[next]!;
+          if (lead && batch.some((entry) => entry.lead === lead._id)) break;
+          next++;
+          if (lead && !artSeries.has(lead._id)) batch.push({ release, lead: lead._id });
+        }
+        const art = await Promise.all(batch.map(({ release }) => hasArt(release)));
+        for (const [i, { release, lead }] of batch.entries()) {
+          if (withArt.length === BOARD_COVER_CAP) break;
+          if (art[i]) {
+            artSeries.add(lead);
+            withArt.push(release);
+          } else if (!artless.has(lead)) {
+            artless.set(lead, release);
+          }
+        }
+      }
+      const picks = [
+        ...withArt,
+        ...[...artless].flatMap(([seriesId, release]) =>
+          artSeries.has(seriesId) ? [] : [release],
+        ),
+      ].slice(0, BOARD_COVER_CAP);
+      // Joined exactly as the browser joins them, kept in pick order.
+      const joined = new Map(
+        (await joinBrowseRows(ctx, picks, cache)).map((row) => [row.id, row]),
+      );
+      const covers = picks.flatMap((release) => joined.get(release._id) ?? []);
+
+      const parent = parentOf(publisher);
+      return {
+        publisher: {
+          name: publisher.name,
+          slug: publisher.slug,
+          parent: parent ? { name: parent.name, slug: parent.slug } : null,
+        },
+        releases: rows.length,
+        physical,
+        digital: rows.length - physical,
+        series: series.size,
+        newSeries: newSeries.size,
+        previousReleases: previous.get(publisherId)?.length ?? 0,
+        covers,
+      };
+    }),
+  );
+  const board = cards.flatMap((card) => (card ? [card] : []));
+  board.sort(
+    (a, b) =>
+      b.releases - a.releases ||
+      a.publisher.name.localeCompare(b.publisher.name),
+  );
+
+  // The directory: top-level Publishers A–Z, each with its imprints.
+  const entry = (doc: Doc<"publishers">) => ({
+    name: doc.name,
+    slug: doc.slug,
+    defunct: doc.defunct === true,
+    releases: current.get(doc._id)?.length ?? 0,
+  });
+  const byName = (a: { name: string }, b: { name: string }) =>
+    a.name.localeCompare(b.name);
+  const docs = [...active.values()];
+  const directory = docs
+    .filter((doc) => parentOf(doc) === null)
+    .map((doc) => ({
+      ...entry(doc),
+      imprints: docs
+        .filter((imprint) => parentOf(imprint)?._id === doc._id)
+        .map(entry)
+        .sort(byName),
+    }))
+    .sort(byName);
+
+  return { board, directory };
+}
+
+type MonthBoard = Awaited<ReturnType<typeof buildMonthBoard>>;
+
+/** A real calendar month; anything else reads as an empty board. */
+function monthOk(year: number, month: number) {
+  return (
+    Number.isInteger(year) &&
+    Number.isInteger(month) &&
+    year >= 1000 &&
+    year <= 9999 &&
+    month >= 1 &&
+    month <= 12
+  );
+}
+
+/**
+ * The Publishers board (`/publishers`, `/publishers/{yyyy-mm}`): one month's
+ * `buildMonthBoard`. A month inside the rolling window (`boardWindow`) is
+ * served from its precomputed copy in `publisherBoards`, one document read,
+ * so paging months is quick and the query cache holds until a rebuild
+ * actually changes the month. Any other month, an empty one, or one not
+ * built yet (or built in an older shape) is computed live.
+ */
 export const monthBoard = query({
   args: { year: v.number(), month: v.number() },
-  handler: async (ctx, { year, month }) => {
-    const monthOk =
-      Number.isInteger(year) &&
-      Number.isInteger(month) &&
-      year >= 1000 &&
-      year <= 9999 &&
-      month >= 1 &&
-      month <= 12;
-    const fromSort = monthOk ? year * 10000 + month * 100 : null;
-    const previousSort =
-      fromSort === null ? null : month === 1 ? fromSort - 10000 + 1100 : fromSort - 100;
-
-    const cache = browseCache(ctx);
-    const [publisherDocs, current, previous] = await Promise.all([
-      ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP),
-      visibleMonth(ctx, cache, fromSort),
-      visibleMonth(ctx, cache, previousSort),
-    ]);
-    const active = new Map(
-      publisherDocs
-        .filter((doc) => doc.status === "active")
-        .map((doc) => [doc._id, doc]),
-    );
-    const parentOf = (doc: Doc<"publishers">) =>
-      doc.parentPublisherId ? (active.get(doc.parentPublisherId) ?? null) : null;
-
-    // The Series an Edition debuts, or null. A debut is a standard Edition
-    // (no Edition Line, so not a Deluxe Vol. 1 repackaging) whose coverage
-    // includes an active Volume at Position 1, with no active Release dated
-    // before this month in that Edition (a digital Release of a 2019 print
-    // Vol. 1 is a backfill) nor anywhere in the Series (a relaunch of a 2005
-    // Series is not new). The Series-wide check reads the rebuilt
-    // `seriesStats.firstReleaseSort`, so it lags by up to a rebuild; a Series
-    // without a stats row yet has no known earlier Release. A year-only date
-    // this year (yyyy0000) may well be this month, so it is no evidence of
-    // an earlier Release; an earlier month of this year is. Memoized per
-    // Edition; the Release checks read only the few Vol. 1 Editions.
-    const debutSeries = memoize(async (editionId: Id<"editions">) => {
-      const edition = await cache.edition(editionId);
-      if (!edition || edition.editionLineId || fromSort === null) return null;
-      const earlier = (sort: number) => sort > 0 && sort < fromSort && sort !== year * 10000;
-      let seriesId: Id<"series"> | null = null;
-      for (const row of await cache.coverage(edition._id)) {
-        const volume = await cache.volume(row.volumeId);
-        if (volume?.status === "active" && volume.position === 1) {
-          seriesId = volume.seriesId;
-          break;
-        }
-      }
-      if (!seriesId) return null;
-      const siblings = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .take(EDITION_RELEASE_CAP);
-      if (siblings.some((doc) => doc.status === "active" && earlier(doc.pubDate?.sort ?? 0))) {
-        return null;
-      }
-      const stats = await ctx.db
-        .query("seriesStats")
-        .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+  handler: async (ctx, { year, month }): Promise<MonthBoard> => {
+    if (monthOk(year, month)) {
+      const stored = await ctx.db
+        .query("publisherBoards")
+        .withIndex("by_month", (q) => q.eq("month", year * 100 + month))
         .unique();
-      return earlier(stats?.firstReleaseSort ?? 0) ? null : seriesId;
-    });
+      // Written by storeBoard from buildMonthBoard's result, in this shape
+      // as long as the version matches.
+      if (stored?.version === BOARD_VERSION) return JSON.parse(stored.payload) as MonthBoard;
+    }
+    return await buildMonthBoard(ctx, year, month);
+  },
+});
 
-    // Whether a Release has jacket art the strip can show: a stored cover,
-    // or an ISBN to fetch it by. Read through the cache, so joinBrowseRows
-    // reuses the lookup for the picks.
-    const hasArt = async (release: Doc<"releases">) => {
-      const cover = await cache.cover(release);
-      return cover.coverUrl !== null || cover.coverIsbn !== null;
-    };
+// ---------- Precomputed boards (scheduled) ----------
 
-    const cards = await Promise.all(
-      [...current].map(async ([publisherId, rows]) => {
-        const publisher = active.get(publisherId);
-        // Rows of an inactive Publisher show unattributed in the browser;
-        // there is no card to hang them on.
-        if (!publisher) return null;
+/**
+ * The months kept precomputed: January of last year through December two
+ * years out (2025-01 … 2028-12 during 2026), so recent history and every
+ * announced month page from storage. Keys are yyyymm.
+ */
+export function boardWindow(now: Date): { from: number; to: number } {
+  const year = now.getUTCFullYear();
+  return { from: (year - 1) * 100 + 1, to: (year + 2) * 100 + 12 };
+}
 
-        const series = new Set(rows.flatMap((row) => row.series.map((doc) => doc._id)));
-        const debuts = await Promise.all(
-          rows.map(async ({ release }) => {
-            const debut = await debutSeries(release.editionId);
-            return debut !== null && series.has(debut) ? debut : null;
-          }),
-        );
-        const newSeries = new Set(debuts.flatMap((debut) => (debut ? [debut] : [])));
-        const physical = rows.filter((row) => row.release.format === "physical").length;
+/**
+ * The months around today that change most (last month through three months
+ * out), rebuilt every hour; the rest of the window is rebuilt every six.
+ */
+export function nearMonths(now: Date): { from: number; to: number } {
+  const key = (offset: number) => {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset, 1));
+    return d.getUTCFullYear() * 100 + d.getUTCMonth() + 1;
+  };
+  return { from: key(-1), to: key(3) };
+}
 
-        // The cover strip: one Release per Series, preferring ones with art
-        // (stored, or an ISBN to fetch it by), then new series, then physical
-        // over digital (a shelf shows the jacket), else date then title order.
-        // Candidates are ranked before any join, then walked in (new series,
-        // Format) order in batches of BOARD_COVER_CAP tested for art in
-        // parallel. A batch holds only candidates that can still change the
-        // picks (a lead Series with no art found yet) and at most one per
-        // Series; a second one waits for the next batch, in case the first
-        // has no art. Stop at BOARD_COVER_CAP Series with art and fill from
-        // the best artless ones; only the picks get joined.
-        const ranked = rows
-          .map((row, index) => ({
-            ...row,
-            rank: (debuts[index] ? 0 : 2) + (row.release.format === "physical" ? 0 : 1),
-          }))
-          .sort(
-            (a, b) =>
-              a.rank - b.rank ||
-              (a.release.pubDate?.sort ?? 0) - (b.release.pubDate?.sort ?? 0) ||
-              (a.series[0]?.title ?? "").localeCompare(b.series[0]?.title ?? ""),
-          );
-        const withArt: Array<Doc<"releases">> = [];
-        const artless = new Map<Id<"series">, Doc<"releases">>();
-        const artSeries = new Set<Id<"series">>();
-        let next = 0;
-        while (withArt.length < BOARD_COVER_CAP && next < ranked.length) {
-          const batch: Array<{ release: Doc<"releases">; lead: Id<"series"> }> = [];
-          while (batch.length < BOARD_COVER_CAP && next < ranked.length) {
-            const { release, series: [lead] } = ranked[next]!;
-            if (lead && batch.some((entry) => entry.lead === lead._id)) break;
-            next++;
-            if (lead && !artSeries.has(lead._id)) batch.push({ release, lead: lead._id });
-          }
-          const art = await Promise.all(batch.map(({ release }) => hasArt(release)));
-          for (const [i, { release, lead }] of batch.entries()) {
-            if (withArt.length === BOARD_COVER_CAP) break;
-            if (art[i]) {
-              artSeries.add(lead);
-              withArt.push(release);
-            } else if (!artless.has(lead)) {
-              artless.set(lead, release);
-            }
-          }
-        }
-        const picks = [
-          ...withArt,
-          ...[...artless].flatMap(([seriesId, release]) =>
-            artSeries.has(seriesId) ? [] : [release],
-          ),
-        ].slice(0, BOARD_COVER_CAP);
-        // Joined exactly as the browser joins them, kept in pick order.
-        const joined = new Map(
-          (await joinBrowseRows(ctx, picks, cache)).map((row) => [row.id, row]),
-        );
-        const covers = picks.flatMap((release) => joined.get(release._id) ?? []);
+/** Bump when `buildMonthBoard`'s result changes shape: older rows are then ignored. */
+const BOARD_VERSION = 1;
 
-        const parent = parentOf(publisher);
-        return {
-          publisher: {
-            name: publisher.name,
-            slug: publisher.slug,
-            parent: parent ? { name: parent.name, slug: parent.slug } : null,
-          },
-          releases: rows.length,
-          physical,
-          digital: rows.length - physical,
-          series: series.size,
-          newSeries: newSeries.size,
-          previousReleases: previous.get(publisherId)?.length ?? 0,
-          covers,
-        };
-      }),
-    );
-    const board = cards.flatMap((card) => (card ? [card] : []));
-    board.sort(
-      (a, b) =>
-        b.releases - a.releases ||
-        a.publisher.name.localeCompare(b.publisher.name),
-    );
+/**
+ * Recompute the months in `boardWindow` (only `nearMonths` for scope "near")
+ * and store the ones that changed, then drop stored months that have left
+ * the window. crons.ts runs "near" hourly and the whole window every six
+ * hours. Each month is computed by a query and written by a small mutation,
+ * so imports never contend with the board's large read set. A month with no
+ * cards is not stored (its live board reads only the publisher list), and a
+ * month that fails to compute loses its stored copy rather than going stale,
+ * so it falls back to live. Idempotent; safe to run by hand:
+ * `npx convex run publisher:rebuildBoards`.
+ */
+export const rebuildBoards = internalAction({
+  args: { scope: v.optional(v.literal("near")) },
+  handler: async (ctx, { scope }) => {
+    const startedAt = Date.now();
+    const window = boardWindow(new Date(startedAt));
+    const { from, to } = scope === "near" ? nearMonths(new Date(startedAt)) : window;
+    let changed = 0;
+    let failed = 0;
+    for (let key = from; key <= to; key = key % 100 === 12 ? key + 89 : key + 1) {
+      let payload: string | null = null;
+      try {
+        const board: MonthBoard = await ctx.runQuery(internal.publisher.computeBoard, {
+          year: Math.floor(key / 100),
+          month: key % 100,
+        });
+        payload = board.board.length > 0 ? JSON.stringify(board) : null;
+      } catch (error) {
+        failed++;
+        console.error(`publisher board ${key} failed to build`, error);
+      }
+      const wrote: boolean = await ctx.runMutation(internal.publisher.storeBoard, {
+        month: key,
+        payload,
+        builtAt: startedAt,
+      });
+      if (wrote) changed++;
+    }
+    const dropped: number = await ctx.runMutation(internal.publisher.dropBoardsOutside, window);
+    return { changed, failed, dropped, ms: Date.now() - startedAt };
+  },
+});
 
-    // The directory: top-level Publishers A–Z, each with its imprints.
-    const entry = (doc: Doc<"publishers">) => ({
-      name: doc.name,
-      slug: doc.slug,
-      defunct: doc.defunct === true,
-      releases: current.get(doc._id)?.length ?? 0,
-    });
-    const byName = (a: { name: string }, b: { name: string }) =>
-      a.name.localeCompare(b.name);
-    const docs = [...active.values()];
-    const directory = docs
-      .filter((doc) => parentOf(doc) === null)
-      .map((doc) => ({
-        ...entry(doc),
-        imprints: docs
-          .filter((imprint) => parentOf(imprint)?._id === doc._id)
-          .map(entry)
-          .sort(byName),
-      }))
-      .sort(byName);
+/** One month's board computed live, bypassing the stored copy. */
+export const computeBoard = internalQuery({
+  args: { year: v.number(), month: v.number() },
+  handler: async (ctx, { year, month }): Promise<MonthBoard> =>
+    await buildMonthBoard(ctx, year, month),
+});
 
-    return { board, directory };
+/**
+ * Store a month's board, or delete it for a null payload, writing only when
+ * that changes something so monthBoard's cached result survives a rebuild
+ * that changed nothing. Returns whether it wrote.
+ */
+export const storeBoard = internalMutation({
+  args: { month: v.number(), payload: v.union(v.string(), v.null()), builtAt: v.number() },
+  handler: async (ctx, { month, payload, builtAt }) => {
+    const stored = await ctx.db
+      .query("publisherBoards")
+      .withIndex("by_month", (q) => q.eq("month", month))
+      .unique();
+    if (payload === null) {
+      if (stored) await ctx.db.delete(stored._id);
+      return stored !== null;
+    }
+    if (stored?.payload === payload && stored.version === BOARD_VERSION) return false;
+    const row = { month, version: BOARD_VERSION, payload, builtAt };
+    if (stored) await ctx.db.replace(stored._id, row);
+    else await ctx.db.insert("publisherBoards", row);
+    return true;
+  },
+});
+
+/** Months outside `boardWindow` would go stale unseen; they compute live instead. */
+export const dropBoardsOutside = internalMutation({
+  args: { from: v.number(), to: v.number() },
+  handler: async (ctx, { from, to }) => {
+    const [before, after] = await Promise.all([
+      ctx.db
+        .query("publisherBoards")
+        .withIndex("by_month", (q) => q.lt("month", from))
+        .take(BOARD_DROP_CAP),
+      ctx.db
+        .query("publisherBoards")
+        .withIndex("by_month", (q) => q.gt("month", to))
+        .take(BOARD_DROP_CAP),
+    ]);
+    for (const doc of [...before, ...after]) await ctx.db.delete(doc._id);
+    return before.length + after.length;
   },
 });
