@@ -1,7 +1,6 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
-
 import { catalogQuery } from "~/lib/catalogData";
 import { currentMonth, monthParam, monthTitle, parseMonthParam } from "~/lib/month";
 import { PublishersBoard } from "~/lib/publishersBoard";

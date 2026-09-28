@@ -1,7 +1,6 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
-
 import { catalogQuery } from "~/lib/catalogData";
 import { normalizeIsbn } from "~/lib/isbn";
 import { bundlePath, editionPath } from "~/lib/slug";

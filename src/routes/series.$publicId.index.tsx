@@ -1,7 +1,6 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
-
 import { catalogQuery } from "~/lib/catalogData";
 import { parsePublicId, seriesPath } from "~/lib/slug";
 
