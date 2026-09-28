@@ -5,7 +5,7 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../convex/_generated/api";
-import { MatureProvider, MatureToggle } from "~/lib/mature";
+import { MatureProvider } from "~/lib/mature";
 import { SearchCombobox } from "~/lib/searchSuggest";
 
 // Client-side wiring (spec §9): <ClerkProvider> owns the session,
@@ -62,8 +62,7 @@ export function BrandMark() {
 
 /**
  * The sticky site header of the Bookshelf look (styles/shell.css): brand,
- * primary nav, search, the mature-titles switch, theme toggle, and the
- * account controls. Under 960px
+ * primary nav, search, theme toggle, and the account controls. Under 960px
  * the nav and search fold into a drawer behind the menu button.
  */
 export function SiteHeader() {
@@ -81,22 +80,6 @@ export function SiteHeader() {
           MangaDB
         </Link>
         <nav className="nav" aria-label="Main">
-          {/* The Releases browser (#24) is the main public browse surface. */}
-          <Link
-            to="/releases"
-            className={releasesCurrent ? "nav-link is-current" : "nav-link"}
-            aria-current={releasesCurrent ? "page" : undefined}
-          >
-            Releases
-          </Link>
-          {/* The Publishers board; a Publisher Spotlight counts as being in it. */}
-          <Link
-            to="/publishers"
-            className={publishersCurrent ? "nav-link is-current" : "nav-link"}
-            aria-current={publishersCurrent ? "page" : undefined}
-          >
-            Publishers
-          </Link>
           {/* The Series library; a Series page counts as being in it. */}
           <Link
             to="/series"
@@ -104,6 +87,14 @@ export function SiteHeader() {
             aria-current={seriesCurrent ? "page" : undefined}
           >
             Series
+          </Link>
+          {/* The Releases browser (#24) is the main public browse surface. */}
+          <Link
+            to="/releases"
+            className={releasesCurrent ? "nav-link is-current" : "nav-link"}
+            aria-current={releasesCurrent ? "page" : undefined}
+          >
+            Releases
           </Link>
           {/* The Authors tab; an author page counts as being in it. */}
           <Link
@@ -113,10 +104,17 @@ export function SiteHeader() {
           >
             Authors
           </Link>
+          {/* The Publishers board; a Publisher Spotlight counts as being in it. */}
+          <Link
+            to="/publishers"
+            className={publishersCurrent ? "nav-link is-current" : "nav-link"}
+            aria-current={publishersCurrent ? "page" : undefined}
+          >
+            Publishers
+          </Link>
         </nav>
         <HeaderSearch />
         <div className="header-actions">
-          <MatureToggle />
           <ThemeToggle />
           <button
             className="icon-btn menu-toggle"
@@ -139,19 +137,18 @@ export function SiteHeader() {
           <Link to="/" className="nav-link" onClick={() => setOpen(false)}>
             Home
           </Link>
-          <Link to="/releases" className="nav-link" onClick={() => setOpen(false)}>
-            Releases
-          </Link>
-          <Link to="/publishers" className="nav-link" onClick={() => setOpen(false)}>
-            Publishers
-          </Link>
           <Link to="/series" className="nav-link" onClick={() => setOpen(false)}>
             Series
+          </Link>
+          <Link to="/releases" className="nav-link" onClick={() => setOpen(false)}>
+            Releases
           </Link>
           <Link to="/authors" className="nav-link" onClick={() => setOpen(false)}>
             Authors
           </Link>
-          <MatureToggle mobile />
+          <Link to="/publishers" className="nav-link" onClick={() => setOpen(false)}>
+            Publishers
+          </Link>
           {clerkEnabled ? <AuthNav mobile /> : null}
         </div>
       </div>

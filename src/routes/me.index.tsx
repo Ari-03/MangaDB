@@ -9,6 +9,7 @@ import { LibraryUpcoming } from "~/lib/follows";
 import { todaySortKey } from "~/lib/month";
 import type { EntryState } from "~/lib/quickActions";
 import { LibraryReading } from "~/lib/reading";
+import { MatureSettings } from "~/lib/mature";
 import { SharingSettings } from "~/lib/sharing";
 import { convexClient } from "~/providers";
 
@@ -161,6 +162,10 @@ function MePage() {
             {/* Tracking visibility (#30): separate Ownership/Reading defaults,
                 private until explicitly opened, plus the public-profile link. */}
             <SharingSettings />
+          </div>
+          <div className="acct-panel">
+            <h2 className="lib-group-title">Mature titles</h2>
+            <MatureSettings />
           </div>
           <div className="acct-panel">
             <h2 className="lib-group-title">Account</h2>

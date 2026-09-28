@@ -11,7 +11,7 @@ import {
   type SeriesFacets,
 } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
-import { showMature } from "~/lib/mature";
+import { MatureFilter, showMature } from "~/lib/mature";
 import { MONTH_NAMES } from "~/lib/month";
 import {
   breadcrumbListJsonLd,
@@ -476,6 +476,7 @@ function FilterPanel({
             value={draft.format}
             onPick={(format) => update({ format })}
           />
+          <MatureFilter />
           {/* Source Status is imported like any other fact; until a source
               supplies it the whole catalog reads "unknown" and the group
               would filter nothing. */}

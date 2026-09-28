@@ -350,8 +350,6 @@
 @media (max-width: 720px) {
   :root { --header-h: 60px; }
   .header-actions .btn { display: none; }
-  /* the drawer carries the mature-titles switch at this width */
-  .header-actions .mature-toggle { display: none; }
   .account span:not(.avatar) { display: none; }
   .account { padding: 3px; border-color: transparent; }
   .section { padding-block: 38px 6px; }
@@ -403,28 +401,6 @@ main {
 .breadcrumbs { color: var(--text-mute); font-size: 0.85rem; margin-bottom: 14px; }
 .breadcrumbs a { color: var(--text-dim); }
 .breadcrumbs a:hover { color: var(--accent); }
-
-/* The mature-titles switch (lib/mature.tsx): "18+" in a header circle,
-   lit when mature titles are shown. */
-.mature-toggle {
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  color: var(--text-mute);
-}
-.mature-toggle[aria-checked="true"] {
-  border-color: var(--accent);
-  background: var(--accent-tint);
-  color: var(--accent);
-}
-.mature-toggle--mobile {
-  text-align: left;
-  background: none;
-  border: 0;
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-}
 
 /* The notice leading a Mature Series' page while its art is hidden. */
 .mature-notice {
