@@ -54,6 +54,17 @@ describe("sortByTitleMatch", () => {
     expect(order("ao")[0]).toBe("Ao Haru Ride");
   });
 
+  it("puts a match on the Series' own title ahead of one through an alt title", () => {
+    const shelf = [
+      { title: "The King's Beast", altTitles: ["Kogetsu no Yume"] },
+      { title: "Demon Slayer: Kimetsu no Yaiba", altTitles: ["Kimetsu no Yaiba"] },
+    ];
+    expect(sortByTitleMatch("kny", shelf).map((h) => h.title)).toEqual([
+      "Demon Slayer: Kimetsu no Yaiba",
+      "The King's Beast",
+    ]);
+  });
+
   it("gives two-letter initials no lift over a title that opens with them", () => {
     const shelf = [
       { title: "Dear Emily", altTitles: [] },

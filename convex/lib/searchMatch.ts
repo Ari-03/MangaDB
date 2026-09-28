@@ -139,28 +139,40 @@ export function matchesSeries(
  * letters that is exactly a name's initials ("aot") counts as exact,
  * shortest name first; a partial one ("ao") does not, so it never outranks a
  * title that really begins that way (Ao Haru Ride), and neither do two
- * letters, which half the two-word titles share ("de": Dear Emily).
+ * letters, which half the two-word titles share ("de": Dear Emily). At the
+ * same rank, a Series matched by its own title leads one matched through an
+ * alt title ("kny": Demon Slayer: Kimetsu no Yaiba before The King's Beast,
+ * alias Kogetsu no Yume).
  */
 export function sortByTitleMatch<
   T extends { title: string; altTitles: ReadonlyArray<string> },
 >(query: string, items: ReadonlyArray<T>): T[] {
   const q = compact(query);
+  const nameRank = (name: string) => {
+    const c = compact(name);
+    const initials = q.length >= 3 && keysOf(name).initials.has(q);
+    return c === q || initials ? 0 : c.startsWith(q) ? 1 : 2;
+  };
   const keyed = items.map((item, index) => {
     let rank = 2;
     let length = 0;
     for (const name of [item.title, ...item.altTitles]) {
+      const r = nameRank(name);
       const c = compact(name);
-      const initials = q.length >= 3 && keysOf(name).initials.has(q);
-      const nameRank = c === q || initials ? 0 : c.startsWith(q) ? 1 : 2;
-      if (nameRank < rank || (nameRank === rank && nameRank < 2 && c.length < length)) {
-        rank = nameRank;
+      if (r < rank || (r === rank && r < 2 && c.length < length)) {
+        rank = r;
         length = c.length;
       }
     }
-    return { item, rank, length: rank < 2 ? length : 0, index };
+    // A match on the Series' own title beats one through an alt title.
+    const viaAlt = rank < 2 && nameRank(item.title) > rank ? 1 : 0;
+    return { item, rank, viaAlt, length: rank < 2 ? length : 0, index };
   });
   return keyed
-    .sort((a, b) => a.rank - b.rank || a.length - b.length || a.index - b.index)
+    .sort(
+      (a, b) =>
+        a.rank - b.rank || a.viaAlt - b.viaAlt || a.length - b.length || a.index - b.index,
+    )
     .map(({ item }) => item);
 }
 
