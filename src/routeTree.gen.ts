@@ -14,6 +14,7 @@ import { Route as AboutTheDataRouteImport } from './routes/about-the-data'
 import { Route as ClaimUsernameRouteImport } from './routes/claim-username'
 import { Route as MeRouteImport } from './routes/me'
 import { Route as SearchRouteImport } from './routes/search'
+import { Route as AuthorsIndexRouteImport } from './routes/authors.index'
 import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
 import { Route as ModImportsRouteImport } from './routes/mod.imports'
@@ -31,6 +32,8 @@ import { Route as SeriesIndexRouteImport } from './routes/series.index'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as UUsernameRouteImport } from './routes/u.$username'
+import { Route as AuthorPublicIdIndexRouteImport } from './routes/author.$publicId.index'
+import { Route as AuthorPublicIdSlugRouteImport } from './routes/author.$publicId.$slug'
 import { Route as BundlePublicIdIndexRouteImport } from './routes/bundle.$publicId.index'
 import { Route as BundlePublicIdSlugRouteImport } from './routes/bundle.$publicId.$slug'
 import { Route as EditionPublicIdIndexRouteImport } from './routes/edition.$publicId.index'
@@ -68,6 +71,11 @@ const MeRoute = MeRouteImport.update({
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthorsIndexRoute = AuthorsIndexRouteImport.update({
+  id: '/authors/',
+  path: '/authors/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IsbnIsbnRoute = IsbnIsbnRouteImport.update({
@@ -153,6 +161,16 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
 const UUsernameRoute = UUsernameRouteImport.update({
   id: '/u/$username',
   path: '/u/$username',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthorPublicIdIndexRoute = AuthorPublicIdIndexRouteImport.update({
+  id: '/author/$publicId/',
+  path: '/author/$publicId/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthorPublicIdSlugRoute = AuthorPublicIdSlugRouteImport.update({
+  id: '/author/$publicId/$slug',
+  path: '/author/$publicId/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BundlePublicIdIndexRoute = BundlePublicIdIndexRouteImport.update({
@@ -241,16 +259,19 @@ export interface FileRoutesByFullPath {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/u/$username': typeof UUsernameRoute
+  '/authors/': typeof AuthorsIndexRoute
   '/me/': typeof MeIndexRoute
   '/publishers/': typeof PublishersIndexRoute
   '/releases/': typeof ReleasesIndexRoute
   '/series/': typeof SeriesIndexRoute
+  '/author/$publicId/$slug': typeof AuthorPublicIdSlugRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
   '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
+  '/author/$publicId/': typeof AuthorPublicIdIndexRoute
   '/bundle/$publicId/': typeof BundlePublicIdIndexRoute
   '/edition/$publicId/': typeof EditionPublicIdIndexRoute
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
@@ -277,16 +298,19 @@ export interface FileRoutesByTo {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/u/$username': typeof UUsernameRoute
+  '/authors': typeof AuthorsIndexRoute
   '/me': typeof MeIndexRoute
   '/publishers': typeof PublishersIndexRoute
   '/releases': typeof ReleasesIndexRoute
   '/series': typeof SeriesIndexRoute
+  '/author/$publicId/$slug': typeof AuthorPublicIdSlugRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
   '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
+  '/author/$publicId': typeof AuthorPublicIdIndexRoute
   '/bundle/$publicId': typeof BundlePublicIdIndexRoute
   '/edition/$publicId': typeof EditionPublicIdIndexRoute
   '/series/$publicId': typeof SeriesPublicIdIndexRoute
@@ -315,16 +339,19 @@ export interface FileRoutesById {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/u/$username': typeof UUsernameRoute
+  '/authors/': typeof AuthorsIndexRoute
   '/me/': typeof MeIndexRoute
   '/publishers/': typeof PublishersIndexRoute
   '/releases/': typeof ReleasesIndexRoute
   '/series/': typeof SeriesIndexRoute
+  '/author/$publicId/$slug': typeof AuthorPublicIdSlugRoute
   '/bundle/$publicId/$slug': typeof BundlePublicIdSlugRoute
   '/edition/$publicId/$slug': typeof EditionPublicIdSlugRoute
   '/mod/proposal/$id': typeof ModProposalIdRoute
   '/mod/propose-new/$seriesPublicId': typeof ModProposeNewSeriesPublicIdRoute
   '/series/$publicId/$slug': typeof SeriesPublicIdSlugRoute
   '/volume/$publicId/$slug': typeof VolumePublicIdSlugRoute
+  '/author/$publicId/': typeof AuthorPublicIdIndexRoute
   '/bundle/$publicId/': typeof BundlePublicIdIndexRoute
   '/edition/$publicId/': typeof EditionPublicIdIndexRoute
   '/series/$publicId/': typeof SeriesPublicIdIndexRoute
@@ -354,16 +381,19 @@ export interface FileRouteTypes {
     | '/sign-in/$'
     | '/sign-up/$'
     | '/u/$username'
+    | '/authors/'
     | '/me/'
     | '/publishers/'
     | '/releases/'
     | '/series/'
+    | '/author/$publicId/$slug'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
     | '/mod/proposal/$id'
     | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
     | '/volume/$publicId/$slug'
+    | '/author/$publicId/'
     | '/bundle/$publicId/'
     | '/edition/$publicId/'
     | '/series/$publicId/'
@@ -390,16 +420,19 @@ export interface FileRouteTypes {
     | '/sign-in/$'
     | '/sign-up/$'
     | '/u/$username'
+    | '/authors'
     | '/me'
     | '/publishers'
     | '/releases'
     | '/series'
+    | '/author/$publicId/$slug'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
     | '/mod/proposal/$id'
     | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
     | '/volume/$publicId/$slug'
+    | '/author/$publicId'
     | '/bundle/$publicId'
     | '/edition/$publicId'
     | '/series/$publicId'
@@ -427,16 +460,19 @@ export interface FileRouteTypes {
     | '/sign-in/$'
     | '/sign-up/$'
     | '/u/$username'
+    | '/authors/'
     | '/me/'
     | '/publishers/'
     | '/releases/'
     | '/series/'
+    | '/author/$publicId/$slug'
     | '/bundle/$publicId/$slug'
     | '/edition/$publicId/$slug'
     | '/mod/proposal/$id'
     | '/mod/propose-new/$seriesPublicId'
     | '/series/$publicId/$slug'
     | '/volume/$publicId/$slug'
+    | '/author/$publicId/'
     | '/bundle/$publicId/'
     | '/edition/$publicId/'
     | '/series/$publicId/'
@@ -465,15 +501,18 @@ export interface RootRouteChildren {
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   UUsernameRoute: typeof UUsernameRoute
+  AuthorsIndexRoute: typeof AuthorsIndexRoute
   PublishersIndexRoute: typeof PublishersIndexRoute
   ReleasesIndexRoute: typeof ReleasesIndexRoute
   SeriesIndexRoute: typeof SeriesIndexRoute
+  AuthorPublicIdSlugRoute: typeof AuthorPublicIdSlugRoute
   BundlePublicIdSlugRoute: typeof BundlePublicIdSlugRoute
   EditionPublicIdSlugRoute: typeof EditionPublicIdSlugRoute
   ModProposalIdRoute: typeof ModProposalIdRoute
   ModProposeNewSeriesPublicIdRoute: typeof ModProposeNewSeriesPublicIdRoute
   SeriesPublicIdSlugRoute: typeof SeriesPublicIdSlugRoute
   VolumePublicIdSlugRoute: typeof VolumePublicIdSlugRoute
+  AuthorPublicIdIndexRoute: typeof AuthorPublicIdIndexRoute
   BundlePublicIdIndexRoute: typeof BundlePublicIdIndexRoute
   EditionPublicIdIndexRoute: typeof EditionPublicIdIndexRoute
   SeriesPublicIdIndexRoute: typeof SeriesPublicIdIndexRoute
@@ -518,6 +557,13 @@ declare module '@tanstack/react-router' {
       path: '/search'
       fullPath: '/search'
       preLoaderRoute: typeof SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/authors/': {
+      id: '/authors/'
+      path: '/authors'
+      fullPath: '/authors/'
+      preLoaderRoute: typeof AuthorsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/isbn/$isbn': {
@@ -637,6 +683,20 @@ declare module '@tanstack/react-router' {
       path: '/u/$username'
       fullPath: '/u/$username'
       preLoaderRoute: typeof UUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/author/$publicId/': {
+      id: '/author/$publicId/'
+      path: '/author/$publicId'
+      fullPath: '/author/$publicId/'
+      preLoaderRoute: typeof AuthorPublicIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/author/$publicId/$slug': {
+      id: '/author/$publicId/$slug'
+      path: '/author/$publicId/$slug'
+      fullPath: '/author/$publicId/$slug'
+      preLoaderRoute: typeof AuthorPublicIdSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/bundle/$publicId/': {
@@ -762,15 +822,18 @@ const rootRouteChildren: RootRouteChildren = {
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   UUsernameRoute: UUsernameRoute,
+  AuthorsIndexRoute: AuthorsIndexRoute,
   PublishersIndexRoute: PublishersIndexRoute,
   ReleasesIndexRoute: ReleasesIndexRoute,
   SeriesIndexRoute: SeriesIndexRoute,
+  AuthorPublicIdSlugRoute: AuthorPublicIdSlugRoute,
   BundlePublicIdSlugRoute: BundlePublicIdSlugRoute,
   EditionPublicIdSlugRoute: EditionPublicIdSlugRoute,
   ModProposalIdRoute: ModProposalIdRoute,
   ModProposeNewSeriesPublicIdRoute: ModProposeNewSeriesPublicIdRoute,
   SeriesPublicIdSlugRoute: SeriesPublicIdSlugRoute,
   VolumePublicIdSlugRoute: VolumePublicIdSlugRoute,
+  AuthorPublicIdIndexRoute: AuthorPublicIdIndexRoute,
   BundlePublicIdIndexRoute: BundlePublicIdIndexRoute,
   EditionPublicIdIndexRoute: EditionPublicIdIndexRoute,
   SeriesPublicIdIndexRoute: SeriesPublicIdIndexRoute,

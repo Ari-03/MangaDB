@@ -165,6 +165,10 @@ describe("parseApiResponse", () => {
     // EN/JA alternative titles only — the Italian one is dropped.
     expect(manga.altTitles).toEqual(["Sōsō no Frieren", "葬送のフリーレン"]);
     expect(manga.staff).toEqual(["Kanehito Yamada", "Tsukasa Abe"]);
+    expect(manga.credits).toEqual([
+      { personId: "208754", name: "Kanehito Yamada", task: "Story" },
+      { personId: "208753", name: "Tsukasa Abe", task: "Art" },
+    ]);
     // The DVD line is rejected; five book lines remain.
     expect(manga.releases).toHaveLength(5);
     expect(manga.releases[1]).toMatchObject({

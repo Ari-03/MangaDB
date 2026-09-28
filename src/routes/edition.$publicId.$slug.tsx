@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
+import { Byline } from "~/lib/byline";
 import { catalogQuery } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover, coverIsbns } from "~/lib/cover";
@@ -135,7 +136,7 @@ function EditionNotFound() {
 }
 
 function EditionPage() {
-  const { edition, series, coverage, releases, coverUrl } =
+  const { edition, series, credits, coverage, releases, coverUrl } =
     Route.useLoaderData();
   const primarySeries = series[0];
   // One covered Volume with a Label gets the numbered cloth spine (one trade
@@ -185,6 +186,7 @@ function EditionPage() {
 
         <div className="detail-body">
           <h1 className="detail-title">{edition.title}</h1>
+          <Byline credits={credits} />
           <p className="fact-chips">
             {edition.publisher ? (
               <Link

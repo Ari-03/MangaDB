@@ -72,6 +72,10 @@ export function publisherTitleTag(name: string): string {
   return `${name} – Manga Releases & Upcoming Books | ${SITE_NAME}`;
 }
 
+export function authorTitleTag(name: string): string {
+  return `${name} – Manga Series in English | ${SITE_NAME}`;
+}
+
 /** `monthYear` is "August 2026" (lib/month.ts monthTitle). */
 export function monthTitleTag(monthYear: string): string {
   return `English Manga Releases – ${monthYear} | ${SITE_NAME}`;
@@ -187,6 +191,17 @@ export function organizationJsonLd(args: {
     name: args.name,
     url: absoluteUrl(args.path),
     ...(args.description ? { description: args.description } : {}),
+  };
+}
+
+/** Person — on author pages; `sameAs` is their ANN Encyclopedia page. */
+export function personJsonLd(args: { name: string; path: string; sameAs: string }) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    name: args.name,
+    url: absoluteUrl(args.path),
+    sameAs: [args.sameAs],
   };
 }
 

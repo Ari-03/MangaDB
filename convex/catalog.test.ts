@@ -316,6 +316,7 @@ describe("catalog.search", () => {
     await seed(t);
     expect(await t.query(api.catalog.search, { query: "   " })).toEqual({
       series: [],
+      authors: [],
       publishers: [],
       didYouMean: [],
     });
@@ -472,6 +473,7 @@ describe("catalog.suggest", () => {
     await seed(t);
     expect(await t.query(api.catalog.suggest, { query: " " })).toEqual({
       series: [],
+      authors: [],
       didYouMean: [],
       publishers: [],
     });

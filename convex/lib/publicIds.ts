@@ -6,7 +6,7 @@
 import type { MutationCtx } from "../_generated/server";
 
 /** Entities that carry a public ID; each has its own counter row. */
-export type PublicIdEntity = "series" | "volume" | "edition" | "bundle";
+export type PublicIdEntity = "series" | "volume" | "edition" | "bundle" | "person";
 
 /**
  * Allocate `count` consecutive public IDs in one counter bump and return the

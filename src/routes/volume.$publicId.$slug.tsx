@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
+import { Byline } from "~/lib/byline";
 import { catalogQuery, type VolumePageData } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover, coverIsbns } from "~/lib/cover";
@@ -98,7 +99,7 @@ function plural(n: number, one: string, many: string): string {
 
 function VolumePage() {
   const page = Route.useLoaderData();
-  const { volume, series, editions, coverUrl } = page;
+  const { volume, series, credits, editions, coverUrl } = page;
   const complete = editions.filter((e) => e.extentForVolume === "complete");
   const partial = editions.filter((e) => e.extentForVolume === "partial");
   const releaseCount = editions.reduce((n, e) => n + e.releases.length, 0);
@@ -165,6 +166,7 @@ function VolumePage() {
 
         <div className="volume-hero-body">
           <h1 className="volume-title">{volume.title}</h1>
+          <Byline credits={credits} />
           <div className="chips">
             <Link
               className="chip"

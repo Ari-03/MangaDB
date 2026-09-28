@@ -11,6 +11,7 @@ import {
 import { coverUrl, seriesCover } from "./lib/covers";
 import { groupEditions } from "./lib/editionGroups";
 import { canonicalPublisherFor } from "./lib/publishers";
+import { creditsFor } from "./people";
 import {
   matchesAllWords,
   matchesSeries,
@@ -268,6 +269,27 @@ async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
   return { publishers: [...hits.values()].slice(0, limit), names };
 }
 
+/** Authors in search results and suggestions. */
+export const SEARCH_AUTHORS = 6;
+export const SUGGEST_AUTHORS = 3;
+
+/**
+ * Authors whose name the query opens, word by word (`matchesAllWords`), off
+ * the people name index, the most prolific first. Authors with no visible
+ * Series are left out.
+ */
+async function authorHits(ctx: QueryCtx, query: string, limit: number) {
+  const docs = await ctx.db
+    .query("people")
+    .withSearchIndex("search_name", (q) => q.search("name", query))
+    .take(limit * 4);
+  return docs
+    .filter((doc) => doc.seriesCount > 0 && matchesAllWords(query, doc.name))
+    .sort((a, b) => b.seriesCount - a.seriesCount)
+    .slice(0, limit)
+    .map((doc) => ({ publicId: doc.publicId, name: doc.name, seriesCount: doc.seriesCount }));
+}
+
 /** The alt title a hit matched through, or null when its title matched. */
 function matchedAlt(query: string, doc: Doc<"series">): string | null {
   if (matchesAllWords(query, doc.title)) return null;
@@ -325,13 +347,14 @@ export const search = query({
   handler: async (ctx, { query: rawQuery }) => {
     const trimmed = rawQuery.trim();
     if (trimmed === "") {
-      return { series: [], publishers: [], didYouMean: [] };
+      return { series: [], publishers: [], authors: [], didYouMean: [] };
     }
 
     // Overfetch so post-filtering hidden/merged docs can't starve the page.
-    const [hits, { publishers, names }] = await Promise.all([
+    const [hits, { publishers, names }, authors] = await Promise.all([
       titleHits(ctx, trimmed, SEARCH_LIMIT * 2),
       publisherHits(ctx, trimmed, SEARCH_LIMIT),
+      authorHits(ctx, trimmed, SEARCH_AUTHORS),
     ]);
     const wholeIds = new Set(hits.whole.map((doc) => doc._id));
     const ranked = [
@@ -340,12 +363,12 @@ export const search = query({
     ].slice(0, SEARCH_LIMIT);
     const [series, didYouMean] = await Promise.all([
       Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
-      hits.whole.length === 0 && !names
+      hits.whole.length === 0 && !names && authors.length === 0
         ? nearMisses(ctx, trimmed, hits.active).then((misses) => nearMissCards(ctx, misses))
         : [],
     ]);
 
-    return { series, publishers, didYouMean };
+    return { series, publishers, authors, didYouMean };
   },
 });
 
@@ -367,15 +390,19 @@ export const suggest = query({
   args: { query: v.string() },
   handler: async (ctx, { query: rawQuery }) => {
     const trimmed = rawQuery.trim();
-    if (trimmed === "") return { series: [], didYouMean: [], publishers: [] };
+    if (trimmed === "") return { series: [], didYouMean: [], publishers: [], authors: [] };
 
-    const [hits, { publishers, names }] = await Promise.all([
+    const [hits, { publishers, names }, authors] = await Promise.all([
       titleHits(ctx, trimmed, SUGGEST_TAKE),
       publisherHits(ctx, trimmed, SUGGEST_PUBLISHERS),
+      authorHits(ctx, trimmed, SUGGEST_AUTHORS),
     ]);
+    // A query that names an author wants the author, not typo help.
     const misses =
-      hits.whole.length === 0 && !names ? await nearMisses(ctx, trimmed, hits.active) : [];
-    const better = hits.whole.length > 0 || misses.length > 0 || names;
+      hits.whole.length === 0 && !names && authors.length === 0
+        ? await nearMisses(ctx, trimmed, hits.active)
+        : [];
+    const better = hits.whole.length > 0 || misses.length > 0 || names || authors.length > 0;
     const shown = better ? hits.whole : hits.active;
     const [series, didYouMean] = await Promise.all([
       Promise.all(
@@ -386,7 +413,7 @@ export const suggest = query({
       nearMissCards(ctx, misses),
     ]);
 
-    return { series, didYouMean, publishers };
+    return { series, didYouMean, publishers, authors };
   },
 });
 
@@ -612,6 +639,8 @@ export const seriesPage = query({
         bookless: series.bookless === true,
       },
       family,
+      // Its authors, from ANN's staff credits (people.ts).
+      credits: await creditsFor(ctx, series._id),
       volumes,
       editionGroups,
       coverUrl: editionGroups[0]?.books[0]?.coverUrl ?? null,

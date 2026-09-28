@@ -84,6 +84,7 @@ function SiteFooter() {
             <Link to="/releases">Release calendar</Link>
             <Link to="/publishers">Publishers</Link>
             <Link to="/series">Series</Link>
+            <Link to="/authors">Authors</Link>
             <Link to="/search" search={{ q: "" }}>Search</Link>
           </div>
           <div className="footer-col">

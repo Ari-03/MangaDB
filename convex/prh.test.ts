@@ -708,8 +708,8 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     // A sequel whose name ends in a numeral, and no base to split onto.
     const hearts = await backbone(t, "Kingdom Hearts II", []);
     stubApi([
-      { isbn: "9781685795009", title: "BARBARITIES II", seriesNumber: null, imprint: "Seven Seas" },
-      { isbn: "9781975300000", title: "Kingdom Hearts II", seriesNumber: null, imprint: "Yen Press" },
+      { isbn: "9781685795009", title: "BARBARITIES II", imprint: "Seven Seas" },
+      { isbn: "9781975300000", title: "Kingdom Hearts II", imprint: "Yen Press" },
     ]);
     await sync(t);
     await t.run(async (ctx) => {

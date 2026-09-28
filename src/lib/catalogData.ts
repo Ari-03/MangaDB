@@ -71,6 +71,10 @@ export type EditionPageData = Found<typeof api.catalogPages.editionPage>;
 export type BundlePageData = Found<typeof api.catalogPages.bundlePage>;
 /** /search (ticket #38): Series + Publisher matches and "Did you mean" near misses. */
 export type SearchResults = Found<typeof api.catalog.search>;
+/** An author page: the author and every Series they're credited on (people.ts). */
+export type AuthorPageData = Found<typeof api.people.authorPage>;
+/** One author on the Authors tab. */
+export type AuthorCard = Found<typeof api.people.authors>["page"][number];
 /** A public profile (ticket #30), exactly what its owner's visibility allows. */
 export type PublicProfileData = Found<typeof api.sharing.publicProfile>;
 

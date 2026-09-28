@@ -231,6 +231,40 @@ export default defineSchema({
     .index("by_collectors", ["collectors", "publicId"])
     .index("by_rebuiltAt", ["rebuiltAt"]),
 
+  // Authors (people.ts): the creators ANN credits on each Series, derived by
+  // `people.rebuild` from the stored ANN manga observations, like
+  // seriesStats. ANN's person id is the identity, so one author keeps one
+  // row across entries and spellings. `seriesCount` and the jacket (their
+  // biggest Series') are derived for the Authors tab.
+  people: defineTable({
+    publicId: v.number(),
+    name: v.string(),
+    annId: v.string(),
+    seriesCount: v.number(),
+    coverUrl: v.union(v.string(), v.null()),
+    coverIsbn: v.union(v.string(), v.null()),
+  })
+    .index("by_publicId", ["publicId"])
+    .index("by_annId", ["annId"])
+    .index("by_seriesCount", ["seriesCount"])
+    .searchIndex("search_name", { searchField: "name" }),
+
+  // One Series–author–role link, from ANN's staff tasks (people.ts roleFor).
+  seriesCredits: defineTable({
+    seriesId: v.id("series"),
+    personId: v.id("people"),
+    role: v.union(
+      v.literal("story_art"),
+      v.literal("story"),
+      v.literal("art"),
+      v.literal("original"),
+    ),
+    rebuiltAt: v.number(),
+  })
+    .index("by_series", ["seriesId"])
+    .index("by_person", ["personId"])
+    .index("by_rebuiltAt", ["rebuiltAt"]),
+
   // The Publishers board precomputed (publisher.ts rebuildBoards): monthBoard's
   // result for each month in the rolling window, as JSON, so paging months is
   // one document read. `month` is yyyymm; a payload is tens of KB.
