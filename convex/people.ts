@@ -16,11 +16,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalAction,
   internalMutation,
+  internalQuery,
   query,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import type { AnnCredit } from "./lib/ann";
+import { annCreditValidator, parseApiResponse, type AnnCredit } from "./lib/ann";
+import { politeFetch } from "./lib/http";
 import { allocatePublicId } from "./lib/publicIds";
 
 export type CreditRole = Doc<"seriesCredits">["role"];
@@ -241,6 +243,108 @@ export const statsBatch = internalMutation({
     }
     const last = docs.at(-1);
     return { next: docs.length < STATS_BATCH || !last ? null : last.publicId, count: docs.length };
+  },
+});
+
+// ---------- Backfill (one-time) ----------
+
+const ANN_API = "https://cdn.animenewsnetwork.com/encyclopedia/api.xml";
+/** ANN manga ids per detail request (ANN's documented maximum). */
+const ANN_BATCH = 50;
+/** ANN allows one request a second. */
+const ANN_DELAY_MS = 1100;
+/** Observations scanned per lookup for ones still missing credits. */
+const BACKFILL_SCAN = 400;
+/** Work per action before it continues in a fresh one (actions run ≤10 min). */
+const BACKFILL_BUDGET_MS = 6 * 60 * 1000;
+
+/**
+ * Give ANN manga observations stored before the importer kept credits their
+ * staff credits now, instead of waiting for ANN's weekly sync: fetch the
+ * entries' detail records (50 per request, at ANN's rate) and set only
+ * `snapshot.credits` on each; nothing else is reconciled. Then rebuild
+ * people. Continues itself until done; safe to rerun:
+ * `npx convex run people:backfillAnnCredits`.
+ */
+export const backfillAnnCredits = internalAction({
+  args: { after: v.optional(v.string()) },
+  handler: async (ctx, { after }) => {
+    const started = Date.now();
+    let cursor = after ?? null;
+    let updated = 0;
+    for (;;) {
+      const batch: { ids: string[]; next: string | null } = await ctx.runQuery(
+        internal.people.creditlessManga,
+        { after: cursor },
+      );
+      if (batch.ids.length > 0) {
+        const res = await politeFetch(`${ANN_API}?manga=${batch.ids.join("/")}`, ANN_DELAY_MS);
+        const records = parseApiResponse(await res.text());
+        updated += await ctx.runMutation(internal.people.setCredits, {
+          entries: records.map((record) => ({ mangaId: record.id, credits: record.credits })),
+        });
+      }
+      cursor = batch.next;
+      if (cursor === null) break;
+      if (Date.now() - started > BACKFILL_BUDGET_MS) {
+        await ctx.scheduler.runAfter(0, internal.people.backfillAnnCredits, { after: cursor });
+        return { updated, continued: true };
+      }
+    }
+    await ctx.scheduler.runAfter(0, internal.people.rebuild, {});
+    return { updated, continued: false };
+  },
+});
+
+/**
+ * Up to ANN_BATCH linked, unwithdrawn ANN manga observations after `after`
+ * whose snapshot has no credits yet, by ANN id, and where to look next.
+ */
+export const creditlessManga = internalQuery({
+  args: { after: v.union(v.string(), v.null()) },
+  handler: async (ctx, { after }) => {
+    const docs = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q
+          .eq("sourceKey", "ann")
+          .gt("sourceRecordId", after ?? "manga:")
+          .lt("sourceRecordId", "manga;"),
+      )
+      .take(BACKFILL_SCAN);
+    const ids: string[] = [];
+    let next: string | null = null;
+    for (const doc of docs) {
+      next = doc.sourceRecordId;
+      const snapshot = doc.snapshot as { credits?: unknown } | null;
+      if (doc.withdrawn || doc.recordRef?.type !== "series" || snapshot?.credits) continue;
+      ids.push(doc.sourceRecordId.slice("manga:".length));
+      if (ids.length === ANN_BATCH) break;
+    }
+    const exhausted = docs.length < BACKFILL_SCAN && next === docs.at(-1)?.sourceRecordId;
+    return { ids, next: exhausted ? null : next };
+  },
+});
+
+/** Set the credits ANN returned on each entry's stored snapshot. */
+export const setCredits = internalMutation({
+  args: {
+    entries: v.array(v.object({ mangaId: v.string(), credits: v.array(annCreditValidator) })),
+  },
+  handler: async (ctx, { entries }) => {
+    let updated = 0;
+    for (const { mangaId, credits } of entries) {
+      const doc = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "ann").eq("sourceRecordId", `manga:${mangaId}`),
+        )
+        .unique();
+      if (!doc) continue;
+      await ctx.db.patch(doc._id, { snapshot: { ...(doc.snapshot as object), credits } });
+      updated++;
+    }
+    return updated;
   },
 });
 

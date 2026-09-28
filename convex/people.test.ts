@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -175,5 +175,37 @@ describe("author search", () => {
     expect(search.authors.map((a) => [a.name, a.seriesCount])).toEqual([["Hajime Isayama", 2]]);
     const suggest = await t.query(api.catalog.suggest, { query: "hajime isa" });
     expect(suggest.authors.map((a) => a.name)).toEqual(["Hajime Isayama"]);
+  });
+});
+
+describe("people.backfillAnnCredits", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("fetches staff only for entries stored without credits, and sets just those", async () => {
+    const { t } = await catalog();
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return new Response(
+        `<ann><manga id="30000" name="Attack on Titan"><info type="Main title" lang="EN">Attack on Titan</info>` +
+          `<staff gid="1"><task>Story &amp; Art</task><person id="97559">Hajime Isayama</person></staff></manga></ann>`,
+      );
+    });
+    const result = await t.action(internal.people.backfillAnnCredits, {});
+    expect(result).toEqual({ updated: 1, continued: false });
+    // Every other entry already had credits: one request, for one id.
+    expect(requested).toEqual(["https://cdn.animenewsnetwork.com/encyclopedia/api.xml?manga=30000"]);
+    const snapshot = await t.run(async (ctx) => {
+      const doc = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) => q.eq("sourceKey", "ann").eq("sourceRecordId", "manga:30000"))
+        .unique();
+      return doc?.snapshot;
+    });
+    expect(snapshot).toMatchObject({
+      kind: "annManga",
+      id: "30000",
+      credits: [{ personId: "97559", name: "Hajime Isayama", task: "Story & Art" }],
+    });
   });
 });
