@@ -38,22 +38,42 @@ function foldTitle(title: string): string {
     .replace(/&/g, " and ");
 }
 
+/** Letters and digits only, one space between words. */
+const words = (text: string) =>
+  text.replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+
 /**
  * Normalized series-title key for rungs ③/④ and every by-title Series
  * lookup: entities decoded, accents/apostrophes folded, "&" ≡ "and", a
  * leading "The" dropped, bracketed discriminators like "(Manga)" stripped,
- * punctuation collapsed. A novel marker ("(Light Novel)", ": The Novel")
- * stays in the key, so a novel never matches its manga. Equality on this
- * key is the "normalized series title" of the ladder.
+ * punctuation collapsed. Square brackets that are the whole title ("[Oshi
+ * No Ko]", "[Oshi No Ko] (Manga)") keep their words: stripping them would
+ * leave an empty key that matches nothing, so every import created a new
+ * Series. A novel marker ("(Light Novel)", ": The
+ * Novel") stays in the key, so a novel never matches its manga. Equality on
+ * this key is the "normalized series title" of the ladder.
  */
 export function normalizeTitle(title: string): string {
-  const key = foldTitle(title)
-    .replace(/[([][^()[\]]*[)\]]/g, " ")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/^the /, "");
+  const folded = foldTitle(title);
+  const key = (
+    words(folded.replace(/[([][^()[\]]*[)\]]/g, " ")) ||
+    words(folded.replace(/\([^()]*\)/g, " ")) ||
+    words(folded)
+  ).replace(/^the /, "");
   return isNovelTitle(title) ? `${key}${NOVEL_KEY}` : key;
+}
+
+/**
+ * The Series among several sharing a normalized key whose title matches
+ * with its punctuation kept, when exactly one does: "Bastard" is the
+ * WEBTOON and "Bastard!!" is Hagiwara's work, though both key to
+ * "bastard". Otherwise all of them, for the caller's ambiguity handling.
+ */
+function exactTitleAmong(title: string, series: Doc<"series">[]): Doc<"series">[] {
+  if (series.length < 2) return series;
+  const strict = (text: string) => foldTitle(text).replace(/\s+/g, " ").trim();
+  const exact = series.filter((doc) => strict(doc.title) === strict(title));
+  return exact.length === 1 ? exact : series;
 }
 
 /**
@@ -179,7 +199,8 @@ async function seriesByTitle(
   // an alt title (a pinyin or romanized name) is too loose to refuse a
   // creation on.
   return {
-    active: primary.active.length > 0 ? primary.active : alt.active,
+    active:
+      primary.active.length > 0 ? exactTitleAmong(seriesTitle, primary.active) : alt.active,
     hidden: primary.hidden,
   };
 }
