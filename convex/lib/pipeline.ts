@@ -137,7 +137,8 @@ export async function publisherBySlug(
  * Find-or-create a publisher row by slug. A duplicate slug ("kodansha-comics")
  * resolves to its company first, and an existing row is followed through
  * rename redirects and merges to the survivor — a merged row never collects
- * new Editions. A new imprint row records its parent when the parent exists.
+ * new Editions. A new imprint row records its parent when the parent exists,
+ * and a new adult-only one its content rating.
  */
 export async function ensurePublisher(
   ctx: MutationCtx,
@@ -154,6 +155,8 @@ export async function ensurePublisher(
     name: wanted.name,
     slug: wanted.slug,
     ...(parent ? { parentPublisherId: parent._id } : {}),
+    // An adult-only publisher is born marked (lib/mature.ts).
+    ...(wanted.adultOnly ? { contentRating: "mature" as const } : {}),
   });
   return { id, slug: wanted.slug, created: true };
 }
