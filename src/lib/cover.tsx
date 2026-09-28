@@ -6,6 +6,8 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
+import { useArtConcealed } from "~/lib/mature";
+
 // Cloth colours for coverless books. Picked deterministically from the title
 // so the same book is always the same colour across pages and reloads.
 const CLOTH = [
@@ -135,15 +137,18 @@ export function Cover({
 }: CoverProps) {
   const seed = numbered ? numbered.series : title;
   const style = { "--cloth": clothColor(seed) } as CSSProperties;
+  // On a Mature Series' page the viewer has not opted in to (lib/mature.tsx),
+  // no art is even requested: cloth, marked 18+.
+  const concealed = useArtConcealed();
   // Every art URL to try, best first. An ISBN-derived URL 404s when nobody
   // has art for it; the next candidate takes over, and cloth after the last.
   // Failed URLs (not an index) are remembered, so a failure reported twice —
   // by onError and by the hydration check below — skips only one candidate,
   // and new props start clean.
   const isbns = typeof isbn13 === "string" ? [isbn13] : (isbn13 ?? []);
-  const urls = [...new Set([src, ...isbns.map(coverPath)])].filter(
-    (url): url is string => Boolean(url),
-  );
+  const urls = concealed
+    ? []
+    : [...new Set([src, ...isbns.map(coverPath)])].filter((url): url is string => Boolean(url));
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
   const art = urls.find((url) => !failed.has(url)) ?? null;
   const fail = (url: string) =>
@@ -188,6 +193,11 @@ export function Cover({
         </span>
       )}
       {badges ? <span className="cover-badges">{badges}</span> : null}
+      {concealed ? (
+        <span className="cover-rating" title="Cover hidden: rated 18+">
+          18+
+        </span>
+      ) : null}
       {followed ? (
         <span className="cover-flag" title="You follow this series" aria-label="You follow this series">
           ★

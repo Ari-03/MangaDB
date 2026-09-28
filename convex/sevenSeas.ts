@@ -297,8 +297,11 @@ export const noteListing = internalMutation({
     const obs = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
     if (!obs) return { needsDetail: true };
     await ctx.db.patch(obs._id, { lastSeenAt: Date.now(), withdrawn: false });
-    const stored = (obs.snapshot as Partial<BookSnapshot> | null)?.modifiedGmt;
-    if (force || stored !== modifiedGmt) return { needsDetail: true };
+    const stored = obs.snapshot as Partial<BookSnapshot> | null;
+    if (force || stored?.modifiedGmt !== modifiedGmt) return { needsDetail: true };
+    // Age ratings predate their import too: a book read before them is
+    // re-read once, paced by the same budget (lib/mature.ts).
+    if (stored?.mature === undefined) return { needsDetail: true };
     // Descriptions predate their import: a linked Release still without one
     // is re-read while the listing offers a blurb, paced by the detail
     // budget, so the backfill needs no forced run. A human's cleared

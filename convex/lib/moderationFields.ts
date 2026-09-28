@@ -74,6 +74,13 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
   publisher: [
     text("name", "Name", { required: true }),
     textarea("description", "Description", { editorial: true }),
+    {
+      name: "contentRating",
+      label: "Content rating",
+      kind: "select",
+      options: ["mature"],
+      help: "\"mature\" when every book it issues is for adults (FAKKU, 801 Media, Ghost Ship): all its Series become Mature Series at the next library rebuild.",
+    },
   ],
   seriesFamily: [text("name", "Name", { required: true })],
   series: [
@@ -92,6 +99,13 @@ export const EDITABLE_FIELDS: Record<RecordType, FieldDescriptor[]> = {
       help: "The source work's completion state, not the English edition's.",
     },
     textarea("synopsis", "Series synopsis", { editorial: true }),
+    {
+      name: "contentRating",
+      label: "Content rating",
+      kind: "select",
+      options: ["mature", "general"],
+      help: "Leave empty to follow the publishers' own age ratings. \"mature\" or \"general\" overrides them.",
+    },
   ],
   volume: [
     text("label", "Volume label", {

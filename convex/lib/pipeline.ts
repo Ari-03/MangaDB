@@ -210,15 +210,26 @@ export async function findPublisherByName(
 
 // ---------- the series half of rung ① ----------
 
-/** The synthetic series-link snapshot: the source's series title, page, and blurb. */
-type SeriesLinkSnapshot = { kind: "series"; title: string; url?: string; synopsis?: string };
+/**
+ * The synthetic series-link snapshot: the source's series title, page, and
+ * blurb, plus its age rating where the source rates series (Kodansha:
+ * kodansha.ts recordListingRatings; read by lib/mature.ts).
+ */
+type SeriesLinkSnapshot = {
+  kind: "series";
+  title: string;
+  url?: string;
+  synopsis?: string;
+  mature?: boolean;
+};
 
 /**
  * Upsert the synthetic series-link observation (`series:{key}`) and point it
  * at the canonical Series if not linked yet. The key is the source's own
  * series identity (its slug or record id), making a later series rename a
  * rung-① field conflict instead of a failed match. A feed without series
- * text (Kodansha's calendar) keeps the synopsis another feed stored.
+ * text (Kodansha's calendar) keeps the synopsis another feed stored, and
+ * the stored age rating always stays.
  */
 export async function linkSeriesObservation(
   ctx: MutationCtx,
@@ -245,6 +256,7 @@ export async function linkSeriesObservation(
       title: args.title,
       url: args.url,
       ...(synopsis !== undefined ? { synopsis } : {}),
+      ...(stored?.mature !== undefined ? { mature: stored.mature } : {}),
     },
     now: args.now,
   });

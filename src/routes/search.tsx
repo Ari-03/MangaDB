@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery, type SearchResults } from "~/lib/catalogData";
+import { showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
 import { authorMeta, isbnInProgress, useDebounced } from "~/lib/searchSuggest";
@@ -35,7 +36,10 @@ export const Route = createFileRoute("/search")({
       throw redirect({ href: `/isbn/${isbn}`, statusCode: 302 });
     }
     if (q === "") return { q, results: emptyResults() };
-    return { q, results: await catalogQuery(api.catalog.search, { query: q }) };
+    return {
+      q,
+      results: await catalogQuery(api.catalog.search, { query: q, showMature: showMature() }),
+    };
   },
   head: ({ loaderData }) => ({
     meta: [

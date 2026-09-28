@@ -240,7 +240,7 @@ describe("yenPress.booksToFetch", () => {
       await ctx.db.insert("sourceObservations", {
         sourceKey: "yenpress",
         sourceRecordId: "9798855438611",
-        snapshot: { onsale: { year: 2020, month: 1, day: 1 } },
+        snapshot: { onsale: { year: 2020, month: 1, day: 1 }, mature: false },
         lastSeenAt: now,
         withdrawn: false,
       });

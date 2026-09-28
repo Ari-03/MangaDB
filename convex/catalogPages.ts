@@ -86,7 +86,7 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
       volumeTitle: volumeTitle(series.title, volume.label ?? null),
       extent: row.extent,
       note: row.note ?? null,
-      series: { publicId: series.publicId, title: series.title },
+      series: { publicId: series.publicId, title: series.title, mature: series.mature === true },
     });
   }
 
@@ -98,7 +98,7 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   const series =
     coverage[0]?.series ??
     (lineSeries && lineSeries.status === "active"
-      ? { publicId: lineSeries.publicId, title: lineSeries.title }
+      ? { publicId: lineSeries.publicId, title: lineSeries.title, mature: lineSeries.mature === true }
       : null);
   const title = editionTitle({
     seriesTitle: series?.title ?? null,
@@ -112,6 +112,8 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
     coverage,
     /** The Edition's Series: the covered Volumes' (first), else its line's. */
     series,
+    /** It collects any Mature Series (lib/mature.ts). */
+    mature: coverage.some((c) => c.series.mature) || series?.mature === true,
     coverageUnmapped: edition.coverageUnmapped === true,
   };
 }
@@ -250,6 +252,8 @@ export const volumePage = query({
         title: volumeTitle(series.title, volume.label ?? null),
       },
       series: { publicId: series.publicId, title: series.title },
+      /** A Mature Series' Volume (lib/mature.ts): art hidden from viewers who have not opted in. */
+      mature: series.mature === true,
       credits: await creditsFor(ctx, series._id),
       editions,
       coverUrl: representativeCover(editions.flatMap((e) => e.releases)),
@@ -282,6 +286,7 @@ export const editionPage = query({
       lineName,
       coverage,
       series: lineSeries,
+      mature,
       coverageUnmapped,
     } = await editionCoverage(ctx, edition);
     const releases = await editionReleases(ctx, edition._id);
@@ -310,6 +315,8 @@ export const editionPage = query({
             : null,
       },
       series,
+      /** Collects a Mature Series (lib/mature.ts): art hidden from viewers who have not opted in. */
+      mature,
       // The authors of the (first) Series it collects.
       credits: series[0] ? await creditsForPublicId(ctx, series[0].publicId) : [],
       coverage,
@@ -346,6 +353,8 @@ export const bundlePage = query({
       .collect();
 
     const members = [];
+    // An adult-only publisher's box set, or one holding a Mature Series' book.
+    let mature = publisher?.contentRating === "mature";
     for (const membership of memberships) {
       const release = await followMerges(
         ctx,
@@ -359,7 +368,9 @@ export const bundlePage = query({
         await ctx.db.get(release.editionId),
       );
       if (!edition) continue;
-      const { title } = await editionCoverage(ctx, edition);
+      const coverage = await editionCoverage(ctx, edition);
+      const { title } = coverage;
+      if (coverage.mature) mature = true;
 
       let pinnedVariant: { name: string } | null = null;
       if (membership.variantId) {
@@ -400,6 +411,8 @@ export const bundlePage = query({
             : null,
         coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
       },
+      /** Art hidden from viewers who have not opted in (lib/mature.ts). */
+      mature,
       members,
     };
   },

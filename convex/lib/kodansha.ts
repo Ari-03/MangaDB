@@ -29,6 +29,9 @@
 // on every volume snapshot of the crawl as `seriesSynopsis` and is offered
 // as the Series synopsis. A packaging line's page describes the line ("a
 // new 3-in-1 omnibus edition"), not the work, so its volumes carry none.
+// The listing's `age_rating` is per series too: each crawl writes it onto
+// the series-link observation as `mature` (kodansha.ts recordListingRatings),
+// where the Mature Series rebuild reads it (lib/mature.ts).
 //
 // One volume yields one snapshot PER FORMAT: print and digital are distinct
 // Releases of one Edition (spec §2), so each gets its own observation
@@ -390,7 +393,20 @@ export type SeriesListingEntry = {
   lastUpdatedAt: string;
   /** The listing's `short_description` blurb; the series page's is fuller. */
   synopsis?: string;
+  /** Kodansha rates the series 18+ ("Mature"): see `isMatureRating`. */
+  mature: boolean;
 };
+
+/**
+ * Kodansha's `age_rating` → is it 18+? The search-series listing sends
+ * `{ rating: 18, label: "Mature" }`, the new-releases feed a bare 18;
+ * the other ratings are 0 (none), 10 (Child), 13 (Early Teen), 16 (Teen).
+ */
+export function isMatureRating(raw: unknown): boolean {
+  const rating =
+    typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).rating : raw;
+  return typeof rating === "number" && rating >= 18;
+}
 
 /** Series per search-series request; the endpoint caps `count` at 100. */
 export const LISTING_PAGE_SIZE = 100;
@@ -418,6 +434,7 @@ export function parseSeriesListing(raw: unknown): {
       name: r.name.trim(),
       lastUpdatedAt: typeof r.last_updated_at === "string" ? r.last_updated_at : "",
       synopsis: cleanBlurb(r.short_description),
+      mature: isMatureRating(r.age_rating),
     });
   }
   return {

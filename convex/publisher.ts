@@ -33,6 +33,7 @@ import {
   WINDOW_CAP,
   type BrowseCache,
 } from "./releases";
+import { showMatureArg, visibleTo } from "./lib/mature";
 
 // The Spotlight's months after this one are bounded (prototype #17): at most
 // LANE_CAP books within the horizon the route requests (~3 months), enough
@@ -113,6 +114,9 @@ const MONTH_SCAN_CAP = 400;
  *   bounded to LANE_CAP; the Releases browser has the rest.
  * - `nextSort`: the next publication date from today on, if any.
  *
+ * Books of Mature Series, and adult-only imprints, are left out unless
+ * `showMature` (lib/mature.ts).
+ *
  * Returns `{ redirectTo }` when the requested slug is a renamed Publisher's
  * old slug or a merged Publisher's (the route 301s), null for unknown/hidden.
  */
@@ -121,8 +125,9 @@ export const publisherPage = query({
     slug: v.string(),
     todaySort: v.number(),
     horizonSort: v.number(),
+    ...showMatureArg,
   },
-  handler: async (ctx, { slug, todaySort, horizonSort }) => {
+  handler: async (ctx, { slug, todaySort, horizonSort, showMature }) => {
     const publisher = await resolveBySlug(ctx, slug);
     if (!publisher) return null;
     if (publisher.slug !== slug) {
@@ -145,7 +150,10 @@ export const publisherPage = query({
         )
         .take(cap);
       const active = docs.filter((doc) => doc.status === "active");
-      return { rows: await joinBrowseRows(ctx, active), full: docs.length === cap };
+      const rows = (await joinBrowseRows(ctx, active)).filter((row) =>
+        visibleTo(showMature, row.mature),
+      );
+      return { rows, full: docs.length === cap };
     };
     const [month, later] = boundsOk
       ? await Promise.all([
@@ -171,7 +179,10 @@ export const publisherPage = query({
       .withIndex("by_parent", (q) => q.eq("parentPublisherId", publisher._id))
       .collect();
     const imprints = imprintDocs
-      .filter((doc) => doc.status === "active")
+      .filter(
+        (doc) =>
+          doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
+      )
       .map((doc) => ({ name: doc.name, slug: doc.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -189,6 +200,8 @@ export const publisherPage = query({
         name: publisher.name,
         slug: publisher.slug,
         description: publisher.description ?? null,
+        /** An adult-only publisher (lib/mature.ts): the page says why its lanes may be empty. */
+        mature: publisher.contentRating === "mature",
       },
       parent: parentDoc ? { name: parentDoc.name, slug: parentDoc.slug } : null,
       imprints,
@@ -229,11 +242,16 @@ type BoardRow = { release: Doc<"releases">; series: Array<Doc<"series">> };
  * (date) order. Same window and visibility as the Releases browser
  * (monthBrowse + joinBrowseRows): active Releases dated inside the month
  * (`fromSort` is its yyyymm00 key), whose Edition is active and which keep
- * at least one active Series, each with those Series. Lookups go through
- * the caller's `cache`, in parallel. A null month (malformed input) is an
- * empty window.
+ * at least one active Series, each with those Series; books of a Mature
+ * Series only with `showMature`. Lookups go through the caller's `cache`,
+ * in parallel. A null month (malformed input) is an empty window.
  */
-async function visibleMonth(ctx: QueryCtx, cache: BrowseCache, fromSort: number | null) {
+async function visibleMonth(
+  ctx: QueryCtx,
+  cache: BrowseCache,
+  fromSort: number | null,
+  showMature: boolean,
+) {
   // yyyymm00 (month-precision) … yyyymm99 covers every day of the month.
   const windowDocs =
     fromSort === null
@@ -253,6 +271,7 @@ async function visibleMonth(ctx: QueryCtx, cache: BrowseCache, fromSort: number 
       const series = (await Promise.all(release.seriesIds.map(cache.series))).flatMap(
         (doc) => (doc?.status === "active" ? [doc] : []),
       );
+      if (!showMature && series.some((doc) => doc.mature)) return null;
       return series.length > 0 ? { release, series } : null;
     }),
   );
@@ -280,21 +299,33 @@ async function visibleMonth(ctx: QueryCtx, cache: BrowseCache, fromSort: number 
  * `directory` lists every active Publisher A–Z with its month count;
  * imprints nest under an active parent (one level, spec'd on the schema),
  * defunct ones are flagged. A malformed month reads as an empty board.
+ *
+ * Without `showMature`, books of Mature Series and adult-only Publishers
+ * are left out of every count, strip, and directory entry (lib/mature.ts).
+ * Pass one `cache` to build both views of a month from the same reads.
  */
-async function buildMonthBoard(ctx: QueryCtx, year: number, month: number) {
+async function buildMonthBoard(
+  ctx: QueryCtx,
+  year: number,
+  month: number,
+  showMature: boolean,
+  cache: BrowseCache = browseCache(ctx),
+) {
   const fromSort = monthOk(year, month) ? year * 10000 + month * 100 : null;
   const previousSort =
     fromSort === null ? null : month === 1 ? fromSort - 10000 + 1100 : fromSort - 100;
 
-  const cache = browseCache(ctx);
   const [publisherDocs, current, previous] = await Promise.all([
     ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP),
-    visibleMonth(ctx, cache, fromSort),
-    visibleMonth(ctx, cache, previousSort),
+    visibleMonth(ctx, cache, fromSort, showMature),
+    visibleMonth(ctx, cache, previousSort, showMature),
   ]);
   const active = new Map(
     publisherDocs
-      .filter((doc) => doc.status === "active")
+      .filter(
+        (doc) =>
+          doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
+      )
       .map((doc) => [doc._id, doc]),
   );
   const parentOf = (doc: Doc<"publishers">) =>
@@ -487,21 +518,24 @@ function monthOk(year: number, month: number) {
  * served from its precomputed copy in `publisherBoards`, one document read,
  * so paging months is quick and the query cache holds until a rebuild
  * actually changes the month. Any other month, an empty one, or one not
- * built yet (or built in an older shape) is computed live.
+ * built yet (or built in an older shape) is computed live. Each month is
+ * kept in both views, with and without Mature Series (`showMature`).
  */
 export const monthBoard = query({
-  args: { year: v.number(), month: v.number() },
-  handler: async (ctx, { year, month }): Promise<MonthBoard> => {
+  args: { year: v.number(), month: v.number(), ...showMatureArg },
+  handler: async (ctx, { year, month, showMature = false }): Promise<MonthBoard> => {
     if (monthOk(year, month)) {
       const stored = await ctx.db
         .query("publisherBoards")
-        .withIndex("by_month", (q) => q.eq("month", year * 100 + month))
+        .withIndex("by_month_and_mature", (q) =>
+          q.eq("month", year * 100 + month).eq("mature", showMature ? true : undefined),
+        )
         .unique();
       // Written by storeBoard from buildMonthBoard's result, in this shape
       // as long as the version matches.
       if (stored?.version === BOARD_VERSION) return JSON.parse(stored.payload) as MonthBoard;
     }
-    return await buildMonthBoard(ctx, year, month);
+    return await buildMonthBoard(ctx, year, month, showMature);
   },
 });
 
@@ -533,7 +567,7 @@ export function nearMonths(now: Date): { from: number; to: number } {
 const MAX_BOARD_PAYLOAD = 700_000;
 
 /** Bump when `buildMonthBoard`'s result changes shape: older rows are then ignored. */
-const BOARD_VERSION = 1;
+const BOARD_VERSION = 2;
 
 /**
  * Recompute the months in `boardWindow` (only `nearMonths` for scope "near")
@@ -555,37 +589,50 @@ export const rebuildBoards = internalAction({
     let changed = 0;
     let failed = 0;
     for (let key = from; key <= to; key = key % 100 === 12 ? key + 89 : key + 1) {
-      let payload: string | null = null;
+      let boards: { general: MonthBoard; mature: MonthBoard } | null = null;
       try {
-        const board: MonthBoard = await ctx.runQuery(internal.publisher.computeBoard, {
+        boards = await ctx.runQuery(internal.publisher.computeBoard, {
           year: Math.floor(key / 100),
           month: key % 100,
         });
-        const json = JSON.stringify(board);
-        // A payload near Convex's 1 MiB value limit can't be stored; that
-        // month computes live instead (today's boards are ~40 KB).
-        payload = board.board.length > 0 && json.length < MAX_BOARD_PAYLOAD ? json : null;
       } catch (error) {
         failed++;
         console.error(`publisher board ${key} failed to build`, error);
       }
-      const wrote: boolean = await ctx.runMutation(internal.publisher.storeBoard, {
-        month: key,
-        payload,
-        builtAt: startedAt,
-      });
-      if (wrote) changed++;
+      for (const mature of [false, true]) {
+        const board = boards && (mature ? boards.mature : boards.general);
+        const json = board ? JSON.stringify(board) : "";
+        // A payload near Convex's 1 MiB value limit can't be stored; that
+        // month computes live instead (today's boards are ~40 KB).
+        const payload =
+          board && board.board.length > 0 && json.length < MAX_BOARD_PAYLOAD ? json : null;
+        const wrote: boolean = await ctx.runMutation(internal.publisher.storeBoard, {
+          month: key,
+          ...(mature ? { mature: true as const } : {}),
+          payload,
+          builtAt: startedAt,
+        });
+        if (wrote) changed++;
+      }
     }
     const dropped: number = await ctx.runMutation(internal.publisher.dropBoardsOutside, window);
     return { changed, failed, dropped, ms: Date.now() - startedAt };
   },
 });
 
-/** One month's board computed live, bypassing the stored copy. */
+/**
+ * One month's board in both views, computed live from one shared set of
+ * reads, bypassing the stored copies.
+ */
 export const computeBoard = internalQuery({
   args: { year: v.number(), month: v.number() },
-  handler: async (ctx, { year, month }): Promise<MonthBoard> =>
-    await buildMonthBoard(ctx, year, month),
+  handler: async (ctx, { year, month }): Promise<{ general: MonthBoard; mature: MonthBoard }> => {
+    const cache = browseCache(ctx);
+    return {
+      general: await buildMonthBoard(ctx, year, month, false, cache),
+      mature: await buildMonthBoard(ctx, year, month, true, cache),
+    };
+  },
 });
 
 /**
@@ -594,18 +641,23 @@ export const computeBoard = internalQuery({
  * that changed nothing. Returns whether it wrote.
  */
 export const storeBoard = internalMutation({
-  args: { month: v.number(), payload: v.union(v.string(), v.null()), builtAt: v.number() },
-  handler: async (ctx, { month, payload, builtAt }) => {
+  args: {
+    month: v.number(),
+    mature: v.optional(v.literal(true)),
+    payload: v.union(v.string(), v.null()),
+    builtAt: v.number(),
+  },
+  handler: async (ctx, { month, mature, payload, builtAt }) => {
     const stored = await ctx.db
       .query("publisherBoards")
-      .withIndex("by_month", (q) => q.eq("month", month))
+      .withIndex("by_month_and_mature", (q) => q.eq("month", month).eq("mature", mature))
       .unique();
     if (payload === null) {
       if (stored) await ctx.db.delete(stored._id);
       return stored !== null;
     }
     if (stored?.payload === payload && stored.version === BOARD_VERSION) return false;
-    const row = { month, version: BOARD_VERSION, payload, builtAt };
+    const row = { month, ...(mature ? { mature } : {}), version: BOARD_VERSION, payload, builtAt };
     if (stored) await ctx.db.replace(stored._id, row);
     else await ctx.db.insert("publisherBoards", row);
     return true;
@@ -619,11 +671,11 @@ export const dropBoardsOutside = internalMutation({
     const [before, after] = await Promise.all([
       ctx.db
         .query("publisherBoards")
-        .withIndex("by_month", (q) => q.lt("month", from))
+        .withIndex("by_month_and_mature", (q) => q.lt("month", from))
         .take(BOARD_DROP_CAP),
       ctx.db
         .query("publisherBoards")
-        .withIndex("by_month", (q) => q.gt("month", to))
+        .withIndex("by_month_and_mature", (q) => q.gt("month", to))
         .take(BOARD_DROP_CAP),
     ]);
     for (const doc of [...before, ...after]) await ctx.db.delete(doc._id);

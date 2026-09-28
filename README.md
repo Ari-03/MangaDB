@@ -1419,6 +1419,55 @@ recrawling everything:
 npx convex run kodansha:backlistSync '{"onlySeries":["blue-lock","initial-d"]}'
 ```
 
+## Mature titles (18+)
+
+A **Mature Series** (CONTEXT.md) stays out of browse, search, the home
+shelf, the Releases calendar, the Publishers board, author shelves and the
+sitemap until the viewer opts in. Its own pages still load, but for a viewer
+who has not opted in they lead with a notice and draw every cover as cloth
+marked 18+. The art isn't even requested. Those pages carry
+`<meta name="rating" content="adult">` and no cover-led social card.
+
+**Who opts in.** Anyone. The header's "18+" switch asks "I'm 18 or older"
+on the way on and stores a `mangadb-mature=1` cookie (`src/lib/mature.tsx`).
+The cookie lets the server render and every catalog read agree: public
+queries run without auth, so the loaders pass `showMature` as an argument
+(`convex/lib/mature.ts` `showMatureArg`). Personal pages (My library,
+upcoming) always show the viewer's own books.
+
+**What makes a Series mature.** The Series library rebuild derives
+`series.mature` (`seriesBrowse.upsertStats`), so it lags by at most one
+rebuild:
+
+| Evidence | Where it comes from |
+| --- | --- |
+| Data Team call | `series.contentRating` ("mature" / "general") wins over everything; editing it applies at once |
+| Adult-only publisher | `publishers.contentRating = "mature"`: every Series with one of its Editions |
+| Kodansha | the search-series listing's `age_rating` ≥ 18, written onto the `series:{slug}` link observation each backlist run |
+| Seven Seas | the book page's `<div class="age-rating" id="mature">` |
+| Yen Press | the "Age Rating" detail: "18+ M (Mature)", "18 & Up" |
+| ANN | "Objectionable content" MA or AO, or an erotica/hentai genre (ANN rarely fills it in) |
+
+PRH carries no age rating for manga (its `age` field is empty), and neither
+does OpenLibrary. Ghost Ship titles still come through as adult-only publisher
+rows. Both fields are ordinary edit-form fields (`/mod/edit/series/{id}`,
+`/mod/edit/publisher/{slug}`).
+
+**Rolling it out.** After deploying:
+
+1. An Administrator sets Content rating to "mature" on the adult-only
+   publishers: FAKKU, Eros Comix, Project-H, Kitty Media, Irodori Comics,
+   801 Media, June and Ghost Ship. Check each one: an imprint that also
+   publishes all-ages books belongs on its Series, not here.
+2. Ratings reach existing records as the sources re-read them. ANN mirrors
+   weekly and Kodansha's listing is read on every backlist run. Yen Press
+   and Seven Seas treat a snapshot taken before ratings as due, so their
+   normal per-run budgets backfill it. For Seven Seas that is ~200 books a
+   run, about a month; `npx convex run sevenSeas:sync
+   '{"maxDetailFetches":2000}'` finishes sooner.
+3. `npx convex run seriesBrowse:rebuild` and `npx convex run
+   publisher:rebuildBoards` to apply the flags now rather than on schedule.
+
 ## Deployment
 
 One command deploys both halves — Convex first (schema + functions), which

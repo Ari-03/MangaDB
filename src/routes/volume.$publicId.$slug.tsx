@@ -7,6 +7,7 @@ import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
+import { ConcealArt } from "~/lib/mature";
 import { VolumeReadCount } from "~/lib/reading";
 import {
   breadcrumbListJsonLd,
@@ -48,7 +49,7 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
   // back to fact assembly when no Volume Synopsis exists.
   head: ({ loaderData }) => {
     if (!loaderData) return {};
-    const { volume, series, editions, coverUrl } = loaderData;
+    const { volume, series, editions, coverUrl, mature } = loaderData;
     const path = volumePath(volume.publicId, volume.title);
     const editionCount =
       editions.length === 1 ? "1 English edition" : `${editions.length} English editions`;
@@ -61,6 +62,7 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
         path,
         image: coverUrl,
         ogType: "book",
+        mature,
       }),
       scripts: [
         jsonLdScript(
@@ -76,7 +78,7 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
       ],
     };
   },
-  component: VolumePage,
+  component: ConcealedVolumePage,
   notFoundComponent: VolumeNotFound,
 });
 
@@ -95,6 +97,15 @@ type CoveringEditionData = VolumePageData["editions"][number];
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+/** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
+function ConcealedVolumePage() {
+  return (
+    <ConcealArt mature={Route.useLoaderData().mature}>
+      <VolumePage />
+    </ConcealArt>
+  );
 }
 
 function VolumePage() {

@@ -6,6 +6,7 @@ import type {
 } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
+import { showMature } from "~/lib/mature";
 import { timingNeedsToday, todaySortKey } from "~/lib/month";
 
 // Public catalog reads for route loaders (spec §9: SSR reads go through the
@@ -80,11 +81,12 @@ export type PublicProfileData = Found<typeof api.sharing.publicProfile>;
 
 // contract: `api.seriesBrowse.browse` / `api.seriesBrowse.facets` are the
 // Series library queries in convex/seriesBrowse.ts. Argument and result types
-// are inferred from them, so the page follows the backend's shape; the one
-// argument the page does not give, `todaySort`, is filled in here.
+// are inferred from them, so the page follows the backend's shape; the two
+// arguments the page does not give, `todaySort` and the viewer's
+// `showMature` (lib/mature.tsx), are filled in here.
 export type SeriesBrowseArgs = Omit<
   FunctionArgs<typeof api.seriesBrowse.browse>,
-  "todaySort"
+  "todaySort" | "showMature"
 >;
 export type SeriesBrowsePage = Found<typeof api.seriesBrowse.browse>;
 export type SeriesBrowseItem = SeriesBrowsePage["items"][number];
@@ -109,5 +111,6 @@ export function fetchSeriesBrowse(args: SeriesBrowseArgs) {
   return catalogQuery(api.seriesBrowse.browse, {
     ...args,
     todaySort: needsToday ? todaySortKey() : undefined,
+    showMature: showMature(),
   });
 }

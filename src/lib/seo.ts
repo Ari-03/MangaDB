@@ -101,6 +101,12 @@ export type PageHeadArgs = {
   robots?: string;
   /** OG object type; "book" for book detail pages, default "website". */
   ogType?: "website" | "book";
+  /**
+   * A Mature Series' page (lib/mature.tsx): marked `rating: adult` for search
+   * engines' safe-search filters, and never given a cover-led card, since
+   * crawlers and link previews have not opted in to see the art.
+   */
+  mature?: boolean;
 };
 
 /**
@@ -112,15 +118,18 @@ export function pageHead({
   title,
   description,
   path,
-  image,
+  image: cover,
   robots,
   ogType = "website",
+  mature = false,
 }: PageHeadArgs) {
   const url = absoluteUrl(path);
+  const image = mature ? null : cover;
   const meta: Array<Record<string, string>> = [
     { title },
     { name: "description", content: description },
     ...(robots ? [{ name: "robots", content: robots }] : []),
+    ...(mature ? [{ name: "rating", content: "adult" }] : []),
     { property: "og:site_name", content: SITE_NAME },
     { property: "og:type", content: ogType },
     { property: "og:title", content: title },

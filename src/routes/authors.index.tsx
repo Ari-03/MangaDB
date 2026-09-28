@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery, type AuthorCard } from "~/lib/catalogData";
+import { showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
 import { breadcrumbListJsonLd, jsonLdScript, pageHead, SITE_NAME } from "~/lib/seo";
 import { slugParams } from "~/lib/slug";
@@ -10,8 +11,11 @@ import { slugParams } from "~/lib/slug";
 /** Authors per page of the tab. */
 const PAGE_SIZE = 48;
 
-const authorsPage = (cursor: string | null) =>
-  catalogQuery(api.people.authors, { paginationOpts: { numItems: PAGE_SIZE, cursor } });
+const authorsPage = (cursor: string | null, mature: boolean) =>
+  catalogQuery(api.people.authors, {
+    paginationOpts: { numItems: PAGE_SIZE, cursor },
+    showMature: mature,
+  });
 
 /**
  * `/authors` — the Authors tab: every author ANN credits on a Series in the
@@ -19,7 +23,11 @@ const authorsPage = (cursor: string | null) =>
  * jacket of their biggest Series. More load on request. Indexable.
  */
 export const Route = createFileRoute("/authors/")({
-  loader: async () => ({ first: await authorsPage(null) }),
+  loader: async () => {
+    // The mature-titles choice the first page was read under (lib/mature.tsx).
+    const mature = showMature();
+    return { first: await authorsPage(null, mature), mature };
+  },
   head: () => ({
     ...pageHead({
       title: `Manga Authors – Browse by Mangaka | ${SITE_NAME}`,
@@ -37,7 +45,18 @@ export const Route = createFileRoute("/authors/")({
 });
 
 function AuthorsPage() {
-  const { first } = Route.useLoaderData();
+  const { first, mature } = Route.useLoaderData();
+  // A changed mature-titles choice starts the list over from its new first page.
+  return <AuthorsList key={String(mature)} first={first} mature={mature} />;
+}
+
+function AuthorsList({
+  first,
+  mature,
+}: {
+  first: Awaited<ReturnType<typeof authorsPage>>;
+  mature: boolean;
+}) {
   const [authors, setAuthors] = useState<AuthorCard[]>(first?.page ?? []);
   const [cursor, setCursor] = useState(first && !first.isDone ? first.continueCursor : null);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
@@ -46,7 +65,7 @@ function AuthorsPage() {
     if (!cursor) return;
     setState("loading");
     try {
-      const next = await authorsPage(cursor);
+      const next = await authorsPage(cursor, mature);
       if (!next) throw new Error("Convex is not configured");
       setAuthors((prev) => [...prev, ...next.page]);
       setCursor(next.isDone ? null : next.continueCursor);

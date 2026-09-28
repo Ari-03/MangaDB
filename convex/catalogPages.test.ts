@@ -273,7 +273,7 @@ describe("catalogPages.editionPage", () => {
       lineName: null,
       publisher: { name: "VIZ Media", slug: "viz-media" },
     });
-    expect(page?.series).toEqual([{ publicId: 1, title: "S" }]);
+    expect(page?.series).toEqual([{ publicId: 1, title: "S", mature: false }]);
     expect(page?.releases).toHaveLength(2);
     const [physical, digital] = page!.releases;
     expect(physical).toMatchObject({

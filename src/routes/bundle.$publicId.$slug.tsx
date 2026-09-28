@@ -10,6 +10,7 @@ import { catalogQuery, type BundlePageData } from "~/lib/catalogData";
 import { BundleCollectionControls } from "~/lib/collection";
 import { Cover } from "~/lib/cover";
 import { formatPartialDate, formatPrice } from "~/lib/format";
+import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import {
   breadcrumbListJsonLd,
@@ -50,7 +51,7 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
   // publisher blurb is the fallback.
   head: ({ loaderData }) => {
     if (!loaderData) return {};
-    const { bundle, members } = loaderData;
+    const { bundle, members, mature } = loaderData;
     const path = bundlePath(bundle.publicId, bundle.name);
     const facts = [
       bundle.publisher ? `from ${bundle.publisher.name}` : null,
@@ -69,6 +70,7 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
         path,
         image: bundle.coverUrl,
         ogType: "book",
+        mature,
       }),
       scripts: [
         jsonLdScript(
@@ -80,7 +82,7 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
       ],
     };
   },
-  component: BundlePage,
+  component: ConcealedBundlePage,
   notFoundComponent: BundleNotFound,
 });
 
@@ -92,6 +94,15 @@ function BundleNotFound() {
         No bundle lives at this address. <Link to="/">Browse the catalog</Link>.
       </p>
     </main>
+  );
+}
+
+/** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
+function ConcealedBundlePage() {
+  return (
+    <ConcealArt mature={Route.useLoaderData().mature}>
+      <BundlePage />
+    </ConcealArt>
   );
 }
 

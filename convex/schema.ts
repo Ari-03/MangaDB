@@ -172,6 +172,10 @@ export default defineSchema({
     // No longer publishing English manga (ADV, Tokyopop's Blu, CMX, …):
     // their books stay in the catalog; the flag is display/reporting data.
     defunct: v.optional(v.boolean()),
+    // "mature": every book this publisher or imprint issues is for adults
+    // (FAKKU, 801 Media, Ghost Ship), so each of its Series is a Mature
+    // Series (lib/mature.ts). Set by the Data Team as an ordinary field.
+    contentRating: v.optional(v.literal("mature")),
   })
     .index("by_slug", ["slug"])
     .index("by_parent", ["parentPublisherId"]),
@@ -219,6 +223,8 @@ export default defineSchema({
     collectors: v.number(),
     coverUrl: v.union(v.string(), v.null()),
     coverIsbn: v.union(v.string(), v.null()),
+    // Copied from series.mature, so the library can leave Mature Series out.
+    mature: v.optional(v.literal(true)),
     rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])
@@ -246,6 +252,11 @@ export default defineSchema({
     originalCount: v.optional(v.number()),
     coverUrl: v.union(v.string(), v.null()),
     coverIsbn: v.union(v.string(), v.null()),
+    // Every visible Series they are credited on is a Mature Series, so
+    // they stay off the Authors tab and out of search for anyone who has
+    // not opted in. The jacket above never comes from a Mature Series
+    // while they have another.
+    matureOnly: v.optional(v.literal(true)),
   })
     .index("by_publicId", ["publicId"])
     .index("by_annId", ["annId"])
@@ -270,14 +281,16 @@ export default defineSchema({
 
   // The Publishers board precomputed (publisher.ts rebuildBoards): monthBoard's
   // result for each month in the rolling window, as JSON, so paging months is
-  // one document read. `month` is yyyymm; a payload is tens of KB.
+  // one document read. `month` is yyyymm; a payload is tens of KB. Each month
+  // is stored twice: with Mature Series (`mature: true`) and without (absent).
   publisherBoards: defineTable({
     month: v.number(),
+    mature: v.optional(v.literal(true)),
     // publisher.ts BOARD_VERSION when written; another version is ignored.
     version: v.number(),
     payload: v.string(),
     builtAt: v.number(),
-  }).index("by_month", ["month"]),
+  }).index("by_month_and_mature", ["month", "mature"]),
 
   // The library's filter-and-sort facts for every Series, packed many to a
   // document so a filtered view reads a handful of documents instead of one
@@ -309,6 +322,7 @@ export default defineSchema({
         lastReleasedSort: v.number(),
         followers: v.number(),
         collectors: v.number(),
+        mature: v.optional(v.literal(true)),
       }),
     ),
   }).index("by_block", ["block"]),
@@ -349,6 +363,14 @@ export default defineSchema({
     // lands. Public discovery (browse, search, home, sitemap) skips it; the
     // page stays reachable by URL; the Data Team reviews it (/mod/packaging).
     bookless: v.optional(v.literal(true)),
+    // The Data Team's call on whether this is a Mature Series (CONTEXT.md):
+    // "mature" or "general" wins over every source; absent follows them.
+    contentRating: v.optional(v.union(v.literal("mature"), v.literal("general"))),
+    // Mature Series (CONTEXT.md): rated 18+ by a source, published by an
+    // adult-only publisher, or so rated above. Derived by the Series library
+    // rebuild (lib/mature.ts); public discovery leaves it out for anyone who
+    // has not opted in, and its pages hide their cover art.
+    mature: v.optional(v.literal(true)),
   })
     .index("by_publicId", ["publicId"])
     .index("by_family", ["familyId"])

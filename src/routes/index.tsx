@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery, type BrowseRelease } from "~/lib/catalogData";
+import { showMature } from "~/lib/mature";
 import { clothColor, Cover } from "~/lib/cover";
 import {
   addMonths,
@@ -25,12 +26,13 @@ export const Route = createFileRoute("/")({
   // reactive subscription for public catalog data.
   loader: async () => {
     const month = currentMonth();
+    const mature = showMature();
     const [stats, series, releases, nextReleases] = await Promise.all([
       catalogQuery(api.catalog.stats, {}),
-      catalogQuery(api.catalog.recentSeries, { limit: SERIES_SHELF_LIMIT }),
-      catalogQuery(api.releases.monthBrowse, month),
+      catalogQuery(api.catalog.recentSeries, { limit: SERIES_SHELF_LIMIT, showMature: mature }),
+      catalogQuery(api.releases.monthBrowse, { ...month, showMature: mature }),
       // The hero wall runs on into next month when this one is nearly done.
-      catalogQuery(api.releases.monthBrowse, addMonths(month, 1)),
+      catalogQuery(api.releases.monthBrowse, { ...addMonths(month, 1), showMature: mature }),
     ]);
     // The "today" boundary travels with the loader data so SSR and hydration
     // group the shelves identically.

@@ -5,6 +5,7 @@ import { Byline } from "~/lib/byline";
 import { catalogQuery, type SeriesPageData } from "~/lib/catalogData";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { SeriesFollowControls } from "~/lib/follows";
+import { ConcealArt } from "~/lib/mature";
 import {
   ModEditLink,
   ProposeNewRecordsLink,
@@ -74,6 +75,7 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
         description: `English releases of ${series.title}: ${volumeCount} in the canonical reading order, with every edition, format, and release date.`,
         path,
         image: coverUrl,
+        mature: series.mature,
       }),
       scripts: [
         jsonLdScript(
@@ -92,7 +94,7 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
       ],
     };
   },
-  component: SeriesPage,
+  component: ConcealedSeriesPage,
   notFoundComponent: SeriesNotFound,
 });
 
@@ -145,6 +147,15 @@ function seriesLinkParams(publicId: number, title: string) {
   const canonical = seriesPath(publicId, title);
   const slug = canonical.split("/").pop() ?? "";
   return { publicId: String(publicId), slug };
+}
+
+/** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
+function ConcealedSeriesPage() {
+  return (
+    <ConcealArt mature={Route.useLoaderData().series.mature}>
+      <SeriesPage />
+    </ConcealArt>
+  );
 }
 
 function SeriesPage() {

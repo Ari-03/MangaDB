@@ -23,6 +23,7 @@ import {
 } from "./_generated/server";
 import { annCreditValidator, parseApiResponse, type AnnCredit } from "./lib/ann";
 import { politeFetch } from "./lib/http";
+import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { allocatePublicId } from "./lib/publicIds";
 
 export type CreditRole = Doc<"seriesCredits">["role"];
@@ -219,8 +220,9 @@ export const sweepCredits = internalMutation({
 /**
  * Refresh a batch of authors' derived facts: how many visible Series they
  * wrote or drew (`isMaker`), how many more they are only the original
- * creator of, and the jacket of their biggest (most Volumes), preferring
- * one they made.
+ * creator of, the jacket of their biggest (most Volumes), preferring one
+ * they made and one that is not a Mature Series, and whether every Series
+ * they are credited on is mature (`matureOnly`, lib/mature.ts).
  */
 export const statsBatch = internalMutation({
   args: { afterPublicId: v.union(v.number(), v.null()) },
@@ -232,24 +234,29 @@ export const statsBatch = internalMutation({
       )
       .take(STATS_BATCH);
     for (const person of docs) {
-      const shelf = await visibleSeriesOf(ctx, person._id);
+      const shelf = await visibleSeriesOf(ctx, person._id, true);
       const made = shelf.filter((entry) => entry.roles.some(isMaker));
-      const biggest = (made.length > 0 ? made : shelf).reduce<(typeof shelf)[number] | null>(
+      const general = (entries: typeof shelf) => entries.filter((entry) => !entry.series.mature);
+      const pool = [general(made), made, general(shelf), shelf].find((entries) => entries.length > 0) ?? [];
+      const biggest = pool.reduce<(typeof shelf)[number] | null>(
         (best, entry) =>
           (entry.stats?.volumeCount ?? 0) > (best?.stats?.volumeCount ?? -1) ? entry : best,
         null,
       );
+      const matureOnly = shelf.length > 0 && general(shelf).length === 0;
       const facts = {
         seriesCount: made.length,
         originalCount: shelf.length - made.length,
         coverUrl: biggest?.stats?.coverUrl ?? null,
         coverIsbn: biggest?.stats?.coverIsbn ?? null,
+        matureOnly: matureOnly ? (true as const) : undefined,
       };
       if (
         facts.seriesCount !== person.seriesCount ||
         facts.originalCount !== person.originalCount ||
         facts.coverUrl !== person.coverUrl ||
-        facts.coverIsbn !== person.coverIsbn
+        facts.coverIsbn !== person.coverIsbn ||
+        facts.matureOnly !== person.matureOnly
       ) {
         await ctx.db.patch(person._id, facts);
       }
@@ -373,10 +380,14 @@ export const setCredits = internalMutation({
 
 /**
  * The Series an author is credited on that public pages show (active, not
- * bookless), each with its roles and Series library row (null until the
- * library rebuild has seen it).
+ * bookless, and not mature unless `showMature`: `listed`), each with its
+ * roles and Series library row (null until the library rebuild has seen it).
  */
-async function visibleSeriesOf(ctx: QueryCtx, personId: Id<"people">) {
+async function visibleSeriesOf(
+  ctx: QueryCtx,
+  personId: Id<"people">,
+  showMature: boolean | undefined,
+) {
   const credits = await ctx.db
     .query("seriesCredits")
     .withIndex("by_person", (q) => q.eq("personId", personId))
@@ -388,7 +399,7 @@ async function visibleSeriesOf(ctx: QueryCtx, personId: Id<"people">) {
   const shelf = await Promise.all(
     [...roles].map(async ([seriesId, seriesRoles]) => {
       const series = await ctx.db.get(seriesId);
-      if (!series || series.status !== "active" || series.bookless) return null;
+      if (!series || !listed(series, showMature)) return null;
       const stats = await ctx.db
         .query("seriesStats")
         .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
@@ -429,14 +440,14 @@ export async function creditsFor(ctx: QueryCtx, seriesId: Id<"series">) {
  * first, each with its roles and library card facts. Null for an unknown id.
  */
 export const authorPage = query({
-  args: { publicId: v.number() },
-  handler: async (ctx, { publicId }) => {
+  args: { publicId: v.number(), ...showMatureArg },
+  handler: async (ctx, { publicId, showMature }) => {
     const person = await ctx.db
       .query("people")
       .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
       .unique();
     if (!person) return null;
-    const shelf = await visibleSeriesOf(ctx, person._id);
+    const shelf = await visibleSeriesOf(ctx, person._id, showMature);
     const series = shelf
       .map(({ series, stats, roles }) => ({
         publicId: series.publicId,
@@ -454,17 +465,21 @@ export const authorPage = query({
     return {
       author: { publicId: person.publicId, name: person.name, annUrl: annPersonUrl(person.annId) },
       series,
+      /** Every Series they are credited on is a Mature Series (the shelf may be empty). */
+      matureOnly: person.matureOnly === true,
     };
   },
 });
 
 /**
  * The Authors tab (`/authors`): authors who wrote or drew at least one
- * visible Series, the most prolific first, a page at a time.
+ * visible Series, the most prolific first, a page at a time. Authors of
+ * nothing but Mature Series are skipped unless `showMature`, so a page can
+ * run short of `numItems`.
  */
 export const authors = query({
-  args: { paginationOpts: paginationOptsValidator },
-  handler: async (ctx, { paginationOpts }) => {
+  args: { paginationOpts: paginationOptsValidator, ...showMatureArg },
+  handler: async (ctx, { paginationOpts, showMature }) => {
     const page = await ctx.db
       .query("people")
       .withIndex("by_seriesCount", (q) => q.gt("seriesCount", 0))
@@ -472,7 +487,7 @@ export const authors = query({
       .paginate(paginationOpts);
     return {
       ...page,
-      page: page.page.map((person) => ({
+      page: page.page.filter((person) => visibleTo(showMature, person.matureOnly)).map((person) => ({
         publicId: person.publicId,
         name: person.name,
         seriesCount: person.seriesCount,

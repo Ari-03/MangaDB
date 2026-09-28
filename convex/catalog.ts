@@ -10,6 +10,7 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCover } from "./lib/covers";
 import { groupEditions } from "./lib/editionGroups";
+import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { canonicalPublisherFor } from "./lib/publishers";
 import { creditsFor } from "./people";
 import {
@@ -110,27 +111,28 @@ export async function recountCatalog(ctx: ActionCtx): Promise<Record<CountedTabl
  * the real browse surface is the Releases browser (a later ticket).
  */
 export const listSeries = query({
-  args: {},
-  handler: async (ctx) => {
+  args: showMatureArg,
+  handler: async (ctx, { showMature }) => {
     const docs = await ctx.db
       .query("series")
       .withIndex("by_publicId")
       .take(COUNT_CAP);
     return docs
-      .filter((doc) => doc.status === "active" && doc.bookless !== true)
+      .filter((doc) => listed(doc, showMature))
       .map((doc) => ({ publicId: doc.publicId, title: doc.title }));
   },
 });
 
 /**
- * The newest Series in the catalog (highest public IDs), each with a jacket
- * for the home page's "recently added" shelf. Small and bounded: the shelf
+ * The newest Series in the catalog (highest public IDs) the viewer may
+ * see (`listed`), each with a jacket for the home page's "recently added"
+ * shelf. Small and bounded: the shelf
  * is a taste of the catalog, search and the browser are the way in.
  */
 export const RECENT_SERIES_MAX = 28;
 export const recentSeries = query({
-  args: { limit: v.number() },
-  handler: async (ctx, { limit }) => {
+  args: { limit: v.number(), ...showMatureArg },
+  handler: async (ctx, { limit, showMature }) => {
     const take = Math.max(1, Math.min(RECENT_SERIES_MAX, Math.floor(limit)));
     // Look a little past the limit and seat the Series that have a jacket
     // first: a shelf of the newest announcements is mostly books whose art
@@ -150,8 +152,9 @@ export const recentSeries = query({
     const jacketed: Array<Shelved> = [];
     const cloth: Array<Shelved> = [];
     for (const doc of docs) {
-      // Bookless Series (no books yet) are not a taste of the catalog.
-      if (doc.status !== "active" || doc.bookless === true) continue;
+      // Bookless Series (no books yet) are not a taste of the catalog, and
+      // Mature Series only for a viewer who opted in.
+      if (!listed(doc, showMature)) continue;
       const entry = { publicId: doc.publicId, title: doc.title, ...(await seriesCover(ctx, doc._id)) };
       (entry.coverUrl || entry.coverIsbn ? jacketed : cloth).push(entry);
       if (jacketed.length === take) break;
@@ -189,13 +192,19 @@ const PROBE_TAKE = 8;
  * peice" finds every "One …"), so `whole` is what tells a real match from a
  * shared word. Reads `take` documents.
  */
-async function titleHits(ctx: QueryCtx, query: string, take: number) {
+async function titleHits(
+  ctx: QueryCtx,
+  query: string,
+  take: number,
+  showMature: boolean | undefined,
+) {
   const docs = await ctx.db
     .query("series")
     .withSearchIndex("search_title", (q) => q.search("searchText", query))
     .take(take);
-  // Bookless Series stay out of search until a book lands (CONTEXT.md).
-  const active = docs.filter((doc) => doc.status === "active" && doc.bookless !== true);
+  // Bookless Series stay out of search until a book lands (CONTEXT.md), and
+  // Mature Series unless the viewer opted in.
+  const active = docs.filter((doc) => listed(doc, showMature));
   const whole = sortByTitleMatch(
     query,
     active.filter((doc) => matchesSeries(query, doc)),
@@ -209,7 +218,12 @@ async function titleHits(ctx: QueryCtx, query: string, take: number) {
  * most 4 × PROBE_TAKE reads), pool those with the hits already read, and
  * rank the near misses in memory (lib/searchMatch.ts).
  */
-async function nearMisses(ctx: QueryCtx, query: string, seen: ReadonlyArray<Doc<"series">>) {
+async function nearMisses(
+  ctx: QueryCtx,
+  query: string,
+  seen: ReadonlyArray<Doc<"series">>,
+  showMature: boolean | undefined,
+) {
   const pool = new Map(seen.map((doc) => [doc._id, doc]));
   const probes = await Promise.all(
     probePrefixes(query).map((prefix) =>
@@ -220,7 +234,7 @@ async function nearMisses(ctx: QueryCtx, query: string, seen: ReadonlyArray<Doc<
     ),
   );
   for (const doc of probes.flat()) {
-    if (doc.status === "active" && doc.bookless !== true) pool.set(doc._id, doc);
+    if (listed(doc, showMature)) pool.set(doc._id, doc);
   }
   return rankNearMisses(query, [...pool.values()], NEAR_MISS_LIMIT);
 }
@@ -242,7 +256,12 @@ async function nearMisses(ctx: QueryCtx, query: string, seen: ReadonlyArray<Doc<
  * ("manga", "press", "gasp") lists the Publishers but suppresses nothing.
  * Shared by search and suggest, so the dropdown and the page agree.
  */
-async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
+async function publisherHits(
+  ctx: QueryCtx,
+  query: string,
+  limit: number,
+  showMature: boolean | undefined,
+) {
   const docs = await ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP);
   const byId = new Map(docs.map((doc) => [doc._id, doc]));
   const alias = canonicalPublisherFor(query);
@@ -261,7 +280,7 @@ async function publisherHits(ctx: QueryCtx, query: string, limit: number) {
       visited.add(target._id);
       target = byId.get(target.mergedIntoId);
     }
-    if (target?.status === "active") {
+    if (target?.status === "active" && visibleTo(showMature, target.contentRating === "mature")) {
       hits.set(target._id, { name: target.name, slug: target.slug });
       names ||= match.names;
     }
@@ -278,7 +297,12 @@ export const SUGGEST_AUTHORS = 3;
  * the people name index, the most prolific first. Authors with no visible
  * Series, as maker or original creator, are left out.
  */
-async function authorHits(ctx: QueryCtx, query: string, limit: number) {
+async function authorHits(
+  ctx: QueryCtx,
+  query: string,
+  limit: number,
+  showMature: boolean | undefined,
+) {
   const docs = await ctx.db
     .query("people")
     .withSearchIndex("search_name", (q) => q.search("name", query))
@@ -286,7 +310,9 @@ async function authorHits(ctx: QueryCtx, query: string, limit: number) {
   return docs
     .filter(
       (doc) =>
-        doc.seriesCount + (doc.originalCount ?? 0) > 0 && matchesAllWords(query, doc.name),
+        doc.seriesCount + (doc.originalCount ?? 0) > 0 &&
+        visibleTo(showMature, doc.matureOnly) &&
+        matchesAllWords(query, doc.name),
     )
     .sort((a, b) => b.seriesCount - a.seriesCount)
     .slice(0, limit)
@@ -349,10 +375,12 @@ function nearMissCards(ctx: QueryCtx, misses: Awaited<ReturnType<typeof nearMiss
  * Results carry only active records: hidden records are invisible, and a
  * merged Series is findable through its survivor (merges fold alt titles
  * into the surviving record), so search always links canonical pages.
+ * Mature Series, adult-only Publishers, and authors of nothing else stay
+ * out unless `showMature` (lib/mature.ts); suggest does the same.
  */
 export const search = query({
-  args: { query: v.string() },
-  handler: async (ctx, { query: rawQuery }) => {
+  args: { query: v.string(), ...showMatureArg },
+  handler: async (ctx, { query: rawQuery, showMature }) => {
     const trimmed = rawQuery.trim();
     if (trimmed === "") {
       return { series: [], publishers: [], authors: [], didYouMean: [] };
@@ -360,9 +388,9 @@ export const search = query({
 
     // Overfetch so post-filtering hidden/merged docs can't starve the page.
     const [hits, { publishers, names }, authors] = await Promise.all([
-      titleHits(ctx, trimmed, SEARCH_LIMIT * 2),
-      publisherHits(ctx, trimmed, SEARCH_LIMIT),
-      authorHits(ctx, trimmed, SEARCH_AUTHORS),
+      titleHits(ctx, trimmed, SEARCH_LIMIT * 2, showMature),
+      publisherHits(ctx, trimmed, SEARCH_LIMIT, showMature),
+      authorHits(ctx, trimmed, SEARCH_AUTHORS, showMature),
     ]);
     const wholeIds = new Set(hits.whole.map((doc) => doc._id));
     const ranked = [
@@ -372,7 +400,9 @@ export const search = query({
     const [series, didYouMean] = await Promise.all([
       Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
       hits.whole.length === 0 && !names && authors.length === 0
-        ? nearMisses(ctx, trimmed, hits.active).then((misses) => nearMissCards(ctx, misses))
+        ? nearMisses(ctx, trimmed, hits.active, showMature).then((misses) =>
+            nearMissCards(ctx, misses),
+          )
         : [],
     ]);
 
@@ -395,20 +425,20 @@ export const search = query({
  * when there is nothing better.
  */
 export const suggest = query({
-  args: { query: v.string() },
-  handler: async (ctx, { query: rawQuery }) => {
+  args: { query: v.string(), ...showMatureArg },
+  handler: async (ctx, { query: rawQuery, showMature }) => {
     const trimmed = rawQuery.trim();
     if (trimmed === "") return { series: [], didYouMean: [], publishers: [], authors: [] };
 
     const [hits, { publishers, names }, authors] = await Promise.all([
-      titleHits(ctx, trimmed, SUGGEST_TAKE),
-      publisherHits(ctx, trimmed, SUGGEST_PUBLISHERS),
-      authorHits(ctx, trimmed, SUGGEST_AUTHORS),
+      titleHits(ctx, trimmed, SUGGEST_TAKE, showMature),
+      publisherHits(ctx, trimmed, SUGGEST_PUBLISHERS, showMature),
+      authorHits(ctx, trimmed, SUGGEST_AUTHORS, showMature),
     ]);
     // A query that names an author wants the author, not typo help.
     const misses =
       hits.whole.length === 0 && !names && authors.length === 0
-        ? await nearMisses(ctx, trimmed, hits.active)
+        ? await nearMisses(ctx, trimmed, hits.active, showMature)
         : [];
     const better = hits.whole.length > 0 || misses.length > 0 || names || authors.length > 0;
     const shown = better ? hits.whole : hits.active;
@@ -645,6 +675,8 @@ export const seriesPage = query({
         synopsis: series.synopsis ?? null,
         /** Bookless Series (CONTEXT.md): volumes known, no English book attached yet. */
         bookless: series.bookless === true,
+        /** Mature Series (lib/mature.ts): the page hides its art from viewers who have not opted in. */
+        mature: series.mature === true,
       },
       family,
       // Its authors, from ANN's staff credits (people.ts).

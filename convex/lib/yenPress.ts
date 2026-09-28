@@ -13,8 +13,8 @@
 //   is a truncated copy), one format tab per edition ("Paperback",
 //   "Hardback", "Digital"), a price block per tab, and a "full details"
 //   block per tab in the same order (Series, Page Count, ISBN, Release
-//   Date, Imprint), plus the category of its genre labels (manga, comics,
-//   light-novels, audio-books).
+//   Date, Age Rating, Imprint), plus the category of its genre labels
+//   (manga, comics, light-novels, audio-books).
 //
 // Scope (spec §1): Yen On (light novels) and Yen Audio never enter;
 // JY manga is allowed. Neither do the light-novel/audio
@@ -40,6 +40,11 @@ export const yenTitleValidator = v.object({
   category: v.optional(v.string()),
   /** Why the book is out of catalog scope; absent = in scope. */
   outOfScope: v.optional(v.string()),
+  /**
+   * The page rates this format 18+ (`isMatureRating`). Absent on snapshots
+   * taken before ratings were read, which the sync treats as due.
+   */
+  mature: v.optional(v.boolean()),
 });
 
 export type YenTitleSnapshot = Infer<typeof yenTitleValidator>;
@@ -87,7 +92,18 @@ export type YenFormat = {
   priceCents?: number;
   imprint?: string;
   seriesName?: string;
+  /** The "Age Rating" detail, verbatim ("18+ M (Mature)", "T (Teen)", "16 & Up"). */
+  ageRating?: string;
 };
+
+/**
+ * Yen's age ratings → is it 18+? Older pages say "A (All Ages)", "T (Teen)",
+ * "OT (Older Teen)", "18+ M (Mature)"; newer ones "13 & Up", "16 & Up".
+ */
+export function isMatureRating(ageRating: string | undefined): boolean {
+  if (ageRating === undefined) return false;
+  return /\b18\s*(?:\+|&\s*up)|\(mature\)|^m$/i.test(ageRating.trim());
+}
 
 export type YenTitlePage = {
   title: string;
@@ -186,6 +202,7 @@ export function parseTitlePage(html: string): YenTitlePage | null {
       priceCents: prices[i],
       imprint: fields.Imprint,
       seriesName: fields.Series,
+      ageRating: fields["Age Rating"],
     };
   });
   return { title, category, description: blurbOf(html), formats };
@@ -278,6 +295,7 @@ export function toSnapshots(page: YenTitlePage, url: string): YenTitleSnapshot[]
       seriesName: entry.seriesName,
       category: page.category,
       outOfScope: reason ?? undefined,
+      mature: isMatureRating(entry.ageRating),
     });
   }
   return snapshots;

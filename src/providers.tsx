@@ -5,6 +5,7 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../convex/_generated/api";
+import { MatureProvider, MatureToggle } from "~/lib/mature";
 import { SearchCombobox } from "~/lib/searchSuggest";
 
 // Client-side wiring (spec §9): <ClerkProvider> owns the session,
@@ -25,21 +26,23 @@ export const clerkEnabled = Boolean(
 );
 
 export function AppProviders({ children }: { children: ReactNode }) {
+  // The viewer's mature-titles choice (lib/mature.tsx) wraps everything.
+  const inner = <MatureProvider>{children}</MatureProvider>;
   if (!clerkEnabled) {
     return convexClient ? (
-      <ConvexProvider client={convexClient}>{children}</ConvexProvider>
+      <ConvexProvider client={convexClient}>{inner}</ConvexProvider>
     ) : (
-      <>{children}</>
+      inner
     );
   }
   return (
     <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
       {convexClient ? (
         <ConvexProviderWithClerk client={convexClient} useAuth={useAuth}>
-          {children}
+          {inner}
         </ConvexProviderWithClerk>
       ) : (
-        children
+        inner
       )}
     </ClerkProvider>
   );
@@ -59,7 +62,8 @@ export function BrandMark() {
 
 /**
  * The sticky site header of the Bookshelf look (styles/shell.css): brand,
- * primary nav, search, theme toggle, and the account controls. Under 960px
+ * primary nav, search, the mature-titles switch, theme toggle, and the
+ * account controls. Under 960px
  * the nav and search fold into a drawer behind the menu button.
  */
 export function SiteHeader() {
@@ -112,6 +116,7 @@ export function SiteHeader() {
         </nav>
         <HeaderSearch />
         <div className="header-actions">
+          <MatureToggle />
           <ThemeToggle />
           <button
             className="icon-btn menu-toggle"
@@ -146,6 +151,7 @@ export function SiteHeader() {
           <Link to="/authors" className="nav-link" onClick={() => setOpen(false)}>
             Authors
           </Link>
+          <MatureToggle mobile />
           {clerkEnabled ? <AuthNav mobile /> : null}
         </div>
       </div>
