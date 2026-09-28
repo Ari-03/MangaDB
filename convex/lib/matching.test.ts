@@ -43,6 +43,12 @@ describe("normalizeTitle", () => {
     );
   });
 
+  it("keeps brackets inside a title: a spinoff is not its parent", () => {
+    expect(normalizeTitle("Rent-A-(Really Shy!)-Girlfriend")).toBe("rent a really shy girlfriend");
+    expect(normalizeTitle("Rent-A-(Really Shy!)-Girlfriend")).not.toBe(normalizeTitle("Rent-A-Girlfriend"));
+    expect(normalizeTitle("Dekoboko Sugar Days [Mou Ikkai!] (Manga)")).toBe("dekoboko sugar days");
+  });
+
   it("keeps a title that is all brackets instead of emptying it", () => {
     expect(normalizeTitle("[Oshi No Ko]")).toBe("oshi no ko");
     expect(normalizeTitle("[Oshi No Ko] (Manga)")).toBe("oshi no ko");

@@ -45,19 +45,21 @@ const words = (text: string) =>
 /**
  * Normalized series-title key for rungs ③/④ and every by-title Series
  * lookup: entities decoded, accents/apostrophes folded, "&" ≡ "and", a
- * leading "The" dropped, bracketed discriminators like "(Manga)" stripped,
- * punctuation collapsed. Square brackets that are the whole title ("[Oshi
- * No Ko]", "[Oshi No Ko] (Manga)") keep their words: stripping them would
- * leave an empty key that matches nothing, so every import created a new
- * Series. A novel marker ("(Light Novel)", ": The
- * Novel") stays in the key, so a novel never matches its manga. Equality on
- * this key is the "normalized series title" of the ladder.
+ * leading "The" dropped, trailing bracketed discriminators like "(Manga)"
+ * stripped, punctuation collapsed. Brackets inside a title are part of it:
+ * "Rent-A-(Really Shy!)-Girlfriend" is the spinoff, not "Rent-A-Girlfriend".
+ * Square brackets that are the whole title ("[Oshi No Ko]", "[Oshi No Ko]
+ * (Manga)") keep their words: stripping them would leave an empty key that
+ * matches nothing, so every import created a new Series. A novel marker
+ * ("(Light Novel)", ": The Novel") stays in the key, so a novel never
+ * matches its manga. Equality on this key is the "normalized series title"
+ * of the ladder.
  */
 export function normalizeTitle(title: string): string {
   const folded = foldTitle(title);
   const key = (
-    words(folded.replace(/[([][^()[\]]*[)\]]/g, " ")) ||
-    words(folded.replace(/\([^()]*\)/g, " ")) ||
+    words(folded.replace(/(\s*[([][^()[\]]*[)\]])+\s*$/, " ")) ||
+    words(folded.replace(/(\s*\([^()]*\))+\s*$/, " ")) ||
     words(folded)
   ).replace(/^the /, "");
   return isNovelTitle(title) ? `${key}${NOVEL_KEY}` : key;
@@ -227,6 +229,88 @@ export async function hiddenSeriesTitled(
   seriesTitle: string,
 ): Promise<Doc<"series">[]> {
   return (await seriesByTitle(ctx, seriesTitle)).hidden;
+}
+
+/** What a source knows about a work beyond its title (ANN's staff and books). */
+export type WorkEvidence = {
+  books: Array<{ isbn13: string; format: "physical" | "digital" }>;
+  annPersonIds: string[];
+};
+
+// Bound on the Series walk below; a long Series answers well before it.
+const EVIDENCE_VOLUMES = 150;
+
+/**
+ * Whether a title-matched Series is the work the evidence describes. A
+ * title alone links Doubt to Doubt!!, E'S to ES, and Citrus to Citrus+ (an
+ * alt title); once linked, the source builds its Volumes and credits there.
+ *   "same"      — one of the work's ISBNs is already a Release of the Series
+ *   "different" — both sides know their creators (ANN person ids) and share
+ *                 none, or both hold ISBNs in a common format and share none
+ *                 (a spinoff shares its author, so only the books tell it)
+ *   "unknown"   — not enough on one side to tell; the title decides
+ */
+export async function workMatch(
+  ctx: QueryCtx | MutationCtx,
+  seriesId: Id<"series">,
+  evidence: WorkEvidence,
+): Promise<"same" | "different" | "unknown"> {
+  const isbns = new Set(evidence.books.map((book) => book.isbn13));
+  for (const isbn13 of isbns) {
+    const releases = await ctx.db
+      .query("releases")
+      .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+      .collect();
+    if (releases.some((r) => r.status === "active" && r.seriesIds.includes(seriesId))) {
+      return "same";
+    }
+  }
+
+  if (evidence.annPersonIds.length > 0) {
+    const credits = await ctx.db
+      .query("seriesCredits")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .collect();
+    const known = new Set<string>();
+    for (const credit of credits) {
+      const person = await ctx.db.get(credit.personId);
+      if (person) known.add(person.annId);
+    }
+    // A shared creator proves nothing (a spinoff shares its author), but
+    // wholly different creators are different works.
+    if (known.size > 0 && !evidence.annPersonIds.some((id) => known.has(id))) {
+      return "different";
+    }
+  }
+
+  // No shared ISBN (checked above): any Release of the Series with an ISBN
+  // in a format the evidence also lists is a book of another work.
+  const formats = new Set(evidence.books.map((book) => book.format));
+  if (formats.size === 0) return "unknown";
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .take(EVIDENCE_VOLUMES);
+  const seen = new Set<Id<"editions">>();
+  for (const volume of volumes) {
+    if (volume.status !== "active") continue;
+    const coverage = await ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
+      .collect();
+    for (const row of coverage) {
+      if (seen.has(row.editionId)) continue;
+      seen.add(row.editionId);
+      const releases = await ctx.db
+        .query("releases")
+        .withIndex("by_edition", (q) => q.eq("editionId", row.editionId))
+        .collect();
+      if (releases.some((r) => r.status === "active" && r.isbn13 && formats.has(r.format))) {
+        return "different";
+      }
+    }
+  }
+  return "unknown";
 }
 
 /**

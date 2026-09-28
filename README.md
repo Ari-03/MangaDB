@@ -1394,6 +1394,19 @@ were loaded into the duplicate queue at `/mod/launch` for a Moderator to
 merge. The rest: 86 lines named a distributor with no publisher row, 83 were
 packaging-only, 19 had no ISBN.
 
+**A title match that is another work.** A title alone linked ANN entries to
+the wrong Series: Doubt!! to Doubt, E'S to ES, Citrus to Citrus+ (through its
+alt title), and every feed's "Rent-A-Girlfriend" to "Rent-A-(Really
+Shy!)-Girlfriend". Once linked, ANN builds its Volumes and credits there, so
+two works end up in one Series. `normalizeTitle` now strips brackets only at
+the end of a title, and before linking an unlinked entry ANN asks
+`workMatch` (`convex/lib/matching.ts`) whether each title candidate is the
+same work: a candidate whose credited people (ANN person ids) or whose ISBNs
+in a shared format are both known and share nothing is dropped, and the
+entry goes to the creation path instead. A shared creator never proves a
+match, since a spinoff shares its author. Series that were already mixed are
+separated with the repair's `splitSeries` entries.
+
 Import runs apply one record per mutation and retry Convex write conflicts
 (`convex/lib/occ.ts`), so concurrent sources no longer skip records. If a run
 still reports skipped records, rerun that source with `npx convex run
