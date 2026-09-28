@@ -1458,7 +1458,7 @@ rows. Both fields are ordinary edit-form fields (`/mod/edit/series/{id}`,
 
 **Rolling it out.** After deploying:
 
-1. `npx convex run launch:seedPublishers '{}'` marks the adult-only
+1. `npx convex run --prod launch:seedPublishers '{}'` marks the adult-only
    publishers (`adultOnly` in `convex/lib/publishers.ts`: FAKKU, Eros Comix,
    Project-H, Kitty Media, Irodori Comics, 801 Media, June, Ghost Ship).
    Others are set by hand in the edit form. A publisher that also issues
@@ -1467,9 +1467,9 @@ rows. Both fields are ordinary edit-form fields (`/mod/edit/series/{id}`,
    weekly and Kodansha's listing is read on every backlist run. Yen Press
    and Seven Seas treat a snapshot taken before ratings as due, so their
    normal per-run budgets backfill it. For Seven Seas that is ~200 books a
-   run, about a month; `npx convex run sevenSeas:sync
+   run, about a month; `npx convex run --prod sevenSeas:sync
    '{"maxDetailFetches":2000}'` finishes sooner.
-3. `npx convex run seriesBrowse:rebuild` and `npx convex run
+3. `npx convex run --prod seriesBrowse:rebuild` and `npx convex run --prod
    publisher:rebuildBoards` to apply the flags now rather than on schedule.
 
 ## Deployment
