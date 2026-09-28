@@ -68,7 +68,13 @@ import { applyRetrying } from "./lib/occ";
 import { openFollowOnRun, runToContinue } from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
-import { candidateSeries, labelsEqual, survivorOf } from "./lib/matching";
+import {
+  candidateSeries,
+  labelsEqual,
+  survivorOf,
+  workMatch,
+  type WorkEvidence,
+} from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
@@ -633,7 +639,22 @@ export const applyManga = internalMutation({
         }
       }
     } else {
-      let candidates = await candidateSeries(ctx, snapshot.title);
+      // A title names candidates; the entry's staff and ISBNs rule out the
+      // ones that are another work (Doubt vs Doubt!!, Citrus vs Citrus+).
+      const evidence: WorkEvidence = {
+        books: snapshot.releases.flatMap((r) =>
+          r.isbn13 ? [{ isbn13: r.isbn13, format: r.format }] : [],
+        ),
+        annPersonIds: (snapshot.credits ?? []).map((c) => c.personId),
+      };
+      const sameWork = async (found: Doc<"series">[]) => {
+        const kept: Doc<"series">[] = [];
+        for (const series of found) {
+          if ((await workMatch(ctx, series._id, evidence)) !== "different") kept.push(series);
+        }
+        return kept;
+      };
+      let candidates = await sameWork(await candidateSeries(ctx, snapshot.title));
       if (candidates.length === 0) {
         // ANN often names a work by a short title and carries the
         // publisher's full title only as an alternative ("7th Time Loop:
@@ -646,7 +667,7 @@ export const applyManga = internalMutation({
         for (const alt of snapshot.altTitles) {
           for (const series of await candidateSeries(ctx, alt)) byAlt.set(series._id, series);
         }
-        candidates = [...byAlt.values()];
+        candidates = await sameWork([...byAlt.values()]);
       }
       if (candidates.length === 1) {
         seriesId = candidates[0]!._id;

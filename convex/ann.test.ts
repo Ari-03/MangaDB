@@ -29,6 +29,8 @@ type FixtureManga = {
   /** The Plot Summary's XML text (already escaped, as ANN serves it). */
   plot?: string;
   releases: FixtureRelease[];
+  /** Staff rows; defaults to one "Story & Art" person. */
+  staff?: Array<{ id: number; name: string }>;
 };
 
 function reportXml(manga: FixtureManga[], nskip: number, nlist: number) {
@@ -64,7 +66,9 @@ function apiXml(manga: FixtureManga[], ids: string[]) {
 ${alts}
 ${plot}
 ${releases}
-<staff gid="3"><task>Story &amp; Art</task><person id="1">Some One</person></staff></manga>`;
+${(m.staff ?? [{ id: 1, name: "Some One" }])
+  .map((p) => `<staff gid="3"><task>Story &amp; Art</task><person id="${p.id}">${p.name}</person></staff>`)
+  .join("\n")}</manga>`;
     })
     .join("\n");
   return `<ann>${blocks}</ann>`;
@@ -1464,5 +1468,141 @@ describe("ann.syncReleasePages — non-English distributors (#48)", () => {
     expect((await obsFor(t, 7002))?.conflicts?.[0]?.reason).toMatch(/another language: out of English scope/);
     // The Toyspress line places now that the row exists.
     expect((await obsFor(t, 7001))?.recordRef?.type).toBe("release");
+  });
+});
+
+describe("ann.sync — a title match that is another work", () => {
+  /** A publisher-fed Series with one Release carrying `isbn13`. */
+  async function seedSeriesWithBook(
+    t: TestT,
+    title: string,
+    altTitles: string[],
+    isbn13: string,
+  ) {
+    return await t.run(async (ctx) => {
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 700,
+        title,
+        altTitles,
+        searchText: [title, ...altTitles].join(" "),
+      });
+      const volumeId = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 701,
+        seriesId,
+        position: 1,
+        label: "1",
+      });
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+      });
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 702, publisherId });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        isbn13,
+        publisherId,
+        seriesIds: [seriesId],
+      });
+      return seriesId;
+    });
+  }
+
+  const linkOf = (t: TestT, mangaId: number) =>
+    t.run(async (ctx) =>
+      (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === `manga:${mangaId}`,
+      )?.recordRef,
+    );
+
+  it("never links a parent work to its spinoff through an alt title when their books differ", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // Seven Seas' Citrus+ carries ANN's "Citrus Plus" as an alt title.
+    const spinoff = await seedSeriesWithBook(t, "Citrus+", ["Citrus Plus"], "9781645052722");
+    stubAnn([
+      {
+        id: 15835,
+        title: "Citrus",
+        altTitles: [{ lang: "EN", text: "Citrus Plus" }],
+        releases: [{ annId: 50001, date: "2016-01-12", designator: "GN 1", ean: "9781626922617" }],
+      },
+    ]);
+    await sync(t, { releasePages: false });
+    const link = await linkOf(t, 15835);
+    expect(link?.type).toBe("series");
+    expect(link?.id).not.toBe(spinoff);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(link!.id as Id<"series">))?.title).toBe("Citrus");
+      // The spinoff keeps only its own Volume.
+      const spinoffVolumes = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", spinoff))
+        .collect();
+      expect(spinoffVolumes.map((v) => v.label)).toEqual(["1"]);
+    });
+  });
+
+  it("never links two same-titled works by different creators", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // Tonogai's Doubt, already credited from its own ANN entry.
+    const tonogai = await t.run(async (ctx) => {
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 710,
+        title: "Doubt",
+        altTitles: [],
+        searchText: "Doubt",
+      });
+      const personId = await ctx.db.insert("people", {
+        publicId: 711,
+        name: "Yoshiki Tonogai",
+        annId: "4001",
+        seriesCount: 1,
+        coverUrl: null,
+        coverIsbn: null,
+      });
+      await ctx.db.insert("seriesCredits", { seriesId, personId, role: "story_art", rebuiltAt: 0 });
+      return seriesId;
+    });
+    stubAnn([
+      {
+        id: 3337,
+        title: "Doubt!!",
+        staff: [{ id: 4002, name: "Kaneyoshi Izumi" }],
+        releases: [{ annId: 50002, date: "2005-04-05", designator: "GN 1" }],
+      },
+    ]);
+    await sync(t, { releasePages: false });
+    const link = await linkOf(t, 3337);
+    expect(link?.id).not.toBe(tonogai);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(link!.id as Id<"series">))?.title).toBe("Doubt!!");
+    });
+  });
+
+  it("still links when one of the entry's ISBNs is already a book of the Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const series = await seedSeriesWithBook(t, "Citrus", [], "9781626922617");
+    stubAnn([
+      {
+        id: 15835,
+        title: "Citrus",
+        releases: [
+          { annId: 50001, date: "2016-01-12", designator: "GN 1", ean: "9781626922617" },
+          { annId: 50003, date: "2016-05-10", designator: "GN 2", ean: "9781626922990" },
+        ],
+      },
+    ]);
+    await sync(t, { releasePages: false });
+    expect(await linkOf(t, 15835)).toEqual({ type: "series", id: series });
   });
 });
