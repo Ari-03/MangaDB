@@ -22,7 +22,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { todaySortKey } from "./lib/dates";
 import { ensurePublisher, publisherBySlug } from "./lib/pipeline";
-import { CANONICAL_PUBLISHERS, DEFUNCT_SLUGS } from "./lib/publishers";
+import { ADULT_ONLY_SLUGS, CANONICAL_PUBLISHERS, DEFUNCT_SLUGS } from "./lib/publishers";
 import { findDuplicatePairs, pairKeyOf, Reservoir, type SweepEntry } from "./lib/qa";
 import { requireDataTeam, requireModerator, requireRole } from "./lib/roles";
 
@@ -236,6 +236,16 @@ export const seedPublishers = internalMutation({
         markedDefunct.push(slug);
       }
     }
+    // Adult-only marks (lib/mature.ts), likewise. Only ever added: dropping a
+    // slug from the list leaves its mark for a Moderator to clear.
+    const markedAdultOnly: string[] = [];
+    for (const slug of ADULT_ONLY_SLUGS) {
+      const row = await publisherBySlug(ctx, slug);
+      if (row && row.slug === slug && row.contentRating !== "mature") {
+        await ctx.db.patch(row._id, { contentRating: "mature" });
+        markedAdultOnly.push(slug);
+      }
+    }
     // Parents second: an imprint seeded before its parent row existed.
     const parented: string[] = [];
     for (const pub of CANONICAL_PUBLISHERS) {
@@ -247,7 +257,7 @@ export const seedPublishers = internalMutation({
         parented.push(pub.slug);
       }
     }
-    return { created, parented, markedDefunct, total: CANONICAL_PUBLISHERS.length };
+    return { created, parented, markedDefunct, markedAdultOnly, total: CANONICAL_PUBLISHERS.length };
   },
 });
 

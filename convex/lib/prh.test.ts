@@ -353,6 +353,7 @@ describe("imprintPublisher", () => {
       name: "Ghost Ship",
       slug: "ghost-ship",
       parentSlug: "seven-seas",
+      adultOnly: true,
     });
     expect(imprintPublisher("Vertical Comics")).toMatchObject({
       slug: "vertical",

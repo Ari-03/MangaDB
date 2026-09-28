@@ -31,6 +31,7 @@ describe("canonicalPublisherFor", () => {
       name: "Ghost Ship",
       slug: "ghost-ship",
       parentSlug: "seven-seas",
+      adultOnly: true,
     });
     expect(canonicalPublisherFor("TOKYOPOP LoveLove")?.parentSlug).toBe(
       "tokyopop",

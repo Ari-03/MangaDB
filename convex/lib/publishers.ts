@@ -17,6 +17,11 @@ export type CanonicalPublisher = {
   parentSlug?: string;
   /** No longer publishing English manga (seeded as publishers.defunct). */
   defunct?: boolean;
+  /**
+   * Every book it issues is for adults (seeded as publishers.contentRating
+   * "mature", which makes each of its Series a Mature Series; lib/mature.ts).
+   */
+  adultOnly?: boolean;
 };
 
 /**
@@ -51,11 +56,11 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "ComicsOne", slug: "comicsone", defunct: true },
   { name: "Star Fruit Books", slug: "star-fruit-books" },
   { name: "Glacier Bay Books", slug: "glacier-bay-books" },
-  { name: "FAKKU", slug: "fakku" },
-  { name: "Irodori Comics", slug: "irodori-comics" },
+  { name: "FAKKU", slug: "fakku", adultOnly: true },
+  { name: "Irodori Comics", slug: "irodori-comics", adultOnly: true },
   { name: "Last Gasp", slug: "last-gasp" },
   { name: "Kuma", slug: "kuma" },
-  { name: "Ghost Ship", slug: "ghost-ship", parentSlug: "seven-seas" },
+  { name: "Ghost Ship", slug: "ghost-ship", parentSlug: "seven-seas", adultOnly: true },
   { name: "Steamship", slug: "steamship", parentSlug: "seven-seas" },
   { name: "Airship", slug: "airship", parentSlug: "seven-seas" },
   {
@@ -73,8 +78,8 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   // publishers, so ANN's release pages and OpenLibrary can place their
   // books. Imprints name their parent where it is a row here.
   { name: "SuBLime", slug: "sublime", parentSlug: "viz-media" },
-  { name: "June", slug: "june", parentSlug: "digital-manga" },
-  { name: "801 Media", slug: "801-media", parentSlug: "digital-manga", defunct: true },
+  { name: "June", slug: "june", parentSlug: "digital-manga", adultOnly: true },
+  { name: "801 Media", slug: "801-media", parentSlug: "digital-manga", defunct: true, adultOnly: true },
   { name: "Blu", slug: "blu", parentSlug: "tokyopop", defunct: true },
   { name: "ADV Manga", slug: "adv-manga", defunct: true },
   { name: "Aurora Publishing", slug: "aurora-publishing", defunct: true },
@@ -82,7 +87,7 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "Central Park Media", slug: "central-park-media", defunct: true },
   { name: "Go! Comi", slug: "go-comi", defunct: true },
   { name: "Media Blasters", slug: "media-blasters", defunct: true },
-  { name: "Kitty Media", slug: "kitty-media", parentSlug: "media-blasters", defunct: true },
+  { name: "Kitty Media", slug: "kitty-media", parentSlug: "media-blasters", defunct: true, adultOnly: true },
   { name: "Broccoli Books", slug: "broccoli-books", defunct: true },
   { name: "Icarus Publishing", slug: "icarus-publishing", defunct: true },
   { name: "Bandai Entertainment", slug: "bandai-entertainment", defunct: true },
@@ -94,8 +99,8 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "PictureBox", slug: "picturebox", defunct: true },
   { name: "Gen Manga", slug: "gen-manga", defunct: true },
   { name: "Tanoshimi", slug: "tanoshimi", defunct: true },
-  { name: "Eros Comix", slug: "eros-comix", parentSlug: "fantagraphics", defunct: true },
-  { name: "Project-H", slug: "project-h" },
+  { name: "Eros Comix", slug: "eros-comix", parentSlug: "fantagraphics", defunct: true, adultOnly: true },
+  { name: "Project-H", slug: "project-h", adultOnly: true },
   { name: "Ponent Mon", slug: "ponent-mon" },
   { name: "Fanfare", slug: "fanfare", parentSlug: "ponent-mon" },
   { name: "Living the Line", slug: "living-the-line" },
@@ -127,6 +132,11 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
 /** Slugs of the rows above that no longer publish (seedPublishers marks them). */
 export const DEFUNCT_SLUGS: ReadonlySet<string> = new Set(
   CANONICAL_PUBLISHERS.filter((pub) => pub.defunct).map((pub) => pub.slug),
+);
+
+/** Publishers seeded as adult-only (publishers.contentRating "mature"). */
+export const ADULT_ONLY_SLUGS: ReadonlySet<string> = new Set(
+  CANONICAL_PUBLISHERS.filter((pub) => pub.adultOnly).map((pub) => pub.slug),
 );
 
 /**

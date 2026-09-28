@@ -468,8 +468,16 @@ describe("seedPublishers (the canonical publisher list)", () => {
       expect((await bySlug("adv-manga"))?.defunct).toBe(true);
       expect((await bySlug("del-rey-manga"))?.defunct).toBe(true);
       expect((await bySlug("viz-media"))?.defunct).toBeUndefined();
+      // Adult-only publishers are marked (lib/mature.ts); mixed ones are not.
+      expect((await bySlug("ghost-ship"))?.contentRating).toBe("mature");
+      expect((await bySlug("fakku"))?.contentRating).toBe("mature");
+      expect((await bySlug("seven-seas"))?.contentRating).toBeUndefined();
+      expect((await bySlug("sublime"))?.contentRating).toBeUndefined();
     });
     expect(first.markedDefunct).toContain("central-park-media");
     expect(again.markedDefunct).toEqual([]);
+    // New rows are born marked; only the pre-existing Ghost Ship row needed it.
+    expect(first.markedAdultOnly).toEqual(["ghost-ship"]);
+    expect(again.markedAdultOnly).toEqual([]);
   });
 });
