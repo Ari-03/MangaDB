@@ -1,6 +1,15 @@
 import { createFileRoute, Link, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { api } from "../../convex/_generated/api";
+import {
+  catalogQuery,
+  fetchSeriesBrowse,
+  type SeriesBrowseArgs,
+  type SeriesBrowseItem,
+  type SeriesBrowsePage,
+  type SeriesFacets,
+} from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
 import { MONTH_NAMES } from "~/lib/month";
 import {
@@ -11,14 +20,6 @@ import {
 } from "~/lib/seo";
 import { slugParams } from "~/lib/slug";
 import { useUrlDraft } from "~/lib/urlDraft";
-import {
-  fetchSeriesBrowse,
-  fetchSeriesFacets,
-  type SeriesBrowseArgs,
-  type SeriesBrowseItem,
-  type SeriesBrowsePage,
-  type SeriesFacets,
-} from "~/server/seriesBrowse";
 
 type SeriesSort = SeriesBrowseArgs["sort"];
 type SeriesStatus = NonNullable<SeriesBrowseArgs["status"]>;
@@ -156,10 +157,11 @@ function browseArgs(
  * per session instead of on every filter change (each ask reads all the
  * packs). The server renders them fresh; a failed ask is retried next time.
  */
-let clientFacets: ReturnType<typeof fetchSeriesFacets> | undefined;
+let clientFacets: ReturnType<typeof fetchFacets> | undefined;
+const fetchFacets = () => catalogQuery(api.seriesBrowse.facets, {});
 function libraryFacets() {
-  if (typeof window === "undefined") return fetchSeriesFacets();
-  clientFacets ??= fetchSeriesFacets().catch((error: unknown) => {
+  if (typeof window === "undefined") return fetchFacets();
+  clientFacets ??= fetchFacets().catch((error: unknown) => {
     clientFacets = undefined;
     throw error;
   });
@@ -186,7 +188,7 @@ export const Route = createFileRoute("/series/")({
   loaderDeps: ({ search }) => search,
   loader: async ({ deps }) => {
     const [page, facets] = await Promise.all([
-      fetchSeriesBrowse({ data: browseArgs(deps) }),
+      fetchSeriesBrowse(browseArgs(deps)),
       libraryFacets(),
     ]);
     return {
@@ -745,7 +747,7 @@ function LibraryShelf({
     loading.current = true;
     setState("loading");
     try {
-      const next = await fetchSeriesBrowse({ data: browseArgs(search, cursor) });
+      const next = await fetchSeriesBrowse(browseArgs(search, cursor));
       if (!next) throw new Error("Convex is not configured");
       const merged = [...items, ...next.items];
       loadedViews.set(key, { items: merged, cursor: next.nextCursor });

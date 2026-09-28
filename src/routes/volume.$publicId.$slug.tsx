@@ -1,5 +1,8 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { Byline } from "~/lib/byline";
+import { catalogQuery, type VolumePageData } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
@@ -13,7 +16,6 @@ import {
   volumeTitleTag,
 } from "~/lib/seo";
 import { parsePublicId, seriesPath, slugParams, volumePath } from "~/lib/slug";
-import { fetchVolumePage, type VolumePageData } from "~/server/catalogPages";
 
 /**
  * The Volume page (ticket #23): `/volume/{id}/{slug}`, server-rendered from
@@ -33,7 +35,7 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await fetchVolumePage({ data: publicId });
+    const page = await catalogQuery(api.catalogPages.volumePage, { publicId });
     if (!page) throw notFound();
     const canonical = volumePath(page.volume.publicId, page.volume.title);
     if (`/volume/${params.publicId}/${params.slug}` !== canonical) {
@@ -97,7 +99,7 @@ function plural(n: number, one: string, many: string): string {
 
 function VolumePage() {
   const page = Route.useLoaderData();
-  const { volume, series, editions, coverUrl } = page;
+  const { volume, series, credits, editions, coverUrl } = page;
   const complete = editions.filter((e) => e.extentForVolume === "complete");
   const partial = editions.filter((e) => e.extentForVolume === "partial");
   const releaseCount = editions.reduce((n, e) => n + e.releases.length, 0);
@@ -164,6 +166,7 @@ function VolumePage() {
 
         <div className="volume-hero-body">
           <h1 className="volume-title">{volume.title}</h1>
+          <Byline credits={credits} />
           <div className="chips">
             <Link
               className="chip"

@@ -1,12 +1,13 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery, type SearchResults } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
-import { isbnInProgress, useDebounced } from "~/lib/searchSuggest";
+import { authorMeta, isbnInProgress, useDebounced } from "~/lib/searchSuggest";
 import { slugParams } from "~/lib/slug";
 import { useUrlDraft } from "~/lib/urlDraft";
-import { fetchSearchResults, type SearchResults } from "~/server/search";
 
 /**
  * v1 search (ticket #38, spec §8/§11): `/search?q=…` over Series via the
@@ -34,7 +35,7 @@ export const Route = createFileRoute("/search")({
       throw redirect({ href: `/isbn/${isbn}`, statusCode: 302 });
     }
     if (q === "") return { q, results: emptyResults() };
-    return { q, results: await fetchSearchResults({ data: q }) };
+    return { q, results: await catalogQuery(api.catalog.search, { query: q }) };
   },
   head: ({ loaderData }) => ({
     meta: [
@@ -59,7 +60,7 @@ function queryOf(search: { q: string }): string {
 }
 
 function emptyResults(): SearchResults {
-  return { series: [], publishers: [], didYouMean: [] };
+  return { series: [], publishers: [], authors: [], didYouMean: [] };
 }
 
 /** Quiet time before the page's box re-runs the search. */
@@ -116,8 +117,8 @@ function SearchPage() {
               held.current = false;
               setDraft({ q: event.target.value });
             }}
-            placeholder="Series title, publisher, or ISBN"
-            aria-label="Search series, publishers, or an ISBN"
+            placeholder="Series title, author, publisher, or ISBN"
+            aria-label="Search series, authors, publishers, or an ISBN"
             autoFocus
           />
           <button className="btn btn-primary" type="submit">
@@ -125,8 +126,9 @@ function SearchPage() {
           </button>
         </form>
         <p className="search-note">
-          Series titles — including alternate titles — and publishers. Paste an
-          ISBN to jump straight to that book.
+          Series titles — including alternate titles and initials like
+          “aot” — authors, and publishers. Paste an ISBN to jump straight to
+          that book.
         </p>
       </div>
 
@@ -150,7 +152,11 @@ function SearchResultsView({
   results: SearchResults;
 }) {
   const didYouMean = <DidYouMean hits={results.didYouMean} />;
-  if (results.series.length === 0 && results.publishers.length === 0) {
+  if (
+    results.series.length === 0 &&
+    results.publishers.length === 0 &&
+    results.authors.length === 0
+  ) {
     return (
       <>
         {didYouMean}
@@ -231,6 +237,32 @@ function SearchResultsView({
                   ) : null}
                 </div>
               </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {results.authors.length > 0 ? (
+        <section className="search-results">
+          <div className="section-head">
+            <h2 className="section-title">Authors</h2>
+          </div>
+          <div className="pub-hits">
+            {results.authors.map((a) => (
+              <Link
+                className="pub-hit"
+                key={a.publicId}
+                to="/author/$publicId/$slug"
+                params={slugParams(a.publicId, a.name)}
+              >
+                <span className="pub-mark" aria-hidden="true">
+                  {a.name.slice(0, 1)}
+                </span>
+                <span>
+                  <span className="pub-hit-name">{a.name}</span>
+                  <span className="pub-hit-meta">{authorMeta(a)}</span>
+                </span>
+              </Link>
             ))}
           </div>
         </section>

@@ -101,8 +101,9 @@ in memory with an exact keyset cursor and total (a filtered page reads about
 and the limits). After deploying a change to either table's shape, run the
 rebuild so the packs follow; until packs exist, filtered views fall back to
 reading every row. The timing filters that count back from today (past
-3/6/12 months, finished) use today's UTC date, which the server function
-passes as `todaySort`, so a cached query never serves an earlier day's
+3/6/12 months, finished) use today's UTC date by the loader's clock (the
+Worker on SSR, the browser on client navigations), which `fetchSeriesBrowse`
+(`src/lib/catalogData.ts`) passes as `todaySort`, so a cached query never serves an earlier day's
 cutoff; later pages keep the first page's date, which their cursor carries,
 so a view paged across midnight stays one set. Other views get no date and
 keep one cache key. Popularity is the signals the catalog has — Series
@@ -206,7 +207,8 @@ catalog page below.
 ## Volume, Edition, and Bundle pages + `/isbn` (ticket #23)
 
 The rest of the public catalog surface (spec §2, §10, §11), served by the
-queries in `convex/catalogPages.ts` through `src/server/catalogPages.ts`:
+queries in `convex/catalogPages.ts`, read by the route loaders through
+`catalogQuery` (`src/lib/catalogData.ts`):
 
 - **`/volume/{id}/{slug}`** reveals every Release covering that Volume,
   grouped under its Edition and split into **Complete releases** vs
@@ -278,7 +280,18 @@ The cross-publisher overview: what every Publisher is releasing in one month.
   earlier (Edition Line repackagings such as a Deluxe Vol. 1 don't count,
   nor does this month's digital Release of a Vol. 1 in print since 2019; a
   year-only date in the same year is not "earlier").
-  No denormalized tables.
+- **Precomputed months**: computing a board reads thousands of documents
+  (~0.7 s on a cold cache), so `rebuildBoards` (`convex/crons.ts`) stores
+  each month with cards from January of last year through December two years
+  out (2025-01 … 2028-12 during 2026) in `publisherBoards` as JSON, rewriting
+  a month only when it changed. Last month through three months out rebuild
+  hourly, the rest every six hours. `monthBoard` serves the stored copy in
+  one read and computes any other month live, as it does an empty month, a
+  month whose build failed, or a row written under an older `BOARD_VERSION`
+  (bump it when the board's shape changes). After deploying,
+  `npx convex run publisher:rebuildBoards` fills the table without waiting
+  for the cron. The month strip's arrows preload the months either side as
+  soon as they are on screen.
 
 ## Search
 
@@ -287,7 +300,19 @@ in the site header. It is deliberately narrow:
 
 - **Series** are matched through the `search_title` search index on
   `searchText` — the title and every alternate title concatenated on write —
-  so "Toukyou Kushu" finds Tokyo Ghoul. Results link the canonical
+  so "Toukyou Kushu" finds Tokyo Ghoul — plus nickname keys derived from
+  those names (`seriesSearchText` in `convex/lib/searchMatch.ts`): the word
+  initials ("aot" → Attack on Titan, "sxf" → Spy x Family, "kny" → Demon
+  Slayer: Kimetsu no Yaiba) and the words run together ("chainsawman").
+  Initials count only when typed whole ("aot" is not Ace of the Diamond's
+  "aotd"); a three-plus-letter query that is exactly a name's initials ranks
+  as an exact match. A "×" reads as the word "x" ("SPY×FAMILY"). Fan
+  nicknames that are not initials ("JJK") work once they are an alt title.
+  Every writer of a title or alt titles goes through `seriesSearchText`, and
+  the Series library rebuild brings older rows up to the current rule, so
+  after a deploy that changes it, `npx convex run seriesBrowse:rebuild`
+  backfills. The `/series` library's title filter matches the same keys.
+  Results link the canonical
   `/series/{id}/{slug}` pages; hidden and merged records never appear (a
   merged Series is findable through its survivor).
 - **Publishers** match when every query word starts a word of their name,
@@ -469,7 +494,7 @@ Follows are always private in v1 — the profile never shows them.
 Spec §3: personal tracking is **private by default**, with separate
 visibility defaults for Ownership and Reading plus per-Series overrides
 (`convex/sharing.ts`; UI in `src/lib/sharing.tsx`; profile page at
-`src/routes/u.$username.tsx` reading through `src/server/profile.ts`).
+`src/routes/u.$username.tsx`, a public read through `src/lib/catalogData.ts`).
 
 - **Defaults** live on the User (`ownershipVisibility` /
   `readingVisibility`, both `private` at account creation). `/me` → Sharing
@@ -1246,10 +1271,10 @@ functions authorize in Convex via `ctx.auth.getUserIdentity()`
 (`convex/lib/auth.ts` has the `requireUser` gate for the tracking slices).
 
 Requests flow: `clerkMiddleware()` (`src/start.ts`) authenticates every server
-request → the root route's `beforeLoad` server function exposes
-`{ userId, convexToken }` (a JWT minted from the Clerk template named
-`convex`) → SSR loaders put that token on the Convex HTTP client
-(`convexServerClient(token)`), while the browser uses
+request → the gated routes' `beforeLoad` server functions (`/me`,
+`/claim-username`) read `{ userId, convexToken }` via `ssrAuth()` (a JWT
+minted from the Clerk template named `convex`) and put that token on the
+Convex HTTP client (`convexServerClient(token)`), while the browser uses
 `ConvexProviderWithClerk` (`src/providers.tsx`). Convex validates both via
 OIDC (`convex/auth.config.ts`).
 

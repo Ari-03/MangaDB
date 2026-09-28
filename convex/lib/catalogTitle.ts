@@ -49,6 +49,10 @@ export const catalogTitleFields = {
   isBox: v.optional(v.boolean()),
   /** The label came from an unmarked trailing number ("Omega 6" may be a title). */
   bareNumber: v.optional(v.boolean()),
+  /** The bare number was a trailing roman numeral (lib/bookTitle.ts BARE_ROMAN). */
+  bareRoman: v.optional(v.boolean()),
+  /** The split an unlicensed trailing number would make (lib/bookTitle.ts `bareSplit`). */
+  bareSplit: v.optional(v.object({ seriesTitle: v.string(), volumeLabel: v.string() })),
   author: v.optional(v.string()),
   onsale: v.optional(v.object({ year: v.number(), month: v.number(), day: v.number() })),
   format: v.union(v.literal("physical"), v.literal("digital")),
@@ -163,16 +167,38 @@ export async function applyCatalogTitle(
 
   // Series first: every placement below hangs off the base Series. An
   // unmarked trailing number may belong to the name ("Omega 6"): when only
-  // the whole title names an existing Series, the book is that Series'.
+  // the whole title names an existing Series, the book is that Series'. A
+  // trailing roman numeral is more often a sequel's name ("Kingdom Hearts
+  // II") than a volume, so the whole title is asked first, and the split
+  // stands only when an existing base Series claims it ("BARBARITIES II" →
+  // Barbarities Vol. 2); a new work keeps its whole name. A trailing number
+  // the parser left in place for want of a volume number ("Tower Dungeon
+  // 7" from a PRH row without seriesNumber) follows the same rule: whole
+  // title first, else an existing base Series takes it as a Volume, else
+  // the new work keeps its whole name.
   let seriesTitle = snapshot.seriesTitle;
   let volumeLabel = snapshot.volumeLabel ?? null;
   let candidates = await candidateSeries(ctx, seriesTitle);
-  if (candidates.length === 0 && snapshot.bareNumber) {
+  if (snapshot.bareRoman) {
+    const whole = await candidateSeries(ctx, snapshot.title);
+    if (whole.length > 0 || candidates.length === 0) {
+      candidates = whole;
+      seriesTitle = whole[0]?.title ?? snapshot.title;
+      volumeLabel = null;
+    }
+  } else if (candidates.length === 0 && snapshot.bareNumber) {
     const whole = await candidateSeries(ctx, snapshot.title);
     if (whole.length > 0) {
       candidates = whole;
       seriesTitle = whole[0]!.title;
       volumeLabel = null;
+    }
+  } else if (candidates.length === 0 && snapshot.bareSplit) {
+    const base = await candidateSeries(ctx, snapshot.bareSplit.seriesTitle);
+    if (base.length > 0) {
+      candidates = base;
+      seriesTitle = base[0]!.title;
+      volumeLabel = snapshot.bareSplit.volumeLabel;
     }
   }
   const seriesId = candidates.length === 1 ? candidates[0]!._id : null;

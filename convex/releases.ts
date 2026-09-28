@@ -1,6 +1,9 @@
 // The public Releases browser (ticket #24, spec §10): one month-window query
 // serving both the Release Agenda (`/releases`) and the Month Grid
-// (`/releases/{yyyy-mm}`) over the same Canonical Releases.
+// (`/releases/{yyyy-mm}`) over the same Canonical Releases. The pages load a
+// month unfiltered and apply the Format and Publisher filters in memory, so
+// changing a filter never waits on the network; the filter arguments below
+// remain for other callers.
 //
 // Recorded schema trade-off (spec §8): the scan is always a date-window over
 // an index — `by_publisher_date` when a Publisher filter is present, else
@@ -240,7 +243,7 @@ export const monthBrowse = query({
       .map((doc) => ({ name: doc.name, slug: doc.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    const empty = { releases: [], publishers };
+    const empty = { releases: [], publishers, capped: false };
     if (!Number.isInteger(year) || !Number.isInteger(month)) return empty;
     if (year < 1000 || year > 9999 || month < 1 || month > 12) return empty;
 
@@ -281,6 +284,27 @@ export const monthBrowse = query({
         doc.status === "active" && (format === undefined || doc.format === format),
     );
 
-    return { releases: await joinBrowseRows(ctx, refined), publishers };
+    return {
+      releases: await joinBrowseRows(ctx, refined),
+      publishers,
+      // The window hit WINDOW_CAP: the month holds more than this read. The
+      // pages filter in memory, so they say so rather than miss releases
+      // silently (months hold ~250–350 today).
+      capped: windowDocs.length === WINDOW_CAP,
+    };
+  },
+});
+
+/**
+ * The current slug for a Publisher-filter slug (`resolvePublisher`: renamed
+ * and merged Publishers follow to their survivor), or null when it names no
+ * active Publisher. The Releases pages filter by slug in memory, so a shared
+ * link with an old slug redirects to the current one first.
+ */
+export const canonicalPublisherSlug = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const publisher = await resolvePublisher(ctx, slug);
+    return publisher?.status === "active" ? publisher.slug : null;
   },
 });

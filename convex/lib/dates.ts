@@ -12,8 +12,8 @@ export function todaySortKey(now: Date = new Date()): number {
 /**
  * Whether a Series library timing filter counts back from today, so a
  * browse needs todaySort: every timing but "upcoming", which reads announced
- * dates. The one rule for convex/seriesBrowse.ts and the app's server shim
- * (src/server/seriesBrowse.ts), which sends todaySort only when it is read.
+ * dates. The one rule for convex/seriesBrowse.ts and the app's loader shim
+ * (src/lib/catalogData.ts), which sends todaySort only when it is read.
  */
 export function timingNeedsToday<T extends string>(timing: T): timing is Exclude<T, "upcoming"> {
   return timing !== "upcoming";

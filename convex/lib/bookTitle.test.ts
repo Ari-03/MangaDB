@@ -250,6 +250,30 @@ describe("parseBookTitle — unmarked trailing numbers", () => {
     expect(parseBookTitle("Chainsaw Man, Vol. 22").bareNumber).toBe(false);
   });
 
+  it("offers the split it declined, for callers with catalog access", () => {
+    // No seriesNumber, no tag: the title stays whole, the split is only offered.
+    expect(parseBookTitle("Tower Dungeon 7")).toMatchObject({
+      seriesTitle: "Tower Dungeon 7",
+      volumeLabel: null,
+      bareNumber: false,
+      bareSplit: { seriesTitle: "Tower Dungeon", volumeLabel: "7" },
+    });
+    expect(parseBookTitle("The Otaku Love Connection 01").bareSplit).toEqual({
+      seriesTitle: "The Otaku Love Connection",
+      volumeLabel: "1",
+    });
+    expect(parseBookTitle("Ascendance of a Bookworm: Fanbook 2").bareSplit).toEqual({
+      seriesTitle: "Ascendance of a Bookworm: Fanbook",
+      volumeLabel: "2",
+    });
+    // A taken split, a range, a "No." name, a marked title: nothing to offer.
+    expect(parseBookTitle("Tower Dungeon 7", { seriesNumber: 7 }).bareSplit).toBeNull();
+    expect(parseBookTitle("Astro Boy 1 & 2").bareSplit).toBeNull();
+    expect(parseBookTitle("Kaiju No. 8").bareSplit).toBeNull();
+    expect(parseBookTitle("Chainsaw Man, Vol. 22").bareSplit).toBeNull();
+    expect(parseBookTitle("1984").bareSplit).toBeNull();
+  });
+
   it("keeps real names that contain packaging or edition words", () => {
     for (const title of [
       "Lovesickness: Junji Ito Story Collection",
@@ -647,5 +671,37 @@ describe("outOfScopeReason", () => {
     ]) {
       expect(outOfScopeReason(title), title).toBeNull();
     }
+  });
+});
+
+describe("parseBookTitle — bare roman numerals and +1 extras", () => {
+  const roman = (title: string) => {
+    const p = parseBookTitle(title);
+    return [p.seriesTitle, p.volumeLabel, p.bareNumber, p.bareRoman];
+  };
+
+  it("reads a bare trailing roman numeral as a provisional volume number", () => {
+    expect(roman("BARBARITIES I")).toEqual(["BARBARITIES", "1", true, true]);
+    expect(roman("BARBARITIES IV")).toEqual(["BARBARITIES", "4", true, true]);
+    expect(roman("Monster Girl Encyclopedia II")).toEqual(["Monster Girl Encyclopedia", "2", true, true]);
+  });
+
+  it("leaves pronouns and marked titles alone", () => {
+    expect(roman("You and I")).toEqual(["You and I", null, false, false]);
+    expect(roman("Kingdom Hearts II Vol. 3")).toEqual(["Kingdom Hearts II", "3", false, false]);
+    // Provisional: the catalog keeps these whole unless a base Series exists.
+    expect(roman("Triage X")).toEqual(["Triage", "10", true, true]);
+  });
+
+  it("lets a bracketed volume win over a trailing numeral", () => {
+    expect(roman("Kingdom Hearts II (Vol. 3)")).toEqual(["Kingdom Hearts II", "3", false, false]);
+    const tower = parseBookTitle("Tower Dungeon 7 (Vol. 8)");
+    expect(tower.volumeLabel).toBe("8");
+    expect(tower.bareSplit).toBeNull();
+  });
+
+  it("keeps an '18+1' extra as one unnumbered label, not a range", () => {
+    expect(roman("Barakamon, Vol. 18+1")).toEqual(["Barakamon", "18+1", false, false]);
+    expect(roman("Barakamon, Vol. 18")).toEqual(["Barakamon", "18", false, false]);
   });
 });

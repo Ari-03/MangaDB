@@ -700,6 +700,59 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     });
   });
 
+  it("splits a trailing number without seriesNumber only onto an existing base Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // The catalog knows the work; PRH's row for its next book has no seriesNumber.
+    const tower = await backbone(t, "Tower Dungeon", ["6"]);
+    stubApi([
+      { isbn: "9781647297091", title: "Tower Dungeon 7", imprint: "Vertical Comics" },
+      // No base Series "Omega": a new work keeps its whole name.
+      { isbn: "9781506731780", title: "Omega 6", imprint: "Dark Horse Manga" },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      expect(series.map((s) => s.title).sort()).toEqual(["Omega 6", "Tower Dungeon"]);
+      const volumes = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", tower))
+        .collect();
+      expect(volumes.map((v) => [v.label, v.position])).toEqual([
+        ["6", 6],
+        ["7", 7],
+      ]);
+      const release = (await ctx.db.query("releases").collect()).find((r) => r.isbn13 === "9781647297091");
+      expect(release?.seriesIds).toEqual([tower]);
+    });
+  });
+
+  it("splits a trailing roman numeral only onto an existing base Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // ANN's backbone for the work; PRH names its books "BARBARITIES I" etc.
+    const barbarities = await backbone(t, "Barbarities", []);
+    // A sequel whose name ends in a numeral, and no base to split onto.
+    const hearts = await backbone(t, "Kingdom Hearts II", []);
+    stubApi([
+      { isbn: "9781685795009", title: "BARBARITIES II", imprint: "Seven Seas" },
+      { isbn: "9781975300000", title: "Kingdom Hearts II", imprint: "Yen Press" },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("series").collect()).map((s) => s._id).sort()).toEqual(
+        [barbarities, hearts].sort(),
+      );
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.seriesIds[0]).sort()).toEqual([barbarities, hearts].sort());
+      const volumes = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", barbarities))
+        .collect();
+      expect(volumes.map((v) => v.label)).toEqual(["2"]);
+    });
+  });
+
   it("makes a box set a Release Bundle of the base Series' Releases", async () => {
     const t = makeT();
     await seedRegistry(t, true);

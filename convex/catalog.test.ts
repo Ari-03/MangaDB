@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
+import { seriesSearchText } from "./lib/searchMatch";
 import schema from "./schema";
 
 describe("catalog.stats", () => {
@@ -137,6 +138,41 @@ describe("catalog.search", () => {
       });
     });
   };
+
+  it("finds Series by initials, run-together names, and nickname alt titles", async () => {
+    const t = convexTest(schema);
+    await t.run(async (ctx) => {
+      let publicId = 100;
+      for (const [title, altTitles] of [
+        ["Ao Haru Ride", []],
+        ["Attack on Titan: No Regrets", []],
+        ["Attack on Titan", ["Shingeki no Kyojin", "SnK"]],
+        ["Chainsaw Man", []],
+        ["Jujutsu Kaisen", ["JJK"]],
+        ["Four Lives Remain", ["Four Lives Remain: Tatsuya Endo Before Spy x Family"]],
+        ["SPY×FAMILY", []],
+      ] as const) {
+        await ctx.db.insert("series", {
+          status: "active",
+          publicId: ++publicId,
+          title,
+          altTitles: [...altTitles],
+          searchText: seriesSearchText(title, altTitles),
+        });
+      }
+    });
+    const titles = async (query: string) =>
+      (await t.query(api.catalog.search, { query })).series.map((s) => s.title);
+    expect(await titles("aot")).toEqual(["Attack on Titan", "Attack on Titan: No Regrets"]);
+    expect((await titles("snk"))[0]).toBe("Attack on Titan");
+    expect((await titles("chainsawman"))[0]).toBe("Chainsaw Man");
+    expect(await titles("jjk")).toEqual(["Jujutsu Kaisen"]);
+    // "×" reads as "x": the title itself leads, not the one that names it.
+    expect((await titles("spy x family"))[0]).toBe("SPY×FAMILY");
+    expect(await titles("sxf")).toEqual(["SPY×FAMILY"]);
+    const suggested = await t.query(api.catalog.suggest, { query: "jk" });
+    expect(suggested.series.map((s) => s.title)).toEqual(["Jujutsu Kaisen"]);
+  });
 
   it("matches Series by title, skipping hidden and merged records", async () => {
     const t = convexTest(schema);
@@ -280,6 +316,7 @@ describe("catalog.search", () => {
     await seed(t);
     expect(await t.query(api.catalog.search, { query: "   " })).toEqual({
       series: [],
+      authors: [],
       publishers: [],
       didYouMean: [],
     });
@@ -436,6 +473,7 @@ describe("catalog.suggest", () => {
     await seed(t);
     expect(await t.query(api.catalog.suggest, { query: " " })).toEqual({
       series: [],
+      authors: [],
       didYouMean: [],
       publishers: [],
     });

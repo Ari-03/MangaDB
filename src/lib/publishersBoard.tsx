@@ -11,6 +11,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
+import type { PublishersBoardData } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
 import {
   addMonths,
@@ -21,7 +22,6 @@ import {
   type YearMonth,
 } from "~/lib/month";
 import { slugParams } from "~/lib/slug";
-import type { PublishersBoardData } from "~/server/publisher";
 
 type BoardCard = PublishersBoardData["board"][number];
 type DirectoryEntry = PublishersBoardData["directory"][number];
@@ -40,6 +40,7 @@ function MonthLink({
   today,
   className,
   label,
+  preload,
   children,
 }: {
   month: YearMonth;
@@ -47,10 +48,12 @@ function MonthLink({
   className?: string;
   /** Accessible name, for links whose text is only an arrow. */
   label?: string;
+  /** Overrides the router's hover preload. */
+  preload?: "viewport";
   children: ReactNode;
 }) {
   return sameMonth(month, today) ? (
-    <Link className={className} to="/publishers" aria-label={label}>
+    <Link className={className} to="/publishers" aria-label={label} preload={preload}>
       {children}
     </Link>
   ) : (
@@ -59,6 +62,7 @@ function MonthLink({
       to="/publishers/$month"
       params={{ month: monthParam(month) }}
       aria-label={label}
+      preload={preload}
     >
       {children}
     </Link>
@@ -81,9 +85,12 @@ function MonthStrip({ anchor, today }: { anchor: YearMonth; today: YearMonth }) 
     addMonths(anchor, i - STRIP_REACH),
   );
   const todayInStrip = months.some((month) => sameMonth(month, today));
+  // The months either side load as soon as the strip is on screen, so a step
+  // with the arrows is instant; the board is precomputed, so each is one
+  // small read (convex/publisher.ts).
   return (
     <nav className="month-strip" aria-label="Month">
-      <MonthLink month={prev} today={today} className="month-step" label={`Previous month, ${monthTitle(prev)}`}>
+      <MonthLink month={prev} today={today} className="month-step" label={`Previous month, ${monthTitle(prev)}`} preload="viewport">
         ‹
       </MonthLink>
       <ol className="month-strip-list">
@@ -113,7 +120,7 @@ function MonthStrip({ anchor, today }: { anchor: YearMonth; today: YearMonth }) 
           );
         })}
       </ol>
-      <MonthLink month={next} today={today} className="month-step" label={`Next month, ${monthTitle(next)}`}>
+      <MonthLink month={next} today={today} className="month-step" label={`Next month, ${monthTitle(next)}`} preload="viewport">
         ›
       </MonthLink>
       {todayInStrip ? null : (

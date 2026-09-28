@@ -1,7 +1,8 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery } from "~/lib/catalogData";
 import { editionPath, parsePublicId } from "~/lib/slug";
-import { fetchEditionPage } from "~/server/catalogPages";
 
 /**
  * Slugless `/edition/{id}` (and any merged loser's ID): permanent redirect
@@ -12,7 +13,7 @@ export const Route = createFileRoute("/edition/$publicId/")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await fetchEditionPage({ data: publicId });
+    const page = await catalogQuery(api.catalogPages.editionPage, { publicId });
     if (!page) throw notFound();
     throw redirect({
       href: editionPath(page.edition.publicId, page.edition.title),

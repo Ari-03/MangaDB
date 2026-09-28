@@ -6,18 +6,10 @@ import {
   Outlet,
   Scripts,
 } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
 import type { ReactNode } from "react";
 
 import { AppProviders, BrandMark, SiteHeader } from "~/providers";
-import { ssrAuth } from "~/server/auth";
 import stylesUrl from "../styles.css?url";
-
-// Runs on the server for SSR and on every client navigation (server-fn RPC),
-// so gated routes see fresh auth state both ways (spec §9).
-const fetchSsrAuth = createServerFn({ method: "GET" }).handler(async () => {
-  return await ssrAuth();
-});
 
 // Dark is the default shelf: <html> ships with data-theme="dark" and the OS
 // preference is deliberately ignored. A saved choice wins, applied before
@@ -27,10 +19,10 @@ const THEME_BOOT = `(function(){var p=null;try{p=localStorage.getItem("mangadb-t
 const FONTS_URL =
   "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..800,0..100,0..1&family=Nunito+Sans:opsz,wght@6..12,300..900&display=swap";
 
+// No root beforeLoad: it would run on every navigation and preload, holding
+// up each one behind a server round trip. Gated routes (/me, /claim-username)
+// check auth in their own beforeLoad.
 export const Route = createRootRoute({
-  // Merged into router context: `userId` (Clerk subject, null signed out) and
-  // `convexToken` for authed SSR reads via convexServerClient(token).
-  beforeLoad: async () => await fetchSsrAuth(),
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -45,6 +37,11 @@ export const Route = createRootRoute({
       },
     ],
     links: [
+      // The header's brand mark (public/): SVG for browsers that take it, the
+      // ICO for the rest, a full-bleed PNG for iOS home screens.
+      { rel: "icon", href: "/favicon.ico", sizes: "48x48" },
+      { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       { rel: "stylesheet", href: FONTS_URL },
@@ -87,6 +84,7 @@ function SiteFooter() {
             <Link to="/releases">Release calendar</Link>
             <Link to="/publishers">Publishers</Link>
             <Link to="/series">Series</Link>
+            <Link to="/authors">Authors</Link>
             <Link to="/search" search={{ q: "" }}>Search</Link>
           </div>
           <div className="footer-col">

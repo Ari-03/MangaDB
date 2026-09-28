@@ -18,7 +18,7 @@ import {
 import { api } from "../../convex/_generated/api";
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
-import { seriesPath } from "~/lib/slug";
+import { authorPath, seriesPath } from "~/lib/slug";
 
 type Suggestions = FunctionReturnType<typeof api.catalog.suggest>;
 type SeriesCard = Suggestions["series"][number];
@@ -26,6 +26,7 @@ type SeriesCard = Suggestions["series"][number];
 type Option =
   | { kind: "series"; href: string; card: SeriesCard }
   | { kind: "publisher"; href: string; name: string }
+  | { kind: "author"; href: string; name: string; meta: string }
   | { kind: "isbn"; href: string; isbn: string }
   | { kind: "all"; href: string; query: string };
 
@@ -62,7 +63,7 @@ export function useDebounced<T>(value: T, ms: number): T {
 
 /**
  * The dropdown's rows, grouped: near misses first when the query looks like
- * a typo, then Series, then Publishers, and always a row into /search. A
+ * a typo, then Series, Authors, Publishers, and always a row into /search. A
  * valid ISBN offers only the jump to that book. `stale` marks `data` as the
  * answer to an earlier query.
  */
@@ -80,6 +81,16 @@ function suggestionGroups(query: string, data: Suggestions | null, stale: boolea
     { label: "Did you mean", options: (data?.didYouMean ?? []).map(seriesOption), stale },
     { label: "Series", options: (data?.series ?? []).map(seriesOption), stale },
     {
+      label: "Authors",
+      options: (data?.authors ?? []).map((a) => ({
+        kind: "author" as const,
+        href: authorPath(a.publicId, a.name),
+        name: a.name,
+        meta: authorMeta(a),
+      })),
+      stale,
+    },
+    {
       label: "Publishers",
       options: (data?.publishers ?? []).map((p) => ({
         kind: "publisher" as const,
@@ -95,6 +106,13 @@ function suggestionGroups(query: string, data: Suggestions | null, stale: boolea
     },
   ];
   return groups.filter((group) => group.options.length > 0);
+}
+
+/** "12 series", or "Original creator of 5 series" for someone who made none. */
+export function authorMeta(author: { seriesCount: number; originalCount: number }): string {
+  return author.seriesCount > 0
+    ? `${author.seriesCount} series`
+    : `Original creator of ${author.originalCount} series`;
 }
 
 /** A suggested Series' second line: the alt title it matched, size, publisher. */
@@ -136,6 +154,18 @@ function OptionBody({ option }: { option: Option }) {
           <span className="suggest-text">
             <span className="suggest-title">{option.name}</span>
             <span className="suggest-meta">Publisher</span>
+          </span>
+        </>
+      );
+    case "author":
+      return (
+        <>
+          <span className="suggest-thumb suggest-mark" aria-hidden="true">
+            {option.name.slice(0, 1)}
+          </span>
+          <span className="suggest-text">
+            <span className="suggest-title">{option.name}</span>
+            <span className="suggest-meta">Author · {option.meta}</span>
           </span>
         </>
       );
@@ -288,8 +318,8 @@ export function SearchCombobox({
         className="search-input"
         type="search"
         name="q"
-        placeholder="Search series, publishers, ISBN"
-        aria-label="Search series, publishers, or an ISBN"
+        placeholder="Search series, authors, ISBN"
+        aria-label="Search series, authors, publishers, or an ISBN"
         autoComplete="off"
         role="combobox"
         aria-autocomplete="list"

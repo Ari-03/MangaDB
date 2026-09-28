@@ -829,7 +829,7 @@ describe("proposals — temp-ID multi-record creation", () => {
     expect(series).toHaveLength(1);
     expect(series[0]).toMatchObject({
       title: "Brand New",
-      searchText: "Brand New BN",
+      searchText: "Brand New BN bn brandnew",
     });
     const volumes = await t.run((ctx) => ctx.db.query("volumes").collect());
     expect(volumes[0]?.seriesId).toBe(series[0]._id);

@@ -5,6 +5,8 @@ import {
   redirect,
 } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery, type BundlePageData } from "~/lib/catalogData";
 import { BundleCollectionControls } from "~/lib/collection";
 import { Cover } from "~/lib/cover";
 import { formatPartialDate, formatPrice } from "~/lib/format";
@@ -18,7 +20,6 @@ import {
   truncateDescription,
 } from "~/lib/seo";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
-import { fetchBundlePage, type BundlePageData } from "~/server/catalogPages";
 
 /**
  * The Bundle page (ticket #23, spec §2/§11): `/bundle/{id}/{slug}`,
@@ -36,7 +37,7 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await fetchBundlePage({ data: publicId });
+    const page = await catalogQuery(api.catalogPages.bundlePage, { publicId });
     if (!page) throw notFound();
     const canonical = bundlePath(page.bundle.publicId, page.bundle.name);
     if (`/bundle/${params.publicId}/${params.slug}` !== canonical) {

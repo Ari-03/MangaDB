@@ -15,10 +15,12 @@ export const NEAR_MISS_MIN_LENGTH = 4;
 /**
  * Lower-cased, accent-free words of a text, split on anything that is not a
  * letter or digit: "Pokémon: Red & Blue" → ["pokemon", "red", "blue"]. Only
- * Latin accents are dropped; kana keep their voicing marks.
+ * Latin accents are dropped; kana keep their voicing marks. A "×" is the word
+ * "x" readers type, so "SPY×FAMILY" is ["spy", "x", "family"].
  */
 export function searchWords(text: string): string[] {
   return text
+    .replace(/×/g, " x ")
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .normalize("NFC")
@@ -30,6 +32,67 @@ export function searchWords(text: string): string[] {
 /** The words of a text run together, so spacing typos compare equal. */
 function compact(text: string): string {
   return searchWords(text).join("");
+}
+
+// A name's parts: "Demon Slayer: Kimetsu no Yaiba" is also known by each half.
+const SUBTITLE_BREAK = /\s*[:：–—(]\s*|\s+-\s+/;
+const ARTICLES = new Set(["the", "a", "an"]);
+
+/**
+ * The keys one name derives, for itself and each part of a subtitled name:
+ * the initials of every run of two or more words ("Attack on Titan" → "aot",
+ * "Spy x Family" → "sxf", "Mob Psycho 100" → "mp100"), again without a
+ * leading article ("The Apothecary Diaries" → "ad"), and each run's words
+ * together ("Chainsaw Man" → "chainsawman"). Apostrophes fold first, so
+ * "JoJo's" is one word.
+ */
+function keysOf(name: string): { initials: Set<string>; runs: Set<string> } {
+  const initials = new Set<string>();
+  const runs = new Set<string>();
+  for (const part of new Set([name, ...name.split(SUBTITLE_BREAK)])) {
+    const words = searchWords(part.replace(/['’]/g, ""));
+    const bare = ARTICLES.has(words[0] ?? "") ? words.slice(1) : words;
+    for (const run of [words, bare]) {
+      if (run.length < 2) continue;
+      // By code point, so a letter outside the BMP stays whole.
+      initials.add(run.map((word) => (/^\d+$/.test(word) ? word : [...word][0])).join(""));
+      runs.add(run.join(""));
+    }
+  }
+  return { initials, runs };
+}
+
+/**
+ * Keys a reader types for a Series instead of its words (`keysOf` each of
+ * its names): `initials` like "aot" for Attack on Titan or "kny" for Demon
+ * Slayer: Kimetsu no Yaiba, which count only when typed whole, and `runs`
+ * like "chainsawman", which open like any word. Fan nicknames that are not
+ * initials ("JJK") are not derivable; those come in as alt titles.
+ */
+export function nicknameKeys(names: ReadonlyArray<string>): {
+  initials: string[];
+  runs: string[];
+} {
+  const initials = new Set<string>();
+  const runs = new Set<string>();
+  for (const name of names) {
+    const keys = keysOf(name);
+    for (const key of keys.initials) initials.add(key);
+    for (const key of keys.runs) runs.add(key);
+  }
+  return { initials: [...initials], runs: [...runs] };
+}
+
+/**
+ * A Series' `searchText`, the one field its search index covers: title, alt
+ * titles, and their `nicknameKeys`. Every writer of a Series title or alt
+ * titles sets it through here, so "aot" finds Attack on Titan in search and
+ * import matching compares whole titles as before (it only reads the hits).
+ */
+export function seriesSearchText(title: string, altTitles: ReadonlyArray<string>): string {
+  const names = [title, ...altTitles];
+  const { initials, runs } = nicknameKeys(names);
+  return [...names, ...initials, ...runs].join(" ");
 }
 
 /** True when every query word starts some word of `words`: the one match rule. */
@@ -49,31 +112,68 @@ export function matchesAllWords(query: string, text: string): boolean {
 }
 
 /**
+ * `matchesAllWords` for a Series: every query word starts a word of its
+ * names or a run-together name, or is one of its initials exactly. So "aot"
+ * finds Attack on Titan but not Ace of the Diamond ("aotd"), and typing
+ * "chainsaw" still finds "chainsawman".
+ */
+export function matchesSeries(
+  query: string,
+  series: { title: string; altTitles: ReadonlyArray<string> },
+): boolean {
+  const queryWords = searchWords(query);
+  const names = [series.title, ...series.altTitles];
+  const { initials, runs } = nicknameKeys(names);
+  const words = [...searchWords(names.join(" ")), ...runs];
+  return (
+    queryWords.length > 0 &&
+    queryWords.every((q) => initials.includes(q) || words.some((w) => w.startsWith(q)))
+  );
+}
+
+/**
  * Order search hits the way a reader expects: a title (or alt title) that
  * is exactly the query first, then titles that begin with it — shortest
  * first, so "berserk" puts Berserk ahead of Berserk of Gluttony — then the
  * rest in the order given (the index's relevance). The index alone ranks
- * "Attack on Titan Anthology" above Attack on Titan.
+ * "Attack on Titan Anthology" above Attack on Titan. A query of three or more
+ * letters that is exactly a name's initials ("aot") counts as exact,
+ * shortest name first; a partial one ("ao") does not, so it never outranks a
+ * title that really begins that way (Ao Haru Ride), and neither do two
+ * letters, which half the two-word titles share ("de": Dear Emily). At the
+ * same rank, a Series matched by its own title leads one matched through an
+ * alt title ("kny": Demon Slayer: Kimetsu no Yaiba before The King's Beast,
+ * alias Kogetsu no Yume).
  */
 export function sortByTitleMatch<
   T extends { title: string; altTitles: ReadonlyArray<string> },
 >(query: string, items: ReadonlyArray<T>): T[] {
   const q = compact(query);
+  const nameRank = (name: string) => {
+    const c = compact(name);
+    const initials = q.length >= 3 && keysOf(name).initials.has(q);
+    return c === q || initials ? 0 : c.startsWith(q) ? 1 : 2;
+  };
   const keyed = items.map((item, index) => {
     let rank = 2;
     let length = 0;
     for (const name of [item.title, ...item.altTitles]) {
+      const r = nameRank(name);
       const c = compact(name);
-      const nameRank = c === q ? 0 : c.startsWith(q) ? 1 : 2;
-      if (nameRank < rank || (nameRank === rank && nameRank < 2 && c.length < length)) {
-        rank = nameRank;
+      if (r < rank || (r === rank && r < 2 && c.length < length)) {
+        rank = r;
         length = c.length;
       }
     }
-    return { item, rank, length: rank < 2 ? length : 0, index };
+    // A match on the Series' own title beats one through an alt title.
+    const viaAlt = rank < 2 && nameRank(item.title) > rank ? 1 : 0;
+    return { item, rank, viaAlt, length: rank < 2 ? length : 0, index };
   });
   return keyed
-    .sort((a, b) => a.rank - b.rank || a.length - b.length || a.index - b.index)
+    .sort(
+      (a, b) =>
+        a.rank - b.rank || a.viaAlt - b.viaAlt || a.length - b.length || a.index - b.index,
+    )
     .map(({ item }) => item);
 }
 

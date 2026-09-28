@@ -5,16 +5,24 @@
 // the URL — the view is the path (plus `?view=agenda` on month URLs), the
 // filters are query params — so any browser state is shareable as a link.
 //
+// The routes load a month once, unfiltered, and every filter applies in
+// memory here, so switching filters or views never waits on the network.
+//
 // Followed Series (ticket #29) are a subtle marker + a filter, never a
 // separate section. Follows are personal, so the marker and filter are a
-// signed-in client-side overlay (per the recorded spec §8 trade-off, the
-// followed filter applies in memory): the SSR month window stays public and
+// signed-in client-side overlay: the SSR month window stays public and
 // identical for everyone, and `?followed=true` views are noindex (spec §11).
 
-import { Link } from "@tanstack/react-router";
+import { Link, redirect } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
+import { useMemo } from "react";
 
 import { api } from "../../convex/_generated/api";
+import {
+  catalogQuery,
+  type BrowseRelease,
+  type MonthReleasesData,
+} from "~/lib/catalogData";
 import { convexClient } from "~/providers";
 import { Cover } from "~/lib/cover";
 import {
@@ -29,7 +37,6 @@ import {
   type YearMonth,
 } from "~/lib/month";
 import { slugParams } from "~/lib/slug";
-import type { BrowseRelease, MonthReleasesData } from "~/server/releases";
 
 export type ReleaseFormat = "physical" | "digital";
 export type BrowseFilters = {
@@ -62,6 +69,34 @@ export function validateBrowseFilters(
         ? true
         : undefined,
   };
+}
+
+/** Any filter set: such views are noindex/follow (spec §11). */
+export function isFiltered(filters: BrowseFilters): boolean {
+  return Boolean(filters.format || filters.publisher || filters.followed);
+}
+
+/**
+ * The Publisher filter matches rows by current slug, so a shared link with a
+ * renamed or merged Publisher's old slug redirects to its current one (or
+ * drops the filter when it names no active Publisher). Only a slug missing
+ * from the month's publisher list costs a lookup.
+ */
+export async function followPublisherSlug(
+  location: { pathname: string; search: BrowseFilters & Record<string, unknown> },
+  data: MonthReleasesData | null,
+): Promise<void> {
+  const slug = location.search.publisher;
+  if (!slug || !data || data.publishers.some((p) => p.slug === slug)) return;
+  const current = await catalogQuery(api.releases.canonicalPublisherSlug, { slug });
+  // Already current (a Publisher past the month's publisher list): no loop.
+  if (current === slug) return;
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries({ ...location.search, publisher: current })) {
+    if (value !== undefined && value !== null) search.set(key, String(value));
+  }
+  const query = search.toString();
+  throw redirect({ href: query ? `${location.pathname}?${query}` : location.pathname });
 }
 
 /**
@@ -115,19 +150,22 @@ function BrowserView({
   onFiltersChange,
   followedSeries,
 }: BrowserProps & { followedSeries: FollowedSeriesSet }) {
-  // The followed filter applies in memory over the public month window; the
-  // marker set doubles as the predicate.
-  const followsFilter = (release: BrowseRelease) =>
-    followedSeries !== null &&
-    release.series.some((series) => followedSeries.has(series.publicId));
-  const releases = data
-    ? filters.followed
-      ? data.releases.filter(followsFilter)
-      : data.releases
-    : null;
-  const filtered = Boolean(
-    filters.format || filters.publisher || filters.followed,
+  // Every filter applies in memory over the public month window, which the
+  // route loads once per month, so changing one is instant. The followed
+  // marker set doubles as the followed filter's predicate.
+  const releases = useMemo(
+    () =>
+      data?.releases.filter(
+        (release) =>
+          (!filters.format || release.format === filters.format) &&
+          (!filters.publisher || release.publisher?.slug === filters.publisher) &&
+          (!filters.followed ||
+            (followedSeries !== null &&
+              release.series.some((series) => followedSeries.has(series.publicId)))),
+      ) ?? null,
+    [data, filters.format, filters.publisher, filters.followed, followedSeries],
   );
+  const filtered = isFiltered(filters);
 
   return (
     <main className="releases-page">
@@ -156,6 +194,12 @@ function BrowserView({
         ) : null}
         {releases ? <ResultCount releases={releases} /> : null}
       </div>
+      {data?.capped ? (
+        <p className="note">
+          This month holds more releases than the browser loads at once; some may be
+          missing here.
+        </p>
+      ) : null}
 
       {data === null || releases === null ? (
         <p className="notice">
@@ -498,7 +542,7 @@ const LONG_WEEKDAYS: Record<string, string> = {
  * Spotlight's upcoming lane (ticket #25), which renders the same rows
  * month by month (without the followed overlay).
  */
-export function AgendaView({
+function AgendaView({
   anchor,
   releases,
   followedSeries = null,

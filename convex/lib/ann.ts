@@ -28,6 +28,14 @@ import { cleanBlurb, cleanTitleText, decodeEntities, stripHtml } from "./text";
 
 // ---------- the normalized snapshot ----------
 
+/** One `<staff>` row: ANN's task ("Story & Art", "Art", …) and person. */
+export const annCreditValidator = v.object({
+  personId: v.string(),
+  name: v.string(),
+  task: v.string(),
+});
+export type AnnCredit = Infer<typeof annCreditValidator>;
+
 // What reconciliation reads (spec §6): one observation per manga entry, its
 // releases embedded (they also get per-release observations keyed on ANN's
 // own release ids — see ann.ts).
@@ -40,6 +48,8 @@ export const annMangaValidator = v.object({
   /** The entry's Plot Summary, cleaned to one paragraph. */
   synopsis: v.optional(v.string()),
   staff: v.array(v.string()),
+  /** Each staff row with its task and ANN person id (credits.ts reads these). */
+  credits: v.optional(v.array(annCreditValidator)),
   releases: v.array(
     v.object({
       annId: v.string(),
@@ -226,6 +236,7 @@ export type AnnManga = {
   altTitles: string[];
   synopsis?: string;
   staff: string[];
+  credits: AnnCredit[];
   releases: AnnRelease[];
 };
 
@@ -300,6 +311,16 @@ export function parseApiResponse(xml: string): AnnManga[] {
       const name = cleanTitleText(person[1]!);
       if (name !== "" && !staff.includes(name)) staff.push(name);
     }
+    // The same rows with their task and ANN's stable person id, which is
+    // what identifies an author across entries and spellings.
+    const credits: AnnCredit[] = [];
+    for (const row of body.matchAll(
+      /<staff[^>]*>\s*<task>([\s\S]*?)<\/task>\s*<person[^>]*\bid="(\d+)"[^>]*>([\s\S]*?)<\/person>/g,
+    )) {
+      const name = cleanTitleText(row[3]!);
+      const task = decodeEntities(row[1]!).trim();
+      if (name !== "" && task !== "") credits.push({ personId: row[2]!, name, task });
+    }
 
     const plot = /<info[^>]*type="Plot Summary"[^>]*>([\s\S]*?)<\/info>/.exec(body)?.[1];
 
@@ -309,6 +330,7 @@ export function parseApiResponse(xml: string): AnnManga[] {
       altTitles,
       synopsis: plot !== undefined ? cleanBlurb(decodeEntities(plot)) : undefined,
       staff,
+      credits,
       releases: parseReleases(body, title, id),
     });
   }
@@ -407,6 +429,7 @@ export function toSnapshot(manga: AnnManga): AnnMangaSnapshot {
     altTitles: manga.altTitles,
     synopsis: manga.synopsis,
     staff: manga.staff,
+    credits: manga.credits,
     releases: manga.releases,
   };
 }

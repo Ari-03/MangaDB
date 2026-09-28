@@ -15,6 +15,7 @@ import { v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { allocatePublicId } from "./lib/publicIds";
+import { seriesSearchText } from "./lib/searchMatch";
 
 // ---------- small builders ----------
 
@@ -69,7 +70,7 @@ async function addSeries(
     publicId,
     title: args.title,
     altTitles,
-    searchText: [args.title, ...altTitles].join(" "),
+    searchText: seriesSearchText(args.title, altTitles),
     familyId: args.familyId,
     sourceStatus: args.sourceStatus,
   });

@@ -22,6 +22,11 @@ export function seriesPath(publicId: number, title: string): string {
   return `/series/${publicId}/${slugify(title)}`;
 }
 
+/** Canonical author URL path: `/author/{id}/{slug}`, like a Series. */
+export function authorPath(publicId: number, name: string): string {
+  return `/author/${publicId}/${slugify(name)}`;
+}
+
 // Volume, Edition, and Bundle titles are composed, not stored (spec §8):
 // Volumes/Editions from series + label/line (convex/lib/titles.ts), Bundles
 // from their stored name. The slug is computed from that composed title.

@@ -1,8 +1,9 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery } from "~/lib/catalogData";
 import { normalizeIsbn } from "~/lib/isbn";
 import { bundlePath, editionPath } from "~/lib/slug";
-import { fetchIsbnTarget } from "~/server/catalogPages";
 
 /**
  * `/isbn/{isbn}` (ticket #23, spec §11): the ISBN entry point. A valid
@@ -21,7 +22,7 @@ export const Route = createFileRoute("/isbn/$isbn")({
   loader: async ({ params }) => {
     const isbn = normalizeIsbn(params.isbn);
     if (isbn === null) throw notFound();
-    const target = await fetchIsbnTarget({ data: isbn });
+    const target = await catalogQuery(api.catalogPages.isbnLookup, { isbn });
     if (!target) throw notFound();
     if (target.kind === "release") {
       throw redirect({

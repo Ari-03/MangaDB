@@ -1,5 +1,8 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { Byline } from "~/lib/byline";
+import { catalogQuery, type SeriesPageData } from "~/lib/catalogData";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { SeriesFollowControls } from "~/lib/follows";
 import {
@@ -27,7 +30,6 @@ import {
 } from "~/lib/seriesShelf";
 import { SeriesVisibilityControls } from "~/lib/sharing";
 import { parsePublicId, seriesPath } from "~/lib/slug";
-import { fetchSeriesPage, type SeriesPageData } from "~/server/seriesPage";
 
 /**
  * The Series page (ticket #22): `/series/{id}/{slug}`, server-rendered from
@@ -50,7 +52,7 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await fetchSeriesPage({ data: publicId });
+    const page = await catalogQuery(api.catalog.seriesPage, { publicId });
     if (!page) throw notFound();
     const canonical = seriesPath(page.series.publicId, page.series.title);
     if (`/series/${params.publicId}/${params.slug}` !== canonical) {
@@ -148,7 +150,7 @@ function seriesLinkParams(publicId: number, title: string) {
 function SeriesPage() {
   const page = Route.useLoaderData();
   const { edition: editionKey } = Route.useSearch();
-  const { series, family, volumes, editionGroups, coverUrl } = page;
+  const { series, family, credits, volumes, editionGroups, coverUrl } = page;
   const facts = packagingFacts(editionGroups);
   // The first path's first book fronts the Series — the standard run leads,
   // so this is its Volume 1 whenever one is on file.
@@ -188,6 +190,7 @@ function SeriesPage() {
 
         <div className="series-hero-body">
           <h1 className="series-title">{series.title}</h1>
+          <Byline credits={credits} />
           <div className="chips">
             {series.sourceStatus ? (
               <span className="chip" title="Status of the original publication">

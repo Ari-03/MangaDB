@@ -578,3 +578,60 @@
   .follow-btn,
   .edition-card { transition: none; }
 }
+
+/* --- Authors ---------------------------------------------------------------
+   The byline under a Series, Volume, or Edition title (lib/byline.tsx), the
+   author page, and the Authors tab. Credits come from ANN (convex/people.ts). */
+
+.byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 4px;
+  margin-top: 10px;
+  color: var(--text-dim);
+}
+.byline-part {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 4px;
+}
+.byline-part .dot { margin-right: 6px; }
+.byline-role { color: var(--text-mute); }
+.byline-name {
+  color: var(--text);
+  font-weight: 700;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  transition: color 140ms ease, border-color 140ms ease;
+}
+.byline-name:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.author-hero {
+  padding-block: 18px 6px;
+}
+.author-name {
+  font-size: clamp(2.1rem, 1.5rem + 2.2vw, 3.1rem);
+  letter-spacing: -0.026em;
+}
+.author-hero .chips { margin-top: 14px; }
+.author-roles {
+  margin-top: 12px;
+  color: var(--text-dim);
+}
+.author-credit { margin-top: 8px; }
+.author-credit a,
+.authors-note a {
+  color: var(--accent);
+  font-weight: 700;
+}
+.author-role-chips { gap: 6px; flex-wrap: wrap; white-space: normal; }
+
+.authors-note {
+  margin: 10px 0 28px;
+  max-width: 64ch;
+}

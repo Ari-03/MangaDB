@@ -61,6 +61,15 @@ export type ParsedBookTitle = {
    * with catalog access double-check it: "Omega 6" is a whole title.
    */
   bareNumber: boolean;
+  /** The bare number was a roman numeral: split only onto an existing base Series. */
+  bareRoman: boolean;
+  /**
+   * The split an unlicensed trailing number would have made ("Tower Dungeon
+   * 7" with no seriesNumber and no tag): offered, not taken. Callers with
+   * catalog access accept it only when an existing base Series claims it
+   * (lib/catalogTitle.ts); a new work keeps its whole name ("Omega 6").
+   */
+  bareSplit: { seriesTitle: string; volumeLabel: string } | null;
 };
 
 export type ParseOptions = {
@@ -102,7 +111,10 @@ const WORD_NUMBER = `(?:${WORD_NUMBERS.join("|")})`;
 const ROMAN = "(?:X{0,3}(?:IX|IV|V?I{1,3}|V)|X{1,3})";
 const NUM = "\\d+(?:\\.\\d+)?";
 /** One volume designation: 5, 7.5, G1, Five, IV. */
-const LABEL = `(?:${NUM}|[A-Z]\\d{1,2}|${WORD_NUMBER}|${ROMAN})`;
+/** An extra numbered off a volume: "18+1", "9+1". Unnumbered as a label. */
+const PLUS_EXTRA = `${NUM}\\+\\d+`;
+const PLUS_EXTRA_RE = new RegExp(`^${PLUS_EXTRA}$`);
+const LABEL = `(?:${PLUS_EXTRA}|${NUM}|[A-Z]\\d{1,2}|${WORD_NUMBER}|${ROMAN})`;
 /** A list or range of numbers: "1-3", "1 & 2", "1, 2, 3", "10-11+EX". */
 const RANGE = `${NUM}(?:\\s*(?:-|–|—|&|,|and)\\s*${NUM})+(?:\\s*\\+\\s*\\w+)?`;
 
@@ -233,6 +245,15 @@ const BRACKET_MARKER = new RegExp(`(?:^|\\s)${MARKER}\\s*(${LABEL})$`, "i");
 const BARE_NUMBER = new RegExp(
   `^(.*?[^\\s#,])(?:\\s*,)?\\s+(\\d{1,3}(?:\\.\\d+)?(?:\\s*(?:-|–|&)\\s*\\d{1,3})?)(?:\\s*:\\s*(.+)|\\s+\\(([^()]+)\\))?$`,
 );
+
+/**
+ * "BARBARITIES II": an unmarked trailing roman numeral, upper-case only and
+ * never after a conjunction ("You and I"). Like BARE_NUMBER the split is
+ * provisional (`bareNumber`): the catalog decides, and only an existing base
+ * Series may claim it (lib/catalogTitle.ts), so "Kingdom Hearts II" stays whole.
+ */
+const BARE_ROMAN = new RegExp(`^(.*?[A-Za-z!?.)][^\\s]*)\\s+(${ROMAN})$`);
+const CONJUNCTION_BEFORE = /(?:^|\s)(?:and|&|or|vs\.?|with|the|a)$/i;
 
 // ---------- peeling ----------
 
@@ -433,6 +454,8 @@ export function parseBookTitle(
   let volumeSubtitle: string | null = null;
   let range: CoverRange | null = null;
   let bareNumber = false;
+  let bareRoman = false;
+  let bareSplit: ParsedBookTitle["bareSplit"] = null;
   let packagingName: string | null = null;
   let linePosition: string | null = null;
 
@@ -459,7 +482,8 @@ export function parseBookTitle(
     if (marked) {
       text = marked[1]!;
       const designation = marked[2]!;
-      range = parseRange(designation);
+      // "18+1" is one extra volume's label, never a range.
+      range = PLUS_EXTRA_RE.test(designation) ? null : parseRange(designation);
       if (range === null) volumeLabel = canonicalLabel(designation);
       const subtitle = (marked[3] ?? marked[4])?.trim();
       volumeSubtitle = subtitle ? subtitle : null;
@@ -506,6 +530,8 @@ export function parseBookTitle(
         if (rangeHere) range = rangeHere;
         else volumeLabel = canonicalLabel(designation);
         volumeSubtitle = bare[3]?.trim() || null;
+      } else if (!rangeHere) {
+        bareSplit = { seriesTitle: tidySeries(bare[1]!), volumeLabel: canonicalLabel(designation) };
       }
     }
   }
@@ -527,6 +553,21 @@ export function parseBookTitle(
       volumeSubtitle = sub[2]?.trim() || null;
     }
   }
+
+  // Last, and only when nothing else named the volume (a bracket, a
+  // subtitle): "Kingdom Hearts II (Vol. 3)" is Vol. 3 of Kingdom Hearts II.
+  if (volumeLabel === null && range === null && linePosition === null && packagingName === null) {
+    const roman = BARE_ROMAN.exec(text);
+    if (roman && !CONJUNCTION_BEFORE.test(roman[1]!)) {
+      text = roman[1]!;
+      volumeLabel = canonicalLabel(roman[2]!);
+      bareNumber = true;
+      bareRoman = true;
+    }
+  }
+  // A declined split is offered only while no label is known: "Tower
+  // Dungeon 7 (Vol. 8)" is Vol. 8, never 7.
+  if (volumeLabel !== null || range !== null) bareSplit = null;
 
   // Bracket packaging names apply when no trailing phrase named the line.
   const lineName = packagingName ?? peel.lineNames[0] ?? null;
@@ -555,6 +596,8 @@ export function parseBookTitle(
     isNovel: peel.isNovel,
     formatTags: peel.formatTags,
     bareNumber,
+    bareRoman,
+    bareSplit,
   };
 }
 

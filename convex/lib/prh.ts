@@ -252,6 +252,8 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
     packaging: parsed.packaging ?? undefined,
     isBox: parsed.isBox || undefined,
     bareNumber: parsed.bareNumber || undefined,
+    bareRoman: parsed.bareRoman || undefined,
+    bareSplit: parsed.bareSplit ?? undefined,
     author: typeof entry.author === "string" ? entry.author.trim() : undefined,
     onsale: parseOnsale(entry.onsale ?? entry.onSaleDate),
     format: digital ? "digital" : "physical",

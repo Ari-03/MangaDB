@@ -38,6 +38,7 @@ import {
   type CanonicalPublisher,
 } from "./publishers";
 import { reconcileFields } from "./reconcile";
+import { seriesSearchText } from "./searchMatch";
 
 // ---------- dates & labels ----------
 
@@ -819,7 +820,7 @@ export async function createCanonicalRecords(
       ...tag,
       publicId,
       ...fields,
-      searchText: [args.seriesTitle, ...altTitles].join(" "),
+      searchText: seriesSearchText(args.seriesTitle, altTitles),
     });
     created.push({
       ref: { type: "series", id: seriesId },

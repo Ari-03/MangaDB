@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery } from "~/lib/catalogData";
 import { currentMonth } from "~/lib/month";
 import { PublishersBoard } from "~/lib/publishersBoard";
 import {
@@ -8,7 +10,6 @@ import {
   pageHead,
   SITE_NAME,
 } from "~/lib/seo";
-import { fetchPublishersBoard } from "~/server/publisher";
 
 /**
  * `/publishers` — the Publishers board for the current month: one card per
@@ -21,7 +22,7 @@ export const Route = createFileRoute("/publishers/")({
     // The current month (UTC) is computed on the server so SSR and
     // hydration agree, like the Release Agenda.
     const anchor = currentMonth();
-    const data = await fetchPublishersBoard({ data: anchor });
+    const data = await catalogQuery(api.publisher.monthBoard, anchor);
     return { anchor, data };
   },
   head: () => ({

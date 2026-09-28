@@ -1,10 +1,11 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
 
+import { api } from "../../convex/_generated/api";
+import { catalogQuery, type PublicProfileData } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
 import { SITE_NAME } from "~/lib/seo";
 import { slugParams } from "~/lib/slug";
-import { fetchPublicProfile, type PublicProfileData } from "~/server/profile";
 
 const STATUS_LABELS = {
   planToRead: "Plan to Read",
@@ -30,7 +31,7 @@ const STATUS_LABELS = {
  */
 export const Route = createFileRoute("/u/$username")({
   loader: async ({ params }) => {
-    const profile = await fetchPublicProfile({ data: params.username });
+    const profile = await catalogQuery(api.sharing.publicProfile, { username: params.username });
     if (!profile) throw notFound();
     return profile;
   },

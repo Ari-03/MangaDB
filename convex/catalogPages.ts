@@ -12,8 +12,18 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
 import { coverIsbnForRelease, coverUrl } from "./lib/covers";
+import { creditsFor } from "./people";
 
 // ---------- shared resolution & joins ----------
+
+/** `creditsFor` a Series known by its public ID. */
+async function creditsForPublicId(ctx: QueryCtx, publicId: number) {
+  const series = await ctx.db
+    .query("series")
+    .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
+    .unique();
+  return series ? await creditsFor(ctx, series._id) : [];
+}
 
 type MergeableTable =
   | "publishers"
@@ -240,6 +250,7 @@ export const volumePage = query({
         title: volumeTitle(series.title, volume.label ?? null),
       },
       series: { publicId: series.publicId, title: series.title },
+      credits: await creditsFor(ctx, series._id),
       editions,
       coverUrl: representativeCover(editions.flatMap((e) => e.releases)),
     };
@@ -299,6 +310,8 @@ export const editionPage = query({
             : null,
       },
       series,
+      // The authors of the (first) Series it collects.
+      credits: series[0] ? await creditsForPublicId(ctx, series[0].publicId) : [],
       coverage,
       releases,
       coverUrl: representativeCover(releases),

@@ -14,6 +14,7 @@ import {
   IMPRINT_PARENTS,
   canonicalPublisherFor,
 } from "../publishers";
+import { seriesSearchText } from "../searchMatch";
 import { applyHide, applyMerge, applyRestore } from "../sensitiveOps";
 import { sameValue } from "../values";
 import {
@@ -500,7 +501,7 @@ async function retitleSeries(ctx: MutationCtx, audit: Audit, seriesId: Id<"serie
   if (!series || series.title === title) return;
   await updateRecord(ctx, audit, { type: "series", id: seriesId }, series, {
     title,
-    searchText: [title, ...series.altTitles].join(" "),
+    searchText: seriesSearchText(title, series.altTitles),
   });
 }
 
@@ -988,7 +989,7 @@ async function updateFields(
       else patch.altTitles = change.after;
     }
     const title = patch.title ?? series.title;
-    patch.searchText = [title, ...(patch.altTitles ?? series.altTitles)].join(" ");
+    patch.searchText = seriesSearchText(title, patch.altTitles ?? series.altTitles);
     await updateRecord(ctx, audit, { type: "series", id: series._id }, series, patch);
     if (patch.title !== undefined) await lockTitleIfContested(ctx, audit, series._id);
     return applied;
@@ -1136,7 +1137,7 @@ async function createSplitSeries(
     publicId: await allocatePublicId(ctx, "series"),
     title: entry.title,
     altTitles: entry.altTitles,
-    searchText: [entry.title, ...entry.altTitles].join(" "),
+    searchText: seriesSearchText(entry.title, entry.altTitles),
   };
   const id = await ctx.db.insert("series", fields);
   audit.op({ kind: "create", table: "series", tempId: id, fields });

@@ -26,6 +26,7 @@ import {
   type FieldDecision,
   type Incumbent,
 } from "./authority";
+import { seriesSearchText } from "./searchMatch";
 import { sameValue, valueHash } from "./values";
 
 /** The record types imports reconcile field-level today. */
@@ -241,7 +242,7 @@ export async function reconcileFields(
     // Derived field maintained by every write path (spec §8).
     if (ref.type === "series" && "title" in patch) {
       const series = doc as Doc<"series">;
-      patch.searchText = [patch.title as string, ...series.altTitles].join(" ");
+      patch.searchText = seriesSearchText(patch.title as string, series.altTitles);
     }
     await ctx.db.patch(ref.id as Id<"releases">, patch as never);
 

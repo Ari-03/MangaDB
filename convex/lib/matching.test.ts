@@ -43,6 +43,11 @@ describe("normalizeTitle", () => {
     );
   });
 
+  it("keeps a title that is all brackets instead of emptying it", () => {
+    expect(normalizeTitle("[Oshi No Ko]")).toBe("oshi no ko");
+    expect(normalizeTitle("[Oshi No Ko] (Manga)")).toBe("oshi no ko");
+  });
+
   it("keeps a novel distinct from its manga", () => {
     expect(normalizeTitle("Seraph of the End (Novel)")).not.toBe(
       normalizeTitle("Seraph of the End"),
@@ -406,6 +411,19 @@ describe("candidateSeries", () => {
     expect((await t.run((ctx) => candidateSeries(ctx, "Tenken"))).map((s) => s._id)).toEqual([
       tenken,
     ]);
+  });
+
+  it("picks the namesake whose title matches with punctuation kept", async () => {
+    const t = makeT();
+    // Two works that key to "bastard": the WEBTOON and Hagiwara's BASTARD!!.
+    const webtoon = await insertSeries(t, "Bastard");
+    const hagiwara = await insertSeries(t, "Bastard!!");
+    const ids = async (title: string) =>
+      (await t.run((ctx) => candidateSeries(ctx, title))).map((s) => s._id);
+    expect(await ids("Bastard")).toEqual([webtoon]);
+    expect(await ids("Bastard!!")).toEqual([hagiwara]);
+    // Neither spelled exactly: still both, for review.
+    expect((await ids("BASTARD?")).sort()).toEqual([webtoon, hagiwara].sort());
   });
 
   it("answers a merged Series' title with its survivor, and reports hidden namesakes apart", async () => {

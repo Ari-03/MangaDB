@@ -68,6 +68,7 @@ export function SiteHeader() {
   const releasesCurrent = pathname.startsWith("/releases");
   const publishersCurrent = pathname.startsWith("/publisher");
   const seriesCurrent = pathname.startsWith("/series");
+  const authorsCurrent = pathname.startsWith("/author");
   return (
     <header className="site-header">
       <div className="container header-inner">
@@ -99,6 +100,14 @@ export function SiteHeader() {
             aria-current={seriesCurrent ? "page" : undefined}
           >
             Series
+          </Link>
+          {/* The Authors tab; an author page counts as being in it. */}
+          <Link
+            to="/authors"
+            className={authorsCurrent ? "nav-link is-current" : "nav-link"}
+            aria-current={authorsCurrent ? "page" : undefined}
+          >
+            Authors
           </Link>
         </nav>
         <HeaderSearch />
@@ -133,6 +142,9 @@ export function SiteHeader() {
           </Link>
           <Link to="/series" className="nav-link" onClick={() => setOpen(false)}>
             Series
+          </Link>
+          <Link to="/authors" className="nav-link" onClick={() => setOpen(false)}>
+            Authors
           </Link>
           {clerkEnabled ? <AuthNav mobile /> : null}
         </div>
@@ -213,8 +225,8 @@ function PlainHeaderSearch({
         className="search-input"
         type="search"
         name="q"
-        placeholder="Search series, publishers, ISBN"
-        aria-label="Search series, publishers, or an ISBN"
+        placeholder="Search series, authors, ISBN"
+        aria-label="Search series, authors, publishers, or an ISBN"
       />
     </form>
   );

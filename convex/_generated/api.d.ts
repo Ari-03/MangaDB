@@ -60,6 +60,7 @@ import type * as lib_yenPress from "../lib/yenPress.js";
 import type * as moderation from "../moderation.js";
 import type * as openLibrary from "../openLibrary.js";
 import type * as packaging from "../packaging.js";
+import type * as people from "../people.js";
 import type * as prh from "../prh.js";
 import type * as proposals from "../proposals.js";
 import type * as publisher from "../publisher.js";
@@ -136,6 +137,7 @@ declare const fullApi: ApiFromModules<{
   moderation: typeof moderation;
   openLibrary: typeof openLibrary;
   packaging: typeof packaging;
+  people: typeof people;
   prh: typeof prh;
   proposals: typeof proposals;
   publisher: typeof publisher;

@@ -1,0 +1,246 @@
+import { convexTest } from "convex-test";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import type { AnnCredit } from "./lib/ann";
+import { roleFor } from "./people";
+import schema from "./schema";
+
+describe("roleFor", () => {
+  it("keeps the makers and the source, drops other tasks", () => {
+    expect(roleFor("Story & Art")).toBe("story_art");
+    expect(roleFor("Story")).toBe("story");
+    expect(roleFor("Art")).toBe("art");
+    expect(roleFor("Original creator")).toBe("original");
+    expect(roleFor("Original Concept")).toBe("original");
+    expect(roleFor("Original Character Design")).toBeNull();
+  });
+});
+
+// Isayama writes and draws Attack on Titan and created No Regrets, which
+// Gan Sunaaku writes and Hikaru Suruga draws; Suruga's credit comes from a
+// second ANN entry on a Series later merged into No Regrets.
+async function catalog() {
+  const t = convexTest(schema);
+  const ids = await t.run(async (ctx) => {
+    let publicId = 0;
+    const series = (title: string, extra: { bookless?: true } = {}) =>
+      ctx.db.insert("series", {
+        status: "active",
+        publicId: ++publicId,
+        title,
+        altTitles: [],
+        searchText: title,
+        ...extra,
+      });
+    const aot = await series("Attack on Titan");
+    const regrets = await series("Attack on Titan: No Regrets");
+    const duplicate = await series("No Regrets (duplicate)");
+    await ctx.db.patch(duplicate, { status: "merged", mergedIntoId: regrets });
+    const bookless = await series("Attack on Titan: Lost Girls", { bookless: true });
+    const observe = (mangaId: string, seriesId: Id<"series">, credits?: AnnCredit[]) =>
+      ctx.db.insert("sourceObservations", {
+        sourceKey: "ann",
+        sourceRecordId: `manga:${mangaId}`,
+        recordRef: { type: "series", id: seriesId },
+        snapshot: { kind: "annManga", id: mangaId, staff: [], ...(credits ? { credits } : {}) },
+        lastSeenAt: 0,
+        withdrawn: false,
+      });
+    const isayama = { personId: "97559", name: "Hajime Isayama" };
+    await observe("12308", aot, [{ ...isayama, task: "Story & Art" }]);
+    await observe("15904", regrets, [
+      { personId: "127179", name: "Gan Sunaaku", task: "Story" },
+      { ...isayama, task: "Original creator" },
+      { personId: "1", name: "Designer", task: "Original Character Design" },
+      // Credited only for the idea: listed on pages, not ranked.
+      { personId: "555", name: "Idea Person", task: "Original Concept" },
+    ]);
+    await observe("99999", duplicate, [{ personId: "127178", name: "Hikaru Suruga", task: "Art" }]);
+    await observe("20000", bookless, [{ ...isayama, task: "Original creator" }]);
+    // Stored before the importer kept credits: names only, nothing to credit.
+    await observe("30000", aot);
+    await ctx.db.insert("seriesStats", {
+      seriesId: aot,
+      publicId: 1,
+      title: "Attack on Titan",
+      titleSort: "attack on titan",
+      letter: "a",
+      sourceStatus: "completed",
+      publishers: [{ name: "Kodansha", slug: "kodansha" }],
+      hasPhysical: true,
+      hasDigital: true,
+      volumeCount: 34,
+      releaseCount: 68,
+      firstReleaseSort: 20120619,
+      latestReleaseSort: 20210000,
+      nextReleaseSort: 0,
+      followers: 0,
+      collectors: 0,
+      coverUrl: null,
+      coverIsbn: "9781612620244",
+      rebuiltAt: 0,
+    });
+    return { aot, regrets, bookless };
+  });
+  await t.action(internal.people.rebuild, {});
+  return { t, ids };
+}
+
+describe("people.rebuild", () => {
+  it("credits each Series from ANN staff, merged Series via their survivor", async () => {
+    const { t, ids } = await catalog();
+    const page = await t.query(api.catalog.seriesPage, { publicId: 2 });
+    expect(page?.credits.map((c) => [c.name, c.role])).toEqual([
+      ["Gan Sunaaku", "story"],
+      ["Hikaru Suruga", "art"],
+      ["Hajime Isayama", "original"],
+      ["Idea Person", "original"],
+    ]);
+    const people = await t.run((ctx) => ctx.db.query("people").collect());
+    // One row per ANN person; character design credits no one.
+    expect(people.map((p) => p.name).sort()).toEqual([
+      "Gan Sunaaku",
+      "Hajime Isayama",
+      "Hikaru Suruga",
+      "Idea Person",
+    ]);
+    const isayama = people.find((p) => p.name === "Hajime Isayama")!;
+    // He made Attack on Titan and originated No Regrets; the bookless
+    // Series is credited but neither counted nor shown.
+    expect(isayama).toMatchObject({
+      seriesCount: 1,
+      originalCount: 1,
+      coverIsbn: "9781612620244",
+    });
+    expect(people.find((p) => p.name === "Idea Person")).toMatchObject({
+      seriesCount: 0,
+      originalCount: 1,
+    });
+    const credits = await t.run((ctx) =>
+      ctx.db
+        .query("seriesCredits")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.bookless))
+        .collect(),
+    );
+    expect(credits).toHaveLength(1);
+  });
+
+  it("drops credits no observation gives any more", async () => {
+    const { t, ids } = await catalog();
+    await t.run(async (ctx) => {
+      const observation = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) => q.eq("sourceKey", "ann").eq("sourceRecordId", "manga:12308"))
+        .unique();
+      await ctx.db.patch(observation!._id, { withdrawn: true });
+    });
+    await t.action(internal.people.rebuild, {});
+    const credits = await t.run((ctx) =>
+      ctx.db
+        .query("seriesCredits")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.aot))
+        .collect(),
+    );
+    expect(credits).toEqual([]);
+  });
+});
+
+describe("people.authorPage and people.authors", () => {
+  it("lists an author's visible Series with roles, latest release first", async () => {
+    const { t } = await catalog();
+    const isayama = await t.run((ctx) =>
+      ctx.db
+        .query("people")
+        .withIndex("by_annId", (q) => q.eq("annId", "97559"))
+        .unique(),
+    );
+    const page = await t.query(api.people.authorPage, { publicId: isayama!.publicId });
+    expect(page?.author).toMatchObject({
+      name: "Hajime Isayama",
+      annUrl: "https://www.animenewsnetwork.com/encyclopedia/people.php?id=97559",
+    });
+    expect(page?.series.map((s) => [s.title, s.roles])).toEqual([
+      ["Attack on Titan", ["story_art"]],
+      ["Attack on Titan: No Regrets", ["original"]],
+    ]);
+    expect(await t.query(api.people.authorPage, { publicId: 999 })).toBeNull();
+  });
+
+  it("pages authors who wrote or drew something, most prolific first", async () => {
+    const { t } = await catalog();
+    const first = await t.query(api.people.authors, {
+      paginationOpts: { numItems: 2, cursor: null },
+    });
+    const rest = await t.query(api.people.authors, {
+      paginationOpts: { numItems: 10, cursor: first.continueCursor },
+    });
+    // Idea Person only originated a Series, so isn't ranked.
+    expect([...first.page, ...rest.page].map((a) => a.name).sort()).toEqual([
+      "Gan Sunaaku",
+      "Hajime Isayama",
+      "Hikaru Suruga",
+    ]);
+  });
+});
+
+describe("author search", () => {
+  it("finds authors by name in search and suggestions", async () => {
+    const { t } = await catalog();
+    const search = await t.query(api.catalog.search, { query: "isayama" });
+    expect(search.authors.map((a) => [a.name, a.seriesCount])).toEqual([["Hajime Isayama", 1]]);
+    // An original creator is still findable.
+    const idea = await t.query(api.catalog.search, { query: "idea person" });
+    expect(idea.authors).toMatchObject([{ name: "Idea Person", seriesCount: 0, originalCount: 1 }]);
+    const suggest = await t.query(api.catalog.suggest, { query: "hajime isa" });
+    expect(suggest.authors.map((a) => a.name)).toEqual(["Hajime Isayama"]);
+  });
+});
+
+describe("people.backfillAnnCredits", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("fetches staff only for entries stored without credits, and sets just those", async () => {
+    const { t } = await catalog();
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return new Response(
+        `<ann><manga id="30000" name="Attack on Titan"><info type="Main title" lang="EN">Attack on Titan</info>` +
+          `<staff gid="1"><task>Story &amp; Art</task><person id="97559">Hajime Isayama</person></staff></manga></ann>`,
+      );
+    });
+    const result = await t.action(internal.people.backfillAnnCredits, {});
+    expect(result).toEqual({ updated: 1, continued: false });
+    // Every other entry already had credits: one request, for one id.
+    expect(requested).toEqual(["https://cdn.animenewsnetwork.com/encyclopedia/api.xml?manga=30000"]);
+    const snapshot = await t.run(async (ctx) => {
+      const doc = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) => q.eq("sourceKey", "ann").eq("sourceRecordId", "manga:30000"))
+        .unique();
+      return doc?.snapshot;
+    });
+    expect(snapshot).toMatchObject({
+      kind: "annManga",
+      id: "30000",
+      credits: [{ personId: "97559", name: "Hajime Isayama", task: "Story & Art" }],
+    });
+  });
+
+  it("marks an entry ANN has no record for, so a rerun doesn't ask again", async () => {
+    const { t } = await catalog();
+    let requests = 0;
+    vi.stubGlobal("fetch", async () => {
+      requests++;
+      return new Response(`<ann><warning>no result for manga=30000</warning></ann>`);
+    });
+    expect(await t.action(internal.people.backfillAnnCredits, {})).toEqual({
+      updated: 1,
+      continued: false,
+    });
+    await t.action(internal.people.backfillAnnCredits, {});
+    expect(requests).toBe(1);
+  });
+});
