@@ -649,3 +649,28 @@ describe("outOfScopeReason", () => {
     }
   });
 });
+
+describe("parseBookTitle — bare roman numerals and +1 extras", () => {
+  const roman = (title: string) => {
+    const p = parseBookTitle(title);
+    return [p.seriesTitle, p.volumeLabel, p.bareNumber, p.bareRoman];
+  };
+
+  it("reads a bare trailing roman numeral as a provisional volume number", () => {
+    expect(roman("BARBARITIES I")).toEqual(["BARBARITIES", "1", true, true]);
+    expect(roman("BARBARITIES IV")).toEqual(["BARBARITIES", "4", true, true]);
+    expect(roman("Monster Girl Encyclopedia II")).toEqual(["Monster Girl Encyclopedia", "2", true, true]);
+  });
+
+  it("leaves pronouns and marked titles alone", () => {
+    expect(roman("You and I")).toEqual(["You and I", null, false, false]);
+    expect(roman("Kingdom Hearts II Vol. 3")).toEqual(["Kingdom Hearts II", "3", false, false]);
+    // Provisional: the catalog keeps these whole unless a base Series exists.
+    expect(roman("Triage X")).toEqual(["Triage", "10", true, true]);
+  });
+
+  it("keeps an '18+1' extra as one unnumbered label, not a range", () => {
+    expect(roman("Barakamon, Vol. 18+1")).toEqual(["Barakamon", "18+1", false, false]);
+    expect(roman("Barakamon, Vol. 18")).toEqual(["Barakamon", "18", false, false]);
+  });
+});

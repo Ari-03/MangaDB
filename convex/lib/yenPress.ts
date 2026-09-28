@@ -267,6 +267,7 @@ export function toSnapshots(page: YenTitlePage, url: string): YenTitleSnapshot[]
         (boxed ? { lineName: "Box Set", linePosition: null, coverRange: null } : undefined),
       isBox: boxed || undefined,
       bareNumber: parsed.bareNumber || undefined,
+      bareRoman: parsed.bareRoman || undefined,
       onsale: entry.onsale,
       format: format?.format ?? "physical",
       binding: format?.binding,

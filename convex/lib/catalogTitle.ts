@@ -49,6 +49,8 @@ export const catalogTitleFields = {
   isBox: v.optional(v.boolean()),
   /** The label came from an unmarked trailing number ("Omega 6" may be a title). */
   bareNumber: v.optional(v.boolean()),
+  /** The bare number was a trailing roman numeral (lib/bookTitle.ts BARE_ROMAN). */
+  bareRoman: v.optional(v.boolean()),
   author: v.optional(v.string()),
   onsale: v.optional(v.object({ year: v.number(), month: v.number(), day: v.number() })),
   format: v.union(v.literal("physical"), v.literal("digital")),
@@ -163,11 +165,22 @@ export async function applyCatalogTitle(
 
   // Series first: every placement below hangs off the base Series. An
   // unmarked trailing number may belong to the name ("Omega 6"): when only
-  // the whole title names an existing Series, the book is that Series'.
+  // the whole title names an existing Series, the book is that Series'. A
+  // trailing roman numeral is more often a sequel's name ("Kingdom Hearts
+  // II") than a volume, so the whole title is asked first, and the split
+  // stands only when an existing base Series claims it ("BARBARITIES II" →
+  // Barbarities Vol. 2); a new work keeps its whole name.
   let seriesTitle = snapshot.seriesTitle;
   let volumeLabel = snapshot.volumeLabel ?? null;
   let candidates = await candidateSeries(ctx, seriesTitle);
-  if (candidates.length === 0 && snapshot.bareNumber) {
+  if (snapshot.bareRoman) {
+    const whole = await candidateSeries(ctx, snapshot.title);
+    if (whole.length > 0 || candidates.length === 0) {
+      candidates = whole;
+      seriesTitle = whole[0]?.title ?? snapshot.title;
+      volumeLabel = null;
+    }
+  } else if (candidates.length === 0 && snapshot.bareNumber) {
     const whole = await candidateSeries(ctx, snapshot.title);
     if (whole.length > 0) {
       candidates = whole;

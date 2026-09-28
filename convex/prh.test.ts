@@ -700,6 +700,32 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     });
   });
 
+  it("splits a trailing roman numeral only onto an existing base Series", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // ANN's backbone for the work; PRH names its books "BARBARITIES I" etc.
+    const barbarities = await backbone(t, "Barbarities", []);
+    // A sequel whose name ends in a numeral, and no base to split onto.
+    const hearts = await backbone(t, "Kingdom Hearts II", []);
+    stubApi([
+      { isbn: "9781685795009", title: "BARBARITIES II", seriesNumber: null, imprint: "Seven Seas" },
+      { isbn: "9781975300000", title: "Kingdom Hearts II", seriesNumber: null, imprint: "Yen Press" },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("series").collect()).map((s) => s._id).sort()).toEqual(
+        [barbarities, hearts].sort(),
+      );
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.seriesIds[0]).sort()).toEqual([barbarities, hearts].sort());
+      const volumes = await ctx.db
+        .query("volumes")
+        .withIndex("by_series", (q) => q.eq("seriesId", barbarities))
+        .collect();
+      expect(volumes.map((v) => v.label)).toEqual(["2"]);
+    });
+  });
+
   it("makes a box set a Release Bundle of the base Series' Releases", async () => {
     const t = makeT();
     await seedRegistry(t, true);
