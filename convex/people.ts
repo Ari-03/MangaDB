@@ -293,8 +293,16 @@ export const backfillAnnCredits = internalAction({
       if (batch.ids.length > 0) {
         const res = await politeFetch(`${ANN_API}?manga=${batch.ids.join("/")}`, ANN_DELAY_MS);
         const records = parseApiResponse(await res.text());
+        const returned = new Set(records.map((record) => record.id));
         updated += await ctx.runMutation(internal.people.setCredits, {
-          entries: records.map((record) => ({ mangaId: record.id, credits: record.credits })),
+          entries: [
+            ...records.map((record) => ({ mangaId: record.id, credits: record.credits })),
+            // ANN has no record for these: mark them credited-with-nothing so
+            // a rerun doesn't ask again.
+            ...batch.ids
+              .filter((id) => !returned.has(id))
+              .map((id) => ({ mangaId: id, credits: [] })),
+          ],
         });
       }
       cursor = batch.next;

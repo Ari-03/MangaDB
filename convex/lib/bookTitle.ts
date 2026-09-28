@@ -536,16 +536,6 @@ export function parseBookTitle(
     }
   }
 
-  if (volumeLabel === null && range === null && linePosition === null && packagingName === null) {
-    const roman = BARE_ROMAN.exec(text);
-    if (roman && !CONJUNCTION_BEFORE.test(roman[1]!)) {
-      text = roman[1]!;
-      volumeLabel = canonicalLabel(roman[2]!);
-      bareNumber = true;
-      bareRoman = true;
-    }
-  }
-
   // A volume noted only in brackets: "(Kase-san and... Book 3)", "(Vol. 13)".
   if (volumeLabel === null && range === null && peel.noteLabel !== null) {
     volumeLabel = peel.noteLabel;
@@ -563,6 +553,21 @@ export function parseBookTitle(
       volumeSubtitle = sub[2]?.trim() || null;
     }
   }
+
+  // Last, and only when nothing else named the volume (a bracket, a
+  // subtitle): "Kingdom Hearts II (Vol. 3)" is Vol. 3 of Kingdom Hearts II.
+  if (volumeLabel === null && range === null && linePosition === null && packagingName === null) {
+    const roman = BARE_ROMAN.exec(text);
+    if (roman && !CONJUNCTION_BEFORE.test(roman[1]!)) {
+      text = roman[1]!;
+      volumeLabel = canonicalLabel(roman[2]!);
+      bareNumber = true;
+      bareRoman = true;
+    }
+  }
+  // A declined split is offered only while no label is known: "Tower
+  // Dungeon 7 (Vol. 8)" is Vol. 8, never 7.
+  if (volumeLabel !== null || range !== null) bareSplit = null;
 
   // Bracket packaging names apply when no trailing phrase named the line.
   const lineName = packagingName ?? peel.lineNames[0] ?? null;

@@ -529,6 +529,9 @@ export function nearMonths(now: Date): { from: number; to: number } {
   return { from: key(-1), to: key(3) };
 }
 
+/** Largest board stored, in UTF-16 units: well under the 1 MiB value limit. */
+const MAX_BOARD_PAYLOAD = 700_000;
+
 /** Bump when `buildMonthBoard`'s result changes shape: older rows are then ignored. */
 const BOARD_VERSION = 1;
 
@@ -558,7 +561,10 @@ export const rebuildBoards = internalAction({
           year: Math.floor(key / 100),
           month: key % 100,
         });
-        payload = board.board.length > 0 ? JSON.stringify(board) : null;
+        const json = JSON.stringify(board);
+        // A payload near Convex's 1 MiB value limit can't be stored; that
+        // month computes live instead (today's boards are ~40 KB).
+        payload = board.board.length > 0 && json.length < MAX_BOARD_PAYLOAD ? json : null;
       } catch (error) {
         failed++;
         console.error(`publisher board ${key} failed to build`, error);

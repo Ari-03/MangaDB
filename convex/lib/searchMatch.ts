@@ -54,7 +54,8 @@ function keysOf(name: string): { initials: Set<string>; runs: Set<string> } {
     const bare = ARTICLES.has(words[0] ?? "") ? words.slice(1) : words;
     for (const run of [words, bare]) {
       if (run.length < 2) continue;
-      initials.add(run.map((word) => (/^\d+$/.test(word) ? word : word[0])).join(""));
+      // By code point, so a letter outside the BMP stays whole.
+      initials.add(run.map((word) => (/^\d+$/.test(word) ? word : [...word][0])).join(""));
       runs.add(run.join(""));
     }
   }

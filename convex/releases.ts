@@ -243,7 +243,7 @@ export const monthBrowse = query({
       .map((doc) => ({ name: doc.name, slug: doc.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    const empty = { releases: [], publishers };
+    const empty = { releases: [], publishers, capped: false };
     if (!Number.isInteger(year) || !Number.isInteger(month)) return empty;
     if (year < 1000 || year > 9999 || month < 1 || month > 12) return empty;
 
@@ -284,7 +284,14 @@ export const monthBrowse = query({
         doc.status === "active" && (format === undefined || doc.format === format),
     );
 
-    return { releases: await joinBrowseRows(ctx, refined), publishers };
+    return {
+      releases: await joinBrowseRows(ctx, refined),
+      publishers,
+      // The window hit WINDOW_CAP: the month holds more than this read. The
+      // pages filter in memory, so they say so rather than miss releases
+      // silently (months hold ~250–350 today).
+      capped: windowDocs.length === WINDOW_CAP,
+    };
   },
 });
 

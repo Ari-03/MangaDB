@@ -89,6 +89,8 @@ export async function followPublisherSlug(
   const slug = location.search.publisher;
   if (!slug || !data || data.publishers.some((p) => p.slug === slug)) return;
   const current = await catalogQuery(api.releases.canonicalPublisherSlug, { slug });
+  // Already current (a Publisher past the month's publisher list): no loop.
+  if (current === slug) return;
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries({ ...location.search, publisher: current })) {
     if (value !== undefined && value !== null) search.set(key, String(value));
@@ -192,6 +194,12 @@ function BrowserView({
         ) : null}
         {releases ? <ResultCount releases={releases} /> : null}
       </div>
+      {data?.capped ? (
+        <p className="note">
+          This month holds more releases than the browser loads at once; some may be
+          missing here.
+        </p>
+      ) : null}
 
       {data === null || releases === null ? (
         <p className="notice">

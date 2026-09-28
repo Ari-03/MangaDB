@@ -139,6 +139,10 @@ describe("nicknameKeys", () => {
     );
   });
 
+  it("takes a letter outside the BMP whole", () => {
+    expect(nicknameKeys(["𠮷野 家"]).initials).toEqual(["𠮷家"]);
+  });
+
   it("derives nothing from a one-word name", () => {
     expect(keys("Berserk", "JJK")).toEqual([]);
   });

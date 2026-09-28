@@ -693,6 +693,13 @@ describe("parseBookTitle — bare roman numerals and +1 extras", () => {
     expect(roman("Triage X")).toEqual(["Triage", "10", true, true]);
   });
 
+  it("lets a bracketed volume win over a trailing numeral", () => {
+    expect(roman("Kingdom Hearts II (Vol. 3)")).toEqual(["Kingdom Hearts II", "3", false, false]);
+    const tower = parseBookTitle("Tower Dungeon 7 (Vol. 8)");
+    expect(tower.volumeLabel).toBe("8");
+    expect(tower.bareSplit).toBeNull();
+  });
+
   it("keeps an '18+1' extra as one unnumbered label, not a range", () => {
     expect(roman("Barakamon, Vol. 18+1")).toEqual(["Barakamon", "18+1", false, false]);
     expect(roman("Barakamon, Vol. 18")).toEqual(["Barakamon", "18", false, false]);

@@ -20,6 +20,11 @@ import { authorPath, parsePublicId, slugParams } from "~/lib/slug";
  * Encyclopedia, which the page credits and links, as ANN's terms ask.
  * A stale slug 301s to the canonical URL, as for a Series.
  */
+type AuthorSeries = AuthorPageData["series"][number];
+
+/** Wrote or drew it (people.ts `isMaker`), as opposed to only originating it. */
+const made = (entry: AuthorSeries) => entry.roles.some((role) => role !== "original");
+
 export const Route = createFileRoute("/author/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
@@ -34,7 +39,9 @@ export const Route = createFileRoute("/author/$publicId/$slug")({
   },
   head: ({ loaderData }) => {
     if (!loaderData) return {};
-    const { author, series } = loaderData;
+    const { author } = loaderData;
+    // The same count the page leads with: Series they wrote or drew.
+    const series = loaderData.series.filter(made);
     const path = authorPath(author.publicId, author.name);
     const titles = series.slice(0, 3).map((s) => s.title).join(", ");
     return {
@@ -67,7 +74,6 @@ export const Route = createFileRoute("/author/$publicId/$slug")({
   ),
 });
 
-type AuthorSeries = AuthorPageData["series"][number];
 
 /** "Story & Art on 12 · Original creator on 3": what they did, how often. */
 function roleSummary(series: ReadonlyArray<AuthorSeries>): string {
@@ -81,8 +87,6 @@ function roleSummary(series: ReadonlyArray<AuthorSeries>): string {
     .join(" · ");
 }
 
-/** Wrote or drew it (people.ts `isMaker`), as opposed to only originating it. */
-const made = (entry: AuthorSeries) => entry.roles.some((role) => role !== "original");
 
 function AuthorPage() {
   const { author, series: all } = Route.useLoaderData();

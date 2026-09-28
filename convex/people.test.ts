@@ -228,4 +228,19 @@ describe("people.backfillAnnCredits", () => {
       credits: [{ personId: "97559", name: "Hajime Isayama", task: "Story & Art" }],
     });
   });
+
+  it("marks an entry ANN has no record for, so a rerun doesn't ask again", async () => {
+    const { t } = await catalog();
+    let requests = 0;
+    vi.stubGlobal("fetch", async () => {
+      requests++;
+      return new Response(`<ann><warning>no result for manga=30000</warning></ann>`);
+    });
+    expect(await t.action(internal.people.backfillAnnCredits, {})).toEqual({
+      updated: 1,
+      continued: false,
+    });
+    await t.action(internal.people.backfillAnnCredits, {});
+    expect(requests).toBe(1);
+  });
 });
