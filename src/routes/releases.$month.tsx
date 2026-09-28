@@ -2,6 +2,7 @@ import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery } from "~/lib/catalogData";
+import { showMature } from "~/lib/mature";
 import { currentMonth, monthParam, monthTitle, parseMonthParam } from "~/lib/month";
 import {
   followPublisherSlug,
@@ -43,7 +44,7 @@ export const Route = createFileRoute("/releases/$month")({
   loader: async ({ params, location }) => {
     const anchor = parseMonthParam(params.month);
     if (!anchor) throw notFound();
-    const data = await catalogQuery(api.releases.monthBrowse, anchor);
+    const data = await catalogQuery(api.releases.monthBrowse, { ...anchor, showMature: showMature() });
     await followPublisherSlug(location, data);
     return { anchor, today: currentMonth(), data };
   },

@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery } from "~/lib/catalogData";
+import { showMature } from "~/lib/mature";
 import { currentMonth } from "~/lib/month";
 import { PublishersBoard } from "~/lib/publishersBoard";
 import {
@@ -22,7 +23,7 @@ export const Route = createFileRoute("/publishers/")({
     // The current month (UTC) is computed on the server so SSR and
     // hydration agree, like the Release Agenda.
     const anchor = currentMonth();
-    const data = await catalogQuery(api.publisher.monthBoard, anchor);
+    const data = await catalogQuery(api.publisher.monthBoard, { ...anchor, showMature: showMature() });
     return { anchor, data };
   },
   head: () => ({

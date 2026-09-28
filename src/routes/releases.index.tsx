@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery } from "~/lib/catalogData";
+import { showMature } from "~/lib/mature";
 import { currentMonth } from "~/lib/month";
 import {
   breadcrumbListJsonLd,
@@ -38,7 +39,7 @@ export const Route = createFileRoute("/releases/")({
     // The Agenda anchors on the month containing today (UTC), computed on the
     // server so SSR and hydration agree.
     const anchor = currentMonth();
-    const data = await catalogQuery(api.releases.monthBrowse, anchor);
+    const data = await catalogQuery(api.releases.monthBrowse, { ...anchor, showMature: showMature() });
     await followPublisherSlug(location, data);
     return { anchor, data };
   },

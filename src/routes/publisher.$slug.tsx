@@ -13,6 +13,7 @@ import {
   type PublisherPageData,
   type SeriesBrowseItem,
 } from "~/lib/catalogData";
+import { ConcealArt, showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
 import {
   addMonths,
@@ -72,6 +73,7 @@ export const Route = createFileRoute("/publisher/$slug")({
         slug: params.slug,
         todaySort,
         horizonSort: monthEndSortKey(addMonths(month, LANE_HORIZON_MONTHS)),
+        showMature: showMature(),
       }),
       fetchSeriesBrowse({
         sort: "volumes",
@@ -79,7 +81,7 @@ export const Route = createFileRoute("/publisher/$slug")({
         timing: "past-12m",
         pageSize: TOP_SERIES,
       }),
-      catalogQuery(api.seriesBrowse.facets, {}),
+      catalogQuery(api.seriesBrowse.facets, { showMature: showMature() }),
     ]);
     if (!page) throw notFound();
     if ("redirectTo" in page) {
@@ -109,6 +111,8 @@ export const Route = createFileRoute("/publisher/$slug")({
         title: publisherTitleTag(publisher.name),
         description: `${publisher.name} on MangaDB: publisher profile, upcoming English manga releases, and the full release calendar.`,
         path,
+        // An adult-only publisher is marked for safe-search (lib/mature.tsx).
+        mature: publisher.mature,
       }),
       scripts: [
         jsonLdScript(
@@ -127,7 +131,7 @@ export const Route = createFileRoute("/publisher/$slug")({
       ],
     };
   },
-  component: PublisherPage,
+  component: ConcealedPublisherPage,
   notFoundComponent: PublisherNotFound,
 });
 
@@ -176,6 +180,18 @@ function groupByMonth(books: ReadonlyArray<Book>) {
     }
   }
   return groups;
+}
+
+/**
+ * An adult-only publisher's page (lib/mature.tsx) says why its lanes are
+ * empty for viewers who have not opted in to mature titles.
+ */
+function ConcealedPublisherPage() {
+  return (
+    <ConcealArt mature={Route.useLoaderData().publisher.mature}>
+      <PublisherPage />
+    </ConcealArt>
+  );
 }
 
 function PublisherPage() {

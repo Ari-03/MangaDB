@@ -5,6 +5,7 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../convex/_generated/api";
+import { MatureProvider } from "~/lib/mature";
 import { SearchCombobox } from "~/lib/searchSuggest";
 
 // Client-side wiring (spec §9): <ClerkProvider> owns the session,
@@ -25,21 +26,23 @@ export const clerkEnabled = Boolean(
 );
 
 export function AppProviders({ children }: { children: ReactNode }) {
+  // The viewer's mature-titles choice (lib/mature.tsx) wraps everything.
+  const inner = <MatureProvider>{children}</MatureProvider>;
   if (!clerkEnabled) {
     return convexClient ? (
-      <ConvexProvider client={convexClient}>{children}</ConvexProvider>
+      <ConvexProvider client={convexClient}>{inner}</ConvexProvider>
     ) : (
-      <>{children}</>
+      inner
     );
   }
   return (
     <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
       {convexClient ? (
         <ConvexProviderWithClerk client={convexClient} useAuth={useAuth}>
-          {children}
+          {inner}
         </ConvexProviderWithClerk>
       ) : (
-        children
+        inner
       )}
     </ClerkProvider>
   );
@@ -77,22 +80,6 @@ export function SiteHeader() {
           MangaDB
         </Link>
         <nav className="nav" aria-label="Main">
-          {/* The Releases browser (#24) is the main public browse surface. */}
-          <Link
-            to="/releases"
-            className={releasesCurrent ? "nav-link is-current" : "nav-link"}
-            aria-current={releasesCurrent ? "page" : undefined}
-          >
-            Releases
-          </Link>
-          {/* The Publishers board; a Publisher Spotlight counts as being in it. */}
-          <Link
-            to="/publishers"
-            className={publishersCurrent ? "nav-link is-current" : "nav-link"}
-            aria-current={publishersCurrent ? "page" : undefined}
-          >
-            Publishers
-          </Link>
           {/* The Series library; a Series page counts as being in it. */}
           <Link
             to="/series"
@@ -101,6 +88,14 @@ export function SiteHeader() {
           >
             Series
           </Link>
+          {/* The Releases browser (#24) is the main public browse surface. */}
+          <Link
+            to="/releases"
+            className={releasesCurrent ? "nav-link is-current" : "nav-link"}
+            aria-current={releasesCurrent ? "page" : undefined}
+          >
+            Releases
+          </Link>
           {/* The Authors tab; an author page counts as being in it. */}
           <Link
             to="/authors"
@@ -108,6 +103,14 @@ export function SiteHeader() {
             aria-current={authorsCurrent ? "page" : undefined}
           >
             Authors
+          </Link>
+          {/* The Publishers board; a Publisher Spotlight counts as being in it. */}
+          <Link
+            to="/publishers"
+            className={publishersCurrent ? "nav-link is-current" : "nav-link"}
+            aria-current={publishersCurrent ? "page" : undefined}
+          >
+            Publishers
           </Link>
         </nav>
         <HeaderSearch />
@@ -134,17 +137,17 @@ export function SiteHeader() {
           <Link to="/" className="nav-link" onClick={() => setOpen(false)}>
             Home
           </Link>
-          <Link to="/releases" className="nav-link" onClick={() => setOpen(false)}>
-            Releases
-          </Link>
-          <Link to="/publishers" className="nav-link" onClick={() => setOpen(false)}>
-            Publishers
-          </Link>
           <Link to="/series" className="nav-link" onClick={() => setOpen(false)}>
             Series
           </Link>
+          <Link to="/releases" className="nav-link" onClick={() => setOpen(false)}>
+            Releases
+          </Link>
           <Link to="/authors" className="nav-link" onClick={() => setOpen(false)}>
             Authors
+          </Link>
+          <Link to="/publishers" className="nav-link" onClick={() => setOpen(false)}>
+            Publishers
           </Link>
           {clerkEnabled ? <AuthNav mobile /> : null}
         </div>

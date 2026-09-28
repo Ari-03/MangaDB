@@ -313,6 +313,32 @@ export const recordSeriesCrawl = internalMutation({
   },
 });
 
+/**
+ * Write the listing's age ratings onto the series-link observations
+ * (`series:{slug}`) of series already linked to the catalog, where the
+ * Mature Series rebuild reads them (lib/mature.ts). Kodansha rates series,
+ * not books, and the listing is fetched in full every run, so this costs no
+ * page fetches. A series linked later this run gets its rating next run.
+ */
+export const recordListingRatings = internalMutation({
+  args: { entries: v.array(v.object({ slug: v.string(), mature: v.boolean() })) },
+  handler: async (ctx, { entries }) => {
+    const now = Date.now();
+    for (const { slug, mature } of entries) {
+      const link = await getObservation(ctx, SOURCE_KEY, `series:${slug}`);
+      if (!link) continue;
+      const snapshot = link.snapshot as { mature?: boolean };
+      if (snapshot.mature === mature) continue;
+      await upsertObservation(ctx, {
+        sourceKey: SOURCE_KEY,
+        sourceRecordId: link.sourceRecordId,
+        snapshot: { ...snapshot, mature },
+        now,
+      });
+    }
+  },
+});
+
 /** Every in-scope comic series, alphabetical by slug (~12 requests). */
 async function fetchListing(delay: number): Promise<SeriesListingEntry[]> {
   const bySlug = new Map<string, SeriesListingEntry>();
@@ -441,6 +467,9 @@ export const backlistSync = internalAction({
       let budgetSpent = false;
       for (let offset = 0; offset < listing.length && !budgetSpent; offset += PLAN_CHUNK) {
         const chunk = listing.slice(offset, offset + PLAN_CHUNK);
+        await ctx.runMutation(internal.kodansha.recordListingRatings, {
+          entries: chunk.map(({ slug, mature }) => ({ slug, mature })),
+        });
         const due: Array<{
           slug: string;
           mode: "full" | "recheck";

@@ -110,6 +110,7 @@ describe("publisher.publisherPage", () => {
       name: "VIZ Media",
       slug: "viz-media",
       description: "Publisher profile blurb.",
+      mature: false,
     });
     expect(page.editionCount).toEqual({ count: 1, capped: false });
     // This month is every active August release, out already or still to
@@ -794,12 +795,18 @@ describe("publisher precomputed boards", () => {
     const { t, more } = await catalog();
 
     // Only September has cards; empty months are left to compute live.
+    // Each month is stored in both views, with and without Mature Series.
     const first = await t.action(internal.publisher.rebuildBoards, {});
-    expect(first).toMatchObject({ changed: 1, failed: 0 });
+    expect(first).toMatchObject({ changed: 2, failed: 0 });
     const stored = await t.run((ctx) => ctx.db.query("publisherBoards").collect());
-    expect(stored.map((row) => row.month)).toEqual([202609]);
-    expect(await t.query(api.publisher.monthBoard, september)).toEqual(
-      await t.query(internal.publisher.computeBoard, september),
+    expect(stored.map((row) => [row.month, row.mature])).toEqual([
+      [202609, undefined],
+      [202609, true],
+    ]);
+    const computed = await t.query(internal.publisher.computeBoard, september);
+    expect(await t.query(api.publisher.monthBoard, september)).toEqual(computed.general);
+    expect(await t.query(api.publisher.monthBoard, { ...september, showMature: true })).toEqual(
+      computed.mature,
     );
     expect(await releasesIn(t)).toBe(1);
 
@@ -807,7 +814,7 @@ describe("publisher precomputed boards", () => {
     // September's board changes (October has no card to carry a delta).
     await more(20260920);
     expect(await releasesIn(t)).toBe(1);
-    expect((await t.action(internal.publisher.rebuildBoards, { scope: "near" })).changed).toBe(1);
+    expect((await t.action(internal.publisher.rebuildBoards, { scope: "near" })).changed).toBe(2);
     expect(await releasesIn(t)).toBe(2);
     expect((await t.action(internal.publisher.rebuildBoards, {})).changed).toBe(0);
   });

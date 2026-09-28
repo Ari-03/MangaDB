@@ -8,12 +8,15 @@
 // `lastmod` is each record's latest Revision (spec §11); records that
 // predate revision history fall back to their creation time. Hidden and
 // merged records never appear — the surviving record carries the URL.
+// Mature Series, their Volumes and Editions, and adult-only Publishers and
+// their Bundles are left out too (lib/mature.ts): reachable, not advertised.
 
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { editionCoverage } from "./catalogPages";
+import { listed } from "./lib/mature";
 import { volumeTitle } from "./lib/titles";
 
 export type SitemapEntity = "series" | "volume" | "edition" | "publisher" | "bundle";
@@ -70,8 +73,8 @@ export const sitemapPage = query({
       case "series": {
         const result = await ctx.db.query("series").paginate(paginationOpts);
         for (const doc of result.page) {
-          // Bookless Series are reachable but not advertised.
-          if (doc.status !== "active" || doc.bookless === true) continue;
+          // Bookless and Mature Series are reachable but not advertised.
+          if (!listed(doc, false)) continue;
           entries.push({
             publicId: doc.publicId,
             slug: null,
@@ -87,8 +90,8 @@ export const sitemapPage = query({
           if (doc.status !== "active") continue;
           const series = await ctx.db.get(doc.seriesId);
           // A hidden Series hides its Volumes from the public site; a
-          // Bookless one is not advertised.
-          if (!series || series.status !== "active" || series.bookless === true) continue;
+          // Bookless or Mature one is not advertised.
+          if (!series || !listed(series, false)) continue;
           entries.push({
             publicId: doc.publicId,
             slug: null,
@@ -102,7 +105,8 @@ export const sitemapPage = query({
         const result = await ctx.db.query("editions").paginate(paginationOpts);
         for (const doc of result.page) {
           if (doc.status !== "active") continue;
-          const { title } = await editionCoverage(ctx, doc);
+          const { title, mature } = await editionCoverage(ctx, doc);
+          if (mature) continue;
           entries.push({
             publicId: doc.publicId,
             slug: null,
@@ -115,7 +119,7 @@ export const sitemapPage = query({
       case "publisher": {
         const result = await ctx.db.query("publishers").paginate(paginationOpts);
         for (const doc of result.page) {
-          if (doc.status !== "active") continue;
+          if (doc.status !== "active" || doc.contentRating === "mature") continue;
           entries.push({
             publicId: null,
             // Publishers are the slug-only URL exception (spec §11).
@@ -130,6 +134,8 @@ export const sitemapPage = query({
         const result = await ctx.db.query("releaseBundles").paginate(paginationOpts);
         for (const doc of result.page) {
           if (doc.status !== "active") continue;
+          const publisher = await ctx.db.get(doc.publisherId);
+          if (publisher?.contentRating === "mature") continue;
           entries.push({
             publicId: doc.publicId,
             slug: null,

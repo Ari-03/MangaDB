@@ -10,6 +10,7 @@ import { Byline } from "~/lib/byline";
 import { catalogQuery } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover, coverIsbns } from "~/lib/cover";
+import { ConcealArt } from "~/lib/mature";
 import {
   ModEditLink,
   ModReleaseEditLinks,
@@ -58,7 +59,7 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
   // (publisher, date, ISBN), falling back to the Release Description blurb.
   head: ({ loaderData }) => {
     if (!loaderData) return {};
-    const { edition, series, releases, coverUrl } = loaderData;
+    const { edition, series, releases, coverUrl, mature } = loaderData;
     const path = editionPath(edition.publicId, edition.title);
     const primarySeries = series[0];
     const first = releases[0];
@@ -80,6 +81,7 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
         path,
         image: coverUrl,
         ogType: "book",
+        mature,
       }),
       scripts: [
         jsonLdScript(
@@ -112,14 +114,15 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
               pubDate: release.pubDate,
               language: release.language,
               publisherName: edition.publisher?.name ?? null,
-              coverUrl: release.coverUrl,
+              // No art for crawlers on a Mature Series' page (lib/mature.tsx).
+              coverUrl: mature ? null : release.coverUrl,
             }),
           ),
         ),
       ],
     };
   },
-  component: EditionPage,
+  component: ConcealedEditionPage,
   notFoundComponent: EditionNotFound,
 });
 
@@ -132,6 +135,15 @@ function EditionNotFound() {
         .
       </p>
     </main>
+  );
+}
+
+/** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
+function ConcealedEditionPage() {
+  return (
+    <ConcealArt mature={Route.useLoaderData().mature}>
+      <EditionPage />
+    </ConcealArt>
   );
 }
 

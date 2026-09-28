@@ -431,3 +431,18 @@
   .cover,
   .cover-actions { transition: none; }
 }
+
+/* A Mature Series' cover the viewer has not opted in to see (lib/mature.tsx):
+   cloth, never art, marked 18+ at the foot. */
+.cover-rating {
+  position: absolute;
+  bottom: 8px; right: 8px;
+  z-index: 2;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  background: var(--on-cover-scrim);
+  color: var(--on-cover-ink);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}

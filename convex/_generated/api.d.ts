@@ -33,6 +33,7 @@ import type * as lib_http from "../lib/http.js";
 import type * as lib_importRuns from "../lib/importRuns.js";
 import type * as lib_kodansha from "../lib/kodansha.js";
 import type * as lib_matching from "../lib/matching.js";
+import type * as lib_mature from "../lib/mature.js";
 import type * as lib_moderationFields from "../lib/moderationFields.js";
 import type * as lib_observations from "../lib/observations.js";
 import type * as lib_occ from "../lib/occ.js";
@@ -110,6 +111,7 @@ declare const fullApi: ApiFromModules<{
   "lib/importRuns": typeof lib_importRuns;
   "lib/kodansha": typeof lib_kodansha;
   "lib/matching": typeof lib_matching;
+  "lib/mature": typeof lib_mature;
   "lib/moderationFields": typeof lib_moderationFields;
   "lib/observations": typeof lib_observations;
   "lib/occ": typeof lib_occ;

@@ -63,6 +63,10 @@ An Edition's sequence label within its Edition Line, independent of the identiti
 An active Series whose Volumes are known but to which no English book has attached — no Edition covers any Volume and no Edition Line has a member. Usually a backbone a source built (ANN) whose releases could not be placed: an unknown distributor, packaging-only releases, no ISBN. The Series library rebuild derives and clears the flag; while it stands, the Series is kept out of browse, search, the home page and the sitemap, its page stays reachable, and the Data Team reviews it. Not a Hidden Record: imports keep attaching books to it.
 _Avoid_: empty series, orphan series
 
+**Mature Series**:
+A Series for adults only: rated 18+ by a source (a publisher's own age rating, or ANN's), with an Edition from an adult-only publisher, or so rated by the Data Team, whose call wins either way. Discovery (browse, search, the calendar, the Publishers board, author shelves, the sitemap) leaves it out unless the viewer has opted in to mature titles; its pages stay reachable but hide their cover art until then. A publisher's teen or older-teen rating does not make a Series mature.
+_Avoid_: NSFW, adult manga, explicit
+
 **Unmapped Packaging**:
 An Edition Line member whose source never stated which Volumes it collects — no title range, no blurb statement, no line name with a fixed size. It has no Volume Coverage yet, shows under its line in the publisher's own numbering, and waits in the Data Team's unmapped queue for a Moderator to map its Volumes. Ownership and reading progress follow the Volumes only once mapped.
 _Avoid_: unplaced, orphan edition

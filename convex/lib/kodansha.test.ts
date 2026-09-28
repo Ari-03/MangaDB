@@ -305,18 +305,21 @@ describe("backlist: search-series listing", () => {
         name: "10 DANCE",
         lastUpdatedAt: "2026-04-08T03:42:28+00:00",
         synopsis: expect.stringMatching(/^Dip into your new obsession .* red-hot romance!$/),
+        mature: false,
       },
       {
         slug: "5-centimeters-per-second-collectors-edition",
         name: "5 Centimeters per Second (Collector's Edition)",
         lastUpdatedAt: "2026-02-06T09:53:10+00:00",
         synopsis: expect.stringMatching(/^Based on the award winning film by Makoto Shinkai/),
+        mature: false,
       },
       {
         slug: "7-billion-needles",
         name: "7 Billion Needles",
         lastUpdatedAt: "2026-02-06T09:53:11+00:00",
         synopsis: expect.stringMatching(/^Hikaru Takabe may not be the most social of teens\./),
+        mature: false,
       },
     ]);
     expect(() => parseSeriesListing({ success: false })).toThrow();

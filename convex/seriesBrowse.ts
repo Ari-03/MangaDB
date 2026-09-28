@@ -33,6 +33,7 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
+import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
 
 export const SORTS = [
@@ -165,6 +166,32 @@ export const sweepStale = internalMutation({
   },
 });
 
+/**
+ * Carry a Series' new `mature` flag into its library row and pack entry at
+ * once, so a Data Team rating edit (moderation.applyUpdate) shows in the
+ * filtered library and its facets without waiting for the next rebuild.
+ * A Series without a row yet (never rebuilt, or bookless) has nothing to
+ * update.
+ */
+export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
+  const flag = mature ? { mature: true as const } : { mature: undefined };
+  const row = await ctx.db
+    .query("seriesStats")
+    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+    .unique();
+  if (row && (row.mature === true) !== mature) await ctx.db.patch(row._id, flag);
+  const pack = await ctx.db
+    .query("seriesStatsPacks")
+    .withIndex("by_block", (q) => q.eq("block", Math.floor(series.publicId / PACK_SPAN)))
+    .unique();
+  const at = pack?.entries.findIndex((entry) => entry.publicId === series.publicId) ?? -1;
+  if (!pack || at < 0 || (pack.entries[at]!.mature === true) === mature) return;
+  const entries = pack.entries.map((entry, i) =>
+    i === at ? { ...entry, mature: mature ? (true as const) : undefined } : entry,
+  );
+  await ctx.db.patch(pack._id, { entries });
+}
+
 /** Series per pack: block k covers publicIds [k * PACK_SPAN, (k + 1) * PACK_SPAN). */
 const PACK_SPAN = 1000;
 /** Packs a reader takes at most: room for 100k publicIds. */
@@ -214,7 +241,10 @@ export const repackBlock = internalMutation({
   },
 });
 
-/** Compute and write one Series' row from its canonical records. */
+/**
+ * Compute and write one Series' row from its canonical records, deriving
+ * the Series' `bookless` and `mature` flags on the way.
+ */
 async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: number) {
   const volumes = (
     await ctx.db
@@ -258,10 +288,26 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     }
   }
 
+  // Mature Series evidence (lib/mature.ts), gathered below only while the
+  // Data Team has made no call and nothing has decided it yet.
+  const rated = ratedByDataTeam(series.contentRating);
+  let evidence = false;
+  const wantEvidence = () => rated === null && !evidence;
+  const settleMature = async () => {
+    if (wantEvidence()) evidence = await sourceRatesMature(ctx, { type: "series", id: series._id });
+    const mature = rated ?? evidence;
+    // Derived data, no Revision — like `bookless`.
+    if ((series.mature === true) !== mature) {
+      await ctx.db.patch(series._id, { mature: mature ? true : undefined });
+    }
+    return mature;
+  };
+
   // A Bookless Series (no Edition at all) leaves the library: its stats row
   // goes and the Series carries the derived flag until a book lands. Derived
   // data, no Revision — like the release denorms.
   if (editionIds.size === 0) {
+    await settleMature();
     if (series.bookless !== true) await ctx.db.patch(series._id, { bookless: true });
     const stale = await ctx.db
       .query("seriesStats")
@@ -292,6 +338,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     if (publisher && publisher.status === "active") {
       publishers.set(publisher.slug, { name: publisher.name, slug: publisher.slug });
     }
+    if (wantEvidence() && publisher?.contentRating === "mature") evidence = true;
     const releases = (
       await ctx.db
         .query("releases")
@@ -326,8 +373,12 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
         .withIndex("by_release", (q) => q.eq("releaseId", release._id))
         .collect();
       for (const entry of entries) collectors.add(entry.userId);
+      if (wantEvidence()) {
+        evidence = await sourceRatesMature(ctx, { type: "release", id: release._id });
+      }
     }
   }
+  const mature = await settleMature();
 
   const followers = (
     await ctx.db
@@ -358,6 +409,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     collectors: collectors.size,
     coverUrl: storedCover,
     coverIsbn: seriesCoverIsbn(coverCandidates),
+    ...(mature ? { mature: true as const } : {}),
     rebuiltAt,
   };
   const existing = await ctx.db
@@ -440,6 +492,7 @@ function entryOf(row: StatsRow): Entry {
     lastReleasedSort: row.lastReleasedSort ?? row.latestReleaseSort,
     followers: row.followers,
     collectors: row.collectors,
+    ...(row.mature ? { mature: true as const } : {}),
   };
 }
 
@@ -718,10 +771,23 @@ async function readChunk(
   return rows;
 }
 
-/** Whether the row's Series is still an active, unmerged public record. */
-async function stillPublic(ctx: QueryCtx, row: StatsRow): Promise<boolean> {
+/**
+ * Whether the row's Series is still an active, unmerged public record the
+ * viewer may see: its own `mature` flag is read, not the row's copy, so a
+ * Series rated since the last rebuild leaves at once.
+ */
+async function stillPublic(
+  ctx: QueryCtx,
+  row: StatsRow,
+  showMature: boolean | undefined,
+): Promise<boolean> {
   const series = await ctx.db.get(row.seriesId);
-  return series !== null && series.status === "active" && !series.mergedIntoId;
+  return (
+    series !== null &&
+    series.status === "active" &&
+    !series.mergedIntoId &&
+    visibleTo(showMature, series.mature)
+  );
 }
 
 /**
@@ -732,7 +798,8 @@ async function stillPublic(ctx: QueryCtx, row: StatsRow): Promise<boolean> {
  * skipped when a page reaches it. `todaySort` (today's yyyymmdd, UTC) is
  * required with the timings that count back from today (past-Nm, finished);
  * a cursor from such a view brings the first page's day along, and the
- * cursor's day wins over `todaySort`.
+ * cursor's day wins over `todaySort`. Mature Series are left out unless
+ * `showMature` (lib/mature.ts).
  */
 export const browse = query({
   args: {
@@ -742,6 +809,7 @@ export const browse = query({
     todaySort: v.optional(v.number()),
     cursor: v.optional(v.union(v.string(), v.null())),
     pageSize: v.optional(v.number()),
+    ...showMatureArg,
   },
   handler: async (ctx, args) => {
     const order = args.order ?? SORT_INDEX[args.sort].defaultOrder;
@@ -756,7 +824,9 @@ export const browse = query({
       // Filters pick the set from the packs (the cost is in the header
       // comment). Then the sort orders it, nothing announced last on
       // "upcoming", and the page resumes after the cursor's entry.
-      const entries = (await allEntries(ctx)).filter(test);
+      const entries = (await allEntries(ctx)).filter(
+        (entry) => visibleTo(args.showMature, entry.mature) && test(entry),
+      );
       const compare = (a: Cursor, b: Cursor) => {
         if (args.sort === "upcoming" && (a.v === 0) !== (b.v === 0)) return a.v === 0 ? 1 : -1;
         const cmp = a.v < b.v ? -1 : a.v > b.v ? 1 : a.id - b.id;
@@ -775,7 +845,7 @@ export const browse = query({
           .unique();
         // Entries lag their Series by up to a rebuild; a Series hidden or
         // merged since must not surface from the library meanwhile.
-        if (row && (await stillPublic(ctx, row))) items.push(row);
+        if (row && (await stillPublic(ctx, row, args.showMature))) items.push(row);
       }
       const edge = entries[examined - 1];
       return {
@@ -795,7 +865,7 @@ export const browse = query({
       const want = target - items.length;
       const chunk = await readChunk(ctx, args.sort, order, cursor, want);
       for (const row of chunk) {
-        if (await stillPublic(ctx, row)) items.push(row);
+        if (await stillPublic(ctx, row, args.showMature)) items.push(row);
       }
       const last = chunk[chunk.length - 1];
       if (!last || chunk.length < want || items.length === target) break;
@@ -814,16 +884,17 @@ export const browse = query({
 /**
  * What the filter panel offers: every Publisher with a Series in the
  * library and how many it has, the total Series count, and counts per
- * Source Status. Publishers come from the packed entries themselves, so a
+ * Source Status, over the Series this viewer sees (`showMature`).
+ * Publishers come from the packed entries themselves, so a
  * listed slug always filters to something.
  */
 export const facets = query({
-  args: {},
-  handler: async (ctx) => {
+  args: showMatureArg,
+  handler: async (ctx, { showMature }) => {
     const publishers = new Map<string, { name: string; slug: string; count: number }>();
     const statuses = new Map<Entry["sourceStatus"], number>();
-    // The same pack read as a filtered browse.
-    const entries = await allEntries(ctx);
+    // The same pack read as a filtered browse, less what the viewer hides.
+    const entries = (await allEntries(ctx)).filter((entry) => visibleTo(showMature, entry.mature));
     for (const entry of entries) {
       statuses.set(entry.sourceStatus, (statuses.get(entry.sourceStatus) ?? 0) + 1);
       for (const publisher of entry.publishers) {

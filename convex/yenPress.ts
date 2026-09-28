@@ -61,8 +61,13 @@ const BACKLIST_REFRESH_MS = 180 * DAY_MS;
 
 // ---------- planning ----------
 
-/** Is this stored snapshot's page due for another fetch? */
+/**
+ * Is this stored snapshot's page due for another fetch? A snapshot from
+ * before age ratings were read is due at once, so the rolling refresh
+ * backfills them within the per-run fetch budget (lib/mature.ts).
+ */
 function isDue(snapshot: YenTitleSnapshot, lastSeenAt: number, now: number): boolean {
+  if (snapshot.mature === undefined) return true;
   const onsale = snapshot.onsale;
   const recent =
     onsale === undefined ||

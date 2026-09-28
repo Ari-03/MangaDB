@@ -8,7 +8,7 @@
 //   The ACF fields (release date, ISBN, price…) are NOT exposed in REST.
 // - The book page HTML (`link`), whose `#volume-meta` block carries
 //   "Series:", "Story & Art by:", "Release Date:", "Price:", "Format:",
-//   "ISBN:" lines plus the cover image.
+//   "ISBN:" lines, plus the cover image and its age-rating badge.
 //
 // Keeping this module pure (no Convex imports beyond values) lets the
 // parsers be unit-tested against saved fixture responses without a backend.
@@ -45,6 +45,11 @@ export const bookSnapshotValidator = v.object({
   isbn13: v.optional(v.string()),
   coverUrl: v.optional(v.string()),
   description: v.optional(v.string()),
+  /**
+   * The page rates the book 18+ (`isMatureRating`). Absent on snapshots
+   * taken before ratings were read, which the sync re-fetches.
+   */
+  mature: v.optional(v.boolean()),
 });
 
 export type BookSnapshot = Infer<typeof bookSnapshotValidator>;
@@ -115,7 +120,17 @@ export type BookPageDetails = {
   category?: string;
   isbn13?: string;
   coverUrl?: string;
+  /** The age-rating badge's id: "allages", "teen", "olderteen15", "olderteen17", "mature". */
+  ageRating?: string;
 };
+
+/**
+ * Seven Seas' age ratings (sevenseasentertainment.com/about/age-ratings/):
+ * only "mature" is 18+; Older Teen is 15+ or 17+.
+ */
+export function isMatureRating(ageRating: string | undefined): boolean {
+  return ageRating === "mature";
+}
 
 const MONTHS: Record<string, number> = {
   january: 1,
@@ -214,6 +229,9 @@ export function parseBookPage(html: string): BookPageDetails {
   }
   details.coverUrl = coverUrl;
 
+  // The rating badge beside the cover: <div class="age-rating" id="teen">.
+  details.ageRating = /<div\s+class="age-rating"\s+id="([a-z0-9-]+)"/i.exec(head)?.[1]?.toLowerCase();
+
   return details;
 }
 
@@ -264,5 +282,6 @@ export function normalizeBook(listing: BookListing, page: BookPageDetails): Book
     isbn13: page.isbn13,
     coverUrl: page.coverUrl,
     description: listing.description,
+    mature: isMatureRating(page.ageRating),
   };
 }

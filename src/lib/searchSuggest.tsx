@@ -18,6 +18,7 @@ import {
 import { api } from "../../convex/_generated/api";
 import { Cover } from "~/lib/cover";
 import { normalizeIsbn } from "~/lib/isbn";
+import { useMature } from "~/lib/mature";
 import { authorPath, seriesPath } from "~/lib/slug";
 
 type Suggestions = FunctionReturnType<typeof api.catalog.suggest>;
@@ -204,9 +205,12 @@ export function SearchCombobox({
 
   const query = text.trim();
   const debounced = useDebounced(query, SUGGEST_DEBOUNCE_MS);
+  const { showMature } = useMature();
   const live = useQuery(
     api.catalog.suggest,
-    debounced.length >= MIN_QUERY && !isbnInProgress(debounced) ? { query: debounced } : "skip",
+    debounced.length >= MIN_QUERY && !isbnInProgress(debounced)
+      ? { query: debounced, showMature }
+      : "skip",
   );
   // useQuery only ever answers the current query, so an older response can
   // never land over a newer one; holding the last answer (and the query it

@@ -18,6 +18,7 @@ import { PUBLISHER_SCAN_CAP } from "./catalog";
 import { followMerges } from "./catalogPages";
 import { editionTitle, releaseAnchor } from "./lib/titles";
 import { coverIsbnForRelease, coverUrl } from "./lib/covers";
+import { showMatureArg, visibleTo } from "./lib/mature";
 
 // A month window holds hundreds of releases across all publishers (spec §8);
 // the cap only guards against pathology, mirroring COUNT_CAP elsewhere.
@@ -130,7 +131,8 @@ function composeVolumeLabel(
  * cover, Series link(s), Volume label, Format, and Publisher per row (spec
  * §10). A month-precision date (day unknown, sort yyyymm00) keeps `day: null`
  * so views can group it as "date to be announced"; rows whose Edition or
- * every Series is hidden drop out. Rows return date-sorted, then stable by
+ * every Series is hidden drop out, and a row of any Mature Series says so
+ * (`mature`) for the caller to filter. Rows return date-sorted, then stable by
  * title and volume. Shared by the browser's month window (monthBrowse), the
  * Publisher Spotlight's upcoming lane and the Publishers board's cover
  * strips (publisher.ts); pass `cache` to share lookups a caller already made.
@@ -149,12 +151,15 @@ export async function joinBrowseRows(
     if (!edition || edition.status !== "active") continue;
 
     // Series links come from the denormalized seriesIds (spec §8); a hidden
-    // Series hides its releases from the public browser.
+    // Series hides its releases from the public browser. A book of any
+    // Mature Series is mature (lib/mature.ts); callers filter on the flag.
     const series = [];
+    let mature = false;
     for (const seriesId of release.seriesIds) {
       const doc = await cache.series(seriesId);
       if (doc && doc.status === "active") {
         series.push({ publicId: doc.publicId, title: doc.title });
+        if (doc.mature) mature = true;
       }
     }
     if (series.length === 0) continue;
@@ -195,6 +200,7 @@ export async function joinBrowseRows(
       binding: release.binding ?? null,
       isbn13: release.isbn13 ?? null,
       series,
+      mature,
       volumeLabel: composeVolumeLabel(covered, anyPartial),
       lineName: line && line.status === "active" ? line.name : null,
       linePosition: edition.linePosition ?? null,
@@ -224,7 +230,8 @@ export async function joinBrowseRows(
  * Releases only — Bundles stay off the browser (spec §10).
  *
  * Also returns the active Publisher list (small, spec §8) so the filter
- * dropdown renders from the same round trip.
+ * dropdown renders from the same round trip. Books of Mature Series, and
+ * adult-only Publishers, are left out unless `showMature` (lib/mature.ts).
  */
 export const monthBrowse = query({
   args: {
@@ -233,13 +240,17 @@ export const monthBrowse = query({
     format: v.optional(v.union(v.literal("physical"), v.literal("digital"))),
     // Publisher filter by slug — the URL-shareable form of the filter state.
     publisher: v.optional(v.string()),
+    ...showMatureArg,
   },
-  handler: async (ctx, { year, month, format, publisher }) => {
+  handler: async (ctx, { year, month, format, publisher, showMature }) => {
     const publisherDocs = await ctx.db
       .query("publishers")
       .take(PUBLISHER_SCAN_CAP);
     const publishers = publisherDocs
-      .filter((doc) => doc.status === "active")
+      .filter(
+        (doc) =>
+          doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
+      )
       .map((doc) => ({ name: doc.name, slug: doc.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -285,7 +296,9 @@ export const monthBrowse = query({
     );
 
     return {
-      releases: await joinBrowseRows(ctx, refined),
+      releases: (await joinBrowseRows(ctx, refined)).filter((row) =>
+        visibleTo(showMature, row.mature),
+      ),
       publishers,
       // The window hit WINDOW_CAP: the month holds more than this read. The
       // pages filter in memory, so they say so rather than miss releases

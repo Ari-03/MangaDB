@@ -7,10 +7,11 @@
 // - `api.xml?manga=ID1/ID2/…` — batch details, up to 50 ids per request
 //   (ANN etiquette: 1 request per second). Each `<manga>` carries the Main
 //   title, Alternative titles, a Plot Summary (the Series synopsis ANN
-//   offers at weak authority), staff, and one `<release date="YYYY-MM-DD"
-//   href="…releases.php?id=NNN">Title (GN 14)</release>` per North American
-//   release — future dates included, month precision possible
-//   ("2024-11-00"), eBook lines for digital.
+//   offers at weak authority), staff, an occasional age rating
+//   ("Objectionable content", genres; see `isMatureEntry`), and one
+//   `<release date="YYYY-MM-DD" href="…releases.php?id=NNN">Title (GN
+//   14)</release>` per North American release — future dates included,
+//   month precision possible ("2024-11-00"), eBook lines for digital.
 //
 // ANN is series-structured: one manga entry = one Series; the "(GN n)"
 // suffixes define the Volume backbone. Each release line also carries the
@@ -50,6 +51,8 @@ export const annMangaValidator = v.object({
   staff: v.array(v.string()),
   /** Each staff row with its task and ANN person id (credits.ts reads these). */
   credits: v.optional(v.array(annCreditValidator)),
+  /** ANN rates the entry for adults (`isMatureEntry`); absent otherwise. */
+  mature: v.optional(v.literal(true)),
   releases: v.array(
     v.object({
       annId: v.string(),
@@ -237,8 +240,21 @@ export type AnnManga = {
   synopsis?: string;
   staff: string[];
   credits: AnnCredit[];
+  mature: boolean;
   releases: AnnRelease[];
 };
+
+/**
+ * Does an entry's body rate it for adults? ANN's "Objectionable content"
+ * is AA (all ages), OC (older children), TA (teens), MA (mature) or AO
+ * (adults only); an erotica or hentai genre/theme says the same. Most
+ * entries carry no rating at all, so its absence proves nothing.
+ */
+export function isMatureEntry(body: string): boolean {
+  const rating = /<info[^>]*type="Objectionable content"[^>]*>\s*([A-Z]+)\s*<\/info>/.exec(body)?.[1];
+  if (rating === "MA" || rating === "AO") return true;
+  return /<info[^>]*type="(?:Genres|Themes)"[^>]*>\s*(?:erotica|hentai)\s*<\/info>/i.test(body);
+}
 
 function parseReleases(body: string, entryName: string, mangaId: string): AnnRelease[] {
   const releases: AnnRelease[] = [];
@@ -331,6 +347,7 @@ export function parseApiResponse(xml: string): AnnManga[] {
       synopsis: plot !== undefined ? cleanBlurb(decodeEntities(plot)) : undefined,
       staff,
       credits,
+      mature: isMatureEntry(body),
       releases: parseReleases(body, title, id),
     });
   }
@@ -430,6 +447,7 @@ export function toSnapshot(manga: AnnManga): AnnMangaSnapshot {
     synopsis: manga.synopsis,
     staff: manga.staff,
     credits: manga.credits,
+    ...(manga.mature ? { mature: true as const } : {}),
     releases: manga.releases,
   };
 }

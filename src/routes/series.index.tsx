@@ -11,6 +11,7 @@ import {
   type SeriesFacets,
 } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
+import { MatureFilter, showMature } from "~/lib/mature";
 import { MONTH_NAMES } from "~/lib/month";
 import {
   breadcrumbListJsonLd,
@@ -155,17 +156,24 @@ function browseArgs(
 /**
  * Facets change only when the stats rebuild runs, so the browser asks once
  * per session instead of on every filter change (each ask reads all the
- * packs). The server renders them fresh; a failed ask is retried next time.
+ * packs), once per mature-titles choice since that changes the counts
+ * (lib/mature.tsx). The server renders them fresh; a failed ask is retried
+ * next time.
  */
-let clientFacets: ReturnType<typeof fetchFacets> | undefined;
-const fetchFacets = () => catalogQuery(api.seriesBrowse.facets, {});
+const clientFacets = new Map<boolean, ReturnType<typeof fetchFacets>>();
+const fetchFacets = (mature: boolean) => catalogQuery(api.seriesBrowse.facets, { showMature: mature });
 function libraryFacets() {
-  if (typeof window === "undefined") return fetchFacets();
-  clientFacets ??= fetchFacets().catch((error: unknown) => {
-    clientFacets = undefined;
-    throw error;
-  });
-  return clientFacets;
+  const mature = showMature();
+  if (typeof window === "undefined") return fetchFacets(mature);
+  let facets = clientFacets.get(mature);
+  if (!facets) {
+    facets = fetchFacets(mature).catch((error: unknown) => {
+      clientFacets.delete(mature);
+      throw error;
+    });
+    clientFacets.set(mature, facets);
+  }
+  return facets;
 }
 
 /**
@@ -195,6 +203,8 @@ export const Route = createFileRoute("/series/")({
       page,
       facets,
       filtered: Object.values(deps).some((value) => value !== undefined),
+      // The mature-titles choice this page was read under (lib/mature.tsx).
+      mature: showMature(),
     };
   },
   head: ({ loaderData }) => ({
@@ -218,10 +228,13 @@ export const Route = createFileRoute("/series/")({
 });
 
 function SeriesLibraryPage() {
-  const { page, facets } = Route.useLoaderData();
+  const { page, facets, mature } = Route.useLoaderData();
   const search = Route.useSearch();
   const { draft, update } = useLibraryDraft(search);
   const loading = useRouterState({ select: (state) => state.isLoading });
+  // A shelf per view and the mature-titles choice its first page was read
+  // under, so a changed choice remounts it only once that page arrives.
+  const viewId = `${viewKey(search)}|${mature ? "mature" : "general"}`;
 
   return (
     <main className="library-page">
@@ -284,7 +297,7 @@ function SeriesLibraryPage() {
           ) : (
             // Keyed by the view so a filter change starts a fresh shelf
             // instead of appending to the old one.
-            <LibraryShelf key={viewKey(search)} search={search} firstPage={page} />
+            <LibraryShelf key={viewId} viewId={viewId} search={search} firstPage={page} />
           )}
         </section>
       </div>
@@ -463,6 +476,7 @@ function FilterPanel({
             value={draft.format}
             onPick={(format) => update({ format })}
           />
+          <MatureFilter />
           {/* Source Status is imported like any other fact; until a source
               supplies it the whole catalog reads "unknown" and the group
               would filter nothing. */}
@@ -712,10 +726,11 @@ function LetterStrip({ search }: { search: LibrarySearch }) {
 const EAGER_COVERS = 7;
 
 /**
- * Pages already loaded per view (keyed by its search params), kept for the
- * browser session so returning to the library rebuilds the whole shelf at
- * once — the router's scroll restoration then lands where the reader left.
- * In memory only: a fresh page load starts from the server-rendered page.
+ * Pages already loaded per view (keyed by its search params and the
+ * mature-titles choice), kept for the browser session so returning to the
+ * library rebuilds the whole shelf at once — the router's scroll
+ * restoration then lands where the reader left. In memory only: a fresh
+ * page load starts from the server-rendered page.
  */
 const loadedViews = new Map<string, { items: SeriesBrowsePage["items"]; cursor: string | null }>();
 
@@ -728,14 +743,16 @@ const PRELOAD_MARGIN = "1200px";
  * failed page offers a retry in place.
  */
 function LibraryShelf({
+  viewId,
   search,
   firstPage,
 }: {
+  /** The view's search params and the mature-titles choice, as one key. */
+  viewId: string;
   search: LibrarySearch;
   firstPage: SeriesBrowsePage;
 }) {
-  const key = viewKey(search);
-  const restored = loadedViews.get(key);
+  const restored = loadedViews.get(viewId);
   const [items, setItems] = useState(restored?.items ?? firstPage.items);
   const [cursor, setCursor] = useState(restored ? restored.cursor : firstPage.nextCursor);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
@@ -750,7 +767,7 @@ function LibraryShelf({
       const next = await fetchSeriesBrowse(browseArgs(search, cursor));
       if (!next) throw new Error("Convex is not configured");
       const merged = [...items, ...next.items];
-      loadedViews.set(key, { items: merged, cursor: next.nextCursor });
+      loadedViews.set(viewId, { items: merged, cursor: next.nextCursor });
       setItems(merged);
       setCursor(next.nextCursor);
       setState("idle");
@@ -759,7 +776,7 @@ function LibraryShelf({
     } finally {
       loading.current = false;
     }
-  }, [cursor, items, search, key]);
+  }, [cursor, items, search, viewId]);
 
   // Load the next page whenever the sentinel under the shelf comes near the
   // viewport; re-armed after each page so a short page keeps filling.

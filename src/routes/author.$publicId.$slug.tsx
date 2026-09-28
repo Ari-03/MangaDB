@@ -3,6 +3,7 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 import { api } from "../../convex/_generated/api";
 import { ROLE_NAMES, type CreditRole } from "~/lib/byline";
 import { catalogQuery, type AuthorPageData } from "~/lib/catalogData";
+import { showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
 import {
   authorTitleTag,
@@ -29,7 +30,7 @@ export const Route = createFileRoute("/author/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await catalogQuery(api.people.authorPage, { publicId });
+    const page = await catalogQuery(api.people.authorPage, { publicId, showMature: showMature() });
     if (!page) throw notFound();
     const canonical = authorPath(page.author.publicId, page.author.name);
     if (`/author/${params.publicId}/${params.slug}` !== canonical) {
