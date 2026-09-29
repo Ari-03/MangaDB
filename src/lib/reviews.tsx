@@ -1,13 +1,13 @@
 // Reviews UI (CONTEXT.md: Review), in two places:
-// - `OwnReview`, the viewer's own Review in the page's tracking card, under
-//   their Rating: "Write a review" (or "Edit your review") opens the form in
-//   place, and a saved Review sits folded beneath it. Always on.
+// - `OwnReview`, the viewer's own Review in the page's `TakePanel` (below),
+//   under their Rating: "Write a review" (or "Edit your review") opens the
+//   form in place, and a saved Review sits folded beneath it. Always on.
 // - `ReviewsSection`, the public "Reviews" section of a Series or Volume
 //   page, rendered only while FEATURES.publicReviews is on (the page decides;
 //   convex/lib/features.ts). The visible list is server-rendered from the
 //   page loader and then follows the live query; "More reviews" asks for
-//   another page's worth. The viewer's own Review stays in the card, not the
-//   list. Moderators get Hide / Unhide on every Review and a list of hidden
+//   another page's worth. The viewer's own Review stays in the panel, not
+//   the list. Moderators get Hide / Unhide on every Review and a list of hidden
 //   ones.
 // Reviews are plain text: the body renders with its line breaks, nothing
 // is parsed.
@@ -15,13 +15,13 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { FEATURES } from "../../convex/lib/features";
 import { useIsModerator } from "~/lib/moderation";
-import { ScoreText, writeErrorMessage, type RatingTarget } from "~/lib/ratings";
+import { RatingControl, ScoreText, writeErrorMessage, type RatingTarget } from "~/lib/ratings";
 import { convexClient } from "~/providers";
 
 // Mirrors REVIEW_MIN_LENGTH / REVIEW_MAX_LENGTH / REVIEW_PAGE in convex/reviews.ts.
@@ -171,6 +171,39 @@ function ReviewCard({ item, moderated = false }: { item: ReviewCardData; moderat
 
 // ---------- the viewer's own Review ----------
 
+/**
+ * The viewer's take on a target, under the cover of its page (Series,
+ * Volume, a single-volume Edition): their Rating, their own Review, then a
+ * row of the page's private toggles (`children`: Follow, Favorite). `note`
+ * is a line above the rating (the Edition page says which Volume it rates).
+ * Every control renders nothing signed out and CSS hides the panel then; the
+ * note alone never keeps it up (styles/ratings.css). While the review form
+ * is open, each hero moves the panel to a full-width row under the cover and
+ * body (styles/catalog-series.css, catalog-edition.css).
+ */
+export function TakePanel({
+  target,
+  noun,
+  note,
+  children,
+}: {
+  target: RatingTarget;
+  noun: string;
+  note?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="take-panel">
+      {note ? <p className="take-note">{note}</p> : null}
+      <div className="take-rating">
+        <RatingControl target={target} />
+      </div>
+      <OwnReview target={target} noun={noun} />
+      <div className="take-actions">{children}</div>
+    </div>
+  );
+}
+
 /** Signed out or without a username, the Reviews section says how to join in. */
 function ReviewPrompt({ noun }: { noun: string }) {
   const viewer = useQuery(api.users.viewer, {});
@@ -193,11 +226,11 @@ function ReviewPrompt({ noun }: { noun: string }) {
 }
 
 /**
- * The viewer's own Review of a target, for the tracking card under their
+ * The viewer's own Review of a target, for the TakePanel under their
  * Rating: a button that opens the form in place, a one-line note on who can
  * read it, and the saved Review folded beneath (with Edit / Delete when
  * unfolded). Renders nothing signed out or before a username is claimed, so
- * the card can hide itself.
+ * the panel can hide itself.
  */
 export function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
   if (!convexClient) return null;
@@ -308,6 +341,10 @@ function ReviewForm({
   const [error, setError] = useState<string | null>(null);
   const length = body.trim().length;
   const short = length < MIN_LENGTH;
+  // The form replaces the button that opened it and may open in a row further
+  // down the page: take focus, which also scrolls it into view.
+  const field = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => field.current?.focus(), []);
 
   return (
     <form
@@ -325,6 +362,7 @@ function ReviewForm({
       <label className="review-field">
         <span>{existing ? "Edit your review" : `Review this ${noun}`}</span>
         <textarea
+          ref={field}
           value={body}
           onChange={(event) => setBody(event.target.value)}
           rows={5}

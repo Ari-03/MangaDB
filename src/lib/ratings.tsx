@@ -224,10 +224,9 @@ function SmileyGlyph({ smiley }: { smiley: Smiley }) {
 
 /**
  * The viewer's own Rating of a target, in their Rating Format: its kicker
- * (with Clear), control, and a one-line hint as bare siblings, so the container
- * (the Series page's tracking bar group, the Volume page's tracking card
- * block) lays them out. Nothing at all signed out, so the container can
- * hide itself.
+ * (with Clear), control, and a one-line hint as bare siblings, so the
+ * container (the TakePanel's rating block, lib/reviews.tsx) lays them out.
+ * Nothing at all signed out, so the container can hide itself.
  */
 export function RatingControl({ target }: { target: RatingTarget }) {
   if (!convexClient) return null;

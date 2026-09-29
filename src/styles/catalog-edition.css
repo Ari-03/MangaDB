@@ -145,6 +145,38 @@
   text-align: left;
 }
 
+/* A single-volume Edition's TakePanel (lib/reviews.tsx, styled in
+   ratings.css) is a grid item in the cover column, under the cover; the
+   body spans both rows, and the second row is 1fr, so the body's extra
+   height lands there and the panel sits right under the cover. The row gap
+   is 0, so pages without a panel (omnibuses, Bundles, signed-out visitors)
+   gain no space. While the review form is open the panel takes a
+   full-width row under the hero (grid-row: -1 starts after the explicit
+   rows). Stacked (under 760px) it follows the cover in source order. */
+@media (min-width: 761px) {
+  .detail-hero {
+    grid-template-rows: auto 1fr;
+    row-gap: 0;
+  }
+  .detail-cover,
+  .detail-hero > .take-panel {
+    grid-column: 1;
+  }
+  .detail-body {
+    grid-column: 2;
+    grid-row: 1 / -1;
+  }
+  /* clear the ledge the cover stands on */
+  .detail-hero > .take-panel {
+    margin-top: 44px;
+  }
+  .detail-hero > .take-panel:has(.review-form) {
+    grid-column: 1 / -1;
+    grid-row: -1;
+    margin-top: 30px;
+  }
+}
+
 /* --- Volume Coverage chips ----------------------------------------------
    Canonical Volume numbering. Partial coverage is drawn as an unfinished
    chip — dashed edge, the extent spelled out — so it can never be read as
@@ -607,7 +639,8 @@
 @media (max-width: 1080px) {
   .detail-hero {
     grid-template-columns: 240px minmax(0, 1fr);
-    gap: 40px;
+    /* the rows keep their 0 gap (above) */
+    column-gap: 40px;
   }
   .detail-cover-plate::after {
     top: calc(240px * 1.5 + 14px);
@@ -649,6 +682,10 @@
   }
   .detail-cover .collection-controls {
     margin-top: 30px;
+  }
+  /* the hero's gap alone would leave the panel against the ledge */
+  .detail-hero > .take-panel {
+    margin-top: 10px;
   }
   .detail-title {
     max-width: none;

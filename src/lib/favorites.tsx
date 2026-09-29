@@ -1,8 +1,8 @@
-// Favorites UI (CONTEXT.md: Favorite): the private toggle on Series and
-// Volume pages, styled like the Follow button (lib/follows.tsx), and the
-// Favorites view of the library (/me?tab=favorites). Signed out, the
-// queries answer null and nothing renders, so the tracking containers stay
-// empty and hide themselves.
+// Favorites UI (CONTEXT.md: Favorite): the private toggle in the TakePanel
+// under the cover of Series, Volume and single-volume Edition pages, styled
+// like the Follow button (lib/follows.tsx), and the Favorites view of the
+// library (/me?tab=favorites). Signed out, the queries answer null and
+// nothing renders, so the panel stays empty and hides itself.
 
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";

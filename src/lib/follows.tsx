@@ -25,9 +25,10 @@ export type FollowSuggestion = { seriesId: Id<"series">; title: string };
 /**
  * The explicit Series Follow toggle on the Series page — the one deliberate
  * way to start tracking a Series' future Releases. Renders nothing signed
- * out. It returns its kicker, the toggle and its hint as bare siblings, so
- * the Series page's tracking bar lays them out as one group (and stays
- * empty, and hidden, for signed-out viewers).
+ * out. It returns the toggle and its hint as bare siblings, so the actions
+ * row of the page's TakePanel (lib/reviews.tsx) sets the toggle beside
+ * Favorite with the hint under both (and stays empty, and hidden, for
+ * signed-out viewers).
  */
 export function SeriesFollowControls({
   seriesPublicId,
@@ -48,7 +49,6 @@ function SeriesFollowControlsInner({
   if (!data) return null; // loading, signed out, or username pending
   return (
     <>
-      <span className="track-kicker">New releases</span>
       <button
         type="button"
         aria-pressed={data.following}

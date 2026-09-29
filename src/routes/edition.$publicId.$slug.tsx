@@ -10,12 +10,15 @@ import { Byline } from "~/lib/byline";
 import { catalogQuery } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover, coverIsbns } from "~/lib/cover";
+import { FavoriteButton } from "~/lib/favorites";
 import { ConcealArt } from "~/lib/mature";
 import {
   ModEditLink,
   ModReleaseEditLinks,
   RecordHistory,
 } from "~/lib/moderation";
+import { RatingAggregate } from "~/lib/ratings";
+import { TakePanel } from "~/lib/reviews";
 import {
   bookJsonLd,
   breadcrumbListJsonLd,
@@ -39,7 +42,25 @@ import { editionPath, parsePublicId, seriesPath, slugParams } from "~/lib/slug";
  * when present, else document ID, and `/isbn/{isbn}` 301s here at that
  * fragment. The Edition's title is composed, never stored (spec §8); a stale
  * slug or a merged Edition's old ID 301s to the canonical URL.
+ *
+ * A book that collects exactly one whole Volume is rated as that Volume:
+ * the Volume's aggregate chip joins the header, and the viewer's take
+ * (TakePanel: Rating, Review, Favorite, all of the Volume) sits under the
+ * cover with a line saying so. Omnibuses and partial books carry no rating;
+ * their Volumes are rated on their own pages.
  */
+
+/**
+ * The Volume a book is rated as: its only covered Volume, when it covers
+ * that Volume completely. Undefined for omnibuses and partial coverage.
+ */
+function ratedVolume<Covered extends { extent: "complete" | "partial" }>(
+  coverage: ReadonlyArray<Covered>,
+): Covered | undefined {
+  const only = coverage.length === 1 ? coverage[0] : undefined;
+  return only?.extent === "complete" ? only : undefined;
+}
+
 export const Route = createFileRoute("/edition/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
@@ -50,7 +71,15 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
     if (`/edition/${params.publicId}/${params.slug}` !== canonical) {
       throw redirect({ href: canonical, statusCode: 301 });
     }
-    return page;
+    // A single-volume book's aggregate is its Volume's: rendered with the
+    // page, then live (lib/ratings.tsx), as on the Volume page.
+    const rated = ratedVolume(page.coverage);
+    const rating = rated
+      ? await catalogQuery(api.ratings.summary, {
+          target: { kind: "volume", publicId: rated.volumePublicId },
+        })
+      : null;
+    return { ...page, rating };
   },
   // Title/description formulas, cover-led social card, canonical link, and
   // JSON-LD (spec §11, ticket #39): BreadcrumbList plus one Book per Release
@@ -148,9 +177,13 @@ function ConcealedEditionPage() {
 }
 
 function EditionPage() {
-  const { edition, series, credits, coverage, releases, coverUrl } =
+  const { edition, series, credits, coverage, releases, coverUrl, rating } =
     Route.useLoaderData();
   const primarySeries = series[0];
+  const rated = ratedVolume(coverage);
+  const ratingTarget = rated
+    ? { kind: "volume" as const, publicId: rated.volumePublicId }
+    : null;
   // One covered Volume with a Label gets the numbered cloth spine (one trade
   // dress, a big number); an omnibus keeps the title placeholder.
   const single = coverage.length === 1 ? coverage[0] : undefined;
@@ -196,6 +229,30 @@ function EditionPage() {
           </div>
         </div>
 
+        {/* A single-volume book: the viewer's take on that Volume, under the
+            cover, saying which Volume it rates. A grid item of its own, so
+            opening the review form can give it the full width. */}
+        {rated && ratingTarget ? (
+          <TakePanel
+            target={ratingTarget}
+            noun="volume"
+            note={
+              <>
+                Rates the volume this book collects,{" "}
+                <Link
+                  to="/volume/$publicId/$slug"
+                  params={slugParams(rated.volumePublicId, rated.volumeTitle)}
+                >
+                  {rated.volumeTitle}
+                </Link>
+                , not this edition.
+              </>
+            }
+          >
+            <FavoriteButton target={ratingTarget} />
+          </TakePanel>
+        ) : null}
+
         <div className="detail-body">
           <h1 className="detail-title">{edition.title}</h1>
           <Byline credits={credits} />
@@ -229,6 +286,9 @@ function EditionPage() {
                 ? "1 release"
                 : `${releases.length} releases`}
             </span>
+            {ratingTarget ? (
+              <RatingAggregate target={ratingTarget} initial={rating} />
+            ) : null}
           </p>
 
           {coverage.length > 0 ? (

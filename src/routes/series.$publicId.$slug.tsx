@@ -14,10 +14,10 @@ import {
   ProposeNewRecordsLink,
   RecordHistory,
 } from "~/lib/moderation";
-import { RatingAggregate, RatingControl } from "~/lib/ratings";
+import { RatingAggregate } from "~/lib/ratings";
 import { SeriesReadingControls, SeriesReadingProgress } from "~/lib/reading";
 import { SeriesReportAffordance } from "~/lib/report";
-import { OwnReview, ReviewsSection } from "~/lib/reviews";
+import { ReviewsSection, TakePanel } from "~/lib/reviews";
 import {
   bookSeriesJsonLd,
   breadcrumbListJsonLd,
@@ -44,6 +44,10 @@ import { parsePublicId, seriesPath } from "~/lib/slug";
  * shows each path's first book and `?edition=` opens that path as a shelf of
  * its books, with gaps in a standard run marked. Releases, Variants and
  * Bundles live on each book's Edition page.
+ *
+ * The hero: the cover (and its date span) on the left with the viewer's
+ * take under it (TakePanel: Rating, Review, Follow, Favorite), the facts on
+ * the right ending in the tracking bar (Reading Status, profile sharing).
  *
  * The public ID is identity; the slug is cosmetic and computed from the
  * current title (spec §8/§11). A stale or wrong slug — including the old ID
@@ -215,6 +219,16 @@ function SeriesPage() {
           ) : null}
         </div>
 
+        {/* The viewer's take, under the cover: their private Rating (the
+            chip in the body shows the public average it feeds), their own
+            Review, then Follow (the explicit toggle for future-release
+            interest, #29) beside the private Favorite. A grid item of its
+            own, so opening the review form can give it the full width. */}
+        <TakePanel target={ratingTarget} noun="series">
+          <SeriesFollowControls seriesPublicId={series.publicId} />
+          <FavoriteButton target={ratingTarget} />
+        </TakePanel>
+
         <div className="series-hero-body">
           <h1 className="series-title">{series.title}</h1>
           <Byline credits={credits} />
@@ -326,26 +340,11 @@ function SeriesPage() {
             ) : null}
           </dl>
 
-          {/* The signed-in tracking bar: three labelled columns, so rating
-              (what you think of it), following (future releases) and
-              reading (where you are in the story) never blur. Every control
-              inside renders null signed out, which leaves the groups empty —
-              CSS hides the bar then, so the public page keeps the hero clean. */}
+          {/* The signed-in tracking bar: where the viewer is in the story,
+              then a footer line for profile sharing. Every control inside
+              renders null signed out, which leaves the groups empty — CSS
+              hides the bar then, so the public page keeps the hero clean. */}
           <div className="owner-bar">
-            <div className="track-group track-group--rating">
-              {/* The viewer's private Rating in their Rating Format; the chip
-                  above shows the public average it feeds. Their own Review
-                  opens in place under it. */}
-              <RatingControl target={ratingTarget} />
-              <OwnReview target={ratingTarget} noun="series" />
-            </div>
-            <div className="track-group track-group--follow">
-              {/* Series Follow is the explicit toggle for future-release
-                  interest (#29); always private in v1. The private Favorite
-                  sits beside it. */}
-              <SeriesFollowControls seriesPublicId={series.publicId} />
-              <FavoriteButton target={ratingTarget} />
-            </div>
             <div className="track-group track-group--reading">
               {/* Series Reading Status is set only here, by explicit choice
                   (#28); the tracking prompts never change it without

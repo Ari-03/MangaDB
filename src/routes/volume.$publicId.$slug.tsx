@@ -11,9 +11,9 @@ import { FavoriteButton } from "~/lib/favorites";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { ConcealArt } from "~/lib/mature";
-import { RatingAggregate, RatingControl } from "~/lib/ratings";
+import { RatingAggregate } from "~/lib/ratings";
 import { VolumeReadCount } from "~/lib/reading";
-import { OwnReview, ReviewsSection } from "~/lib/reviews";
+import { ReviewsSection, TakePanel } from "~/lib/reviews";
 import {
   breadcrumbListJsonLd,
   jsonLdScript,
@@ -31,6 +31,10 @@ import { parsePublicId, seriesPath, slugParams, volumePath } from "~/lib/slug";
  * Canonical Volume numbering (Position + public Label, spec §2) stays
  * visibly separate from any Edition Line numbering, and Release rows link
  * their containing Bundles.
+ *
+ * The hero: the cover on the left with the viewer's take under it
+ * (TakePanel: Rating, Review, Favorite), then the tracking card (what they
+ * own and how often they have read it); the facts and editions on the right.
  *
  * The public ID is identity; the slug is cosmetic, computed from the
  * composed Volume title (spec §8/§11). A stale or wrong slug — including the
@@ -176,29 +180,28 @@ function VolumePage() {
               lazy={false}
             />
           </div>
-          {/* The signed-in tracking card. Every control renders null signed
-              out, leaving the card's blocks empty — CSS hides it then. */}
-          <div className="track-card">
-            {/* The viewer's private Rating of this Volume, in their Rating
-                Format, with their own Review in place under it. */}
-            <div className="volume-rating">
-              <RatingControl target={ratingTarget} />
-              <OwnReview target={ratingTarget} noun="volume" />
-            </div>
-            {/* Volume ownership (#27): displayed purely through the owned
-                Releases covering it — direct or via an Owned Bundle; no
-                stored Volume state. */}
-            <VolumeOwnership volumePublicId={volume.publicId} />
-            {/* Durable, edition-independent read count (#28). */}
-            <VolumeReadCount
-              seriesPublicId={series.publicId}
-              volumePublicId={volume.publicId}
-            />
-            {/* The private Favorite toggle. */}
-            <div className="volume-favorite">
-              <FavoriteButton target={ratingTarget} />
-            </div>
-          </div>
+        </div>
+
+        {/* The viewer's take, under the cover: their private Rating of this
+            Volume, their own Review, and the private Favorite. A grid item of
+            its own, so opening the review form can give it the full width. */}
+        <TakePanel target={ratingTarget} noun="volume">
+          <FavoriteButton target={ratingTarget} />
+        </TakePanel>
+
+        {/* The signed-in tracking card. Every control renders null signed
+            out (or with nothing owned or read), leaving the card's blocks
+            empty — CSS hides it then. */}
+        <div className="track-card">
+          {/* Volume ownership (#27): displayed purely through the owned
+              Releases covering it — direct or via an Owned Bundle; no
+              stored Volume state. */}
+          <VolumeOwnership volumePublicId={volume.publicId} />
+          {/* Durable, edition-independent read count (#28). */}
+          <VolumeReadCount
+            seriesPublicId={series.publicId}
+            volumePublicId={volume.publicId}
+          />
         </div>
 
         <div className="volume-hero-body">

@@ -91,10 +91,10 @@
 .fact-def a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* --- The tracking bar ---------------------------------------------------
-   Rating (with the viewer's own Review), Follow and Favorite, Reading Status
-   and progress, and per-Series visibility, all of them signed-in only. Each
-   control renders nothing signed out, which leaves the bar with no children
-   at all — so the public page never shows an empty frame. */
+   Reading Status and progress, then per-Series visibility, both signed-in
+   only (Rating, Review, Follow and Favorite live in the TakePanel under the
+   cover). Each control renders nothing signed out, which leaves the bar with
+   no children at all — so the public page never shows an empty frame. */
 
 .owner-bar {
   margin-top: 26px;
@@ -102,65 +102,31 @@
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface);
+  /* reading across the bar, sharing as its footer line */
   display: grid;
-  /* rating, following, reading in one row; the rating column is the widest
-     because its ten-step scale is */
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
-  gap: 0;
+  grid-template-columns: minmax(0, 1fr);
 }
 /* signed out, every group is empty: no bar at all */
 .owner-bar:not(:has(.track-group > *)) { display: none; }
 .track-group:empty { display: none; }
 
-/* each group: a small-caps kicker, its controls, a one-line hint; a hairline
-   keeps following and reading visibly apart */
+/* each group: a small-caps kicker, its controls, a one-line hint */
 .track-group {
   display: flex;
   align-items: center;
   align-content: start;
   flex-wrap: wrap;
   gap: 10px 12px;
-  padding: 0 22px;
-  border-left: 1px solid var(--line);
-}
-.track-group:first-child { padding-left: 0; border-left: 0; }
-.track-group--rating { padding-left: 0; border-left: 0; }
-.track-group--reading { padding-right: 0; }
-/* Follow and Favorite sit side by side, the follow hint under both */
-.track-group--follow .track-hint { order: 1; }
-
-/* Too narrow for three columns, or while the viewer writes a review: the
-   rating takes a row of its own above following and reading. */
-.owner-bar:has(.track-group--rating .review-form) {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
-}
-.owner-bar:has(.track-group--rating .review-form) .track-group--rating {
-  grid-column: 1 / -1;
-  padding: 0 0 14px;
-  margin-bottom: 14px;
-  border-bottom: 1px solid var(--line);
-}
-.owner-bar:has(.track-group--rating .review-form) .track-group--follow { padding-left: 0; border-left: 0; }
-@media (max-width: 1180px) {
-  .owner-bar { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
-  .track-group--rating {
-    grid-column: 1 / -1;
-    padding: 0 0 14px;
-    margin-bottom: 14px;
-    border-bottom: 1px solid var(--line);
-  }
-  .track-group--follow { padding-left: 0; border-left: 0; }
 }
 .track-group--reading .progress { flex: 1 1 100%; }
-/* sharing is the quiet third: one footer line across the bar, its label
-   inline, so it never competes with the two groups for width */
+/* sharing is the quiet second: one footer line under a hairline, its label
+   inline, so it never competes with reading for width */
 .track-group--sharing {
-  grid-column: 1 / -1;
   margin-top: 14px;
-  padding: 12px 0 0;
-  border-left: 0;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
 }
+.track-group:empty + .track-group--sharing { margin-top: 0; padding-top: 0; border-top: 0; }
 .track-group--sharing .track-kicker { flex-basis: auto; }
 .track-kicker {
   flex-basis: 100%;
@@ -437,11 +403,10 @@
 .volume-cover .cover-ph-num { font-size: 4.6rem; }
 .volume-cover .cover-ph-title { font-size: 1.6rem; -webkit-line-clamp: 7; }
 
-/* Rating (with the viewer's own Review), ownership, read count, Favorite.
-   Every control renders nothing signed out, leaving the card's blocks
+/* Ownership and read count, under the TakePanel. Both render nothing signed
+   out (and ownership nothing with nothing owned), leaving the card's blocks
    empty, so the card hides itself then. */
 .track-card {
-  margin-top: 44px;
   padding: 16px 18px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -452,14 +417,42 @@
 .track-card > :empty { display: none; }
 .track-card .volume-read { margin-top: 0; }
 .track-card .volume-ownership + .volume-read { margin-top: 12px; }
-/* the rating block leads; a hairline keeps it apart from the shelf facts */
-.track-card > .volume-rating:not(:empty) + :not(:empty) {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
+
+/* --- The viewer's take under the cover ----------------------------------
+   The TakePanel (lib/reviews.tsx, styled in ratings.css) and, on the Volume
+   page, the tracking card are grid items of the hero in the cover column;
+   the body spans every explicit row. The last row is 1fr, so the cover
+   column's rows size to their own content and the body's extra height lands
+   in that last row: the panel sits right under the cover however tall the
+   body runs. Row gaps are 0 (margins space the column), so an empty row
+   never opens a gap for signed-out visitors.
+   While the review form is open the panel takes a full-width row after the
+   explicit ones (grid-row: -1), so the textarea gets the page's width
+   rather than the cover column's. Stacked (under 720px), everything flows
+   in source order: cover, panel, tracking card, body. */
+@media (min-width: 721px) {
+  .series-hero { grid-template-rows: auto 1fr; row-gap: 0; }
+  .volume-hero { grid-template-rows: auto auto 1fr; row-gap: 0; }
+  .series-hero-aside,
+  .volume-hero-aside,
+  .series-hero > .take-panel,
+  .volume-hero > .take-panel,
+  .volume-hero > .track-card { grid-column: 1; }
+  .series-hero-body,
+  .volume-hero-body { grid-column: 2; grid-row: 1 / -1; }
+  /* clear the ledge the cover stands on */
+  .series-hero > .take-panel { margin-top: 30px; }
+  .volume-hero > .take-panel,
+  .volume-hero > .track-card { margin-top: 44px; }
+  .volume-hero > .take-panel + .track-card { margin-top: 14px; }
+  .series-hero > .take-panel:has(.review-form),
+  .volume-hero > .take-panel:has(.review-form) {
+    grid-column: 1 / -1;
+    grid-row: -1;
+    margin-top: 30px;
+  }
+  .volume-hero:has(> .take-panel .review-form) > .track-card { margin-top: 44px; }
 }
-.track-card > .volume-favorite { margin-top: 12px; }
-.track-card > .volume-favorite:first-child { margin-top: 0; }
 
 .volume-title {
   font-size: clamp(2rem, 1.5rem + 2vw, 2.9rem);
@@ -582,34 +575,19 @@
 /* --- Responsive --------------------------------------------------------- */
 
 @media (max-width: 960px) {
-  .series-hero { grid-template-columns: 186px minmax(0, 1fr); gap: 28px; }
-  .volume-hero { grid-template-columns: 236px minmax(0, 1fr); gap: 32px; }
+  /* column gaps only: the rows keep the 0 gap set above */
+  .series-hero { grid-template-columns: 186px minmax(0, 1fr); column-gap: 28px; }
+  .volume-hero { grid-template-columns: 236px minmax(0, 1fr); column-gap: 32px; }
 }
 
 @media (max-width: 720px) {
+  /* stacked: the hero's gap spaces cover, TakePanel, tracking card and body */
   .series-hero { grid-template-columns: 1fr; gap: 30px; }
   .series-cover { max-width: 190px; }
   .series-hero-aside .note { margin-top: 24px; }
   .volume-hero { grid-template-columns: 1fr; gap: 34px; }
   .volume-cover { max-width: 210px; }
-  .track-card { margin-top: 34px; }
   .facts { gap: 14px 20px; }
-  .track-group {
-    padding: 14px 0 0;
-    margin-top: 14px;
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-  .track-group:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
-  /* one column: every group stacked under a hairline */
-  .owner-bar,
-  .owner-bar:has(.track-group--rating .review-form) { grid-template-columns: minmax(0, 1fr); }
-  .owner-bar .track-group--rating,
-  .owner-bar:has(.track-group--rating .review-form) .track-group--rating {
-    padding-bottom: 0;
-    margin-bottom: 0;
-    border-bottom: 0;
-  }
   .track-group .select { flex: 1 1 auto; min-width: 0; }
   .vis-pop-btn,
   .follow-btn { width: 100%; justify-content: center; }

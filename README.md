@@ -459,11 +459,10 @@ Spec §3: future-release interest is a **Series Follow**, separate from
 owning and reading (`convex/follows.ts`; UI in `src/lib/follows.tsx`).
 Follows are always private in v1 — the profile never shows them.
 
-- **Explicit follow toggle** on the Series page, in its own "New releases"
-  column of the tracking bar (beside the private Favorite toggle, between
-  "Your rating" and "Your reading") — visibly apart from the "Your reading" group
-  (status + progress), since following a Series says nothing about reading
-  it. `setSeriesFollow` is the
+- **Explicit follow toggle** on the Series page, in the panel under the
+  cover (beside the private Favorite toggle, under "Your rating") — visibly
+  apart from the tracking bar's "Your reading" group (status + progress),
+  since following a Series says nothing about reading it. `setSeriesFollow` is the
   single write path; nothing follows a Series as a side effect of anything.
 - **One post-first-entry prompt per Series**: inserting a user's first
   Collection Entry in a Series returns a `suggestFollow` from the collection
@@ -559,9 +558,16 @@ styles in `src/styles/ratings.css`.
   The page aggregate follows the viewer's format ("8.4", "4.2 ★", "84");
   smiley3 viewers and signed-out visitors see the point10 form. The count
   stays beside it ("8.4 · 12 ratings").
-- **Where**: "Your rating" is the first column of the tracking bar on the
-  Series page and the first block of the tracking card on the Volume page,
-  with a one-line note that the number is private.
+- **Where**: under the cover art, in a panel of the viewer's own take
+  (`TakePanel` in `src/lib/reviews.tsx`): "Your rating" with a one-line note
+  that the number is private, "Write a review", then the private toggles
+  (Follow and Favorite on the Series page, Favorite on the Volume page). The
+  panel renders nothing signed out. While the review form is open the panel
+  moves to a full-width row under the hero. The **Edition page** of a book
+  that collects exactly one Volume, completely, shows the same panel for
+  that Volume, with a line saying the rating belongs to the Volume, and the
+  Volume's aggregate chip in its header; omnibuses and partial books carry
+  no rating.
 - **Review**: 20 to 5,000 characters of plain text (line breaks kept, no
   Markdown), optionally marked as spoilers, one per user per Series or Volume.
   Written from "Write a review" (or "Edit your review") under the rating,
@@ -608,9 +614,10 @@ repeats.
 `convex/favorites.ts`; UI in `src/lib/favorites.tsx`.
 
 - **Favorite**: a private mark on a Series or a Volume, one per user per
-  target, toggled with "Favorite" / "Favorited" (styled like Follow): in the
-  tracking bar's "New releases" column on the Series page, and at the foot of
-  the tracking card on the Volume page. `favorites.isFavorite` (null signed
+  target, toggled with "Favorite" / "Favorited" (styled like Follow) at the
+  foot of the panel under the cover on the Series and Volume pages (beside
+  Follow on the Series page), and on a single-volume Edition page for its
+  Volume. `favorites.isFavorite` (null signed
   out) and `favorites.toggle` (signed in, active target, merges followed).
 - **Library**: `/me` → Favorites lists them newest first as covers
   (`favorites.mine`), Mature covers concealed unless the viewer opted in,

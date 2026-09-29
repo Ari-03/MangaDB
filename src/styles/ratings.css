@@ -16,8 +16,7 @@
    steps or five stars that fill up to the chosen one (hovering previews:
    the whole scale lights, then everything after the hovered step dims),
    three labelled smileys, or a 1-100 number with steppers. It lives in the
-   Series page's tracking bar (.track-group--rating) and the Volume page's
-   tracking card (.volume-rating). */
+   TakePanel under the cover (.take-rating, below). */
 
 .rating-clear {
   margin-left: 10px;
@@ -151,12 +150,57 @@
 .rating-hundred-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rating-hundred-of { color: var(--text-mute); font-size: 0.8rem; }
 
-/* on the Volume page the rating block leads the tracking card */
-.volume-rating { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+/* --- The viewer's take, under the cover -----------------------------------
+   TakePanel (lib/reviews.tsx) on the Series, Volume and single-volume
+   Edition pages: an optional note, the rating, the viewer's own Review, then
+   a row of private toggles (Follow, Favorite) with the follow hint under
+   both. Every control renders nothing signed out, leaving the panel's blocks
+   empty: the panel then hides, and a note alone (the Edition page's) never
+   holds it open, so visitors see no stray frame. Each hero places the panel
+   (catalog-series.css, catalog-edition.css). */
+
+.take-panel {
+  /* a size container, so a narrow cover column can refit the scale below */
+  container-type: inline-size;
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+.take-panel > :empty { display: none; }
+.take-panel:not(:has(> :not(:empty, .take-note))) { display: none; }
+/* open for writing, the panel spans the hero: keep its lines readable */
+.take-panel:has(.review-form) { max-width: 52rem; }
+
+.take-note { font-size: 0.8rem; line-height: 1.45; color: var(--text-mute); }
+.take-note a { color: var(--text-dim); font-weight: 700; border-bottom: 1px solid var(--line-strong); }
+.take-note a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+.take-rating { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+
+/* the toggles share a row under a hairline and fill it when they wrap */
+.take-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.take-panel > :not(:empty) ~ .take-actions { padding-top: 14px; border-top: 1px solid var(--line); }
+.take-actions .follow-btn { flex: 1 1 auto; justify-content: center; }
+.take-panel:has(.review-form) .take-actions .follow-btn { flex: none; }
+.take-actions .track-hint { order: 1; }
+
+/* a cover column too narrow for ten steps in a row (the Series page's, the
+   Volume and Edition pages' under 960/1080px): two rows of five, stars
+   sharing the width, a slimmer 1-100 field */
+@container (max-width: 239px) {
+  .rating-scale { grid-auto-flow: row; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .rating-scale--stars { width: 100%; }
+  .rating-hundred { gap: 4px; }
+  .rating-hundred-input { width: 3rem; }
+}
 
 /* --- The viewer's own Review, under the rating ---------------------------- */
 
-.own-review { flex-basis: 100%; min-width: 0; display: grid; gap: 10px; margin-top: 4px; }
+.own-review { min-width: 0; display: grid; gap: 10px; }
 .own-review-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .own-review-row .track-hint { flex-basis: auto; }
 .own-review-saved summary {
