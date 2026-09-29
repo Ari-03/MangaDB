@@ -69,19 +69,37 @@ const REBUILD_BATCH = 20;
 const STALE_SWEEP = 200;
 
 /**
+ * Wall-clock budget for one rebuild action before it hands the cursor to a
+ * scheduled continuation. Convex stops an action at ten minutes, and the
+ * full walk over production (every Series' releases, collection entries and
+ * tracking rows) can take longer than that; a chain of short actions cannot.
+ */
+const REBUILD_BUDGET_MS = 3 * 60 * 1000;
+
+/**
  * Rebuild every Series' stats row. Walks the series table in batches from an
  * action so no single mutation grows with the catalog, then sweeps rows whose
  * Series is no longer active. On the way it brings each active Series'
  * `searchText` up to date (`syncSearchText`). Idempotent; safe to run by hand:
  * `npx convex run seriesBrowse:rebuild`.
+ *
+ * A run that outgrows `REBUILD_BUDGET_MS` schedules itself to continue from
+ * the last publicId, keeping the same `startedAt` so the stale sweep at the
+ * end still recognises rows the whole run never touched. The CLI call
+ * returns after the first leg; the chain finishes on its own.
  */
 export const rebuild = internalAction({
-  args: {},
-  handler: async (ctx) =>
+  args: {
+    afterPublicId: v.optional(v.number()),
+    startedAt: v.optional(v.number()),
+    rowsSoFar: v.optional(v.number()),
+  },
+  handler: async (ctx, args) =>
     withExceptionCapture("seriesBrowse.rebuild", ctx, async () => {
-      const startedAt = Date.now();
-      let cursor: number | null = null;
-      let rows = 0;
+      const startedAt = args.startedAt ?? Date.now();
+      const legStartedAt = Date.now();
+      let cursor: number | null = args.afterPublicId ?? null;
+      let rows = args.rowsSoFar ?? 0;
       for (;;) {
         const batch: { next: number | null; count: number } = await ctx.runMutation(
           internal.seriesBrowse.rebuildBatch,
@@ -90,6 +108,14 @@ export const rebuild = internalAction({
         rows += batch.count;
         if (batch.next === null) break;
         cursor = batch.next;
+        if (Date.now() - legStartedAt > REBUILD_BUDGET_MS) {
+          await ctx.scheduler.runAfter(0, internal.seriesBrowse.rebuild, {
+            afterPublicId: cursor,
+            startedAt,
+            rowsSoFar: rows,
+          });
+          return { rows, continuedAfter: cursor, ms: Date.now() - startedAt };
+        }
       }
       let swept = 0;
       for (;;) {

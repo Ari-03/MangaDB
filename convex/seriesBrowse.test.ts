@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -116,6 +116,50 @@ describe("seriesBrowse.rebuild", () => {
     await t.action(internal.seriesBrowse.rebuild, {});
     const rows = await t.run((ctx) => ctx.db.query("seriesStats").collect());
     expect(rows.map((r) => r.title)).toEqual(["Tokyo Ghoul"]);
+  });
+
+  describe("continuation", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    });
+
+    it("hands a long run to a scheduled leg that keeps the same startedAt", async () => {
+      const { t } = await seeded();
+      // More Series than one batch, so the walk needs a second batch at all.
+      // They have no books, so the rebuild marks them bookless rather than
+      // giving them rows; the flag shows which leg reached each one.
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 25; i++) {
+          const title = `Filler ${String(i).padStart(2, "0")}`;
+          await ctx.db.insert("series", { status: "active", publicId: 100 + i, title, altTitles: [], searchText: title });
+        }
+      });
+      // The scheduler runs on timers; each Date.now() call jumps four
+      // minutes so the first budget check after batch one is already over.
+      vi.useFakeTimers();
+      const base = 1_800_000_000_000;
+      let calls = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => base + calls++ * 4 * 60 * 1000);
+
+      const first = await t.action(internal.seriesBrowse.rebuild, {});
+      expect(first).toMatchObject({ continuedAfter: expect.any(Number) });
+      const flaggedMidway = await t.run(async (ctx) =>
+        (await ctx.db.query("series").collect()).filter((s) => s.bookless === true).length,
+      );
+      expect(flaggedMidway).toBeGreaterThan(0);
+      expect(flaggedMidway).toBeLessThan(25);
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      const flagged = await t.run(async (ctx) =>
+        (await ctx.db.query("series").collect()).filter((s) => s.bookless === true).length,
+      );
+      expect(flagged).toBe(25);
+      // One run, one timestamp: the sweep must not treat the first leg's rows as stale.
+      const rows = await t.run((ctx) => ctx.db.query("seriesStats").collect());
+      expect(rows.map((r) => r.title).sort()).toEqual(["The Quiet Cartographer", "Tokyo Ghoul"]);
+      expect(new Set(rows.map((r) => r.rebuiltAt)).size).toBe(1);
+    });
   });
 });
 

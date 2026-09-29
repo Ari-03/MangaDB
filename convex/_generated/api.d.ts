@@ -203,6 +203,6 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  posthog: import("@posthog/convex/_generated/component.js").ComponentApi<"posthog">;
   rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+  posthog: import("@posthog/convex/_generated/component.js").ComponentApi<"posthog">;
 };
