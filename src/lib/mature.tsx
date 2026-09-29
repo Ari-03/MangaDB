@@ -21,7 +21,7 @@
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { createIsomorphicFn } from "@tanstack/react-start";
 import { getCookie } from "@tanstack/react-start/server";
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { track } from "~/lib/analytics";
@@ -120,17 +120,23 @@ function MatureNotice() {
 
 /**
  * The 18+ confirmation that turning the choice on always goes through.
- * A native <dialog>, opened modal as it mounts, portalled to <body>: it
- * holds a <form method="dialog">, and the Series filters that open it are
- * a form themselves. Only ever mounted in the browser (on a click).
+ * A native <dialog>, opened modal as it mounts, portalled to <body>. The
+ * buttons close it themselves rather than through a <form method="dialog">:
+ * React bubbles a portal's events through the component tree, so a submit
+ * here would reach the Series filters' form, whose handler prevents the
+ * default and with it the dialog's own close. Only ever mounted in the
+ * browser (on a click); closing it (buttons or Escape) unmounts it.
  */
 function AgeConfirm({ onClose }: { onClose: () => void }) {
   const { setShowMature } = useMature();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const close = () => dialogRef.current?.close();
   return createPortal(
     <dialog
       className="age-confirm"
       aria-labelledby="age-confirm-title"
       ref={(el) => {
+        dialogRef.current = el;
         if (el && !el.open) el.showModal();
       }}
       onClose={onClose}
@@ -140,14 +146,21 @@ function AgeConfirm({ onClose }: { onClose: () => void }) {
         Mature titles are rated 18+ by their publishers and can include explicit sexual content
         or extreme violence. They will appear across the catalog, with their covers.
       </p>
-      <form method="dialog" className="age-confirm-actions">
-        <button className="btn" value="cancel">
+      <div className="age-confirm-actions">
+        <button className="btn" type="button" onClick={close}>
           Cancel
         </button>
-        <button className="btn btn-primary" value="confirm" onClick={() => setShowMature(true)}>
+        <button
+          className="btn btn-primary"
+          type="button"
+          onClick={() => {
+            setShowMature(true);
+            close();
+          }}
+        >
           I'm 18 or older
         </button>
-      </form>
+      </div>
     </dialog>,
     document.body,
   );
@@ -262,14 +275,14 @@ function MatureWelcome() {
         content. They are hidden unless you allow them. You can change this any time in the
         Series filters or your settings.
       </p>
-      <form method="dialog" className="age-confirm-actions">
-        <button className="btn" value="hide" onClick={() => answer(false)}>
+      <div className="age-confirm-actions">
+        <button className="btn" type="button" onClick={() => answer(false)}>
           Keep hidden
         </button>
-        <button className="btn btn-primary" value="allow" onClick={() => answer(true)}>
+        <button className="btn btn-primary" type="button" onClick={() => answer(true)}>
           I'm 18+, allow
         </button>
-      </form>
+      </div>
     </dialog>
   );
 }
