@@ -12,6 +12,7 @@ import type * as ann from "../ann.js";
 import type * as catalog from "../catalog.js";
 import type * as catalogPages from "../catalogPages.js";
 import type * as collection from "../collection.js";
+import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
 import type * as debugFetch from "../debugFetch.js";
 import type * as follows from "../follows.js";
@@ -93,6 +94,7 @@ declare const fullApi: ApiFromModules<{
   catalog: typeof catalog;
   catalogPages: typeof catalogPages;
   collection: typeof collection;
+  comments: typeof comments;
   crons: typeof crons;
   debugFetch: typeof debugFetch;
   follows: typeof follows;

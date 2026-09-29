@@ -12,6 +12,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
+import { purgeUserComments } from "./comments";
 import { getUserBySubject, requireIdentity, requireUser } from "./lib/auth";
 import { applyRatingDelta, targetOfRow } from "./lib/ratings";
 import { validateUsername } from "./lib/usernames";
@@ -145,8 +146,10 @@ export const deleteAccount = action({
 
 /**
  * Remove every personal record for a Clerk subject: tracking rows, Ratings
- * (decrementing their aggregates) and Reviews, then the User itself. Public catalog history (Revisions, Proposals, roleAudit) is
- * append-only and survives; it renders as a deleted author.
+ * (decrementing their aggregates), Reviews, Comments and Comment Reports,
+ * then the User itself. Public catalog history (Revisions, Proposals,
+ * roleAudit, reviewAudit, commentAudit) is append-only and survives; it
+ * renders as a deleted author.
  */
 export const purgeUser = internalMutation({
   args: { clerkSubject: v.string() },
@@ -191,6 +194,7 @@ export const purgeUser = internalMutation({
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .collect();
     for (const row of reviews) await ctx.db.delete(row._id);
+    await purgeUserComments(ctx, user._id);
     await ctx.db.delete(user._id);
   },
 });

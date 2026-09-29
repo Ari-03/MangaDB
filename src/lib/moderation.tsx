@@ -187,6 +187,25 @@ export function useIsDataTeam(): boolean {
 }
 
 /**
+ * The Comments queue link for the `.mod-tools` navs, with the number of
+ * Comments awaiting review as a badge ("100+" past the query's cap).
+ */
+export function CommentsQueueLink() {
+  const counts = useQuery(api.comments.queueCounts, {});
+  const pending = counts?.pending ?? 0;
+  return (
+    <Link to="/mod/comments">
+      Comments
+      {pending > 0 ? (
+        <span className="mod-badge" aria-label={`${pending} awaiting review`}>
+          {pending >= 100 ? "100+" : pending}
+        </span>
+      ) : null}
+    </Link>
+  );
+}
+
+/**
  * The maintenance entry point on a record page: Moderators and
  * Administrators get the direct edit (`/mod/edit`); Editors get the update
  * proposal (`/mod/propose`, ticket #32) whose submission lands In Review.

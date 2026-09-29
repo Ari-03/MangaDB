@@ -530,6 +530,15 @@ async function transferReferences(
         { kind: "series", id: loserId },
         { kind: "series", id: survivorId },
       );
+      // Comments carry the Series on every row (Volume Comments too, whose
+      // Volumes just moved above); there is no per-user clash to resolve.
+      const comments = await ctx.db
+        .query("comments")
+        .withIndex("by_series", (q) => q.eq("seriesId", loserId))
+        .collect();
+      for (const row of comments) {
+        await repoint(ctx, log, "comments", row, { seriesId: survivorId });
+      }
 
       for (const editionId of affectedEditions) {
         await recomputeReleaseDenorms(ctx, log, editionId);
@@ -584,6 +593,16 @@ async function transferReferences(
         { kind: "volume", id: loserId },
         { kind: "volume", id: survivorId },
       );
+      const comments = await ctx.db
+        .query("comments")
+        .withIndex("by_volume", (q) => q.eq("volumeId", loserId))
+        .collect();
+      for (const row of comments) {
+        await repoint(ctx, log, "comments", row, {
+          volumeId: survivorId,
+          seriesId: survivor.seriesId,
+        });
+      }
 
       for (const editionId of affectedEditions) {
         await recomputeReleaseDenorms(ctx, log, editionId);
@@ -1081,6 +1100,15 @@ export async function impactOf(
       );
       add("Ratings", (await ratingsOf(ctx, { kind: "series", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "series", id })).length);
+      add(
+        "Comments (on the series and its volumes)",
+        (
+          await ctx.db
+            .query("comments")
+            .withIndex("by_series", (q) => q.eq("seriesId", id))
+            .collect()
+        ).length,
+      );
       break;
     }
     case "volume": {
@@ -1105,6 +1133,15 @@ export async function impactOf(
       );
       add("Ratings", (await ratingsOf(ctx, { kind: "volume", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "volume", id })).length);
+      add(
+        "Comments",
+        (
+          await ctx.db
+            .query("comments")
+            .withIndex("by_volume", (q) => q.eq("volumeId", id))
+            .collect()
+        ).length,
+      );
       break;
     }
     case "editionLine": {

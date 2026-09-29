@@ -561,6 +561,60 @@ styles in `src/styles/ratings.css`.
   aggregates) and Reviews; merges move them to the survivor, and where the
   user already rated or reviewed the survivor, the survivor's row is kept.
 
+## Comments
+
+`convex/comments.ts` (policy numbers in its `COMMENT_POLICY`); page UI in
+`src/lib/comments.tsx` under the Reviews section of Series and Volume pages;
+the queue at `/mod/comments` (`src/routes/mod.comments.tsx`); styles in
+`src/styles/comments.css`. Background and alternatives:
+`docs/research/comments-moderation.md`.
+
+- **Comment**: 1 to 2,000 characters of plain text, optionally marked as a
+  spoiler, on a Series or Volume page. Threads are newest first, 20 at a time
+  ("More comments"); replies nest one level, oldest first. Authors edit
+  ("edited") and delete their own. A deleted or removed thread head with
+  replies stays as a `[removed]` placeholder; without replies it disappears.
+  The first page is server-rendered by the page loader, then goes live.
+- **Post-moderation with holds.** A Comment publishes at once unless a hold
+  rule fires, in which case it is `pending` and only its author ("Awaiting
+  review") and the queue see it:
+  - the account is younger than 7 days (`users._creationTime`);
+  - the author has fewer than 3 approved Comments;
+  - the body has more than 2 `http(s)://` links (also checked on edit, which
+    sends an approved Comment back to pending).
+
+  Data Team members are never held. Suspended users cannot post.
+- **Reports**: any signed-in user other than the author can report a
+  published Comment once (spam, harassment, spoiler, off-topic, other, with an
+  optional note up to 500 characters). The third distinct report hides it
+  (`hidden`, audited with the system as actor). Its author then sees "Hidden
+  by moderators" in place of the body.
+- **Queue** (`/mod/comments`, Data Team; Editors read-only): tabs for
+  Pending (oldest first), Reported (published with reports, most reported
+  first), Hidden, and Removed, with the report reasons and notes. Moderators
+  Approve, Hide, Unhide, Remove, Restore, and Shadow / Unshadow the author,
+  each with an optional reason. Every decision writes a `commentAudit` row.
+  Any move back to approved clears the Comment's reports. A Comment its
+  author deleted cannot be restored. The `.mod-tools` navs show the pending
+  count as a badge.
+- **Shadowed users** (`users.commentShadowed`): their Comments keep looking
+  published to them and are hidden from everyone else, including ones
+  already posted. Data Team members cannot be shadowed.
+- **Rate limits** (token buckets per user): `commentPost` 20/hour, burst 5;
+  `commentReport` 10/hour, burst 3. Edits are not rate limited.
+- **Account deletion** hard-deletes the user's Comments, the reports they
+  filed (lowering those counts, never unhiding), and reports on their
+  Comments. Replies to a deleted Comment become top-level Comments. Audit
+  rows stay. Merges move Comments to the survivor (a Volume Comment's
+  denormalised `seriesId` follows its Volume); Split replays them back.
+- **Mature Series**: Comments appear only on their Series or Volume page (no
+  home or profile feed), so there is nothing extra to filter.
+- **Deferred**: Cloudflare Turnstile on the composer, Akismet or LLM triage
+  of held Comments, reply and moderator notifications, thresholds tunable
+  from `appConfig` without a deploy, the global posting cap, and a placeholder
+  for hidden (not removed) thread heads. A hidden thread head hides its
+  replies with it.
+
 ## Moderation core (ticket #31)
 
 Spec §4/§5: immutable, versioned **Proposals** are the single write path for
@@ -1498,7 +1552,8 @@ no card) covers this site many times over.
   | `reading_status_changed` | `seriesId`, `status` (`null` = cleared), `source` |
   | `search_performed` | `queryLength`, `resultCount` (once per query the search page ran) |
   | `mature_titles_toggled` | `showMature` |
-  | `rating_submitted`, `review_submitted`, `comment_posted` | declared, not wired yet |
+  | `comment_posted` | `target` (`series` / `volume`), `seriesId`, `isReply`, `held` |
+  | `rating_submitted`, `review_submitted` | declared, not wired yet |
 
 - **Querying from Claude Code.** `.mcp.json` registers PostHog's hosted MCP
   server in read-only mode (`https://mcp.posthog.com/mcp?readonly=true`).

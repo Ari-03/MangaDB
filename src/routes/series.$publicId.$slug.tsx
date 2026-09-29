@@ -3,6 +3,7 @@ import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-route
 import { api } from "../../convex/_generated/api";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type SeriesPageData } from "~/lib/catalogData";
+import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { SeriesFollowControls } from "~/lib/follows";
 import { ConcealArt } from "~/lib/mature";
@@ -55,20 +56,22 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    // The rating aggregate and first page of Reviews render with the page;
-    // both then follow their live queries (lib/ratings.tsx, lib/reviews.tsx).
+    // The rating aggregate and first pages of Reviews and Comments render
+    // with the page, then follow their live queries (lib/ratings.tsx,
+    // lib/reviews.tsx, lib/comments.tsx).
     const target = { kind: "series" as const, publicId };
-    const [page, rating, reviews] = await Promise.all([
+    const [page, rating, reviews, comments] = await Promise.all([
       catalogQuery(api.catalog.seriesPage, { publicId }),
       catalogQuery(api.ratings.summary, { target }),
       catalogQuery(api.reviews.list, { target }),
+      catalogQuery(api.comments.list, { target }),
     ]);
     if (!page) throw notFound();
     const canonical = seriesPath(page.series.publicId, page.series.title);
     if (`/series/${params.publicId}/${params.slug}` !== canonical) {
       throw redirect({ href: canonical, statusCode: 301 });
     }
-    return { ...page, rating, reviews };
+    return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
   // BreadcrumbList + BookSeries JSON-LD (spec §11, ticket #39).
@@ -424,6 +427,7 @@ function SeriesPage() {
       {family ? <FamilySection family={family} self={series} /> : null}
 
       <ReviewsSection target={ratingTarget} initial={page.reviews} noun="series" />
+      <CommentsSection target={ratingTarget} initial={page.comments} noun="series" />
 
       {/* Partially imported Series show as-is; every Series page carries the
           report affordance feeding the proposal queue (#40, spec §7). */}

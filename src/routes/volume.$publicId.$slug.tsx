@@ -4,6 +4,7 @@ import { api } from "../../convex/_generated/api";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type VolumePageData } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
@@ -38,20 +39,22 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    // The rating aggregate and first page of Reviews render with the page;
-    // both then follow their live queries (lib/ratings.tsx, lib/reviews.tsx).
+    // The rating aggregate and first pages of Reviews and Comments render
+    // with the page, then follow their live queries (lib/ratings.tsx,
+    // lib/reviews.tsx, lib/comments.tsx).
     const target = { kind: "volume" as const, publicId };
-    const [page, rating, reviews] = await Promise.all([
+    const [page, rating, reviews, comments] = await Promise.all([
       catalogQuery(api.catalogPages.volumePage, { publicId }),
       catalogQuery(api.ratings.summary, { target }),
       catalogQuery(api.reviews.list, { target }),
+      catalogQuery(api.comments.list, { target }),
     ]);
     if (!page) throw notFound();
     const canonical = volumePath(page.volume.publicId, page.volume.title);
     if (`/volume/${params.publicId}/${params.slug}` !== canonical) {
       throw redirect({ href: canonical, statusCode: 301 });
     }
-    return { ...page, rating, reviews };
+    return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
   // BreadcrumbList JSON-LD (spec §11, ticket #39). The description falls
@@ -278,6 +281,7 @@ function VolumePage() {
       </div>
 
       <ReviewsSection target={ratingTarget} initial={page.reviews} noun="volume" />
+      <CommentsSection target={ratingTarget} initial={page.comments} noun="volume" />
 
       {/* Public revision history + the moderator edit entry point (#31). */}
       <RecordHistory type="volume" publicId={volume.publicId} />

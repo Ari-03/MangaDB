@@ -115,6 +115,18 @@ _Avoid_: score, stars, vote
 A User's public plain-text write-up of one Series or one Volume, at most one per target, signed with their username and shown beside their Rating when they have one. It may be marked as containing spoilers, and only its author edits or deletes it. A Moderator may hide it, after which only Moderators and the author see it.
 _Avoid_: comment, post
 
+**Comment**:
+A User's short public plain-text post on one Series or one Volume page, signed with their username, or a reply to such a post; replies go one level deep. It may be marked as containing spoilers, and only its author edits or deletes it. It is published at once unless a hold rule sends it to the Data Team first; a Moderator may hide, remove, or restore it.
+_Avoid_: review, post, reply thread
+
+**Comment Report**:
+One User's flag on another User's published Comment, with a reason (spam, harassment, spoiler, off-topic, or other). A User reports a Comment at most once; three distinct Comment Reports hide it until a Moderator decides.
+_Avoid_: flag, complaint
+
+**Shadowed User**:
+A User whose Comments a Moderator has quietly muted: they still look published to that User and are hidden from everyone else. Shadowing covers the User's past and future Comments and is lifted by unshadowing.
+_Avoid_: shadow ban, banned user
+
 **User**:
 A person with a MangaDB account who owns personal tracking state and visibility choices. A User remains the same person across linked sign-in methods or email-address changes.
 _Avoid_: Clerk user, account

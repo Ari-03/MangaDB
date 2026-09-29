@@ -3,7 +3,7 @@ import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink, useIsDataTeam } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 
 /**
@@ -100,6 +100,7 @@ function Imports() {
         <Link to="/mod/queue">Review queue</Link>
         <Link to="/mod/launch">Launch</Link>
         <Link to="/mod/packaging">Catalog gaps</Link>
+        <CommentsQueueLink />
       </nav>
 
       <h2>Sources</h2>

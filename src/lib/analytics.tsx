@@ -33,7 +33,7 @@ type AnalyticsEvents = {
   mature_titles_toggled: { showMature: boolean };
   rating_submitted: { seriesPublicId: number; volumePublicId?: number; rating: number };
   review_submitted: { seriesPublicId: number; volumePublicId?: number; length: number };
-  comment_posted: { targetType: string; targetId: string };
+  comment_posted: { target: "series" | "volume"; seriesId: string; isReply: boolean; held: boolean };
 };
 
 export type AnalyticsEvent = keyof AnalyticsEvents;

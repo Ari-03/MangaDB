@@ -39,6 +39,24 @@ const cover = v.object({
 
 const visibility = v.union(v.literal("public"), v.literal("private"));
 
+// A Comment's moderation state (comments.ts): published, held for a
+// Moderator, hidden (by Moderators or 3 reports), or removed (by its author
+// or a Moderator; the row stays for audit until the author's account purge).
+export const commentStatus = v.union(
+  v.literal("pending"),
+  v.literal("approved"),
+  v.literal("hidden"),
+  v.literal("removed"),
+);
+
+export const commentReportReason = v.union(
+  v.literal("spam"),
+  v.literal("harassment"),
+  v.literal("spoiler"),
+  v.literal("offTopic"),
+  v.literal("other"),
+);
+
 // A Review's moderation state (reviews.ts mirrors it).
 export const reviewStatus = v.union(v.literal("visible"), v.literal("hidden"));
 
@@ -840,6 +858,9 @@ export default defineSchema({
     // Private by default (#7); per-Series overrides live on userSeriesStates.
     ownershipVisibility: visibility,
     readingVisibility: visibility,
+    // Shadowed User (CONTEXT.md): a Moderator's quiet mute. Their Comments
+    // still look published to them and are hidden from everyone else.
+    commentShadowed: v.optional(v.boolean()),
   })
     .index("by_clerkSubject", ["clerkSubject"])
     .index("by_username", ["usernameNormalized"]),
@@ -983,4 +1004,74 @@ export default defineSchema({
     ),
     reason: v.optional(v.string()),
   }).index("by_review", ["reviewId"]),
+
+  // Comments (convex/comments.ts, CONTEXT.md: Comment): short public plain
+  // text on a Series or Volume page, one level of replies. Unlike Ratings
+  // and Reviews, `seriesId` is always set: on a Series Comment it is the
+  // target, on a Volume Comment (volumeId set) it is the Volume's Series,
+  // denormalised for merge transfer and any later Mature filtering.
+  comments: defineTable({
+    userId: v.id("users"),
+    seriesId: v.id("series"),
+    volumeId: v.optional(v.id("volumes")),
+    // A reply's top-level Comment; replies never have replies.
+    parentId: v.optional(v.id("comments")),
+    body: v.string(),
+    spoiler: v.boolean(),
+    status: commentStatus,
+    // Distinct Comment Reports since a Moderator last cleared them.
+    reportCount: v.number(),
+    createdAt: v.number(),
+    // Any change after posting (an edit or a moderation decision).
+    updatedAt: v.optional(v.number()),
+    // The author's last edit; the page shows "edited".
+    editedAt: v.optional(v.number()),
+  })
+    // A page's threads: (series, volume-or-undefined, top level, status), newest last.
+    .index("by_target_thread_status", ["seriesId", "volumeId", "parentId", "status"])
+    .index("by_parent", ["parentId"])
+    // The hold rule's approved count and the account purge.
+    .index("by_user", ["userId", "status"])
+    // The viewer's own held and hidden Comments on one page.
+    .index("by_user_target", ["userId", "seriesId", "volumeId"])
+    // Merge transfer and impact previews.
+    .index("by_series", ["seriesId"])
+    .index("by_volume", ["volumeId"])
+    // The moderation queue: pending and hidden by age, reported by count.
+    .index("by_status", ["status", "reportCount"]),
+
+  // One User's report of one Comment (CONTEXT.md: Comment Report). Three
+  // distinct reports hide an approved Comment until a Moderator decides.
+  commentReports: defineTable({
+    commentId: v.id("comments"),
+    reporterId: v.id("users"),
+    reason: commentReportReason,
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    // One report per user per Comment; the commentId prefix lists a Comment's reports.
+    .index("by_comment_reporter", ["commentId", "reporterId"])
+    .index("by_reporter", ["reporterId"]),
+
+  // Append-only record of moderation on Comments, shaped like reviewAudit.
+  // `userId` names the author a shadow / unshadow applied to. Survives the
+  // Comment's deletion.
+  commentAudit: defineTable({
+    commentId: v.id("comments"),
+    action: v.union(
+      v.literal("approve"),
+      v.literal("hide"),
+      v.literal("unhide"),
+      v.literal("remove"),
+      v.literal("restore"),
+      v.literal("shadow"),
+      v.literal("unshadow"),
+    ),
+    actor: v.union(
+      v.object({ kind: v.literal("user"), userId: v.id("users") }),
+      v.object({ kind: v.literal("system") }),
+    ),
+    userId: v.optional(v.id("users")),
+    reason: v.optional(v.string()),
+  }).index("by_comment", ["commentId"]),
 });
