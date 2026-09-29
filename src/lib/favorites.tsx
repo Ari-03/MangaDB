@@ -106,6 +106,7 @@ function LibraryFavoritesInner() {
 
 function FavoriteCover({ item }: { item: FavoriteItem }) {
   const toggle = useMutation(api.favorites.toggle);
+  const [busy, setBusy] = useState(false);
   const params = slugParams(item.publicId, item.title);
   const cover = (
     <ConcealArt mature={item.mature} notice={false}>
@@ -134,11 +135,15 @@ function FavoriteCover({ item }: { item: FavoriteItem }) {
             <button
               type="button"
               className="quick-btn"
-              onClick={() =>
-                void toggle({ target: item.target }).then(({ favorite }) =>
-                  track("favorite_toggled", { target: item.kind, publicId: item.publicId, favorite }),
-                )
-              }
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void toggle({ target: item.target })
+                  .then(({ favorite }) =>
+                    track("favorite_toggled", { target: item.kind, publicId: item.publicId, favorite }),
+                  )
+                  .finally(() => setBusy(false));
+              }}
             >
               Unfavorite
             </button>

@@ -11,7 +11,7 @@
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import {
@@ -326,23 +326,17 @@ function SmileyScale({ current, onSave }: ScaleProps) {
   );
 }
 
-/** How long the 1-100 control waits after the last change before saving it. */
-const SAVE_DELAY_MS = 700;
-
 /**
  * point100: a number field with -1 / +1 steppers. Typing saves on Enter or
- * when the field loses focus; the steppers save once they have been still
- * for a moment, so holding one down is one write, not twenty.
+ * when the field loses focus; each stepper click saves at once, so nothing
+ * is left waiting in a timer when the user clears the rating or leaves.
  */
 function HundredPointInput({ current, onSave }: ScaleProps) {
   const [draft, setDraft] = useState(current === null ? "" : String(current));
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Follow the stored value when it changes elsewhere (another tab, a clear).
   useEffect(() => setDraft(current === null ? "" : String(current)), [current]);
-  useEffect(() => () => clearTimeout(timer.current), []);
 
   const commit = (raw: string) => {
-    clearTimeout(timer.current);
     const value = Number(raw);
     if (raw.trim() === "" || !Number.isInteger(value)) {
       setDraft(current === null ? "" : String(current));
@@ -355,9 +349,7 @@ function HundredPointInput({ current, onSave }: ScaleProps) {
   const step = (delta: number) => {
     const base = Number(draft) || (current ?? 50);
     const next = String(Math.min(SCORE_MAX, Math.max(SCORE_MIN, base + delta)));
-    setDraft(next);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => commit(next), SAVE_DELAY_MS);
+    commit(next);
   };
 
   return (
