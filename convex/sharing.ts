@@ -482,7 +482,12 @@ export const publicProfile = query({
       const series =
         "seriesId" in found ? await ctx.db.get(found.seriesId) : found;
       if (!series || series.status !== "active" || !visibleTo(showMature, series.mature)) continue;
-      const rating = await ratingRow(ctx, user._id, target);
+      // The surviving target: a merge moves Ratings onto it.
+      const rating = await ratingRow(
+        ctx,
+        user._id,
+        "seriesId" in found ? { kind: "volume", id: found._id } : { kind: "series", id: found._id },
+      );
       reviews.push({
         target:
           "seriesId" in found

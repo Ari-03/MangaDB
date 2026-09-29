@@ -111,13 +111,12 @@ function RatingControlInner({ target, wrapperClass }: { target: RatingTarget; wr
   const controls = (
     <>
       <span className="track-kicker">Your rating</span>
-      <div className="rating-scale" role="radiogroup" aria-label="Your rating, 1 to 10">
+      <div className="rating-scale" role="group" aria-label="Your rating, 1 to 10">
         {SCALE.map((step) => (
           <button
             key={step}
             type="button"
-            role="radio"
-            aria-checked={current === step}
+            aria-pressed={current === step}
             aria-label={`${step} out of 10`}
             className={`rating-step${current !== null && step <= current ? " is-on" : ""}`}
             onClick={() => pick(step)}

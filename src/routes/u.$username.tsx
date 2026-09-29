@@ -416,8 +416,8 @@ function ReviewsSection({
         <p className="section-note">Newest first</p>
       </div>
       <ol className="review-list">
-        {reviews.map((review, i) => (
-          <li key={i}>
+        {reviews.map((review) => (
+          <li key={`${review.target.kind}:${review.target.publicId}`}>
             <ProfileReview review={review} />
           </li>
         ))}

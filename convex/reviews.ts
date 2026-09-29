@@ -31,6 +31,8 @@ export const REVIEW_PAGE = 20;
 const REVIEW_LIMIT_MAX = 200;
 /** Hidden Reviews a Moderator sees per target. */
 const HIDDEN_LIST_MAX = 50;
+/** Longest moderation reason setHidden stores. */
+export const REVIEW_REASON_MAX = 500;
 
 export const REVIEW_RATE_LIMIT = {
   reviewSave: { kind: "token bucket", rate: 20, period: HOUR, capacity: 5 },
@@ -191,13 +193,20 @@ export const remove = mutation({
 
 /**
  * Hide or unhide a Review (Moderators and Administrators), recording the
- * action in reviewAudit with an optional reason. A no-op change records
- * nothing.
+ * action in reviewAudit with an optional reason (at most REVIEW_REASON_MAX
+ * characters after trimming). A no-op change records nothing.
  */
 export const setHidden = mutation({
   args: { reviewId: v.id("reviews"), hidden: v.boolean(), reason: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const moderator = await requireModerator(ctx);
+    const reason = args.reason?.trim();
+    if (reason && reason.length > REVIEW_REASON_MAX) {
+      throw new ConvexError({
+        code: "reasonTooLong",
+        message: `A reason can be at most ${REVIEW_REASON_MAX} characters.`,
+      });
+    }
     const review = await ctx.db.get(args.reviewId);
     if (!review) {
       throw new ConvexError({ code: "notFound", message: "That review is gone." });
@@ -205,7 +214,6 @@ export const setHidden = mutation({
     const status = args.hidden ? "hidden" : "visible";
     if (review.status === status) return null;
     await ctx.db.patch(review._id, { status });
-    const reason = args.reason?.trim();
     await ctx.db.insert("reviewAudit", {
       reviewId: review._id,
       action: args.hidden ? "hidden" : "unhidden",

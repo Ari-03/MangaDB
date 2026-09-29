@@ -632,4 +632,60 @@ describe("seriesBrowse Top rated", () => {
       expect(walked).toEqual(titles(whole));
     }
   });
+
+  it("treats rows and pack entries without a ratingRank (not rebuilt yet) as unranked, paging without repeats", async () => {
+    const t = await library(
+      ["Alpha", "Bravo", "Charlie", "Delta", "Echo"].map((title) => ({
+        title,
+        publishers: ["viz"],
+        volumes: 1,
+        dates: [],
+      })),
+    );
+    await t.run(async (ctx) => {
+      const byTitle = new Map((await ctx.db.query("series").collect()).map((s) => [s.title, s._id]));
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Alpha")!, sum: 27, count: 3 });
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Bravo")!, sum: 35, count: 5 });
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    // Charlie (3) and Echo (5) as a pre-ratings deploy left them: no ratingRank
+    // on the row or in the pack; Delta (4) keeps its 0 between them.
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("seriesStats").collect()) {
+        if (row.title === "Charlie" || row.title === "Echo") {
+          await ctx.db.patch(row._id, { ratingRank: undefined, ratingCount: undefined });
+        }
+      }
+      for (const pack of await ctx.db.query("seriesStatsPacks").collect()) {
+        await ctx.db.patch(pack._id, {
+          entries: pack.entries.map(({ ratingRank, ...entry }) =>
+            entry.publicId === 3 || entry.publicId === 5 ? entry : { ...entry, ratingRank },
+          ),
+        });
+      }
+    });
+    const expected = {
+      desc: ["Alpha", "Bravo", "Echo", "Delta", "Charlie"],
+      asc: ["Bravo", "Alpha", "Charlie", "Delta", "Echo"],
+    };
+    for (const order of ["desc", "asc"] as const) {
+      for (const publishers of [undefined, ["viz"]]) {
+        const whole = await t.query(api.seriesBrowse.browse, { sort: "rating", order, publishers });
+        expect(titles(whole)).toEqual(expected[order]);
+        for (const pageSize of [1, 2]) {
+          const walked: Array<string> = [];
+          let cursor: string | null = null;
+          do {
+            const page: { items: Array<{ title: string }>; nextCursor: string | null } = await t.query(
+              api.seriesBrowse.browse,
+              { sort: "rating", order, publishers, pageSize, cursor },
+            );
+            walked.push(...titles(page));
+            cursor = page.nextCursor;
+          } while (cursor && walked.length < 20);
+          expect(walked).toEqual(expected[order]);
+        }
+      }
+    }
+  });
 });

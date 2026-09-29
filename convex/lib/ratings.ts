@@ -1,8 +1,9 @@
 // Ratings and Reviews share one notion of a target (CONTEXT.md: Rating,
 // Review): a Series or a Volume. This module holds what both slices and the
 // catalog operations need: the target validators and lookups, and the
-// per-target rating aggregate (ratingStats) with its Series library
-// projection.
+// per-target rating aggregate (ratingStats) writes with their Series library
+// projection. Reading the aggregate lives in lib/ratingStats.ts, a leaf both
+// this module and seriesBrowse.ts import, so the dependency runs one way.
 //
 // The aggregate moves in the same transaction as the Rating that changes it
 // (`applyRatingDelta`), so "8.4 · 12 ratings" is exact the moment a rating
@@ -16,11 +17,19 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { resolveActiveSeries } from "../catalog";
 import { followMerges } from "../catalogPages";
 import { syncRatingProjection } from "../seriesBrowse";
+import { statsRow, summaryOf, type TargetId } from "./ratingStats";
+
+export {
+  RATING_RANK_MIN,
+  ratingRankOf,
+  ratingSummary,
+  targetIdArg,
+  type RatingSummary,
+  type TargetId,
+} from "./ratingStats";
 
 export const RATING_MIN = 1;
 export const RATING_MAX = 10;
-/** Ratings a Series needs before "Top rated" ranks it; fewer sort last. */
-export const RATING_RANK_MIN = 3;
 
 /** A target as public pages know it: its kind and public ID. */
 export const targetRefArg = v.object({
@@ -28,13 +37,6 @@ export const targetRefArg = v.object({
   publicId: v.number(),
 });
 export type TargetRef = Infer<typeof targetRefArg>;
-
-/** A target as mutations take it: the document ID a query returned. */
-export const targetIdArg = v.union(
-  v.object({ kind: v.literal("series"), id: v.id("series") }),
-  v.object({ kind: v.literal("volume"), id: v.id("volumes") }),
-);
-export type TargetId = Infer<typeof targetIdArg>;
 
 /** The target's key on a ratings / reviews / ratingStats row (exactly one is set). */
 export function targetFields(target: TargetId) {
@@ -158,35 +160,6 @@ export async function reviewsOf(ctx: QueryCtx, target: TargetId): Promise<Array<
 }
 
 // ---------- the aggregate ----------
-
-export type RatingSummary = { average: number | null; count: number };
-
-async function statsRow(ctx: QueryCtx, target: TargetId): Promise<Doc<"ratingStats"> | null> {
-  return target.kind === "series"
-    ? await ctx.db
-        .query("ratingStats")
-        .withIndex("by_series", (q) => q.eq("seriesId", target.id))
-        .unique()
-    : await ctx.db
-        .query("ratingStats")
-        .withIndex("by_volume", (q) => q.eq("volumeId", target.id))
-        .unique();
-}
-
-function summaryOf(row: { sum: number; count: number } | null): RatingSummary {
-  if (!row || row.count <= 0) return { average: null, count: 0 };
-  return { average: row.sum / row.count, count: row.count };
-}
-
-/** A target's public rating aggregate: the unrounded average (null when unrated) and count. */
-export async function ratingSummary(ctx: QueryCtx, target: TargetId): Promise<RatingSummary> {
-  return summaryOf(await statsRow(ctx, target));
-}
-
-/** A Series' "Top rated" sort key: its average once RATING_RANK_MIN ratings are in, else 0. */
-export function ratingRankOf(summary: RatingSummary): number {
-  return summary.count >= RATING_RANK_MIN && summary.average !== null ? summary.average : 0;
-}
 
 /** Write a target's aggregate and carry a Series' into the library projection. */
 async function writeStats(ctx: MutationCtx, target: TargetId, sum: number, count: number) {

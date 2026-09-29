@@ -530,7 +530,8 @@ visibility defaults for Ownership and Reading plus per-Series overrides
 ## Ratings and reviews
 
 `convex/ratings.ts`, `convex/reviews.ts`, shared target and aggregate code in
-`convex/lib/ratings.ts`; UI in `src/lib/ratings.tsx` and `src/lib/reviews.tsx`,
+`convex/lib/ratings.ts` (reading the aggregate and the "Top rated" rank in
+`convex/lib/ratingStats.ts`); UI in `src/lib/ratings.tsx` and `src/lib/reviews.tsx`,
 styles in `src/styles/ratings.css`.
 
 - **Rating**: a whole number from 1 to 10 per user per Series or Volume,
@@ -560,6 +561,13 @@ styles in `src/styles/ratings.css`.
 - **Account deletion** removes the user's Ratings (decrementing the
   aggregates) and Reviews; merges move them to the survivor, and where the
   user already rated or reviewed the survivor, the survivor's row is kept.
+- **Moderation reasons** are capped at 500 characters.
+
+**Rolling it out.** After deploying, `npx convex run --prod
+seriesBrowse:rebuild` gives every existing library row and pack entry its
+rating fields now rather than on schedule. Until then "Top rated" treats
+rows without a rank as unranked, so it sorts them last and pages without
+repeats.
 
 ## Comments
 

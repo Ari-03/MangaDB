@@ -276,3 +276,72 @@ describe("rating upkeep", () => {
     expect(await t.run((ctx) => ctx.db.query("ratings").collect())).toHaveLength(2);
   });
 });
+
+describe("ratings.set on merged and hidden targets", () => {
+  it("follows the merge loser's id to the survivor, Series and Volume", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.two.seriesId, { status: "merged", mergedIntoId: ids.one.seriesId });
+      await ctx.db.patch(ids.two.volumeId, { status: "merged", mergedIntoId: ids.one.volumeId });
+    });
+    await rate(t, "user_a", { kind: "series", id: ids.two.seriesId }, 6);
+    await rate(t, "user_a", { kind: "volume", id: ids.two.volumeId }, 3);
+    const rows = await t.run((ctx) => ctx.db.query("ratings").collect());
+    expect(rows.map((r) => r.seriesId ?? r.volumeId).sort()).toEqual([ids.one.seriesId, ids.one.volumeId].sort());
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 6, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 3, count: 1 });
+    const stats = await t.run((ctx) => ctx.db.query("ratingStats").collect());
+    expect(stats.every((s) => s.seriesId !== ids.two.seriesId && s.volumeId !== ids.two.volumeId)).toBe(true);
+  });
+
+  it("refuses a hidden Volume of an active Series", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    await t.run((ctx) => ctx.db.patch(ids.one.volumeId, { status: "hidden" }));
+    await expect(rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 5)).rejects.toMatchObject({
+      data: { code: "notFound" },
+    });
+    // The Series itself is still rateable.
+    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 5);
+  });
+});
+
+describe("syncRatingProjection with a partial library", () => {
+  /** A rebuilt library for both seeded Series, then `damage` applied to its packs. */
+  async function library(damage: "no pack" | "no entry") {
+    const t = makeT();
+    const ids = await seed(t);
+    await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
+      for (const [n, { seriesId, volumeId }] of [ids.one, ids.two].entries()) {
+        const editionId = await ctx.db.insert("editions", { status: "active", publicId: 900 + n, publisherId });
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
+        await ctx.db.insert("releases", { status: "active", editionId, publisherId, seriesIds: [seriesId], format: "physical", language: "en" });
+      }
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    await t.run(async (ctx) => {
+      for (const pack of await ctx.db.query("seriesStatsPacks").collect()) {
+        if (damage === "no pack") await ctx.db.delete(pack._id);
+        else await ctx.db.patch(pack._id, { entries: pack.entries.filter((e) => e.publicId !== 1) });
+      }
+    });
+    return { t, ids };
+  }
+
+  for (const damage of ["no pack", "no entry"] as const) {
+    it(`updates the row and leaves the packs alone when there is ${damage}`, async () => {
+      const { t, ids } = await library(damage);
+      const packsBefore = await t.run((ctx) => ctx.db.query("seriesStatsPacks").collect());
+      for (const reader of ["user_a", "user_b", "user_c"]) {
+        await rate(t, reader, { kind: "series", id: ids.one.seriesId }, 8);
+      }
+      const row = await t.run((ctx) =>
+        ctx.db.query("seriesStats").withIndex("by_series", (q) => q.eq("seriesId", ids.one.seriesId)).unique(),
+      );
+      expect(row).toMatchObject({ ratingAverage: 8, ratingCount: 3, ratingRank: 8 });
+      expect(await t.run((ctx) => ctx.db.query("seriesStatsPacks").collect())).toEqual(packsBefore);
+    });
+  }
+});

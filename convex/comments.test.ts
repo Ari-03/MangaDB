@@ -11,6 +11,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { COMMENT_POLICY } from "./comments";
+import type { TargetRef } from "./lib/ratings";
 
 const ADMIN = "user_admin";
 const MOD = "user_mod";
@@ -130,7 +131,7 @@ function post(
   });
 }
 
-const listAs = (t: T, subject: string | null, target = series(1)) =>
+const listAs = (t: T, subject: string | null, target: TargetRef = series(1)) =>
   subject === null
     ? t.query(api.comments.list, { target })
     : t.withIdentity({ subject }).query(api.comments.list, { target });

@@ -73,20 +73,24 @@ function LiveReviews({
   noun: string;
 }) {
   const [limit, setLimit] = useState(PAGE);
-  const live = useQuery(api.reviews.list, { target, limit });
+  const mine = useQuery(api.reviews.mine, { target });
+  const ownId = mine?.review?.reviewId ?? null;
+  // The viewer's own Review shows above the list, not in it: ask for one
+  // extra row so dropping it still leaves a full page.
+  const live = useQuery(api.reviews.list, { target, limit: ownId ? limit + 1 : limit });
   // While a bigger page loads, keep showing the last one rather than blinking.
   const last = useRef(initial);
   if (live !== undefined) last.current = live;
   const page = live ?? last.current;
-  const mine = useQuery(api.reviews.mine, { target });
-  const ownId = mine?.review?.reviewId ?? null;
-  const items = (page?.items ?? []).filter((item) => item.reviewId !== ownId);
+  const others = (page?.items ?? []).filter((item) => item.reviewId !== ownId);
+  const items = others.slice(0, limit);
+  const hasMore = Boolean(page?.hasMore) || others.length > limit;
 
   return (
     <>
       <MyReview target={target} mine={mine} noun={noun} />
       <ReviewList items={items} noun={noun} moderated />
-      {page?.hasMore ? (
+      {hasMore ? (
         <p className="reviews-more">
           <button type="button" className="btn btn-sm" onClick={() => setLimit(limit + PAGE)}>
             More reviews

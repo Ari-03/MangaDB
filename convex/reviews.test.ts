@@ -8,8 +8,9 @@ import { describe, expect, it } from "vitest";
 import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "./_generated/api";
+import type { TargetId, TargetRef } from "./lib/ratings";
 import schema from "./schema";
-import { REVIEW_MAX_LENGTH, REVIEW_MIN_LENGTH } from "./reviews";
+import { REVIEW_MAX_LENGTH, REVIEW_MIN_LENGTH, REVIEW_REASON_MAX } from "./reviews";
 
 const ADMIN = "user_admin";
 const MOD = "user_mod";
@@ -73,7 +74,7 @@ async function write(t: T, subject: string, ids: Ids, body = TEXT, spoiler = fal
     .mutation(api.reviews.save, { target: { kind: "series", id: ids.one.seriesId }, body, spoiler });
 }
 
-const list = (t: T, target = series(1)) => t.query(api.reviews.list, { target });
+const list = (t: T, target: TargetRef = series(1)) => t.query(api.reviews.list, { target });
 
 describe("reviews.save", () => {
   it("posts a public Review with the author's username and Rating beside it", async () => {
@@ -336,5 +337,110 @@ describe("the public profile", () => {
     await t.withIdentity({ subject: MOD }).mutation(api.reviews.setHidden, { reviewId, hidden: true });
     profile = await t.query(api.sharing.publicProfile, { username: "carol" });
     expect(profile!.reviews).toEqual([]);
+  });
+});
+
+describe("reviews.save refusals and merged targets", () => {
+  const save = (t: T, target: TargetId) =>
+    t.withIdentity({ subject: AUTHOR }).mutation(api.reviews.save, { target, body: TEXT, spoiler: false });
+
+  it("refuses a hidden Series and a hidden Volume", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    await t.run((ctx) => ctx.db.patch(ids.two.volumeId, { status: "hidden" }));
+    await expect(save(t, { kind: "volume", id: ids.two.volumeId })).rejects.toMatchObject({
+      data: { code: "notFound" },
+    });
+    await t.run((ctx) => ctx.db.patch(ids.one.seriesId, { status: "hidden" }));
+    await expect(save(t, { kind: "series", id: ids.one.seriesId })).rejects.toMatchObject({
+      data: { code: "notFound" },
+    });
+    expect(await t.run((ctx) => ctx.db.query("reviews").collect())).toEqual([]);
+  });
+
+  it("follows a merged target to its survivor, and refuses one merged into a hidden record", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.two.seriesId, { status: "merged", mergedIntoId: ids.one.seriesId });
+      await ctx.db.patch(ids.two.volumeId, { status: "merged", mergedIntoId: ids.one.volumeId });
+    });
+    const onSeries = await save(t, { kind: "series", id: ids.two.seriesId });
+    const onVolume = await save(t, { kind: "volume", id: ids.two.volumeId });
+    const rows = await t.run(async (ctx) => [await ctx.db.get(onSeries.reviewId), await ctx.db.get(onVolume.reviewId)]);
+    expect(rows[0]).toMatchObject({ seriesId: ids.one.seriesId });
+    expect(rows[1]).toMatchObject({ volumeId: ids.one.volumeId });
+
+    await t.run((ctx) => ctx.db.patch(ids.one.seriesId, { status: "hidden" }));
+    await expect(
+      t.withIdentity({ subject: OTHER }).mutation(api.reviews.save, {
+        target: { kind: "series", id: ids.two.seriesId },
+        body: TEXT,
+        spoiler: false,
+      }),
+    ).rejects.toMatchObject({ data: { code: "notFound" } });
+  });
+});
+
+describe("reviews.mine", () => {
+  it("is null signed out and while the username is pending", async () => {
+    const t = makeT();
+    await seed(t);
+    expect(await t.query(api.reviews.mine, { target: series(1) })).toBeNull();
+    expect(
+      await t.withIdentity({ subject: "user_unclaimed" }).query(api.reviews.mine, { target: series(1) }),
+    ).toBeNull();
+  });
+});
+
+describe("reviews.setHidden reason", () => {
+  it("takes up to REVIEW_REASON_MAX characters and refuses more", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const { reviewId } = await write(t, AUTHOR, ids);
+    const mod = t.withIdentity({ subject: MOD });
+    await expect(
+      mod.mutation(api.reviews.setHidden, { reviewId, hidden: true, reason: "x".repeat(REVIEW_REASON_MAX + 1) }),
+    ).rejects.toMatchObject({ data: { code: "reasonTooLong" } });
+    expect((await list(t))!.items).toHaveLength(1);
+    // Trimmed first, so surrounding whitespace does not count.
+    await mod.mutation(api.reviews.setHidden, {
+      reviewId,
+      hidden: true,
+      reason: `  ${"x".repeat(REVIEW_REASON_MAX)}  `,
+    });
+    const audit = await t.run((ctx) => ctx.db.query("reviewAudit").collect());
+    expect(audit[0]!.reason).toHaveLength(REVIEW_REASON_MAX);
+  });
+});
+
+describe("the public profile's Reviews after catalog changes", () => {
+  it("omits a Review whose Series went hidden and repoints one whose target merged", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const author = t.withIdentity({ subject: AUTHOR });
+    await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, rating: 8 });
+    await author.mutation(api.reviews.save, {
+      target: { kind: "series", id: ids.two.seriesId },
+      body: "Written on what turned out to be a duplicate.",
+      spoiler: false,
+    });
+    await author.mutation(api.reviews.save, {
+      target: { kind: "volume", id: ids.adult.volumeId },
+      body: "A volume whose Series is about to be hidden.",
+      spoiler: false,
+    });
+    // Catalog changes made underneath the rows, as a stale row would see them.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.two.seriesId, { status: "merged", mergedIntoId: ids.one.seriesId });
+      await ctx.db.patch(ids.adult.seriesId, { status: "hidden" });
+    });
+    const profile = await t.query(api.sharing.publicProfile, { username: "carol", showMature: true });
+    expect(profile!.reviews).toHaveLength(1);
+    expect(profile!.reviews[0]).toMatchObject({
+      target: { kind: "series", publicId: 1, title: "Frieren" },
+      rating: 8,
+      body: "Written on what turned out to be a duplicate.",
+    });
   });
 });

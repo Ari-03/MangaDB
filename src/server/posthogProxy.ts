@@ -4,8 +4,8 @@
 // blockers that match *.posthog.com leave them alone.
 //
 // `/_s/static/*` (the SDK's lazy-loaded scripts) and `/_s/array/*` (remote
-// config) go to the asset host and are kept in the edge cache; everything
-// else (event batches, flags) goes to the ingest host. Cookies and auth
+// config) go to the asset host and GETs there are kept in the edge cache;
+// everything else (event batches, flags) goes to the ingest host. Cookies and auth
 // headers never leave our origin, and X-Forwarded-For carries the visitor's
 // IP so PostHog's GeoIP still works.
 //
@@ -25,14 +25,18 @@ export const POSTHOG_PROXY_PATH = "/_s";
 const ASSET_PATH = /^\/(static|array)\//;
 
 /**
- * Handles `/_s/*`; returns null for every other request so the Worker entry
- * can fall through to the app.
+ * Handles `/_s/*`; returns null for every other request (bare `/_s`
+ * included) so the Worker entry can fall through to the app.
  */
 export async function posthogProxyResponse(request: Request): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith(`${POSTHOG_PROXY_PATH}/`)) return null;
   const path = url.pathname.slice(POSTHOG_PROXY_PATH.length) + url.search;
-  return ASSET_PATH.test(path) ? retrieveAsset(request, path) : forwardRequest(request, path);
+  if (!ASSET_PATH.test(path)) return forwardRequest(request, `${INGEST_ORIGIN}${path}`);
+  // The edge cache only takes GETs; anything else goes straight through.
+  return request.method === "GET"
+    ? retrieveAsset(request, path)
+    : forwardRequest(request, `${ASSET_ORIGIN}${path}`);
 }
 
 async function retrieveAsset(request: Request, path: string): Promise<Response> {
@@ -45,15 +49,21 @@ async function retrieveAsset(request: Request, path: string): Promise<Response> 
   return response;
 }
 
-async function forwardRequest(request: Request, path: string): Promise<Response> {
+/**
+ * Pass a request on to `target` without our cookies or auth. The visitor's
+ * IP comes from Cloudflare's CF-Connecting-IP only: a client-sent
+ * X-Forwarded-For is dropped, never trusted.
+ */
+async function forwardRequest(request: Request, target: string): Promise<Response> {
   const headers = new Headers(request.headers);
   headers.delete("cookie");
   headers.delete("authorization");
   headers.delete("host");
+  headers.delete("x-forwarded-for");
   const ip = request.headers.get("CF-Connecting-IP");
   if (ip) headers.set("X-Forwarded-For", ip);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  return fetch(`${INGEST_ORIGIN}${path}`, {
+  return fetch(target, {
     method: request.method,
     headers,
     body: hasBody ? await request.arrayBuffer() : null,

@@ -34,7 +34,7 @@ import {
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
-import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratings";
+import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
 
 export const SORTS = [
@@ -749,31 +749,24 @@ function decodeCursor(raw: string | null | undefined): Cursor | null {
  * group, then everything past it. Every sort index ends in publicId, which
  * is what makes the cursor exact. Ascending "upcoming" shelves the Series
  * with nothing announced (0) after every dated one, as the filtered path's
- * `compare` does. Spelled out per sort so each index range is fully typed.
+ * `compare` does. "Top rated" has its own reader (readRatingChunk). Spelled
+ * out per sort so each index range is fully typed.
  */
 async function readChunk(
   ctx: QueryCtx,
-  sort: Sort,
+  sort: Exclude<Sort, "rating">,
   order: "asc" | "desc",
   cursor: Cursor | null,
   limit: number,
 ): Promise<Array<StatsRow>> {
   const table = () => ctx.db.query("seriesStats");
   const asc = order === "asc";
-  // "upcoming" and "rating" both keep their zeros (nothing announced,
-  // not enough ratings) last, which an ascending read has to arrange.
   const zerosAfter = (id: number) =>
-    sort === "rating"
-      ? table().withIndex("by_rating", (r) => r.eq("ratingRank", 0).gt("publicId", id))
-      : table().withIndex("by_next", (r) => r.eq("nextReleaseSort", 0).gt("publicId", id));
-  const zerosLast = (sort === "upcoming" || sort === "rating") && asc;
+    table().withIndex("by_next", (r) => r.eq("nextReleaseSort", 0).gt("publicId", id));
+  const zerosLast = sort === "upcoming" && asc;
   const ranges = (() => {
     if (zerosLast && !cursor) {
-      const nonZero =
-        sort === "rating"
-          ? table().withIndex("by_rating", (r) => r.gt("ratingRank", 0))
-          : table().withIndex("by_next", (r) => r.gt("nextReleaseSort", 0));
-      return [nonZero, zerosAfter(-1)];
+      return [table().withIndex("by_next", (r) => r.gt("nextReleaseSort", 0)), zerosAfter(-1)];
     }
     if (zerosLast && cursor?.v === 0) return [zerosAfter(cursor.id)];
     if (!cursor) return [table().withIndex(SORT_INDEX[sort].index)];
@@ -817,12 +810,6 @@ async function readChunk(
           table().withIndex("by_collectors", (r) => same(r.eq("collectors", num))),
           table().withIndex("by_collectors", (r) => (asc ? r.gt("collectors", num) : r.lt("collectors", num))),
         ];
-      case "rating":
-        return [
-          table().withIndex("by_rating", (r) => same(r.eq("ratingRank", num))),
-          table().withIndex("by_rating", (r) => (asc ? r.gt("ratingRank", num) : r.lt("ratingRank", num))),
-          ...(zerosLast ? [zerosAfter(-1)] : []),
-        ];
     }
   })();
   const rows: Array<StatsRow> = [];
@@ -830,6 +817,64 @@ async function readChunk(
     if (rows.length >= limit) break;
     rows.push(...(await range.order(order).take(limit - rows.length)));
   }
+  return rows;
+}
+
+/**
+ * "Top rated"'s readChunk. Ranked Series (ratingRank > 0) come first in the
+ * sort's direction; the unranked come last either way, by publicId in the
+ * sort's direction, as the filtered path's `compare` orders them. Unranked
+ * is ratingRank 0 or no ratingRank at all (a row not rebuilt since ratings
+ * arrived): the index keeps those two apart (a missing field sorts before
+ * every number), so the zero group reads both and merges them by publicId,
+ * and a `{ v: 0 }` cursor resumes in either.
+ */
+async function readRatingChunk(
+  ctx: QueryCtx,
+  order: "asc" | "desc",
+  cursor: Cursor | null,
+  limit: number,
+): Promise<Array<StatsRow>> {
+  const table = () => ctx.db.query("seriesStats");
+  const asc = order === "asc";
+  const rows: Array<StatsRow> = [];
+  const num = typeof cursor?.v === "number" ? cursor.v : null;
+  if (!cursor || (num !== null && num > 0)) {
+    const ranked = cursor
+      ? [
+          table().withIndex("by_rating", (r) =>
+            asc
+              ? r.eq("ratingRank", num!).gt("publicId", cursor.id)
+              : r.eq("ratingRank", num!).lt("publicId", cursor.id),
+          ),
+          table().withIndex("by_rating", (r) =>
+            asc ? r.gt("ratingRank", num!) : r.gt("ratingRank", 0).lt("ratingRank", num!),
+          ),
+        ]
+      : [table().withIndex("by_rating", (r) => r.gt("ratingRank", 0))];
+    for (const range of ranked) {
+      if (rows.length >= limit) return rows;
+      rows.push(...(await range.order(order).take(limit - rows.length)));
+    }
+  }
+  const want = limit - rows.length;
+  if (want <= 0) return rows;
+  // Resume inside the zero group only from a zero cursor; otherwise from its start.
+  const afterId = cursor && num === 0 ? cursor.id : null;
+  const unranked = (rank: 0 | undefined) =>
+    table()
+      .withIndex("by_rating", (r) => {
+        const group = r.eq("ratingRank", rank);
+        if (afterId === null) return group;
+        return asc ? group.gt("publicId", afterId) : group.lt("publicId", afterId);
+      })
+      .order(order)
+      .take(want);
+  const [zeros, missing] = await Promise.all([unranked(0), unranked(undefined)]);
+  const merged = [...zeros, ...missing].sort((a, b) =>
+    asc ? a.publicId - b.publicId : b.publicId - a.publicId,
+  );
+  rows.push(...merged.slice(0, want));
   return rows;
 }
 
@@ -927,7 +972,10 @@ export const browse = query({
     let cursor = after;
     for (;;) {
       const want = target - items.length;
-      const chunk = await readChunk(ctx, args.sort, order, cursor, want);
+      const chunk =
+        args.sort === "rating"
+          ? await readRatingChunk(ctx, order, cursor, want)
+          : await readChunk(ctx, args.sort, order, cursor, want);
       for (const row of chunk) {
         if (await stillPublic(ctx, row, args.showMature)) items.push(row);
       }
