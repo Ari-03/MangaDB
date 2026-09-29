@@ -737,6 +737,26 @@ describe("placeholders", () => {
     }
     expect((await listAs(t, OTHER))!.items[0]).toMatchObject({ state: "hidden", own: true });
   });
+
+  it("a re-held head keeps the replies it gathered while published", async () => {
+    const t = makeT();
+    const ids = await trustedSetup(t);
+    const head = await post(t, OTHER, ids, "Published, then re-held");
+    await post(t, R1, ids, "Reply while it was up", { parentId: head.commentId });
+    const result = await t.withIdentity({ subject: OTHER }).mutation(api.comments.edit, {
+      commentId: head.commentId,
+      body: "https://a https://b https://c",
+      spoiler: false,
+    });
+    expect(result.held).toBe(true);
+
+    for (const subject of [null, R1]) {
+      const [item] = (await listAs(t, subject))!.items;
+      expect(item).toMatchObject({ state: "withheld", body: "", username: null });
+      expect(item!.replies.map((reply) => reply.body)).toEqual(["Reply while it was up"]);
+    }
+    expect((await listAs(t, OTHER))!.items[0]).toMatchObject({ state: "pending", own: true });
+  });
 });
 
 describe("reply cap", () => {

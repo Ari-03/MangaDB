@@ -170,8 +170,10 @@ type Placeholder = "removed" | "withheld";
 function shownAs(comment: Comment, author: User | null, viewer: User | null): Shown | null {
   if (comment.status === "removed") return null;
   if (viewer && comment.userId === viewer._id) {
-    // A Shadowed User sees their own Comments as published.
-    if (comment.status === "shadowed" || viewer.commentShadowed) return "approved";
+    // A Shadowed User sees their own shadowed Comments as published; a
+    // moderator's hide still reads as hidden so the note and the refused
+    // edit agree.
+    if (comment.status === "shadowed") return "approved";
     return comment.status;
   }
   // The author check covers approved rows setShadowed's cap left behind.
@@ -283,11 +285,13 @@ export const list = query({
         .order("desc");
     // Published threads, the viewer's own, and gone heads that still carry
     // replies (a placeholder). Only heads with approved replies, or the
-    // viewer's own, can need one; the scan per status is capped.
+    // viewer's own, can need one; the scan per status is capped. Pending
+    // is scanned too: a re-held head (an edit that added links) keeps the
+    // replies it gathered while it was published.
     const candidates = new Map<Id<"comments">, Comment>();
     for (const row of await heads("approved").take(limit + 1)) candidates.set(row._id, row);
     for (const row of own.get(null) ?? []) candidates.set(row._id, row);
-    for (const status of ["removed", "hidden", "shadowed"] as const) {
+    for (const status of ["removed", "hidden", "shadowed", "pending"] as const) {
       let scanned = 0;
       let found = 0;
       for await (const row of heads(status)) {
@@ -305,8 +309,6 @@ export const list = query({
       if (items.length > limit) break;
       const author = await authorOf(head.userId);
       const state = shownAs(head, author, viewer);
-      // A pending head nobody else sees has no replies anyone else sees either.
-      if (!state && head.status === "pending") continue;
       const thread = await threadReplies(ctx, head, own, authorOf, viewer, COMMENT_POLICY.inlineReplies);
       if (state) items.push({ ...card(head, author, viewer, state), ...thread });
       else if (thread.replies.length > 0) {

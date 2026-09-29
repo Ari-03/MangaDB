@@ -583,7 +583,7 @@ the queue at `/mod/comments` (`src/routes/mod.comments.tsx`); styles in
   each thread and the rest behind "N more replies" (`comments.replies`, up to
   100; a head's `replyCount` keeps the approved-reply count). Authors edit
   ("edited") and delete their own. A deleted or removed thread head with
-  replies stays as a `[removed]` placeholder, a hidden or shadowed one as
+  replies stays as a `[removed]` placeholder, a hidden, shadowed, or re-held one as
   `[hidden]` (except to its author); without replies it disappears.
   Placeholders carry no author or date. The first page is server-rendered by
   the page loader, then goes live.
