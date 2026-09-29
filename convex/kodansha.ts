@@ -90,6 +90,7 @@ import {
 import type { CanonicalPublisher } from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
 import { sameValue } from "./lib/values";
+import { withExceptionCapture } from "./lib/posthog";
 
 export const SOURCE_KEY = "kodansha";
 /** The backlist crawl's registry row: its runs, cadence, health, and crawl state. */
@@ -137,113 +138,114 @@ export const sync = internalAction({
     /** Pause before every request; tests pass 0. */
     politeDelayMs: v.optional(v.number()),
   },
-  handler: async (ctx, args): Promise<SyncResult> => {
-    // Explicit annotations break the type cycle with imports.ts's adapter map.
-    const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-      internal.importSources.getByKey,
-      { key: SOURCE_KEY },
-    );
-    if (!source) {
-      throw new Error(
-        "The approved-source registry has no \"kodansha\" row. Run: npx convex run importSources:seedRegistry '{}'",
+  handler: async (ctx, args): Promise<SyncResult> =>
+    withExceptionCapture("kodansha.sync", ctx, async () => {
+      // Explicit annotations break the type cycle with imports.ts's adapter map.
+      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
+        internal.importSources.getByKey,
+        { key: SOURCE_KEY },
       );
-    }
-    if (!source.enabled) return { skipped: "disabled" as const };
+      if (!source) {
+        throw new Error(
+          "The approved-source registry has no \"kodansha\" row. Run: npx convex run importSources:seedRegistry '{}'",
+        );
+      }
+      if (!source.enabled) return { skipped: "disabled" as const };
 
-    const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
-      sourceKey: SOURCE_KEY,
-    });
-    const delay = args.politeDelayMs ?? 350;
-    const errors: string[] = [];
-    let seen = 0;
-    let changed = 0;
-    let failures = 0;
+      const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
+        sourceKey: SOURCE_KEY,
+      });
+      const delay = args.politeDelayMs ?? 350;
+      const errors: string[] = [];
+      let seen = 0;
+      let changed = 0;
+      let failures = 0;
 
-    try {
-      // Merge the two endpoints keyed by (volume, format): the calendar has
-      // the ~8-week window; new-releases refines this week with per-format
-      // flags and an exact ISO date, so it wins on overlap.
-      const items = new Map<string, { item: KodanshaItem; snapshot: KodanshaSnapshot }>();
-      const ingest = (list: KodanshaItem[]) => {
-        for (const item of list) {
-          for (const snapshot of toSnapshots(item)) {
-            items.set(sourceRecordId(item, snapshot.format), {
-              item,
-              snapshot,
-            });
-          }
-        }
-      };
-      const calendarRes = await politeFetch(
-        `${BASE_URL}/wp-json/kodansha/v1/release-calendar`,
-        delay,
-      );
-      ingest(parseCalendar(await calendarRes.json()));
-      const newRes = await politeFetch(`${BASE_URL}/wp-json/kodansha/v1/new-releases`, delay);
-      ingest(parseNewReleases(await newRes.json()));
-
-      const covers: StoredCovers = new Map();
-      for (const [recordId, { snapshot }] of items) {
-        seen++;
-        try {
-          const result = await applyRetrying(ctx, internal.kodansha.applyVolume, {
-            sourceRecordId: recordId,
-            snapshot,
-          });
-          if (result.changed) changed++;
-          if (result.status === "needsReview") {
-            errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
-          }
-          if (result.cover) {
-            try {
-              const notice = await storeCover(ctx, covers, {
-                ...result.cover,
-                attribution: source.attribution ?? PUBLISHER.name,
-                delayMs: delay,
+      try {
+        // Merge the two endpoints keyed by (volume, format): the calendar has
+        // the ~8-week window; new-releases refines this week with per-format
+        // flags and an exact ISO date, so it wins on overlap.
+        const items = new Map<string, { item: KodanshaItem; snapshot: KodanshaSnapshot }>();
+        const ingest = (list: KodanshaItem[]) => {
+          for (const item of list) {
+            for (const snapshot of toSnapshots(item)) {
+              items.set(sourceRecordId(item, snapshot.format), {
+                item,
+                snapshot,
               });
-              if (notice) errors.push(`cover ${recordId}: ${notice}`);
-            } catch (e) {
-              errors.push(`cover ${recordId}: ${errorMessage(e)}`);
             }
           }
-        } catch (e) {
-          failures++;
-          errors.push(`volume ${recordId}: ${errorMessage(e)}`);
-        }
-      }
+        };
+        const calendarRes = await politeFetch(
+          `${BASE_URL}/wp-json/kodansha/v1/release-calendar`,
+          delay,
+        );
+        ingest(parseCalendar(await calendarRes.json()));
+        const newRes = await politeFetch(`${BASE_URL}/wp-json/kodansha/v1/new-releases`, delay);
+        ingest(parseNewReleases(await newRes.json()));
 
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: failures > 0 ? "failed" : "succeeded",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errorCount: errors.length,
-        ...(failures > 0 ? { failed: true } : {}),
-      };
-    } catch (e) {
-      errors.push(errorMessage(e));
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: "failed",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errorCount: errors.length,
-        failed: true,
-      };
-    }
-  },
+        const covers: StoredCovers = new Map();
+        for (const [recordId, { snapshot }] of items) {
+          seen++;
+          try {
+            const result = await applyRetrying(ctx, internal.kodansha.applyVolume, {
+              sourceRecordId: recordId,
+              snapshot,
+            });
+            if (result.changed) changed++;
+            if (result.status === "needsReview") {
+              errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
+            }
+            if (result.cover) {
+              try {
+                const notice = await storeCover(ctx, covers, {
+                  ...result.cover,
+                  attribution: source.attribution ?? PUBLISHER.name,
+                  delayMs: delay,
+                });
+                if (notice) errors.push(`cover ${recordId}: ${notice}`);
+              } catch (e) {
+                errors.push(`cover ${recordId}: ${errorMessage(e)}`);
+              }
+            }
+          } catch (e) {
+            failures++;
+            errors.push(`volume ${recordId}: ${errorMessage(e)}`);
+          }
+        }
+
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: failures > 0 ? "failed" : "succeeded",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errorCount: errors.length,
+          ...(failures > 0 ? { failed: true } : {}),
+        };
+      } catch (e) {
+        errors.push(errorMessage(e));
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: "failed",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errorCount: errors.length,
+          failed: true,
+        };
+      }
+    }),
 });
 
 // ---------- the backlist crawl ----------
@@ -409,199 +411,41 @@ export const backlistSync = internalAction({
     errors: v.optional(v.array(v.string())),
     failures: v.optional(v.number()),
   },
-  handler: async (ctx, args): Promise<BacklistResult> => {
-    // Explicit annotations break the type cycle with imports.ts's adapter map.
-    const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-      internal.importSources.getByKey,
-      { key: BACKLIST_KEY },
-    );
-    if (!source) {
-      throw new Error(
-        "The approved-source registry has no \"kodansha-backlist\" row. Run: npx convex run importSources:seedRegistry '{}'",
+  handler: async (ctx, args): Promise<BacklistResult> =>
+    withExceptionCapture("kodansha.backlistSync", ctx, async () => {
+      // Explicit annotations break the type cycle with imports.ts's adapter map.
+      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
+        internal.importSources.getByKey,
+        { key: BACKLIST_KEY },
       );
-    }
-    // The shared gate: disabling the row stops a scheduled crawl at its next
-    // link (the run closes as "stopped"); an operator-forced run finishes.
-    const runId = await runToContinue(ctx, source, args);
-    if (runId === null) return { skipped: "disabled" as const };
-    const delay = args.politeDelayMs ?? BACKLIST_DELAY_MS;
-    const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
-    const errors = [...(args.errors ?? [])];
-    let failures = args.failures ?? 0;
-    let seen = args.seen ?? 0;
-    let changed = args.changed ?? 0;
-    let seriesCrawled = args.seriesCrawled ?? 0;
-    let fetchedTotal = args.fetched ?? 0;
-    let fetchedHere = 0;
-    let lastSlug = args.afterSlug;
-    const covers: StoredCovers = new Map();
-
-    const finish = async (status: "succeeded" | "failed"): Promise<BacklistResult> => {
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        seriesCrawled,
-        fetched: fetchedTotal,
-        continued: false,
-        errorCount: errors.length,
-        ...(status === "failed" ? { failed: true } : {}),
-      };
-    };
-
-    try {
-      const only = args.onlySeries === undefined ? null : new Set(args.onlySeries);
-      const listing = (await fetchListing(delay)).filter(
-        (entry) =>
-          (args.afterSlug === undefined || entry.slug > args.afterSlug) &&
-          (only === null || only.has(entry.slug)),
-      );
-
-      let budgetSpent = false;
-      for (let offset = 0; offset < listing.length && !budgetSpent; offset += PLAN_CHUNK) {
-        const chunk = listing.slice(offset, offset + PLAN_CHUNK);
-        await ctx.runMutation(internal.kodansha.recordListingRatings, {
-          entries: chunk.map(({ slug, mature }) => ({ slug, mature })),
-        });
-        const due: Array<{
-          slug: string;
-          mode: "full" | "recheck";
-          state: SeriesCrawl | null;
-        }> = await ctx.runQuery(internal.kodansha.backlistPlan, {
-          entries: chunk.map(({ slug, lastUpdatedAt }) => ({
-            slug,
-            lastUpdatedAt,
-          })),
-          now: Date.now(),
-          force: only !== null,
-        });
-        const plans = new Map(due.map((plan) => [plan.slug, plan]));
-
-        for (const entry of chunk) {
-          const plan = plans.get(entry.slug);
-          if (!plan) {
-            lastSlug = entry.slug;
-            continue;
-          }
-          if (fetchedHere >= maxFetches) {
-            budgetSpent = true;
-            break;
-          }
-
-          // The series page: its volume list and blurb.
-          const seriesUrl = `${BASE_URL}/series/${entry.slug}/`;
-          fetchedHere++;
-          fetchedTotal++;
-          let volumes: string[];
-          let synopsis: string | undefined;
-          try {
-            const html = await (await politeFetch(seriesUrl, delay)).text();
-            volumes = parseSeriesPage(html, entry.slug);
-            synopsis = parseSeriesSynopsis(html) ?? entry.synopsis;
-          } catch (e) {
-            // Unrecorded, so the series stays due and is retried next run.
-            failures++;
-            errors.push(`series ${entry.slug}: ${errorMessage(e)}`);
-            lastSlug = entry.slug;
-            continue;
-          }
-
-          // Its volume pages: one apply per (volume, format).
-          const recheck: string[] = [];
-          for (const volumeSlug of volumesToFetch(plan.mode, plan.state, volumes)) {
-            const url = `${seriesUrl}${volumeSlug}/`;
-            fetchedHere++;
-            fetchedTotal++;
-            try {
-              const page = parseVolumePage(await (await politeFetch(url, delay)).text(), url);
-              if (page === null || needsRecheck(page.offers, Date.now())) recheck.push(volumeSlug);
-              if (page === null) continue;
-              for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(
-                page,
-                synopsis,
-              )) {
-                seen++;
-                try {
-                  const result = await applyRetrying(ctx, internal.kodansha.applyVolume, {
-                    sourceRecordId: recordId,
-                    snapshot,
-                  });
-                  if (result.changed) changed++;
-                  if (result.status === "needsReview") {
-                    errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
-                  }
-                  if (result.cover) {
-                    // A download counts against the budget; a failed one is a
-                    // notice, retried when the volume is next applied.
-                    if (!covers.has(coverKey(result.cover))) {
-                      fetchedHere++;
-                      fetchedTotal++;
-                    }
-                    try {
-                      const notice = await storeCover(ctx, covers, {
-                        ...result.cover,
-                        attribution: source.attribution ?? PUBLISHER.name,
-                        delayMs: delay,
-                      });
-                      if (notice) errors.push(`cover ${recordId}: ${notice}`);
-                    } catch (e) {
-                      errors.push(`cover ${recordId}: ${errorMessage(e)}`);
-                    }
-                  }
-                } catch (e) {
-                  // Retried at the next weekly check, not the 180-day refresh.
-                  if (!recheck.includes(volumeSlug)) recheck.push(volumeSlug);
-                  failures++;
-                  errors.push(`volume ${recordId}: ${errorMessage(e)}`);
-                }
-              }
-            } catch (e) {
-              const message = errorMessage(e);
-              // A dead link (404) waits for the next full crawl; anything
-              // else is retried at the next weekly check.
-              if (!message.startsWith("HTTP 404")) recheck.push(volumeSlug);
-              failures++;
-              errors.push(`page ${url}: ${message}`);
-            }
-          }
-
-          await ctx.runMutation(internal.kodansha.recordSeriesCrawl, {
-            slug: entry.slug,
-            crawl: {
-              kind: "kodanshaSeriesCrawl",
-              name: entry.name,
-              url: seriesUrl,
-              lastUpdatedAt: entry.lastUpdatedAt,
-              volumes,
-              recheck,
-              fullCrawledAt: plan.mode === "full" ? Date.now() : plan.state?.fullCrawledAt,
-            },
-          });
-          seriesCrawled++;
-          lastSlug = entry.slug;
-        }
+      if (!source) {
+        throw new Error(
+          "The approved-source registry has no \"kodansha-backlist\" row. Run: npx convex run importSources:seedRegistry '{}'",
+        );
       }
+      // The shared gate: disabling the row stops a scheduled crawl at its next
+      // link (the run closes as "stopped"); an operator-forced run finishes.
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
+      const delay = args.politeDelayMs ?? BACKLIST_DELAY_MS;
+      const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
+      const errors = [...(args.errors ?? [])];
+      let failures = args.failures ?? 0;
+      let seen = args.seen ?? 0;
+      let changed = args.changed ?? 0;
+      let seriesCrawled = args.seriesCrawled ?? 0;
+      let fetchedTotal = args.fetched ?? 0;
+      let fetchedHere = 0;
+      let lastSlug = args.afterSlug;
+      const covers: StoredCovers = new Map();
 
-      if (budgetSpent) {
-        await ctx.scheduler.runAfter(0, internal.kodansha.backlistSync, {
-          politeDelayMs: args.politeDelayMs,
-          maxFetches: args.maxFetches,
-          onlySeries: args.onlySeries,
-          afterSlug: lastSlug,
+      const finish = async (status: "succeeded" | "failed"): Promise<BacklistResult> => {
+        await ctx.runMutation(internal.imports.finishRun, {
           runId,
-          seen,
-          changed,
-          seriesCrawled,
-          fetched: fetchedTotal,
-          errors: errors.slice(0, MAX_CARRIED_ERRORS),
-          failures,
+          status,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
         });
         return {
           runId,
@@ -609,17 +453,176 @@ export const backlistSync = internalAction({
           recordsChanged: changed,
           seriesCrawled,
           fetched: fetchedTotal,
-          continued: true,
+          continued: false,
           errorCount: errors.length,
-          ...(failures > 0 ? { failed: true } : {}),
+          ...(status === "failed" ? { failed: true } : {}),
         };
+      };
+
+      try {
+        const only = args.onlySeries === undefined ? null : new Set(args.onlySeries);
+        const listing = (await fetchListing(delay)).filter(
+          (entry) =>
+            (args.afterSlug === undefined || entry.slug > args.afterSlug) &&
+            (only === null || only.has(entry.slug)),
+        );
+
+        let budgetSpent = false;
+        for (let offset = 0; offset < listing.length && !budgetSpent; offset += PLAN_CHUNK) {
+          const chunk = listing.slice(offset, offset + PLAN_CHUNK);
+          await ctx.runMutation(internal.kodansha.recordListingRatings, {
+            entries: chunk.map(({ slug, mature }) => ({ slug, mature })),
+          });
+          const due: Array<{
+            slug: string;
+            mode: "full" | "recheck";
+            state: SeriesCrawl | null;
+          }> = await ctx.runQuery(internal.kodansha.backlistPlan, {
+            entries: chunk.map(({ slug, lastUpdatedAt }) => ({
+              slug,
+              lastUpdatedAt,
+            })),
+            now: Date.now(),
+            force: only !== null,
+          });
+          const plans = new Map(due.map((plan) => [plan.slug, plan]));
+
+          for (const entry of chunk) {
+            const plan = plans.get(entry.slug);
+            if (!plan) {
+              lastSlug = entry.slug;
+              continue;
+            }
+            if (fetchedHere >= maxFetches) {
+              budgetSpent = true;
+              break;
+            }
+
+            // The series page: its volume list and blurb.
+            const seriesUrl = `${BASE_URL}/series/${entry.slug}/`;
+            fetchedHere++;
+            fetchedTotal++;
+            let volumes: string[];
+            let synopsis: string | undefined;
+            try {
+              const html = await (await politeFetch(seriesUrl, delay)).text();
+              volumes = parseSeriesPage(html, entry.slug);
+              synopsis = parseSeriesSynopsis(html) ?? entry.synopsis;
+            } catch (e) {
+              // Unrecorded, so the series stays due and is retried next run.
+              failures++;
+              errors.push(`series ${entry.slug}: ${errorMessage(e)}`);
+              lastSlug = entry.slug;
+              continue;
+            }
+
+            // Its volume pages: one apply per (volume, format).
+            const recheck: string[] = [];
+            for (const volumeSlug of volumesToFetch(plan.mode, plan.state, volumes)) {
+              const url = `${seriesUrl}${volumeSlug}/`;
+              fetchedHere++;
+              fetchedTotal++;
+              try {
+                const page = parseVolumePage(await (await politeFetch(url, delay)).text(), url);
+                if (page === null || needsRecheck(page.offers, Date.now())) recheck.push(volumeSlug);
+                if (page === null) continue;
+                for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(
+                  page,
+                  synopsis,
+                )) {
+                  seen++;
+                  try {
+                    const result = await applyRetrying(ctx, internal.kodansha.applyVolume, {
+                      sourceRecordId: recordId,
+                      snapshot,
+                    });
+                    if (result.changed) changed++;
+                    if (result.status === "needsReview") {
+                      errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
+                    }
+                    if (result.cover) {
+                      // A download counts against the budget; a failed one is a
+                      // notice, retried when the volume is next applied.
+                      if (!covers.has(coverKey(result.cover))) {
+                        fetchedHere++;
+                        fetchedTotal++;
+                      }
+                      try {
+                        const notice = await storeCover(ctx, covers, {
+                          ...result.cover,
+                          attribution: source.attribution ?? PUBLISHER.name,
+                          delayMs: delay,
+                        });
+                        if (notice) errors.push(`cover ${recordId}: ${notice}`);
+                      } catch (e) {
+                        errors.push(`cover ${recordId}: ${errorMessage(e)}`);
+                      }
+                    }
+                  } catch (e) {
+                    // Retried at the next weekly check, not the 180-day refresh.
+                    if (!recheck.includes(volumeSlug)) recheck.push(volumeSlug);
+                    failures++;
+                    errors.push(`volume ${recordId}: ${errorMessage(e)}`);
+                  }
+                }
+              } catch (e) {
+                const message = errorMessage(e);
+                // A dead link (404) waits for the next full crawl; anything
+                // else is retried at the next weekly check.
+                if (!message.startsWith("HTTP 404")) recheck.push(volumeSlug);
+                failures++;
+                errors.push(`page ${url}: ${message}`);
+              }
+            }
+
+            await ctx.runMutation(internal.kodansha.recordSeriesCrawl, {
+              slug: entry.slug,
+              crawl: {
+                kind: "kodanshaSeriesCrawl",
+                name: entry.name,
+                url: seriesUrl,
+                lastUpdatedAt: entry.lastUpdatedAt,
+                volumes,
+                recheck,
+                fullCrawledAt: plan.mode === "full" ? Date.now() : plan.state?.fullCrawledAt,
+              },
+            });
+            seriesCrawled++;
+            lastSlug = entry.slug;
+          }
+        }
+
+        if (budgetSpent) {
+          await ctx.scheduler.runAfter(0, internal.kodansha.backlistSync, {
+            politeDelayMs: args.politeDelayMs,
+            maxFetches: args.maxFetches,
+            onlySeries: args.onlySeries,
+            afterSlug: lastSlug,
+            runId,
+            seen,
+            changed,
+            seriesCrawled,
+            fetched: fetchedTotal,
+            errors: errors.slice(0, MAX_CARRIED_ERRORS),
+            failures,
+          });
+          return {
+            runId,
+            recordsSeen: seen,
+            recordsChanged: changed,
+            seriesCrawled,
+            fetched: fetchedTotal,
+            continued: true,
+            errorCount: errors.length,
+            ...(failures > 0 ? { failed: true } : {}),
+          };
+        }
+        return await finish(failures > 0 ? "failed" : "succeeded");
+      } catch (e) {
+        errors.push(errorMessage(e));
+        return await finish("failed");
       }
-      return await finish(failures > 0 ? "failed" : "succeeded");
-    } catch (e) {
-      errors.push(errorMessage(e));
-      return await finish("failed");
-    }
-  },
+    }),
 });
 
 // ---------- applying one (volume, format) ----------

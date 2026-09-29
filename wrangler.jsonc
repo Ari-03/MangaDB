@@ -21,7 +21,14 @@
     // Public values (they ship in the client bundle anyway); secrets like
     // CLERK_SECRET_KEY go through `wrangler secret put` instead.
     "VITE_CONVEX_URL": "https://intent-curlew-625.convex.cloud",
-    "VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cHJlc2VudC1ncmFja2xlLTk1NjQuY2xlcmsuYWNjb3VudHMuZGV2JA"
+    "VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cHJlc2VudC1ncmFja2xlLTk1NjQuY2xlcmsuYWNjb3VudHMuZGV2JA",
+    // PostHog (README "Analytics (PostHog)"). The browser bundle takes VITE_*
+    // values from the *build* environment (.env.local or the shell running
+    // `npm run deploy`), not from these vars; they record what is deployed.
+    // The project key (phc_...) is never committed: set it in the build
+    // environment. "/_s" is the same-origin proxy in src/server/posthogProxy.ts.
+    "VITE_PUBLIC_POSTHOG_KEY": "",
+    "VITE_PUBLIC_POSTHOG_HOST": "/_s"
   },
   // mangadb.org is attached to this Worker as Cloudflare custom domains
   // (apex + www; the www → apex 301 is handled by CANONICAL_HOST above).
@@ -45,7 +52,10 @@
       "vars": {
         "CANONICAL_HOST": "",
         "VITE_CONVEX_URL": "https://brave-kingfisher-844.convex.cloud",
-        "VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cHJlc2VudC1ncmFja2xlLTk1NjQuY2xlcmsuYWNjb3VudHMuZGV2JA"
+        "VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cHJlc2VudC1ncmFja2xlLTk1NjQuY2xlcmsuYWNjb3VudHMuZGV2JA",
+        // Set in the build environment, as above.
+        "VITE_PUBLIC_POSTHOG_KEY": "",
+        "VITE_PUBLIC_POSTHOG_HOST": "/_s"
       }
     }
   }

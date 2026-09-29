@@ -13,6 +13,7 @@ import {
 import { Cover } from "~/lib/cover";
 import { MatureFilter, showMature } from "~/lib/mature";
 import { MONTH_NAMES } from "~/lib/month";
+import { RatingLine } from "~/lib/ratings";
 import {
   breadcrumbListJsonLd,
   jsonLdScript,
@@ -58,6 +59,7 @@ const SORT_LABELS: Record<SeriesSort, string> = {
   upcoming: "Upcoming next",
   followers: "Most followed",
   collectors: "Most collected",
+  rating: "Top rated",
 };
 
 const VOLUME_LABELS: Record<VolumeBucket, string> = {
@@ -891,6 +893,15 @@ function SortDetail({ item, sort }: { item: SeriesBrowseItem; sort: SeriesSort }
       return <p className="caption-sub">{item.followers.toLocaleString("en-US")} following</p>;
     case "collectors":
       return <p className="caption-sub">{item.collectors.toLocaleString("en-US")} collecting</p>;
+    case "rating":
+      return (
+        <p className="caption-sub">
+          <RatingLine
+            summary={{ average: item.ratingAverage, count: item.ratingCount }}
+            fallback="No ratings yet"
+          />
+        </p>
+      );
     default:
       return item.sourceStatus === "unknown" ? null : (
         <p className="caption-sub">

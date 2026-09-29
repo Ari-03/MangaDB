@@ -5,6 +5,7 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../convex/_generated/api";
+import { AnalyticsProvider } from "~/lib/analytics";
 import { MatureProvider } from "~/lib/mature";
 import { SearchCombobox } from "~/lib/searchSuggest";
 
@@ -13,6 +14,9 @@ import { SearchCombobox } from "~/lib/searchSuggest";
 // Convex client so every mutation/query authorizes via
 // ctx.auth.getUserIdentity(). Both are optional at runtime: without the
 // publishable key or a Convex URL the public catalog still renders.
+// PostHog (lib/analytics.tsx) sits innermost, so its identity sync can read
+// both the Clerk session and the Convex viewer; it is a pass-through when
+// VITE_PUBLIC_POSTHOG_KEY is unset.
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;
 export const convexClient: ConvexReactClient | null = convexUrl
@@ -28,21 +32,22 @@ export const clerkEnabled = Boolean(
 export function AppProviders({ children }: { children: ReactNode }) {
   // The viewer's mature-titles choice (lib/mature.tsx) wraps everything.
   const inner = <MatureProvider>{children}</MatureProvider>;
+  const anonymous = <AnalyticsProvider>{inner}</AnalyticsProvider>;
   if (!clerkEnabled) {
     return convexClient ? (
-      <ConvexProvider client={convexClient}>{inner}</ConvexProvider>
+      <ConvexProvider client={convexClient}>{anonymous}</ConvexProvider>
     ) : (
-      inner
+      anonymous
     );
   }
   return (
     <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
       {convexClient ? (
         <ConvexProviderWithClerk client={convexClient} useAuth={useAuth}>
-          {inner}
+          <AnalyticsProvider identify>{inner}</AnalyticsProvider>
         </ConvexProviderWithClerk>
       ) : (
-        inner
+        anonymous
       )}
     </ClerkProvider>
   );

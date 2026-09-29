@@ -39,6 +39,7 @@ import {
   type CreateOpInput,
 } from "./lib/proposalCreates";
 import { fieldDescriptor } from "./lib/moderationFields";
+import { captureModeration } from "./lib/posthog";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   applyHide,
@@ -627,6 +628,7 @@ export const requestChanges = mutation({
         comment: version!.changeComment,
       },
     });
+    await captureModeration(ctx, user, "request_changes", "proposal");
   },
 });
 
@@ -686,6 +688,7 @@ export const rejectProposal = mutation({
       decidedAt: Date.now(),
       claimedBy: undefined,
     });
+    await captureModeration(ctx, user, "reject", "proposal");
   },
 });
 
@@ -823,6 +826,7 @@ export const approveProposal = mutation({
       claimedBy: undefined,
       stale: false,
     });
+    await captureModeration(ctx, user, "approve", "proposal");
     return { status: "approved" as const, revisionIds, created };
   },
 });

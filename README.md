@@ -83,7 +83,7 @@ months, or finished: nothing announced and no release in a year, unless the
 Source Status says Ongoing or Hiatus), Format, Source Status, first letter,
 and a title search that updates as you type (words match the starts of
 title and alt-title words). The sort (title, recently added, most volumes,
-latest release, upcoming next, most followed, most collected) then orders
+latest release, upcoming next, most followed, most collected, top rated) then orders
 whatever matched, under a "123 series match" count, and the shelf loads
 more as you scroll. Everything is in the URL
 (`/series?publisher=viz-media,yen-press&volumes=2-5&timing=past-6m&sort=latest`),
@@ -106,9 +106,12 @@ Worker on SSR, the browser on client navigations), which `fetchSeriesBrowse`
 (`src/lib/catalogData.ts`) passes as `todaySort`, so a cached query never serves an earlier day's
 cutoff; later pages keep the first page's date, which their cursor carries,
 so a view paged across midnight stays one set. Other views get no date and
-keep one cache key. Popularity is the signals the catalog has — Series
-Follows and distinct collectors — not ratings, which v1 does not model. The
-Source Status filter appears once any importer supplies a status.
+keep one cache key. Popularity is Series Follows and distinct collectors;
+"Top rated" is the rating average (1–100 scores), ranked only from 3 ratings
+up (fewer sort last). Unlike the other facts, the rating fields are not left to the
+rebuild: every rating write patches the Series' row and, when its rank
+moves, its pack entry (see Ratings and reviews below). The Source Status
+filter appears once any importer supplies a status.
 
 ## Local development
 
@@ -456,10 +459,10 @@ Spec §3: future-release interest is a **Series Follow**, separate from
 owning and reading (`convex/follows.ts`; UI in `src/lib/follows.tsx`).
 Follows are always private in v1 — the profile never shows them.
 
-- **Explicit follow toggle** on the Series page, in its own "New releases"
-  group of the tracking bar — visibly apart from the "Your reading" group
-  (status + progress), since following a Series says nothing about reading
-  it. `setSeriesFollow` is the
+- **Explicit follow toggle** on the Series page, in the panel under the
+  cover (beside the private Favorite toggle, under "Your rating") — visibly
+  apart from the tracking bar's "Your reading" group (status + progress),
+  since following a Series says nothing about reading it. `setSeriesFollow` is the
   single write path; nothing follows a Series as a side effect of anything.
 - **One post-first-entry prompt per Series**: inserting a user's first
   Collection Entry in a Series returns a `suggestFollow` from the collection
@@ -523,6 +526,220 @@ visibility defaults for Ownership and Reading plus per-Series overrides
 - **Public but noindex** (spec §11): the page carries `robots: noindex`,
   profiles are excluded from every sitemap, and there is no activity feed —
   the profile is a snapshot of current state, never a history.
+
+## Ratings and reviews
+
+`convex/ratings.ts`, `convex/reviews.ts`, shared target and aggregate code in
+`convex/lib/ratings.ts` (reading the aggregate and the "Top rated" rank in
+`convex/lib/ratingStats.ts`), score conversions in `convex/lib/scoreFormat.ts`
+(shared with the client); UI in `src/lib/ratings.tsx` and `src/lib/reviews.tsx`,
+styles in `src/styles/ratings.css`.
+
+- **Rating**: one whole-number `score` from 1 to 100 per user per Series,
+  Volume, or omnibus Edition, changeable or clearable. The rule for books: a
+  single-volume Edition rates its Volume; an omnibus (an Edition collecting
+  more than one Volume) is rated as one book. `ratings.set` refuses a
+  single-volume Edition (`rateVolume`, naming the Volume) and Unmapped
+  Packaging (`unmapped`). Whether an Edition is an omnibus counts every
+  Volume its coverage names, hidden ones too; an omnibus with fewer than two
+  of them visible reads as hidden (`notFound`). Public queries take `{ kind, publicId }`,
+  mutations `{ kind, id }`, with `kind` `series`, `volume` or `edition`. The number is private; the public sees the
+  target's average and count as a chip in the page header. `ratingStats`
+  holds each target's sum and count of scores and moves in the same
+  transaction as the rating; merges and splits recount it. A Series'
+  aggregate is also copied into its `seriesStats` row and pack entry at once
+  (`seriesBrowse.syncRatingProjection`) for the library's "Top rated" sort,
+  whose `ratingRank` is the 1–100 average once 3 ratings are in.
+- **Rating format** (AniList style): each user picks how they rate and read
+  scores in `/me` → Settings → Rating format (`users.setScoreFormat`, stored
+  as `users.scoreFormat`, default `point10`; `users.viewer` returns it). The
+  stored score never changes with the format.
+
+  | Format | Control | Stored score | A score reads as |
+  |---|---|---|---|
+  | `point10` | number field /10 with −/+ steppers | n × 10 | max(1, round(score / 10)) |
+  | `star5` | number field /5 with −/+ steppers | n × 20 | max(1, round(score / 20)) |
+  | `point100` | number field /100 with −/+ steppers | n | score |
+  | `smiley3` | one pill: Bad / OK / Good | 35 / 60 / 85 | ≤ 49 / 50–74 / ≥ 75 |
+
+  The three numeric formats share one stepper: Enter or blur saves a typed
+  value, each − or + click saves at once, values clamp to the format's range
+  (`clampStep`; the steppers stop at 1), a typed 0 or negative clears the
+  rating, and a commit that lands on the step already shown saves nothing
+  (so a stored 84 read as 8/10 is not rewritten to 80).
+
+  The page aggregate follows the viewer's format ("8.4", "4.2 ★", "84");
+  smiley3 viewers and signed-out visitors see the point10 form. The count
+  stays beside it ("8.4 · 12 ratings").
+- **Where**: under the cover art, in a panel of the viewer's own take
+  (`TakePanel` in `src/lib/reviews.tsx`): "Your rating" with a one-line note
+  that the number is private, "Write a review", then the private toggles
+  (Follow and Favorite on the Series page, Favorite on the Volume page). The
+  panel renders nothing signed out. While the review form is open the panel
+  moves to a full-width row under the hero. The **Edition page** of a book
+  that collects exactly one Volume, completely, shows the same panel for
+  that Volume, with a line saying the rating belongs to the Volume, and the
+  Volume's aggregate chip in its header. An omnibus shows the panel for
+  itself ("Rates this omnibus as one book.") and its own aggregate chip.
+  Partial single-volume books and Unmapped Packaging carry no rating.
+  Edition aggregates never feed a Series' "Top rated" rank.
+- **Review**: 20 to 5,000 characters of plain text (line breaks kept, no
+  Markdown), optionally marked as spoilers, one per user per Series, Volume,
+  or omnibus Edition (the targets Ratings take).
+  Written from "Write a review" (or "Edit your review") under the rating,
+  which opens the form in place; a saved Review sits folded beneath it with
+  Edit and Delete.
+- **Reviews are private for now.** `FEATURES.publicReviews` in
+  `convex/lib/features.ts` is `false`: `reviews.list` answers an empty page,
+  `reviews.hiddenList` answers null, `sharing.publicProfile` leaves Reviews
+  out, and the Series and Volume pages neither load nor render the public
+  "Reviews" section. Only the author reads their Review (`reviews.mine`),
+  under a note saying so.
+- **Moderation** is post-hoc: Moderators and Administrators see Hide /
+  Unhide on each Review in the public section. A hidden Review leaves the
+  public list and profile. The author still sees it, with a note, and
+  Moderators see it in a hidden list on the page. Every change writes a
+  `reviewAudit` row (actor, action, optional reason). Editing a hidden Review
+  does not unhide it.
+- **Profiles** list the user's rated Series and omnibus Editions (in the
+  viewer's format, each linking to its page) only where their Reading is
+  public for that Series (an Edition's Series is its first covered
+  Volume's). Mature Series are left out
+  unless the viewer opted in.
+- **Rate limits** (token buckets per user): `ratingSet` 120/hour, `reviewSave`
+  20/hour.
+- **Account deletion** removes the user's Ratings (decrementing the
+  aggregates) and Reviews; Series, Volume and Edition merges move them to
+  the survivor, and where the user already rated or reviewed the survivor,
+  the survivor's row is kept.
+- **Omnibus collapse**: when an Edition's coverage comes to name one Volume,
+  its Ratings, Reviews and Favorites move to that Volume, the Volume's row
+  winning a clash, and both aggregates are recounted
+  (`collapseEditionTakes` in `convex/lib/sensitiveOps.ts`). A Volume merge
+  does this for every omnibus of just the two Volumes and records it in its
+  manifest, so Split moves them back; the merge's impact preview counts
+  them. A Data Team coverage remap (`replaceCoverage`, used by Unmapped
+  Packaging mapping and the repair) does it one-way: remapping the Edition
+  onto several Volumes again leaves them on the Volume.
+- **Moderation reasons** are capped at 500 characters.
+
+**Turning public Reviews on.** Set `publicReviews: true` in
+`convex/lib/features.ts` and deploy both halves (Convex and the Worker; the
+page reads the same constant). The "Reviews" section returns under the
+editions, listing everyone's visible Reviews newest first, 20 at a time,
+with each author's username and score; spoilers stay folded until "Show
+spoiler". Profiles list every visible Review again, and the note under the
+viewer's own Review changes to say it is public. Staff the moderation first.
+
+**Rolling it out.** After deploying, `npx convex run --prod
+seriesBrowse:rebuild` gives every existing library row and pack entry its
+rating fields now rather than on schedule. Until then "Top rated" treats
+rows without a rank as unranked, so it sorts them last and pages without
+repeats.
+
+## Favorites
+
+`convex/favorites.ts`; UI in `src/lib/favorites.tsx`.
+
+- **Favorite**: a private mark on a Series, a Volume, or an omnibus Edition,
+  one per user per target, toggled with "Favorite" / "Favorited" (styled
+  like Follow) at the foot of the panel under the cover on the Series and
+  Volume pages (beside Follow on the Series page), and on Edition pages: a
+  single-volume Edition favorites its Volume, an omnibus is favorited as one
+  book. `favorites.isFavorite` (null signed
+  out) and `favorites.toggle` (signed in, active target, merges followed).
+- **Library**: `/me` → Favorites lists them newest first as covers
+  (`favorites.mine`), Mature covers concealed unless the viewer opted in,
+  each with "Unfavorite". Favorites of hidden records drop out while hidden.
+- **Storage**: `favorites` rows carry `seriesId` always, plus `volumeId` for a
+  Volume or `editionId` for an Edition (the target's Series denormalised, as
+  on `comments`; an Edition's is its first covered Volume's). Nobody else
+  ever reads them; profiles never show them.
+- **Upkeep**: account deletion deletes them; merges repoint them (the
+  survivor's row wins a clash) and Split replays them back. An omnibus
+  whose coverage comes to name one Volume hands its Favorites to that
+  Volume (see "Omnibus collapse" under Ratings and reviews).
+- **Size**: the library lists the newest 200 (`MINE_MAX`, sized against the
+  per-query read limit in `convex/favorites.ts`).
+
+## Comments
+
+`convex/comments.ts` (policy numbers in its `COMMENT_POLICY`); page UI in
+`src/lib/comments.tsx` near the foot of Series and Volume pages;
+the queue at `/mod/comments` (`src/routes/mod.comments.tsx`); styles in
+`src/styles/comments.css`. Background and alternatives:
+`docs/research/comments-moderation.md`.
+
+**Comments are switched off for now.** `FEATURES.comments` in
+`convex/lib/features.ts` is `false`: `comments.post`, `edit`, and `report`
+throw `ConvexError({ code: "disabled" })`; `comments.list` and `replies`
+answer an empty page; the Series and Volume pages neither load nor render
+the Comments section; the `.mod-tools` navs drop the "Comments" link and
+its badge; and `/mod/comments` only says Comments are switched off.
+Deleting one's own Comment, moderation mutations, and the account purge
+still work. The code and its tests stay (`convex/comments.test.ts` mocks
+the flag on; `convex/features.test.ts` covers it off).
+
+**Turning them on.** Set `comments: true` in `convex/lib/features.ts` and
+deploy both halves (Convex and the Worker). Everything below applies again
+from the next page load. Staff the queue first.
+
+- **Comment**: 1 to 2,000 characters of plain text, optionally marked as a
+  spoiler, on a Series or Volume page. Threads are newest first, 20 at a time
+  ("More comments", up to 60); replies nest one level, oldest first, 5 under
+  each thread and the rest behind "N more replies" (`comments.replies`, up to
+  100; a head's `replyCount` keeps the approved-reply count). Authors edit
+  ("edited") and delete their own. A deleted or removed thread head with
+  replies stays as a `[removed]` placeholder, a hidden, shadowed, or re-held one as
+  `[hidden]` (except to its author); without replies it disappears.
+  Placeholders carry no author or date. The first page is server-rendered by
+  the page loader, then goes live.
+- **Post-moderation with holds.** A Comment publishes at once unless a hold
+  rule fires, in which case it is `pending` and only its author ("Awaiting
+  review") and the queue see it:
+  - the account is younger than 7 days (`users._creationTime`);
+  - the author has fewer than 3 approved Comments;
+  - the body has more than 2 `http(s)://` links (also checked on edit, which
+    sends an approved Comment back to pending).
+
+  Data Team members are never held. Suspended users cannot post.
+- **Reports**: any signed-in user other than the author can report a
+  published Comment once (spam, harassment, spoiler, off-topic, other, with an
+  optional note up to 500 characters). The third distinct report hides it
+  (`hidden`, audited with the system as actor). Its author then sees "Hidden
+  by moderators" in place of the body.
+- **Queue** (`/mod/comments`, Data Team; Editors read-only): tabs for
+  Pending (oldest first), Reported (published with reports, most reported
+  first; index `by_status`), Hidden, and Removed (newest first), with the
+  report reasons and notes. Pending, Hidden, and Removed read index
+  `by_status_time`, so a re-held Comment with reports keeps its place by
+  age. Moderators Approve, Dismiss reports (on Reported), Hide, Unhide,
+  Remove, Restore, and Shadow / Unshadow the author, each with an optional
+  reason. Every decision writes a `commentAudit` row.
+  Any move back to approved clears the Comment's reports. A Comment its
+  author deleted cannot be restored. The `.mod-tools` navs show the pending
+  count as a badge.
+- **Shadowed users** (`users.commentShadowed`): their Comments keep looking
+  published to them and are hidden from everyone else. Shadowing is a
+  status: new Comments are stored `shadowed` (skipping the hold rules), and
+  Shadow turns the user's approved Comments into `shadowed` ones (up to
+  2,000, 500 per batch; any left over stay hidden by a read-time check).
+  Unshadow publishes every `shadowed` one, including those written while
+  shadowed. A Moderator's approve, unhide, or restore of a shadowed user's
+  Comment leaves it `shadowed`. Data Team members cannot be shadowed.
+- **Rate limits** (token buckets per user): `commentPost` 20/hour, burst 5;
+  `commentReport` 10/hour, burst 3. Edits are not rate limited.
+- **Account deletion** hard-deletes the user's Comments, the reports they
+  filed (lowering those counts, never unhiding), and reports on their
+  Comments. Replies to a deleted Comment become top-level Comments. Audit
+  rows stay. Merges move Comments to the survivor (a Volume Comment's
+  denormalised `seriesId` follows its Volume); Split replays them back.
+- **Mature Series**: Comments appear only on their Series or Volume page (no
+  home or profile feed), so there is nothing extra to filter.
+- **Deferred**: Cloudflare Turnstile on the composer, Akismet or LLM triage
+  of held Comments, reply and moderator notifications, thresholds tunable
+  from `appConfig` without a deploy, the global posting cap, and cursor
+  paging past 60 threads.
 
 ## Moderation core (ticket #31)
 
@@ -664,7 +881,9 @@ no redirects table.
 `mergeManifests` row (each repointed reference with its prior value, each
 deduped row's contents, each inserted row); Split replays it backward —
 skipping references the world re-aimed since — reactivates the loser, and
-consumes the manifest.
+consumes the manifest. The manifest includes the Ratings, Reviews and
+Favorites a Volume merge moved off an omnibus it reduced to one Volume, and
+Split recounts every aggregate those Ratings touched.
 
 **Locks.** Hidden and Merged records reject ordinary edits by status
 (direct edits, proposal drafts, and approvals all refuse them). Moderators
@@ -1298,6 +1517,13 @@ App:
   `clerkMiddleware()` and SSR auth. Unset → app treats everyone as signed out.
   Dev: `.dev.vars` (workerd reads Worker secrets from there, not `.env.local`).
   Deploy: `npx wrangler secret put CLERK_SECRET_KEY`.
+- `VITE_PUBLIC_POSTHOG_KEY` — PostHog project token (`phc_…`). Public;
+  ships in the client bundle. Unset → analytics off entirely (no script, no
+  requests). Dev: `.env.local` (leave it out unless you are testing
+  analytics). Deploy: build env only; never committed. See "Analytics
+  (PostHog)".
+- `VITE_PUBLIC_POSTHOG_HOST` — optional override of the SDK's `api_host`.
+  Unset → `/_s`, the same-origin proxy.
 - `VITE_SITE_URL` — canonical public origin for SEO URLs (canonical links,
   OG URLs, sitemap locs). Unset → `https://mangadb.org` (spec §11's apex).
   Set it only for preview environments that should self-reference.
@@ -1318,6 +1544,11 @@ Convex deployment (Convex dashboard → Settings → Environment Variables, or
 - `RESEND_API_KEY` + `IMPORT_ALERT_EMAIL_TO` (+ optional
   `IMPORT_ALERT_EMAIL_FROM`) — the Administrator source-health alert emails
   (ticket #37); unset → alerts log and skip.
+- `POSTHOG_PROJECT_TOKEN` — PostHog project token (`phc_…`) for backend
+  events. **Required on every deployment**: a push fails until it is set.
+  Empty (`npx convex env set POSTHOG_PROJECT_TOKEN ""`) → no server events,
+  nothing scheduled, no logging. Optional `POSTHOG_HOST` overrides the
+  default `https://us.i.posthog.com`. See "Analytics (PostHog)" → Backend.
 
 Other commands:
 
@@ -1341,7 +1572,8 @@ history, and dashboard. It deploys with `npm run deploy:staging`, which reads
 `.env.staging` (gitignored; `CONVEX_DEPLOYMENT=dev:<staging dev deployment>`)
 to pick the staging project, builds the Worker with `CLOUDFLARE_ENV=staging` so
 the `env.staging` block in `wrangler.jsonc` applies, and deploys it. Staging
-has only the two Clerk variables set on Convex — no importer keys, no Resend —
+has only the two Clerk variables and `POSTHOG_PROJECT_TOKEN` set on Convex — no
+importer keys, no Resend —
 and every Approved Source is disabled there, so it never scrapes publishers or
 emails anyone. In the Clerk dashboard the staging origin must be allowed for
 sign-in to work there.
@@ -1419,6 +1651,103 @@ recrawling everything:
 npx convex run kodansha:backlistSync '{"onlySeries":["blue-lock","initial-d"]}'
 ```
 
+## Analytics (PostHog)
+
+Product analytics run on PostHog Cloud (US region), through the site's own
+origin so ad blockers do not drop them. The free tier (1M events a month,
+no card) covers this site many times over.
+
+- **Env vars.** `VITE_PUBLIC_POSTHOG_KEY` (the project token) and optionally
+  `VITE_PUBLIC_POSTHOG_HOST` (default `/_s`). Like every `VITE_*` value they
+  are inlined by `npm run build`, so the key must be in the **build**
+  environment: `.env.local` on the machine that deploys, or prefixed on the
+  command (`VITE_PUBLIC_POSTHOG_KEY=phc_… npm run deploy:staging` for a
+  separate staging project). The entries in `wrangler.jsonc` only record the
+  deployed values; the key stays out of git. Without the key the app never
+  loads posthog-js.
+- **Proxy.** `src/server.ts` forwards `/_s/*` via `src/server/posthogProxy.ts`:
+  `/_s/static/*` and `/_s/array/*` to `us-assets.i.posthog.com` (edge
+  cached), everything else to `us.i.posthog.com`, with cookies and auth
+  headers stripped and `X-Forwarded-For` set from `CF-Connecting-IP`.
+  Moving to the EU cloud is the `POSTHOG_REGION` line in that file plus
+  `POSTHOG_HOST=https://eu.i.posthog.com` on each Convex deployment.
+- **Client.** `src/lib/analytics.tsx` loads posthog-js lazily after
+  hydration (never in the Worker bundle), with autocapture, session replay
+  and feature flags off, `respect_dnt: true`, and person profiles only for
+  signed-in users. Pageviews and pageleaves are automatic. Signed-in users
+  are identified by their Clerk user id with `username` and `role` (no
+  email); sign-out resets the session.
+- **Events.** Capture only through the typed `track(event, props)`. Props
+  are ids, enums and lengths, never free text or personal data.
+
+  | Event | Props |
+  |---|---|
+  | `series_followed`, `series_unfollowed` | `seriesId`, `source` (`series_page` / `prompt` / `library`) |
+  | `collection_entry_set` | `target` (`release` / `bundle`), `state` (`null` = removed) |
+  | `reading_status_changed` | `seriesId`, `status` (`null` = cleared), `source` |
+  | `search_performed` | `queryLength`, `resultCount` (once per query the search page ran) |
+  | `mature_titles_toggled` | `showMature` |
+  | `comment_posted` | `target` (`series` / `volume`), `seriesId`, `isReply`, `held` |
+  | `favorite_toggled` | `target` (`series` / `volume`), `publicId`, `favorite` |
+  | `rating_submitted`, `review_submitted` | declared, not wired yet |
+
+- **Backend.** Convex sends its own events through PostHog's official
+  Convex component, [`@posthog/convex`](https://posthog.com/docs/libraries/convex),
+  registered in `convex/convex.config.ts` and wrapped by `convex/lib/posthog.ts`
+  (`capture`, `captureModeration`, `withExceptionCapture`). The component
+  requires `POSTHOG_PROJECT_TOKEN`, and the app forwards it, so **every
+  deployment must have it set before its next push**, even to an empty
+  string. Empty means off: the wrapper schedules nothing and logs nothing.
+
+  ```sh
+  npx convex env set POSTHOG_PROJECT_TOKEN ""                                       # local dev (off)
+  npx convex env set --deployment brave-kingfisher-844 POSTHOG_PROJECT_TOKEN phc_…  # staging
+  npx convex env set --prod POSTHOG_PROJECT_TOKEN phc_…                             # production, when agreed
+  ```
+
+  `POSTHOG_HOST` (optional) overrides the default `https://us.i.posthog.com`.
+  Every capture, from a mutation or an action, schedules the component's
+  send action (`ctx.scheduler.runAfter(0, …)`); from a mutation it commits
+  or rolls back with the mutation, and the event keeps the caller's
+  timestamp. Feature flags are not enabled: no `POSTHOG_PERSONAL_API_KEY` is
+  forwarded, so the component's five-minute flag-refresh cron is a no-op. An
+  event a user caused has the user's Clerk id as its distinct id, the id the
+  browser identifies them by, so both land on one person. System events use
+  `server` with `$process_person_profile: false` and create no person.
+  The component stamps every server event `$lib: posthog-convex` (plus
+  `$is_server: true`; browser events have `$lib: web`) and overrides any
+  `$lib` we pass; filter on it where a name also exists client-side
+  (`favorite_toggled`).
+
+  | Event | Distinct id | Props |
+  |---|---|---|
+  | `import_run_finished` | `server` | `source_key`, `status` (`succeeded` / `failed` / `stopped`), `records_seen`, `records_changed`, `error_count`, `duration_ms` |
+  | `source_unhealthy`, `source_recovered` | `server` | `source_key`, `consecutive_failures` |
+  | `moderation_action` | the Moderator | `action`, `target_kind` (`comment` / `comment_author` / `review` / `proposal`), `actor_role` |
+  | `rating_set` | the user | `kind` (`series` / `volume` / `edition`), `score` (1–100, `null` when cleared), `cleared` |
+  | `review_saved` | the user | `kind`, `spoiler`, `length_bucket` (`under_100` / `100_499` / `500_1999` / `2000_plus`), `edited` |
+  | `favorite_toggled` | the user | `kind`, `favorite` |
+
+  `moderation_action` covers comment `moderate` (approve, hide, unhide,
+  remove, restore) and `setShadowed` (shadow, unshadow), review
+  `setHidden` (hide, unhide), and proposal approve, reject and
+  request_changes (a stale approval that applied nothing is not sent).
+
+  **Exceptions.** The unattended actions (the hourly import tick, every
+  source adapter's sync, and the rebuild crons) run inside
+  `withExceptionCapture`: an error that escapes is sent through the
+  component's `captureException` as PostHog's `$exception` (type, message
+  and stack, plus `function_name`, e.g. `ann.sync`, on distinct id `server`)
+  and then rethrown, so Convex still logs the failure. It shows up in
+  PostHog Error tracking.
+- **Querying from Claude Code.** `.mcp.json` registers PostHog's hosted MCP
+  server in read-only mode (`https://mcp.posthog.com/mcp?readonly=true`).
+  Run `/mcp` in Claude Code once and complete the PostHog OAuth login. For
+  PostHog's skills as well, install the plugin:
+  `claude plugin marketplace add PostHog/ai-plugin` then
+  `claude plugin install posthog@posthog`. Never commit a personal API key
+  (`phx_…`) into `.mcp.json`.
+
 ## Mature titles (18+)
 
 A **Mature Series** (CONTEXT.md) stays out of browse, search, the home
@@ -1428,9 +1757,11 @@ who has not opted in they lead with a notice and draw every cover as cloth
 marked 18+. The art isn't even requested. Those pages carry
 `<meta name="rating" content="adult">` and no cover-led social card.
 
-**Who opts in.** Anyone. A first visit asks once, "Allow mature content?",
-and remembers the answer in a `mangadb-mature` cookie (`1` allow, `0` hide;
-`src/lib/mature.tsx`). It can be changed later under Mature content in the
+**Who opts in.** Anyone. The first time a browser reaches the Series
+library or a Series page it asks once, "Allow mature content?", and
+remembers the answer in a `mangadb-mature` cookie (`1` allow, `0` hide;
+`src/lib/mature.tsx`). The home page and every other page never ask; they
+simply stay non-mature until the viewer has opted in. It can be changed later under Mature content in the
 Series filters, in Library → Settings, or from the notice on a mature page.
 Those ask "I'm 18 or older" before allowing.
 The cookie lets the server render and every catalog read agree: public

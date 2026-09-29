@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { useIsModerator } from "~/lib/moderation";
+import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 
 /**
@@ -124,6 +124,7 @@ function ModRolesContent() {
         <Link to="/mod/imports">Imports</Link>
         <Link to="/mod/launch">Launch</Link>
         <Link to="/mod/packaging">Catalog gaps</Link>
+        <CommentsQueueLink />
       </nav>
 
       <section className="mod-panel">

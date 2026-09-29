@@ -6,7 +6,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { useIsModerator } from "~/lib/moderation";
+import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
@@ -103,6 +103,7 @@ function Launch({ canAct }: { canAct: boolean }) {
         <Link to="/mod/imports">Imports</Link>
         <Link to="/mod/queue">Review queue</Link>
         <Link to="/mod/packaging">Catalog gaps</Link>
+        <CommentsQueueLink />
       </nav>
 
       <Checklist />

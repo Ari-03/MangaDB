@@ -17,6 +17,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { primaryVolumeSeries } from "../catalogPages";
 import {
   displayInfo,
   getCanonical,
@@ -24,6 +25,14 @@ import {
   type CatalogDoc,
   type RecordRef,
 } from "../moderation";
+import {
+  ratingsOf,
+  recountRatings,
+  reviewsOf,
+  targetFields,
+  targetOfRow,
+  type TargetId,
+} from "./ratings";
 import { sameValue } from "./values";
 
 const fail = (code: string, message: string): never => {
@@ -290,6 +299,165 @@ async function recomputeReleaseDenorms(
 }
 
 /**
+ * Move the loser's Ratings and Reviews to the survivor, one per user × target:
+ * where a user already rated or reviewed the survivor, the survivor's row
+ * wins and the loser's is removed (Split reinserts it). The two may be of
+ * different kinds (an omnibus collapsing onto its Volume): the loser's key
+ * is cleared as the survivor's is set, so a row keeps exactly one. The
+ * aggregates are recounted afterwards (`recountRatings`), not logged.
+ */
+async function transferRatingsAndReviews(
+  ctx: MutationCtx,
+  log: TransferLog,
+  loser: TargetId,
+  survivor: TargetId,
+): Promise<void> {
+  const patch = {
+    seriesId: undefined,
+    volumeId: undefined,
+    editionId: undefined,
+    ...targetFields(survivor),
+  };
+  const survivorRatings = new Set((await ratingsOf(ctx, survivor)).map((row) => row.userId));
+  for (const row of await ratingsOf(ctx, loser)) {
+    if (survivorRatings.has(row.userId)) await removeRow(ctx, log, "ratings", row);
+    else await repoint(ctx, log, "ratings", row, patch);
+  }
+  const survivorReviews = new Set((await reviewsOf(ctx, survivor)).map((row) => row.userId));
+  for (const row of await reviewsOf(ctx, loser)) {
+    if (survivorReviews.has(row.userId)) await removeRow(ctx, log, "reviews", row);
+    else await repoint(ctx, log, "reviews", row, patch);
+  }
+}
+
+/**
+ * Keep an Edition's own Ratings, Reviews and Favorites reachable when its
+ * coverage stops making it an omnibus: once its coverage rows name exactly
+ * one Volume (a Volume merge folded its two Volumes into one, or a Data Team
+ * remap), it is rated through that Volume (lib/ratings.ts omnibusEdition),
+ * so everything users left on the Edition moves to the Volume. The
+ * Volume's own row wins where a user has both, and the Edition's is removed.
+ * Both aggregates are recounted, which drops the Edition's ratingStats row.
+ * Every move lands in `log`: a merge passes its manifest's log so a Split
+ * puts the rows back (applySplit recounts what they touched). Without a log
+ * the collapse is one-way. Does nothing while the coverage names zero or
+ * several Volumes. Returns how many rows moved or were removed.
+ */
+export async function collapseEditionTakes(
+  ctx: MutationCtx,
+  editionId: Id<"editions">,
+  log: TransferLog = { repointed: [], removed: [], inserted: [] },
+): Promise<number> {
+  const coverage = await ctx.db
+    .query("volumeCoverages")
+    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .collect();
+  const volumeIds = [...new Set(coverage.map((row) => row.volumeId))];
+  const volume = volumeIds.length === 1 ? await ctx.db.get(volumeIds[0]!) : null;
+  if (!volume) return 0;
+  const edition: TargetId = { kind: "edition", id: editionId };
+  const target: TargetId = { kind: "volume", id: volume._id };
+  const before = log.repointed.length + log.removed.length;
+  await transferRatingsAndReviews(ctx, log, edition, target);
+  const favorites = await ctx.db
+    .query("favorites")
+    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .collect();
+  for (const row of favorites) {
+    const existing = await ctx.db
+      .query("favorites")
+      .withIndex("by_user_volume", (q) => q.eq("userId", row.userId).eq("volumeId", volume._id))
+      .unique();
+    if (existing) await removeRow(ctx, log, "favorites", row);
+    else {
+      await repoint(ctx, log, "favorites", row, {
+        editionId: undefined,
+        volumeId: volume._id,
+        seriesId: volume.seriesId,
+      });
+    }
+  }
+  const moved = log.repointed.length + log.removed.length - before;
+  if (moved > 0) {
+    await recountRatings(ctx, edition);
+    await recountRatings(ctx, target);
+  }
+  return moved;
+}
+
+/**
+ * Ratings, Reviews and Favorites left on Editions covering this Volume and
+ * exactly one other: what `collapseEditionTakes` would move to the survivor
+ * if the two Volumes were merged. The impact preview's count.
+ */
+async function collapsibleTakes(ctx: QueryCtx, volumeId: Id<"volumes">): Promise<number> {
+  const covering = await ctx.db
+    .query("volumeCoverages")
+    .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
+    .collect();
+  let count = 0;
+  for (const editionId of new Set(covering.map((row) => row.editionId))) {
+    const rows = await ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+      .collect();
+    if (new Set(rows.map((row) => row.volumeId)).size !== 2) continue;
+    const target: TargetId = { kind: "edition", id: editionId };
+    count += (await ratingsOf(ctx, target)).length + (await reviewsOf(ctx, target)).length;
+    count += (
+      await ctx.db
+        .query("favorites")
+        .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+        .collect()
+    ).length;
+  }
+  return count;
+}
+
+/** A Series, Volume or Edition ref as a rating target; other record types have none. */
+function ratingTarget(ref: RecordRef): TargetId | null {
+  if (ref.type === "series") return { kind: "series", id: ref.id as Id<"series"> };
+  if (ref.type === "volume") return { kind: "volume", id: ref.id as Id<"volumes"> };
+  if (ref.type === "edition") return { kind: "edition", id: ref.id as Id<"editions"> };
+  return null;
+}
+
+/** Recount both sides' rating aggregates after a merge or split moved Ratings. */
+async function recountMergedRatings(ctx: MutationCtx, a: RecordRef, b: RecordRef) {
+  for (const ref of [a, b]) {
+    const target = ratingTarget(ref);
+    if (target) await recountRatings(ctx, target);
+  }
+}
+
+/**
+ * Every rating target a manifest moved Ratings onto or off. Beyond the
+ * merge's own two records these are the Editions a Volume merge collapsed
+ * (collapseEditionTakes), which Split recounts once the Ratings are back.
+ */
+function ratingTargetsIn(manifests: Array<Doc<"mergeManifests">>): TargetId[] {
+  type Keys = Parameters<typeof targetOfRow>[0];
+  const keys = new Set(["seriesId", "volumeId", "editionId"]);
+  const targets = new Map<string, TargetId>();
+  // Manifest values are stored untyped (v.any()); these are rating keys.
+  const add = (row: Keys) => {
+    const target = targetOfRow(row);
+    if (target) targets.set(target.id, target);
+  };
+  for (const manifest of manifests) {
+    for (const entry of manifest.repointed) {
+      if (entry.table !== "ratings" || !keys.has(entry.field)) continue;
+      add({ [entry.field]: entry.before } as Keys);
+      add({ [entry.field]: entry.after } as Keys);
+    }
+    for (const row of manifest.removed) {
+      if (row.table === "ratings") add(row.doc as Keys);
+    }
+  }
+  return [...targets.values()];
+}
+
+/**
  * Transfer every compatible reference from the merge loser to the survivor:
  * child records, relationship edges, and user tracking. Where a transferred
  * row would duplicate one the survivor already has (a user tracking both
@@ -477,6 +645,48 @@ async function transferReferences(
       for (const row of volumeProgress) {
         await repoint(ctx, log, "volumeProgress", row, { seriesId: survivorId });
       }
+      await transferRatingsAndReviews(
+        ctx,
+        log,
+        { kind: "series", id: loserId },
+        { kind: "series", id: survivorId },
+      );
+      // Favorites: a Series favorite moves over unless the user already
+      // favorited the survivor; a Volume or Edition favorite keeps its
+      // target (a Volume just moved above) and follows it with the Series
+      // denorm.
+      const favorites = await ctx.db
+        .query("favorites")
+        .withIndex("by_series", (q) => q.eq("seriesId", loserId))
+        .collect();
+      for (const row of favorites) {
+        if (row.volumeId === undefined && row.editionId === undefined) {
+          const existing = await ctx.db
+            .query("favorites")
+            .withIndex("by_user_series", (q) =>
+              q
+                .eq("userId", row.userId)
+                .eq("seriesId", survivorId)
+                .eq("volumeId", undefined)
+                .eq("editionId", undefined),
+            )
+            .unique();
+          if (existing) {
+            await removeRow(ctx, log, "favorites", row);
+            continue;
+          }
+        }
+        await repoint(ctx, log, "favorites", row, { seriesId: survivorId });
+      }
+      // Comments carry the Series on every row (Volume Comments too, whose
+      // Volumes just moved above); there is no per-user clash to resolve.
+      const comments = await ctx.db
+        .query("comments")
+        .withIndex("by_series", (q) => q.eq("seriesId", loserId))
+        .collect();
+      for (const row of comments) {
+        await repoint(ctx, log, "comments", row, { seriesId: survivorId });
+      }
 
       for (const editionId of affectedEditions) {
         await recomputeReleaseDenorms(ctx, log, editionId);
@@ -525,9 +735,45 @@ async function transferReferences(
           });
         }
       }
+      await transferRatingsAndReviews(
+        ctx,
+        log,
+        { kind: "volume", id: loserId },
+        { kind: "volume", id: survivorId },
+      );
+      const favorites = await ctx.db
+        .query("favorites")
+        .withIndex("by_volume", (q) => q.eq("volumeId", loserId))
+        .collect();
+      for (const row of favorites) {
+        const existing = await ctx.db
+          .query("favorites")
+          .withIndex("by_user_volume", (q) => q.eq("userId", row.userId).eq("volumeId", survivorId))
+          .unique();
+        if (existing) await removeRow(ctx, log, "favorites", row);
+        else {
+          await repoint(ctx, log, "favorites", row, {
+            volumeId: survivorId,
+            seriesId: survivor.seriesId,
+          });
+        }
+      }
+      const comments = await ctx.db
+        .query("comments")
+        .withIndex("by_volume", (q) => q.eq("volumeId", loserId))
+        .collect();
+      for (const row of comments) {
+        await repoint(ctx, log, "comments", row, {
+          volumeId: survivorId,
+          seriesId: survivor.seriesId,
+        });
+      }
 
+      // An omnibus of just these two Volumes now covers one: its Ratings,
+      // Reviews and Favorites move to the survivor (Split moves them back).
       for (const editionId of affectedEditions) {
         await recomputeReleaseDenorms(ctx, log, editionId);
+        await collapseEditionTakes(ctx, editionId, log);
       }
       return;
     }
@@ -581,6 +827,31 @@ async function transferReferences(
       // Moved releases (and any the coverage change affected) get fresh
       // seriesIds/publisherId denorms from the survivor edition.
       await recomputeReleaseDenorms(ctx, log, survivorId);
+
+      // An omnibus is a rating target of its own: its Ratings, Reviews and
+      // Favorites move to the survivor, the survivor's row winning a clash.
+      // A moved Favorite takes the survivor's Series denorm (primaryVolumeSeries,
+      // as lib/ratings.ts reads it).
+      await transferRatingsAndReviews(
+        ctx,
+        log,
+        { kind: "edition", id: loserId },
+        { kind: "edition", id: survivorId },
+      );
+      const primarySeries = await primaryVolumeSeries(ctx, survivorId);
+      const seriesDenorm = primarySeries ? { seriesId: primarySeries._id } : {};
+      const favorites = await ctx.db
+        .query("favorites")
+        .withIndex("by_edition", (q) => q.eq("editionId", loserId))
+        .collect();
+      for (const row of favorites) {
+        const existing = await ctx.db
+          .query("favorites")
+          .withIndex("by_user_edition", (q) => q.eq("userId", row.userId).eq("editionId", survivorId))
+          .unique();
+        if (existing) await removeRow(ctx, log, "favorites", row);
+        else await repoint(ctx, log, "favorites", row, { editionId: survivorId, ...seriesDenorm });
+      }
       return;
     }
 
@@ -746,6 +1017,7 @@ export async function applyMerge(
   const log: TransferLog = { repointed: [], removed: [], inserted: [] };
   await transferProvenance(ctx, log, loser, survivor.id);
   await transferReferences(ctx, log, loser.type, loserDoc, survivorDoc);
+  await recountMergedRatings(ctx, survivor, loser);
 
   await ctx.db.patch(loser.id, {
     status: "merged",
@@ -853,6 +1125,8 @@ export async function applySplit(
   }
 
   await ctx.db.patch(ref.id, { status: "active", mergedIntoId: undefined } as never);
+  await recountMergedRatings(ctx, ref, survivor);
+  for (const target of ratingTargetsIn(manifests)) await recountRatings(ctx, target);
   const reversedAt = Date.now();
   for (const manifest of manifests) await ctx.db.patch(manifest._id, { reversedAt });
 
@@ -1018,6 +1292,26 @@ export async function impactOf(
             .collect()
         ).length,
       );
+      add("Ratings", (await ratingsOf(ctx, { kind: "series", id })).length);
+      add("Reviews", (await reviewsOf(ctx, { kind: "series", id })).length);
+      add(
+        "Favorites (of the series and its volumes)",
+        (
+          await ctx.db
+            .query("favorites")
+            .withIndex("by_series", (q) => q.eq("seriesId", id))
+            .collect()
+        ).length,
+      );
+      add(
+        "Comments (on the series and its volumes)",
+        (
+          await ctx.db
+            .query("comments")
+            .withIndex("by_series", (q) => q.eq("seriesId", id))
+            .collect()
+        ).length,
+      );
       break;
     }
     case "volume": {
@@ -1036,6 +1330,30 @@ export async function impactOf(
         (
           await ctx.db
             .query("volumeProgress")
+            .withIndex("by_volume", (q) => q.eq("volumeId", id))
+            .collect()
+        ).length,
+      );
+      add("Ratings", (await ratingsOf(ctx, { kind: "volume", id })).length);
+      add("Reviews", (await reviewsOf(ctx, { kind: "volume", id })).length);
+      add(
+        "Ratings, reviews and favorites of two-volume omnibuses (move to the survivor if the other Volume is merged)",
+        await collapsibleTakes(ctx, id),
+      );
+      add(
+        "Favorites",
+        (
+          await ctx.db
+            .query("favorites")
+            .withIndex("by_volume", (q) => q.eq("volumeId", id))
+            .collect()
+        ).length,
+      );
+      add(
+        "Comments",
+        (
+          await ctx.db
+            .query("comments")
             .withIndex("by_volume", (q) => q.eq("volumeId", id))
             .collect()
         ).length,
@@ -1070,6 +1388,17 @@ export async function impactOf(
         (
           await ctx.db
             .query("releases")
+            .withIndex("by_edition", (q) => q.eq("editionId", id))
+            .collect()
+        ).length,
+      );
+      add("Ratings", (await ratingsOf(ctx, { kind: "edition", id })).length);
+      add("Reviews", (await reviewsOf(ctx, { kind: "edition", id })).length);
+      add(
+        "Favorites",
+        (
+          await ctx.db
+            .query("favorites")
             .withIndex("by_edition", (q) => q.eq("editionId", id))
             .collect()
         ).length,

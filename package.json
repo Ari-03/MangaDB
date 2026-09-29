@@ -19,9 +19,12 @@
   "dependencies": {
     "@clerk/tanstack-react-start": "^1.5.2",
     "@convex-dev/rate-limiter": "^0.3.2",
+    "@posthog/convex": "^2.1.5",
+    "@posthog/react": "^1.11.2",
     "@tanstack/react-router": "^1.170.29",
     "@tanstack/react-start": "^1.168.46",
     "convex": "^1.44.0",
+    "posthog-js": "^1.434.17",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

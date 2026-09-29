@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 
 import { api } from "../../convex/_generated/api";
-import { ProposalStateChip, useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink, ProposalStateChip, useIsDataTeam } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 
 /**
@@ -71,6 +71,7 @@ function MyProposals() {
       </p>
       <nav className="mod-tools" aria-label="Data team tools">
         <Link to="/mod/queue">Shared review queue</Link>
+        <CommentsQueueLink />
       </nav>
       {rows === undefined ? (
         <p className="notice">Loading…</p>

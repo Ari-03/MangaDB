@@ -23,6 +23,22 @@ describe("users.viewer", () => {
   });
 });
 
+describe("users.setScoreFormat", () => {
+  it("defaults to point10, stores the choice, and needs a signed-in user", async () => {
+    const t = convexTest(schema);
+    const asA = t.withIdentity({ subject: SUBJECT_A });
+    await asA.mutation(api.users.claimUsername, { username: "alice" });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ scoreFormat: "point10" });
+
+    await asA.mutation(api.users.setScoreFormat, { format: "smiley3" });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ scoreFormat: "smiley3" });
+
+    await expect(t.mutation(api.users.setScoreFormat, { format: "star5" })).rejects.toBeInstanceOf(
+      ConvexError,
+    );
+  });
+});
+
 describe("users.claimUsername", () => {
   it("rejects unauthenticated claims", async () => {
     const t = convexTest(schema);
@@ -188,6 +204,22 @@ describe("users.purgeUser", () => {
         seriesId,
         readCount: 1,
       });
+      const commentId = await ctx.db.insert("comments", {
+        userId: user!._id,
+        seriesId,
+        volumeId,
+        body: "A comment",
+        spoiler: false,
+        status: "approved",
+        reportCount: 1,
+        createdAt: 0,
+      });
+      await ctx.db.insert("commentReports", {
+        commentId,
+        reporterId: user!._id,
+        reason: "spam",
+        createdAt: 0,
+      });
     });
 
     await t.mutation(internal.users.purgeUser, { clerkSubject: SUBJECT_A });
@@ -198,6 +230,8 @@ describe("users.purgeUser", () => {
       expect(await ctx.db.query("userSeriesStates").collect()).toHaveLength(0);
       expect(await ctx.db.query("releaseProgress").collect()).toHaveLength(0);
       expect(await ctx.db.query("volumeProgress").collect()).toHaveLength(0);
+      expect(await ctx.db.query("comments").collect()).toHaveLength(0);
+      expect(await ctx.db.query("commentReports").collect()).toHaveLength(0);
     });
 
     // The catalog is untouched and the subject is back to first-sign-in state.

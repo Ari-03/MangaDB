@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { PROPOSAL_WARNINGS } from "../../convex/proposals";
-import { useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink, useIsDataTeam } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 
 /**
@@ -121,6 +121,7 @@ function Queue() {
         <Link to="/mod/imports">Imports</Link>
         <Link to="/mod/launch">Launch</Link>
         <Link to="/mod/packaging">Catalog gaps</Link>
+        <CommentsQueueLink />
       </nav>
 
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>

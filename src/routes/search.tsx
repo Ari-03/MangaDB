@@ -2,6 +2,7 @@ import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, type CSSProperties } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { track } from "~/lib/analytics";
 import { catalogQuery, type SearchResults } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
@@ -73,6 +74,18 @@ const LIVE_DEBOUNCE_MS = 250;
 function SearchPage() {
   const { q, results } = Route.useLoaderData();
   const navigate = Route.useNavigate();
+
+  // One search_performed per query the loader actually ran: header submits,
+  // this page's box once typing settles, "Did you mean" links, direct URLs.
+  // Keyed on the query alone, so a reload of the same query (a mature-titles
+  // change) is not a second search. Never the query text itself.
+  useEffect(() => {
+    if (q === "" || results === null) return; // null: the catalog was unreachable
+    track("search_performed", {
+      queryLength: q.length,
+      resultCount: results.series.length + results.publishers.length + results.authors.length,
+    });
+  }, [q]);
 
   // The box is controlled so results can follow it: once typing pauses, the
   // URL is replaced (the loader re-runs; the old results stay up meanwhile).

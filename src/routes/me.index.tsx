@@ -5,11 +5,13 @@ import { useState, type MouseEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { countLibrary, LibraryCollection } from "~/lib/collection";
+import { LibraryFavorites } from "~/lib/favorites";
 import { LibraryUpcoming } from "~/lib/follows";
 import { todaySortKey } from "~/lib/month";
 import type { EntryState } from "~/lib/quickActions";
 import { LibraryReading } from "~/lib/reading";
 import { MatureSettings } from "~/lib/mature";
+import { ScoreFormatSettings } from "~/lib/ratings";
 import { SharingSettings } from "~/lib/sharing";
 import { convexClient } from "~/providers";
 
@@ -17,6 +19,7 @@ const TABS = [
   { key: "collection", label: "Collection" },
   { key: "reading", label: "Reading" },
   { key: "upcoming", label: "Upcoming" },
+  { key: "favorites", label: "Favorites" },
   { key: "settings", label: "Settings" },
 ] as const;
 type Tab = (typeof TABS)[number]["key"];
@@ -43,8 +46,8 @@ function viewHref(tab: Tab, shelf: EntryState): string {
 
 /**
  * /me — the viewer's own library, in tabs: what you have (one shelf per
- * collection state), what you are reading, what is coming, and the account
- * and sharing settings. The tab and shelf are read from the URL on arrival
+ * collection state), what you are reading, what is coming, your Favorites,
+ * and the account, sharing, and rating settings. The tab and shelf are read from the URL on arrival
  * (linkable, right before hydration) and then switched in place: a click
  * only changes local state and rewrites the address, never navigates, so
  * the /me auth gate is not re-run for every shelf. Each tab mounts the
@@ -155,6 +158,11 @@ function MePage() {
           {/* Series Follows + My Upcoming Releases (#29). */}
           <LibraryUpcoming />
         </section>
+      ) : tab === "favorites" ? (
+        <section className="lib-panel lib-view" aria-label="Favorites">
+          {/* Favorited Series and Volumes, newest first; always private. */}
+          <LibraryFavorites />
+        </section>
       ) : (
         <section className="lib-panel lib-settings lib-view" aria-label="Settings">
           <div className="acct-panel">
@@ -166,6 +174,12 @@ function MePage() {
           <div className="acct-panel">
             <h2 className="lib-group-title">Mature titles</h2>
             <MatureSettings />
+          </div>
+          <div className="acct-panel">
+            <h2 className="lib-group-title">Rating format</h2>
+            {/* Rating Format: the control and display for scores; stored
+                ratings are 1-100 whatever is chosen here. */}
+            <ScoreFormatSettings />
           </div>
           <div className="acct-panel">
             <h2 className="lib-group-title">Account</h2>
@@ -200,6 +214,7 @@ function TabCountInner({ tab }: { tab: Tab }) {
     api.follows.myUpcoming,
     tab === "upcoming" ? { todaySort } : "skip",
   );
+  const favorites = useQuery(api.favorites.mine, tab === "favorites" ? {} : "skip");
   const count =
     tab === "collection" && library
       ? Object.values(countLibrary(library)).reduce((sum, n) => sum + n, 0)
@@ -207,7 +222,9 @@ function TabCountInner({ tab }: { tab: Tab }) {
         ? reading.series.length
         : tab === "upcoming" && upcoming
           ? upcoming.items.length
-          : null;
+          : tab === "favorites" && favorites
+            ? favorites.items.length
+            : null;
   if (count === null) return null;
   return <span className="lib-tab-count">{count}</span>;
 }

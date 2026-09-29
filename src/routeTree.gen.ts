@@ -17,6 +17,7 @@ import { Route as SearchRouteImport } from './routes/search'
 import { Route as AuthorsIndexRouteImport } from './routes/authors.index'
 import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
 import { Route as MeIndexRouteImport } from './routes/me.index'
+import { Route as ModCommentsRouteImport } from './routes/mod.comments'
 import { Route as ModImportsRouteImport } from './routes/mod.imports'
 import { Route as ModLaunchRouteImport } from './routes/mod.launch'
 import { Route as ModPackagingRouteImport } from './routes/mod.packaging'
@@ -87,6 +88,11 @@ const MeIndexRoute = MeIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => MeRoute,
+} as any)
+const ModCommentsRoute = ModCommentsRouteImport.update({
+  id: '/mod/comments',
+  path: '/mod/comments',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ModImportsRoute = ModImportsRouteImport.update({
   id: '/mod/imports',
@@ -247,6 +253,7 @@ export interface FileRoutesByFullPath {
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/comments': typeof ModCommentsRoute
   '/mod/imports': typeof ModImportsRoute
   '/mod/launch': typeof ModLaunchRoute
   '/mod/packaging': typeof ModPackagingRoute
@@ -286,6 +293,7 @@ export interface FileRoutesByTo {
   '/claim-username': typeof ClaimUsernameRoute
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/comments': typeof ModCommentsRoute
   '/mod/imports': typeof ModImportsRoute
   '/mod/launch': typeof ModLaunchRoute
   '/mod/packaging': typeof ModPackagingRoute
@@ -327,6 +335,7 @@ export interface FileRoutesById {
   '/me': typeof MeRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
+  '/mod/comments': typeof ModCommentsRoute
   '/mod/imports': typeof ModImportsRoute
   '/mod/launch': typeof ModLaunchRoute
   '/mod/packaging': typeof ModPackagingRoute
@@ -369,6 +378,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/comments'
     | '/mod/imports'
     | '/mod/launch'
     | '/mod/packaging'
@@ -408,6 +418,7 @@ export interface FileRouteTypes {
     | '/claim-username'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/comments'
     | '/mod/imports'
     | '/mod/launch'
     | '/mod/packaging'
@@ -448,6 +459,7 @@ export interface FileRouteTypes {
     | '/me'
     | '/search'
     | '/isbn/$isbn'
+    | '/mod/comments'
     | '/mod/imports'
     | '/mod/launch'
     | '/mod/packaging'
@@ -489,6 +501,7 @@ export interface RootRouteChildren {
   MeRoute: typeof MeRouteWithChildren
   SearchRoute: typeof SearchRoute
   IsbnIsbnRoute: typeof IsbnIsbnRoute
+  ModCommentsRoute: typeof ModCommentsRoute
   ModImportsRoute: typeof ModImportsRoute
   ModLaunchRoute: typeof ModLaunchRoute
   ModPackagingRoute: typeof ModPackagingRoute
@@ -579,6 +592,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/me/'
       preLoaderRoute: typeof MeIndexRouteImport
       parentRoute: typeof MeRoute
+    }
+    '/mod/comments': {
+      id: '/mod/comments'
+      path: '/mod/comments'
+      fullPath: '/mod/comments'
+      preLoaderRoute: typeof ModCommentsRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/mod/imports': {
       id: '/mod/imports'
@@ -810,6 +830,7 @@ const rootRouteChildren: RootRouteChildren = {
   MeRoute: MeRouteWithChildren,
   SearchRoute: SearchRoute,
   IsbnIsbnRoute: IsbnIsbnRoute,
+  ModCommentsRoute: ModCommentsRoute,
   ModImportsRoute: ModImportsRoute,
   ModLaunchRoute: ModLaunchRoute,
   ModPackagingRoute: ModPackagingRoute,

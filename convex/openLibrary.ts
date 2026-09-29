@@ -47,6 +47,7 @@ import {
 } from "./lib/pipeline";
 import { olEditionValidator, parseDumpLine, type OlEditionSnapshot } from "./lib/openLibrary";
 import { reconcileFields } from "./lib/reconcile";
+import { withExceptionCapture } from "./lib/posthog";
 
 export const SOURCE_KEY = "openlibrary";
 const IMPORT_COMMENT = "Imported from OpenLibrary (CC0).";
@@ -90,156 +91,157 @@ export const sync = internalAction({
     changed: v.optional(v.number()),
     errors: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, args): Promise<SyncResult> => {
-    // Explicit annotations break the type cycle with imports.ts's adapter map.
-    const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-      internal.importSources.getByKey,
-      { key: SOURCE_KEY },
-    );
-    if (!source) {
-      throw new Error(
-        "The approved-source registry has no \"openlibrary\" row. Run: npx convex run importSources:seedRegistry '{}'",
+  handler: async (ctx, args): Promise<SyncResult> =>
+    withExceptionCapture("openLibrary.sync", ctx, async () => {
+      // Explicit annotations break the type cycle with imports.ts's adapter map.
+      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
+        internal.importSources.getByKey,
+        { key: SOURCE_KEY },
       );
-    }
-    if (!source.enabled && args.runId === undefined) {
-      return { skipped: "disabled" as const };
-    }
-    const dumpUrl = args.dumpUrl ?? process.env.OPENLIBRARY_DUMP_URL;
-    if (!dumpUrl) {
-      console.warn(
-        "[imports] OpenLibrary adapter is unconfigured (set OPENLIBRARY_DUMP_URL to the filtered dump) — skipping",
-      );
-      return { skipped: "unconfigured" as const };
-    }
-
-    const maxLines = args.maxLines ?? DEFAULT_MAX_LINES;
-    if (!Number.isSafeInteger(maxLines) || maxLines < 1 || maxLines > DEFAULT_MAX_LINES) {
-      throw new Error(`maxLines must be an integer between 1 and ${DEFAULT_MAX_LINES}`);
-    }
-    const runId = await runToContinue(ctx, source, args);
-    if (runId === null) return { skipped: "disabled" as const };
-    const startLine = args.startLine ?? 0;
-    const errors = [...(args.errors ?? [])];
-    let seen = args.seen ?? 0;
-    let changed = args.changed ?? 0;
-
-    try {
-      const res = await fetch(dumpUrl, {
-        headers: { "User-Agent": USER_AGENT },
-      });
-      if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status} for the dump at ${dumpUrl}`);
-      }
-      // Transparent gzip support where the runtime provides it.
-      let stream: ReadableStream<Uint8Array> = res.body;
-      if (/\.gz($|\?)/.test(dumpUrl) && typeof DecompressionStream !== "undefined") {
-        stream = stream.pipeThrough(
-          new DecompressionStream("gzip") as unknown as ReadableWritablePair<
-            Uint8Array,
-            Uint8Array
-          >,
+      if (!source) {
+        throw new Error(
+          "The approved-source registry has no \"openlibrary\" row. Run: npx convex run importSources:seedRegistry '{}'",
         );
       }
-
-      const reader = stream.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let lineNo = 0;
-      let processed = 0;
-      let done = false;
-
-      const handleLine = async (line: string) => {
-        // 0-based, like startLine/nextLine: an error's line number is the
-        // startLine an operator passes to reprocess it.
-        const index = lineNo++;
-        if (index < startLine) return;
-        processed++;
-        try {
-          const snapshot = parseDumpLine(line);
-          if (!snapshot) return;
-          seen++;
-          const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, {
-            snapshot,
-          });
-          if (result.changed) changed++;
-        } catch (e) {
-          errors.push(`dump line ${index}: ${errorMessage(e)}`);
-        }
-      };
-
-      while (!done && processed < maxLines) {
-        const chunk = await reader.read();
-        if (chunk.done) {
-          done = true;
-          if (buffer.trim() !== "") await handleLine(buffer);
-          break;
-        }
-        buffer += decoder.decode(chunk.value, { stream: true });
-        let newline = buffer.indexOf("\n");
-        while (newline >= 0 && processed < maxLines) {
-          const line = buffer.slice(0, newline);
-          buffer = buffer.slice(newline + 1);
-          if (line.trim() !== "") await handleLine(line);
-          newline = buffer.indexOf("\n");
-        }
+      if (!source.enabled && args.runId === undefined) {
+        return { skipped: "disabled" as const };
       }
-      await reader.cancel().catch(() => undefined);
+      const dumpUrl = args.dumpUrl ?? process.env.OPENLIBRARY_DUMP_URL;
+      if (!dumpUrl) {
+        console.warn(
+          "[imports] OpenLibrary adapter is unconfigured (set OPENLIBRARY_DUMP_URL to the filtered dump) — skipping",
+        );
+        return { skipped: "unconfigured" as const };
+      }
 
-      if (!done && args.noContinue !== true) {
-        await ctx.scheduler.runAfter(0, internal.openLibrary.sync, {
-          dumpUrl,
-          maxLines: args.maxLines,
-          startLine: startLine + processed,
+      const maxLines = args.maxLines ?? DEFAULT_MAX_LINES;
+      if (!Number.isSafeInteger(maxLines) || maxLines < 1 || maxLines > DEFAULT_MAX_LINES) {
+        throw new Error(`maxLines must be an integer between 1 and ${DEFAULT_MAX_LINES}`);
+      }
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
+      const startLine = args.startLine ?? 0;
+      const errors = [...(args.errors ?? [])];
+      let seen = args.seen ?? 0;
+      let changed = args.changed ?? 0;
+
+      try {
+        const res = await fetch(dumpUrl, {
+          headers: { "User-Agent": USER_AGENT },
+        });
+        if (!res.ok || !res.body) {
+          throw new Error(`HTTP ${res.status} for the dump at ${dumpUrl}`);
+        }
+        // Transparent gzip support where the runtime provides it.
+        let stream: ReadableStream<Uint8Array> = res.body;
+        if (/\.gz($|\?)/.test(dumpUrl) && typeof DecompressionStream !== "undefined") {
+          stream = stream.pipeThrough(
+            new DecompressionStream("gzip") as unknown as ReadableWritablePair<
+              Uint8Array,
+              Uint8Array
+            >,
+          );
+        }
+
+        const reader = stream.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let lineNo = 0;
+        let processed = 0;
+        let done = false;
+
+        const handleLine = async (line: string) => {
+          // 0-based, like startLine/nextLine: an error's line number is the
+          // startLine an operator passes to reprocess it.
+          const index = lineNo++;
+          if (index < startLine) return;
+          processed++;
+          try {
+            const snapshot = parseDumpLine(line);
+            if (!snapshot) return;
+            seen++;
+            const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, {
+              snapshot,
+            });
+            if (result.changed) changed++;
+          } catch (e) {
+            errors.push(`dump line ${index}: ${errorMessage(e)}`);
+          }
+        };
+
+        while (!done && processed < maxLines) {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            done = true;
+            if (buffer.trim() !== "") await handleLine(buffer);
+            break;
+          }
+          buffer += decoder.decode(chunk.value, { stream: true });
+          let newline = buffer.indexOf("\n");
+          while (newline >= 0 && processed < maxLines) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            if (line.trim() !== "") await handleLine(line);
+            newline = buffer.indexOf("\n");
+          }
+        }
+        await reader.cancel().catch(() => undefined);
+
+        if (!done && args.noContinue !== true) {
+          await ctx.scheduler.runAfter(0, internal.openLibrary.sync, {
+            dumpUrl,
+            maxLines: args.maxLines,
+            startLine: startLine + processed,
+            runId,
+            seen,
+            changed,
+            errors: errors.slice(0, 50),
+          });
+          return {
+            runId,
+            recordsSeen: seen,
+            recordsChanged: changed,
+            continued: true,
+            nextLine: startLine + processed,
+            errorCount: errors.length,
+          };
+        }
+
+        await ctx.runMutation(internal.imports.finishRun, {
           runId,
-          seen,
-          changed,
-          errors: errors.slice(0, 50),
+          status: errors.length > 0 ? "failed" : "succeeded",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
         });
         return {
           runId,
           recordsSeen: seen,
           recordsChanged: changed,
-          continued: true,
-          nextLine: startLine + processed,
+          continued: false,
+          nextLine: done ? undefined : startLine + processed,
           errorCount: errors.length,
+          failed: errors.length > 0 ? true : undefined,
+        };
+      } catch (e) {
+        errors.push(errorMessage(e));
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: "failed",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          continued: false,
+          errorCount: errors.length,
+          failed: true,
         };
       }
-
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: errors.length > 0 ? "failed" : "succeeded",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        continued: false,
-        nextLine: done ? undefined : startLine + processed,
-        errorCount: errors.length,
-        failed: errors.length > 0 ? true : undefined,
-      };
-    } catch (e) {
-      errors.push(errorMessage(e));
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: "failed",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        continued: false,
-        errorCount: errors.length,
-        failed: true,
-      };
-    }
-  },
+    }),
 });
 
 // ---------- applying one edition ----------

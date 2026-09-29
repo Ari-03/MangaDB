@@ -9,19 +9,22 @@
 //   during SSR, document.cookie in the browser); route loaders pass it on.
 // - `<MatureProvider>` holds it for components; `useMature()` reads and
 //   changes it. A change rewrites the cookie and reloads every route's data.
-// - It is chosen in three places: the first-visit question
-//   (`<MatureWelcome>`, asked once per browser), Library → Settings
+// - It is chosen in three places: the welcome question (`<MatureWelcome>`,
+//   asked once per browser, only on the Series library and Series pages;
+//   the home page stays non-mature without asking), Library → Settings
 //   (`<MatureSettings>`), and the Series filters (`<MatureFilter>`); plus
 //   the notice on a Mature Series' own page. Turning it on always asks for
 //   the 18+ confirmation, except in the welcome, which is that question.
 // - `<ConcealArt>` wraps a Mature Series' page for viewers who have not
 //   opted in: every <Cover> inside draws cloth marked 18+ instead of art.
 
-import { useRouter } from "@tanstack/react-router";
+import { useRouter, useRouterState } from "@tanstack/react-router";
 import { createIsomorphicFn } from "@tanstack/react-start";
 import { getCookie } from "@tanstack/react-start/server";
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+
+import { track } from "~/lib/analytics";
 
 const COOKIE = "mangadb-mature";
 const YEAR_SECONDS = 60 * 60 * 24 * 365;
@@ -52,6 +55,7 @@ export function MatureProvider({ children }: { children: ReactNode }) {
     // A "no" changes nothing on screen; only a "yes" needs fresh data.
     if (next === on) return;
     setOn(next);
+    track("mature_titles_toggled", { showMature: next });
     // Every loader read the old choice; reload what is on screen.
     void router.invalidate();
   };
@@ -74,13 +78,22 @@ export const useArtConcealed = () => useContext(ConcealContext);
  * A Mature Series' page (or an adult-only publisher's) for this viewer:
  * when they have not opted in, a notice leads and every cover inside is
  * drawn as cloth marked 18+. When they have, the children render untouched.
+ * `notice={false}` conceals without the notice, for one cover in a list.
  */
-export function ConcealArt({ mature, children }: { mature: boolean; children: ReactNode }) {
+export function ConcealArt({
+  mature,
+  notice = true,
+  children,
+}: {
+  mature: boolean;
+  notice?: boolean;
+  children: ReactNode;
+}) {
   const { showMature } = useMature();
   const concealed = mature && !showMature;
   return (
     <ConcealContext.Provider value={concealed}>
-      {concealed ? <MatureNotice /> : null}
+      {concealed && notice ? <MatureNotice /> : null}
       {children}
     </ConcealContext.Provider>
   );
@@ -107,17 +120,23 @@ function MatureNotice() {
 
 /**
  * The 18+ confirmation that turning the choice on always goes through.
- * A native <dialog>, opened modal as it mounts, portalled to <body>: it
- * holds a <form method="dialog">, and the Series filters that open it are
- * a form themselves. Only ever mounted in the browser (on a click).
+ * A native <dialog>, opened modal as it mounts, portalled to <body>. The
+ * buttons close it themselves rather than through a <form method="dialog">:
+ * React bubbles a portal's events through the component tree, so a submit
+ * here would reach the Series filters' form, whose handler prevents the
+ * default and with it the dialog's own close. Only ever mounted in the
+ * browser (on a click); closing it (buttons or Escape) unmounts it.
  */
 function AgeConfirm({ onClose }: { onClose: () => void }) {
   const { setShowMature } = useMature();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const close = () => dialogRef.current?.close();
   return createPortal(
     <dialog
       className="age-confirm"
       aria-labelledby="age-confirm-title"
       ref={(el) => {
+        dialogRef.current = el;
         if (el && !el.open) el.showModal();
       }}
       onClose={onClose}
@@ -127,14 +146,21 @@ function AgeConfirm({ onClose }: { onClose: () => void }) {
         Mature titles are rated 18+ by their publishers and can include explicit sexual content
         or extreme violence. They will appear across the catalog, with their covers.
       </p>
-      <form method="dialog" className="age-confirm-actions">
-        <button className="btn" value="cancel">
+      <div className="age-confirm-actions">
+        <button className="btn" type="button" onClick={close}>
           Cancel
         </button>
-        <button className="btn btn-primary" value="confirm" onClick={() => setShowMature(true)}>
+        <button
+          className="btn btn-primary"
+          type="button"
+          onClick={() => {
+            setShowMature(true);
+            close();
+          }}
+        >
           I'm 18 or older
         </button>
-      </form>
+      </div>
     </dialog>,
     document.body,
   );
@@ -210,16 +236,24 @@ export function MatureFilter() {
   );
 }
 
+/** Where the welcome may open: the Series library and every Series page. */
+const WELCOME_PATHS = /^\/series(\/|$)/;
+
 /**
- * Asked once per browser, on the first visit: allow mature content or keep
- * it hidden. Either answer (or dismissing it) is remembered, and either
- * can be changed later in Settings or the Series filters. Opened after
- * hydration, so the server render never depends on it.
+ * Asked once per browser, the first time the viewer reaches the Series
+ * library or a Series page: allow mature content or keep it hidden. The
+ * home page and everything else stay non-mature without asking. Either
+ * answer (or dismissing it) is remembered, and either can be changed later
+ * in Settings or the Series filters. Opened after hydration, so the server
+ * render never depends on it.
  */
 function MatureWelcome() {
   const { setShowMature } = useMature();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [open, setOpen] = useState(false);
-  useEffect(() => setOpen(!answered()), []);
+  useEffect(() => {
+    if (WELCOME_PATHS.test(pathname) && !answered()) setOpen(true);
+  }, [pathname]);
   if (!open) return null;
   const answer = (allow: boolean) => {
     setShowMature(allow);
@@ -241,14 +275,14 @@ function MatureWelcome() {
         content. They are hidden unless you allow them. You can change this any time in the
         Series filters or your settings.
       </p>
-      <form method="dialog" className="age-confirm-actions">
-        <button className="btn" value="hide" onClick={() => answer(false)}>
+      <div className="age-confirm-actions">
+        <button className="btn" type="button" onClick={() => answer(false)}>
           Keep hidden
         </button>
-        <button className="btn btn-primary" value="allow" onClick={() => answer(true)}>
+        <button className="btn btn-primary" type="button" onClick={() => answer(true)}>
           I'm 18+, allow
         </button>
-      </form>
+      </div>
     </dialog>
   );
 }

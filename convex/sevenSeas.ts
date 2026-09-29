@@ -57,6 +57,7 @@ import {
   parseBookPage,
   type BookSnapshot,
 } from "./lib/sevenSeas";
+import { withExceptionCapture } from "./lib/posthog";
 
 export const SOURCE_KEY = "sevenseas";
 const BASE_URL = "https://sevenseasentertainment.com";
@@ -96,186 +97,187 @@ export const sync = internalAction({
     /** Re-fetch details even for observations whose modified_gmt is unchanged. */
     force: v.optional(v.boolean()),
   },
-  handler: async (ctx, args): Promise<SyncResult> => {
-    // Explicit annotations break the type cycle with imports.ts's adapter map.
-    const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-      internal.importSources.getByKey,
-      { key: SOURCE_KEY },
-    );
-    if (!source) {
-      throw new Error(
-        "The approved-source registry has no \"sevenseas\" row. Run: npx convex run importSources:seedRegistry '{}'",
+  handler: async (ctx, args): Promise<SyncResult> =>
+    withExceptionCapture("sevenSeas.sync", ctx, async () => {
+      // Explicit annotations break the type cycle with imports.ts's adapter map.
+      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
+        internal.importSources.getByKey,
+        { key: SOURCE_KEY },
       );
-    }
-    if (!source.enabled) return { skipped: "disabled" as const };
-
-    const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
-      sourceKey: SOURCE_KEY,
-    });
-    const runStartedAt = Date.now();
-    const delay = args.politeDelayMs ?? 350;
-    const errors: string[] = [];
-    let seen = 0;
-    let changed = 0;
-    let completeSweep = true;
-    // Invalid listing items plus detail fetch/parse failures: any of them
-    // fails the run so source health notices a recurring problem.
-    let failures = 0;
-    const covers: StoredCovers = new Map();
-
-    try {
-      let page = 1;
-      let totalPages = 1;
-      let detailBudget = args.maxDetailFetches ?? 200;
-
-      while (page <= totalPages) {
-        if (args.maxListingPages !== undefined && page > args.maxListingPages) {
-          completeSweep = false;
-          break;
-        }
-        const res = await politeFetch(
-          `${BASE_URL}/wp-json/wp/v2/books?per_page=100&page=${page}&orderby=modified&order=desc`,
-          delay,
+      if (!source) {
+        throw new Error(
+          "The approved-source registry has no \"sevenseas\" row. Run: npx convex run importSources:seedRegistry '{}'",
         );
-        const pageCount = res.headers.get("x-wp-totalpages");
-        if (pageCount === null || !/^\d+$/.test(pageCount)) {
-          throw new Error("Seven Seas listing is missing valid X-WP-TotalPages");
-        }
-        totalPages = Number(pageCount);
-        if (!Number.isSafeInteger(totalPages)) {
-          throw new Error("Seven Seas listing has an invalid page count");
-        }
-        const items: unknown = await res.json();
-        if (!Array.isArray(items) || (items.length > 0 && totalPages < page)) {
-          throw new Error("Seven Seas listing has an invalid collection shape");
-        }
-        if (items.length === 0 && totalPages >= page) {
-          throw new Error("Seven Seas listing ended before its declared page count");
-        }
-        // A catalog of 6,000+ books never legitimately empties: an empty
-        // listing would otherwise pass as a complete sweep and withdraw all.
-        if (page === 1 && items.length === 0) {
-          throw new Error("Seven Seas listing was empty");
-        }
+      }
+      if (!source.enabled) return { skipped: "disabled" as const };
 
-        for (const raw of items) {
-          const listing = parseBookListing(raw);
-          if (!listing) {
-            // One bad item never aborts the sweep, but it may hide a book,
-            // so absence is not evidence this run.
-            failures++;
-            completeSweep = false;
-            errors.push(`listing page ${page}: invalid book item`);
-            continue;
-          }
-          const note = await ctx.runMutation(internal.sevenSeas.noteListing, {
-            sourceRecordId: listing.sourceRecordId,
-            modifiedGmt: listing.modifiedGmt,
-            force: args.force ?? false,
-            offersBlurb: listing.description !== undefined,
-          });
-          // Presence remains evidence even if the source recategorizes a
-          // previously imported book as prose. Scope changes are not deletion.
-          if (!isMangaBook({ title: listing.title })) continue;
-          seen++;
-          if (!note.needsDetail) continue;
-          if (detailBudget <= 0) {
-            completeSweep = false;
-            continue;
-          }
-          detailBudget--;
+      const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
+        sourceKey: SOURCE_KEY,
+      });
+      const runStartedAt = Date.now();
+      const delay = args.politeDelayMs ?? 350;
+      const errors: string[] = [];
+      let seen = 0;
+      let changed = 0;
+      let completeSweep = true;
+      // Invalid listing items plus detail fetch/parse failures: any of them
+      // fails the run so source health notices a recurring problem.
+      let failures = 0;
+      const covers: StoredCovers = new Map();
 
-          try {
-            const pageRes = await politeFetch(listing.url, delay);
-            const details = parseBookPage(await pageRes.text());
-            const snapshot = normalizeBook(listing, details);
-            if (
-              !isMangaBook({
-                category: snapshot.category,
-                title: snapshot.title,
-              })
-            ) {
+      try {
+        let page = 1;
+        let totalPages = 1;
+        let detailBudget = args.maxDetailFetches ?? 200;
+
+        while (page <= totalPages) {
+          if (args.maxListingPages !== undefined && page > args.maxListingPages) {
+            completeSweep = false;
+            break;
+          }
+          const res = await politeFetch(
+            `${BASE_URL}/wp-json/wp/v2/books?per_page=100&page=${page}&orderby=modified&order=desc`,
+            delay,
+          );
+          const pageCount = res.headers.get("x-wp-totalpages");
+          if (pageCount === null || !/^\d+$/.test(pageCount)) {
+            throw new Error("Seven Seas listing is missing valid X-WP-TotalPages");
+          }
+          totalPages = Number(pageCount);
+          if (!Number.isSafeInteger(totalPages)) {
+            throw new Error("Seven Seas listing has an invalid page count");
+          }
+          const items: unknown = await res.json();
+          if (!Array.isArray(items) || (items.length > 0 && totalPages < page)) {
+            throw new Error("Seven Seas listing has an invalid collection shape");
+          }
+          if (items.length === 0 && totalPages >= page) {
+            throw new Error("Seven Seas listing ended before its declared page count");
+          }
+          // A catalog of 6,000+ books never legitimately empties: an empty
+          // listing would otherwise pass as a complete sweep and withdraw all.
+          if (page === 1 && items.length === 0) {
+            throw new Error("Seven Seas listing was empty");
+          }
+
+          for (const raw of items) {
+            const listing = parseBookListing(raw);
+            if (!listing) {
+              // One bad item never aborts the sweep, but it may hide a book,
+              // so absence is not evidence this run.
+              failures++;
+              completeSweep = false;
+              errors.push(`listing page ${page}: invalid book item`);
               continue;
             }
-
-            const result = await applyRetrying(ctx, internal.sevenSeas.applyBook, {
+            const note = await ctx.runMutation(internal.sevenSeas.noteListing, {
               sourceRecordId: listing.sourceRecordId,
-              snapshot,
+              modifiedGmt: listing.modifiedGmt,
+              force: args.force ?? false,
+              offersBlurb: listing.description !== undefined,
             });
-            if (result.changed) changed++;
-            if (result.status === "needsReview") {
-              errors.push(`review ${listing.slug}: ${result.reason ?? "conflict"}`);
+            // Presence remains evidence even if the source recategorizes a
+            // previously imported book as prose. Scope changes are not deletion.
+            if (!isMangaBook({ title: listing.title })) continue;
+            seen++;
+            if (!note.needsDetail) continue;
+            if (detailBudget <= 0) {
+              completeSweep = false;
+              continue;
             }
+            detailBudget--;
 
-            if (result.cover) {
-              try {
-                const notice = await storeCover(ctx, covers, {
-                  ...result.cover,
-                  attribution: source.attribution ?? PUBLISHER.name,
-                  delayMs: delay,
-                });
-                if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
-              } catch (e) {
-                errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
+            try {
+              const pageRes = await politeFetch(listing.url, delay);
+              const details = parseBookPage(await pageRes.text());
+              const snapshot = normalizeBook(listing, details);
+              if (
+                !isMangaBook({
+                  category: snapshot.category,
+                  title: snapshot.title,
+                })
+              ) {
+                continue;
               }
+
+              const result = await applyRetrying(ctx, internal.sevenSeas.applyBook, {
+                sourceRecordId: listing.sourceRecordId,
+                snapshot,
+              });
+              if (result.changed) changed++;
+              if (result.status === "needsReview") {
+                errors.push(`review ${listing.slug}: ${result.reason ?? "conflict"}`);
+              }
+
+              if (result.cover) {
+                try {
+                  const notice = await storeCover(ctx, covers, {
+                    ...result.cover,
+                    attribution: source.attribution ?? PUBLISHER.name,
+                    delayMs: delay,
+                  });
+                  if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
+                } catch (e) {
+                  errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
+                }
+              }
+            } catch (e) {
+              // A removed page (404) is a notice, not a failure: the book stays
+              // unobserved and is simply retried while it remains listed.
+              // Other transport errors and a page without volume-meta (likely
+              // a challenge page) are failures.
+              const message = errorMessage(e);
+              if (!message.startsWith("HTTP 404")) failures++;
+              errors.push(`book ${listing.slug}: ${message}`);
             }
-          } catch (e) {
-            // A removed page (404) is a notice, not a failure: the book stays
-            // unobserved and is simply retried while it remains listed.
-            // Other transport errors and a page without volume-meta (likely
-            // a challenge page) are failures.
-            const message = errorMessage(e);
-            if (!message.startsWith("HTTP 404")) failures++;
-            errors.push(`book ${listing.slug}: ${message}`);
           }
+          page++;
         }
-        page++;
-      }
 
-      // Disappearance → withdrawn, only after a COMPLETE sweep (absence is
-      // never evidence on a partial one). Failed individual books are safe:
-      // noteListing already bumped their observations.
-      if (completeSweep) {
-        await ctx.runMutation(internal.imports.markWithdrawn, {
-          sourceKey: SOURCE_KEY,
-          notSeenSince: runStartedAt,
+        // Disappearance → withdrawn, only after a COMPLETE sweep (absence is
+        // never evidence on a partial one). Failed individual books are safe:
+        // noteListing already bumped their observations.
+        if (completeSweep) {
+          await ctx.runMutation(internal.imports.markWithdrawn, {
+            sourceKey: SOURCE_KEY,
+            notSeenSince: runStartedAt,
+          });
+        }
+
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: failures > 0 ? "failed" : "succeeded",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
         });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          completeSweep,
+          errorCount: errors.length,
+          ...(failures > 0 ? { failed: true } : {}),
+        };
+      } catch (e) {
+        errors.push(errorMessage(e));
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: "failed",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          completeSweep: false,
+          errorCount: errors.length,
+          failed: true,
+        };
       }
-
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: failures > 0 ? "failed" : "succeeded",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        completeSweep,
-        errorCount: errors.length,
-        ...(failures > 0 ? { failed: true } : {}),
-      };
-    } catch (e) {
-      errors.push(errorMessage(e));
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: "failed",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        completeSweep: false,
-        errorCount: errors.length,
-        failed: true,
-      };
-    }
-  },
+    }),
 });
 
 // ---------- listing bookkeeping ----------

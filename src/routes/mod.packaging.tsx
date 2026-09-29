@@ -5,7 +5,7 @@ import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { useIsModerator } from "~/lib/moderation";
+import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
 import { slugParams } from "~/lib/slug";
 
 /**
@@ -62,6 +62,7 @@ function UnmappedQueue({ canAct }: { canAct: boolean }) {
         <Link to="/mod/queue">Review queue</Link>
         <Link to="/mod/imports">Imports</Link>
         <Link to="/mod/launch">Launch</Link>
+        <CommentsQueueLink />
       </nav>
       {queue === undefined ? (
         <p className="notice">Loading…</p>

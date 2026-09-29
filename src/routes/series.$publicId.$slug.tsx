@@ -1,9 +1,12 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
+import { FEATURES } from "../../convex/lib/features";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type SeriesPageData } from "~/lib/catalogData";
+import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
+import { FavoriteButton } from "~/lib/favorites";
 import { SeriesFollowControls } from "~/lib/follows";
 import { ConcealArt } from "~/lib/mature";
 import {
@@ -11,8 +14,10 @@ import {
   ProposeNewRecordsLink,
   RecordHistory,
 } from "~/lib/moderation";
+import { RatingAggregate } from "~/lib/ratings";
 import { SeriesReadingControls, SeriesReadingProgress } from "~/lib/reading";
 import { SeriesReportAffordance } from "~/lib/report";
+import { ReviewsSection, TakePanel } from "~/lib/reviews";
 import {
   bookSeriesJsonLd,
   breadcrumbListJsonLd,
@@ -40,6 +45,10 @@ import { parsePublicId, seriesPath } from "~/lib/slug";
  * its books, with gaps in a standard run marked. Releases, Variants and
  * Bundles live on each book's Edition page.
  *
+ * The hero: the cover (and its date span) on the left with the viewer's
+ * take under it (TakePanel: Rating, Review, Follow, Favorite), the facts on
+ * the right ending in the tracking bar (Reading Status, profile sharing).
+ *
  * The public ID is identity; the slug is cosmetic and computed from the
  * current title (spec §8/§11). A stale or wrong slug — including the old ID
  * of a merged Series, which resolves to its survivor — 301s to the canonical
@@ -53,13 +62,23 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await catalogQuery(api.catalog.seriesPage, { publicId });
+    // The rating aggregate and first pages of Reviews and Comments render
+    // with the page, then follow their live queries (lib/ratings.tsx,
+    // lib/reviews.tsx, lib/comments.tsx). Reviews and Comments only while
+    // their feature flags are on (convex/lib/features.ts).
+    const target = { kind: "series" as const, publicId };
+    const [page, rating, reviews, comments] = await Promise.all([
+      catalogQuery(api.catalog.seriesPage, { publicId }),
+      catalogQuery(api.ratings.summary, { target }),
+      FEATURES.publicReviews ? catalogQuery(api.reviews.list, { target }) : null,
+      FEATURES.comments ? catalogQuery(api.comments.list, { target }) : null,
+    ]);
     if (!page) throw notFound();
     const canonical = seriesPath(page.series.publicId, page.series.title);
     if (`/series/${params.publicId}/${params.slug}` !== canonical) {
       throw redirect({ href: canonical, statusCode: 301 });
     }
-    return page;
+    return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
   // BreadcrumbList + BookSeries JSON-LD (spec §11, ticket #39).
@@ -162,6 +181,7 @@ function SeriesPage() {
   const page = Route.useLoaderData();
   const { edition: editionKey } = Route.useSearch();
   const { series, family, credits, volumes, editionGroups, coverUrl } = page;
+  const ratingTarget = { kind: "series" as const, publicId: series.publicId };
   const facts = packagingFacts(editionGroups);
   // The first path's first book fronts the Series — the standard run leads,
   // so this is its Volume 1 whenever one is on file.
@@ -199,6 +219,16 @@ function SeriesPage() {
           ) : null}
         </div>
 
+        {/* The viewer's take, under the cover: their private Rating (the
+            chip in the body shows the public average it feeds), their own
+            Review, then Follow (the explicit toggle for future-release
+            interest, #29) beside the private Favorite. A grid item of its
+            own, so opening the review form can give it the full width. */}
+        <TakePanel target={ratingTarget} noun="series">
+          <SeriesFollowControls seriesPublicId={series.publicId} />
+          <FavoriteButton target={ratingTarget} />
+        </TakePanel>
+
         <div className="series-hero-body">
           <h1 className="series-title">{series.title}</h1>
           <Byline credits={credits} />
@@ -211,6 +241,7 @@ function SeriesPage() {
             <span className="chip">
               {plural(volumes.length, "volume", "volumes")}
             </span>
+            <RatingAggregate target={ratingTarget} initial={page.rating} />
             {editionGroups.length > 1 ? (
               <span className="chip">
                 {plural(editionGroups.length, "edition", "editions")}
@@ -309,17 +340,11 @@ function SeriesPage() {
             ) : null}
           </dl>
 
-          {/* The signed-in tracking bar: three labelled groups so following
-              (future releases) never reads as reading (where you are in the
-              story). Every control inside renders null signed out, which
-              leaves the groups empty — CSS hides the bar then, so the public
-              page keeps the hero clean. */}
+          {/* The signed-in tracking bar: where the viewer is in the story,
+              then a footer line for profile sharing. Every control inside
+              renders null signed out, which leaves the groups empty — CSS
+              hides the bar then, so the public page keeps the hero clean. */}
           <div className="owner-bar">
-            <div className="track-group">
-              {/* Series Follow is the explicit toggle for future-release
-                  interest (#29); always private in v1. */}
-              <SeriesFollowControls seriesPublicId={series.publicId} />
-            </div>
             <div className="track-group track-group--reading">
               {/* Series Reading Status is set only here, by explicit choice
                   (#28); the tracking prompts never change it without
@@ -406,6 +431,13 @@ function SeriesPage() {
       ) : null}
 
       {family ? <FamilySection family={family} self={series} /> : null}
+
+      {FEATURES.publicReviews ? (
+        <ReviewsSection target={ratingTarget} initial={page.reviews} noun="series" />
+      ) : null}
+      {FEATURES.comments ? (
+        <CommentsSection target={ratingTarget} initial={page.comments} noun="series" />
+      ) : null}
 
       {/* Partially imported Series show as-is; every Series page carries the
           report affordance feeding the proposal queue (#40, spec §7). */}

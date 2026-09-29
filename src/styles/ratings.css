@@ -1,0 +1,338 @@
+/* Ratings and Reviews (src/lib/ratings.tsx, src/lib/reviews.tsx, the Reviews
+   list on /u/{username}). Composes .chip, .btn, .notice, .section-head and
+   .track-kicker/.track-hint from shell.css and catalog-series.css. */
+
+/* --- The aggregate chip ------------------------------------------------- */
+
+.chip--rating {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 45%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.rating-star { width: 12px; height: 12px; fill: currentColor; }
+
+/* --- The viewer's control ------------------------------------------------
+   One of two, by Rating Format (convex/lib/scoreFormat.ts): the format's
+   number between − and + steppers with its "/10", "/5" or "/100", or three
+   smileys in one segmented pill. It lives in the TakePanel under the cover
+   (.take-rating, below), whose column can be as narrow as ~156px inside
+   (the Series page under 960px): neither control ever wraps. */
+
+.rating-clear {
+  margin-left: 10px;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--text-mute);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.rating-clear:hover { color: var(--accent); }
+
+/* point10 / star5 / point100: a number between two round steppers */
+.rating-stepper {
+  --stepper-size: 30px;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+}
+/* The glyph's line box is the button's inner height and the grid centres
+   it; − (U+2212) and + share the maths axis, which in Nunito Sans sits
+   about 0.035em below the line box's middle, so a 0.07em bottom padding
+   (in a row pinned to the content box, so the lift is not absorbed by an
+   auto-sized row) puts both at the optical centre of the circle. */
+.rating-stepper-btn {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+  flex: none;
+  width: var(--stepper-size);
+  height: var(--stepper-size);
+  padding: 0 0 0.07em;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: calc(var(--stepper-size) - 2px);
+  cursor: pointer;
+  transition: border-color 110ms ease, color 110ms ease;
+}
+.rating-stepper-btn:hover { border-color: var(--accent); color: var(--accent); }
+.rating-stepper-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rating-stepper-input {
+  width: 3.4rem;
+  min-width: 0;
+  height: calc(var(--stepper-size) + 2px);
+  padding: 0 4px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+/* the steppers are the buttons: no browser spinners inside the field */
+.rating-stepper-input::-webkit-outer-spin-button,
+.rating-stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.rating-stepper-input::placeholder { color: var(--text-mute); }
+.rating-stepper-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rating-stepper-of { flex: none; color: var(--text-mute); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+
+/* smiley3: three equal segments of one pill (the .seg-pill look), only the
+   chosen one lit. The segments share the width and never wrap. */
+.rating-smileys {
+  display: flex;
+  flex-wrap: nowrap;
+  width: 100%;
+  max-width: 300px;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.rating-smiley-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease;
+}
+.rating-smiley-btn:hover { color: var(--text); }
+.rating-smiley-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.rating-smiley-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rating-smiley-label { min-width: 0; overflow: hidden; text-overflow: clip; }
+.rating-smiley { width: 17px; height: 17px; flex: none; }
+
+/* --- The viewer's take, under the cover -----------------------------------
+   TakePanel (lib/reviews.tsx) on the Series, Volume and Edition pages (a
+   single-volume book's Volume, or an omnibus itself): an optional note, the rating, the viewer's own Review, then
+   a row of private toggles (Follow, Favorite) with the follow hint under
+   both. Every control renders nothing signed out, leaving the panel's blocks
+   empty: the panel then hides, and a note alone (the Edition page's) never
+   holds it open, so visitors see no stray frame. Each hero places the panel
+   (catalog-series.css, catalog-edition.css). */
+
+.take-panel {
+  /* a size container, so a narrow cover column can refit the controls below */
+  container-type: inline-size;
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+.take-panel > :empty { display: none; }
+.take-panel:not(:has(> :not(:empty, .take-note))) { display: none; }
+/* open for writing, the panel spans the hero: keep its lines readable */
+.take-panel:has(.review-form) { max-width: 52rem; }
+
+.take-note { font-size: 0.8rem; line-height: 1.45; color: var(--text-mute); }
+.take-note a { color: var(--text-dim); font-weight: 700; border-bottom: 1px solid var(--line-strong); }
+.take-note a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+.take-rating { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+
+/* the toggles share a row under a hairline and fill it when they wrap */
+.take-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.take-panel > :not(:empty) ~ .take-actions { padding-top: 14px; border-top: 1px solid var(--line); }
+.take-actions .follow-btn { flex: 1 1 auto; justify-content: center; }
+.take-panel:has(.review-form) .take-actions .follow-btn { flex: none; }
+.take-actions .track-hint { order: 1; }
+
+/* a narrow cover column (the Series page's under 960px, ~156px inside):
+   tighter steppers, and smaller smiley faces and labels so the pill keeps
+   one row */
+@container (max-width: 199px) {
+  .rating-stepper { --stepper-size: 28px; gap: 4px; }
+  .rating-stepper-input { width: 2.9rem; }
+  .rating-smileys { padding: 2px; gap: 1px; }
+  .rating-smiley-btn { gap: 2px; padding-inline: 0; font-size: 0.68rem; }
+  .rating-smiley { width: 13px; height: 13px; }
+}
+
+/* --- The viewer's own Review, under the rating ---------------------------- */
+
+.own-review { min-width: 0; display: grid; gap: 10px; }
+.own-review-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.own-review-row .track-hint { flex-basis: auto; }
+.own-review-saved summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.own-review-saved summary:hover { color: var(--accent); }
+.own-review-saved .review-body { margin-top: 8px; font-size: 0.88rem; }
+.own-review-saved .review-hidden-note { margin-top: 8px; }
+.own-review .review-form { margin-bottom: 0; padding: 14px; background: var(--surface-2); }
+.own-review .review-form textarea { background: var(--surface); }
+
+/* --- The Reviews section ------------------------------------------------ */
+
+.reviews { max-width: 52rem; }
+.reviews-empty,
+.review-prompt { color: var(--text-mute); font-size: 0.92rem; }
+.review-prompt { margin-bottom: 18px; }
+.review-prompt a { color: var(--text-dim); border-bottom: 1px solid var(--line-strong); }
+.review-prompt a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+.review-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+
+.review-card {
+  padding: 16px 20px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.review-card.is-hidden { border-style: dashed; background: transparent; }
+
+.review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+}
+.review-author { font-weight: 800; color: var(--text); }
+a.review-author:hover { color: var(--accent); }
+.review-score {
+  font-family: var(--display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+.review-score-of { font-size: 0.72rem; color: var(--text-mute); margin-left: 1px; }
+.review-score--smiley { display: inline-flex; align-items: center; gap: 5px; }
+.review-score--smiley .rating-smiley { width: 18px; height: 18px; }
+.review-date { font-size: 0.8rem; color: var(--text-mute); }
+.review-head .chip { align-self: center; }
+.chip--spoiler { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 45%, transparent); }
+.chip--hidden { border-style: dashed; color: var(--text-mute); }
+[data-theme="light"] .chip--spoiler { color: #a23c15; }
+
+/* plain text: the author's own line breaks, nothing else */
+.review-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 68ch;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.reviews-more { margin-top: 18px; }
+
+/* --- The viewer's own Review and the form -------------------------------- */
+
+.review-mine { margin-bottom: 26px; }
+.review-mine-kicker {
+  margin-bottom: 8px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+.review-hidden-note { margin-bottom: 10px; font-size: 0.88rem; }
+.review-mine .review-card { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.review-actions,
+.review-mod { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
+.review-mod .form-error,
+.review-actions .form-error { flex-basis: 100%; }
+.reviews .btn-danger,
+.own-review .btn-danger { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 55%, transparent); }
+[data-theme="light"] .reviews .btn-danger,
+[data-theme="light"] .own-review .btn-danger { color: #a23c15; }
+
+.review-mod-reason {
+  flex: 1 1 16rem;
+  padding: 7px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.review-form {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 26px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.review-field { display: grid; gap: 8px; font-size: 0.9rem; font-weight: 700; }
+.review-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.55;
+  resize: vertical;
+}
+.review-form textarea::placeholder { color: var(--text-mute); }
+.review-form-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; font-size: 0.86rem; }
+.review-spoiler { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); cursor: pointer; }
+.review-spoiler input { accent-color: var(--accent); }
+.review-count { color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.review-count.is-short { color: var(--gold); }
+.review-form .review-actions { margin-top: 0; }
+
+.reviews-hidden { margin-top: 30px; }
+
+/* --- The profile's rated Series ----------------------------------------- */
+
+.profile-ratings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 8px 24px;
+}
+.profile-ratings li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.profile-ratings .review-score { min-width: 3.2ch; }
+.profile-ratings a { font-weight: 700; }
+.profile-ratings a:hover { color: var(--accent); }
+

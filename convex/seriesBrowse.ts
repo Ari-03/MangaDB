@@ -34,7 +34,9 @@ import {
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
+import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
+import { withExceptionCapture } from "./lib/posthog";
 
 export const SORTS = [
   "title",
@@ -44,6 +46,7 @@ export const SORTS = [
   "upcoming",
   "followers",
   "collectors",
+  "rating",
 ] as const;
 export type Sort = (typeof SORTS)[number];
 
@@ -74,38 +77,39 @@ const STALE_SWEEP = 200;
  */
 export const rebuild = internalAction({
   args: {},
-  handler: async (ctx) => {
-    const startedAt = Date.now();
-    let cursor: number | null = null;
-    let rows = 0;
-    for (;;) {
-      const batch: { next: number | null; count: number } = await ctx.runMutation(
-        internal.seriesBrowse.rebuildBatch,
-        { afterPublicId: cursor, rebuiltAt: startedAt },
-      );
-      rows += batch.count;
-      if (batch.next === null) break;
-      cursor = batch.next;
-    }
-    let swept = 0;
-    for (;;) {
-      const n: number = await ctx.runMutation(internal.seriesBrowse.sweepStale, {
-        before: startedAt,
-      });
-      swept += n;
-      if (n < STALE_SWEEP) break;
-    }
-    // Then the packs the filtered views read, from the rows as they now are.
-    let blocks = 0;
-    for (;;) {
-      const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: blocks });
-      blocks++;
-      if (!more) break;
-    }
-    // The home page's catalog totals ride along on the same schedule.
-    const counts = await recountCatalog(ctx);
-    return { rows, swept, blocks, counts, ms: Date.now() - startedAt };
-  },
+  handler: async (ctx) =>
+    withExceptionCapture("seriesBrowse.rebuild", ctx, async () => {
+      const startedAt = Date.now();
+      let cursor: number | null = null;
+      let rows = 0;
+      for (;;) {
+        const batch: { next: number | null; count: number } = await ctx.runMutation(
+          internal.seriesBrowse.rebuildBatch,
+          { afterPublicId: cursor, rebuiltAt: startedAt },
+        );
+        rows += batch.count;
+        if (batch.next === null) break;
+        cursor = batch.next;
+      }
+      let swept = 0;
+      for (;;) {
+        const n: number = await ctx.runMutation(internal.seriesBrowse.sweepStale, {
+          before: startedAt,
+        });
+        swept += n;
+        if (n < STALE_SWEEP) break;
+      }
+      // Then the packs the filtered views read, from the rows as they now are.
+      let blocks = 0;
+      for (;;) {
+        const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: blocks });
+        blocks++;
+        if (!more) break;
+      }
+      // The home page's catalog totals ride along on the same schedule.
+      const counts = await recountCatalog(ctx);
+      return { rows, swept, blocks, counts, ms: Date.now() - startedAt };
+    }),
 });
 
 export const rebuildBatch = internalMutation({
@@ -189,6 +193,43 @@ export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series
   const entries = pack.entries.map((entry, i) =>
     i === at ? { ...entry, mature: mature ? (true as const) : undefined } : entry,
   );
+  await ctx.db.patch(pack._id, { entries });
+}
+
+/**
+ * Carry a Series' new rating aggregate into its library row and pack entry
+ * at once (lib/ratings.ts calls this from every rating write), so "Top
+ * rated" reorders without waiting for the next rebuild. The pack, a large
+ * document many Series share, is rewritten only when the Series' rank
+ * actually moves: ratings below RATING_RANK_MIN leave it at 0 and untouched.
+ * A Series without a row yet (never rebuilt, or bookless) has nothing to
+ * update; the rebuild reads ratingStats itself. Only a Series-target
+ * aggregate lands here: Volume and omnibus Edition Ratings never rank a
+ * Series.
+ */
+export async function syncRatingProjection(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+  summary: RatingSummary,
+) {
+  const row = await ctx.db
+    .query("seriesStats")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .unique();
+  if (!row) return;
+  const ratingRank = ratingRankOf(summary);
+  await ctx.db.patch(row._id, {
+    ratingAverage: summary.average ?? undefined,
+    ratingCount: summary.count,
+    ratingRank,
+  });
+  const pack = await ctx.db
+    .query("seriesStatsPacks")
+    .withIndex("by_block", (q) => q.eq("block", Math.floor(row.publicId / PACK_SPAN)))
+    .unique();
+  const at = pack?.entries.findIndex((entry) => entry.publicId === row.publicId) ?? -1;
+  if (!pack || at < 0 || (pack.entries[at]!.ratingRank ?? 0) === ratingRank) return;
+  const entries = pack.entries.map((entry, i) => (i === at ? { ...entry, ratingRank } : entry));
   await ctx.db.patch(pack._id, { entries });
 }
 
@@ -387,6 +428,8 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
       .collect()
   ).filter((s) => s.following).length;
 
+  const rating = await ratingSummary(ctx, { kind: "series", id: series._id });
+
   const titleSort = sortKeyFor(series.title);
   const row = {
     seriesId: series._id,
@@ -407,6 +450,9 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     searchKey: searchKeyFor([series.title, ...series.altTitles]),
     followers,
     collectors: collectors.size,
+    ...(rating.average !== null ? { ratingAverage: rating.average } : {}),
+    ratingCount: rating.count,
+    ratingRank: ratingRankOf(rating),
     coverUrl: storedCover,
     coverIsbn: seriesCoverIsbn(coverCandidates),
     ...(mature ? { mature: true as const } : {}),
@@ -492,6 +538,7 @@ function entryOf(row: StatsRow): Entry {
     lastReleasedSort: row.lastReleasedSort ?? row.latestReleaseSort,
     followers: row.followers,
     collectors: row.collectors,
+    ratingRank: row.ratingRank ?? 0,
     ...(row.mature ? { mature: true as const } : {}),
   };
 }
@@ -520,6 +567,9 @@ const SORT_INDEX = {
   upcoming: { index: "by_next", field: "nextReleaseSort", defaultOrder: "asc" },
   followers: { index: "by_followers", field: "followers", defaultOrder: "desc" },
   collectors: { index: "by_collectors", field: "collectors", defaultOrder: "desc" },
+  // Ranked Series (RATING_RANK_MIN ratings or more) by average; the rest
+  // carry 0 and sort last either way, as "upcoming" does its unannounced.
+  rating: { index: "by_rating", field: "ratingRank", defaultOrder: "desc" },
 } as const satisfies Record<
   Sort,
   { index: string; field: keyof StatsRow & keyof Entry; defaultOrder: "asc" | "desc" }
@@ -657,6 +707,8 @@ function card(row: StatsRow) {
     nextReleaseSort: row.nextReleaseSort,
     followers: row.followers,
     collectors: row.collectors,
+    ratingAverage: row.ratingAverage ?? null,
+    ratingCount: row.ratingCount ?? 0,
     coverUrl: row.coverUrl,
     coverIsbn: row.coverIsbn,
   };
@@ -701,11 +753,12 @@ function decodeCursor(raw: string | null | undefined): Cursor | null {
  * group, then everything past it. Every sort index ends in publicId, which
  * is what makes the cursor exact. Ascending "upcoming" shelves the Series
  * with nothing announced (0) after every dated one, as the filtered path's
- * `compare` does. Spelled out per sort so each index range is fully typed.
+ * `compare` does. "Top rated" has its own reader (readRatingChunk). Spelled
+ * out per sort so each index range is fully typed.
  */
 async function readChunk(
   ctx: QueryCtx,
-  sort: Sort,
+  sort: Exclude<Sort, "rating">,
   order: "asc" | "desc",
   cursor: Cursor | null,
   limit: number,
@@ -772,6 +825,64 @@ async function readChunk(
 }
 
 /**
+ * "Top rated"'s readChunk. Ranked Series (ratingRank > 0) come first in the
+ * sort's direction; the unranked come last either way, by publicId in the
+ * sort's direction, as the filtered path's `compare` orders them. Unranked
+ * is ratingRank 0 or no ratingRank at all (a row not rebuilt since ratings
+ * arrived): the index keeps those two apart (a missing field sorts before
+ * every number), so the zero group reads both and merges them by publicId,
+ * and a `{ v: 0 }` cursor resumes in either.
+ */
+async function readRatingChunk(
+  ctx: QueryCtx,
+  order: "asc" | "desc",
+  cursor: Cursor | null,
+  limit: number,
+): Promise<Array<StatsRow>> {
+  const table = () => ctx.db.query("seriesStats");
+  const asc = order === "asc";
+  const rows: Array<StatsRow> = [];
+  const num = typeof cursor?.v === "number" ? cursor.v : null;
+  if (!cursor || (num !== null && num > 0)) {
+    const ranked = cursor
+      ? [
+          table().withIndex("by_rating", (r) =>
+            asc
+              ? r.eq("ratingRank", num!).gt("publicId", cursor.id)
+              : r.eq("ratingRank", num!).lt("publicId", cursor.id),
+          ),
+          table().withIndex("by_rating", (r) =>
+            asc ? r.gt("ratingRank", num!) : r.gt("ratingRank", 0).lt("ratingRank", num!),
+          ),
+        ]
+      : [table().withIndex("by_rating", (r) => r.gt("ratingRank", 0))];
+    for (const range of ranked) {
+      if (rows.length >= limit) return rows;
+      rows.push(...(await range.order(order).take(limit - rows.length)));
+    }
+  }
+  const want = limit - rows.length;
+  if (want <= 0) return rows;
+  // Resume inside the zero group only from a zero cursor; otherwise from its start.
+  const afterId = cursor && num === 0 ? cursor.id : null;
+  const unranked = (rank: 0 | undefined) =>
+    table()
+      .withIndex("by_rating", (r) => {
+        const group = r.eq("ratingRank", rank);
+        if (afterId === null) return group;
+        return asc ? group.gt("publicId", afterId) : group.lt("publicId", afterId);
+      })
+      .order(order)
+      .take(want);
+  const [zeros, missing] = await Promise.all([unranked(0), unranked(undefined)]);
+  const merged = [...zeros, ...missing].sort((a, b) =>
+    asc ? a.publicId - b.publicId : b.publicId - a.publicId,
+  );
+  rows.push(...merged.slice(0, want));
+  return rows;
+}
+
+/**
  * Whether the row's Series is still an active, unmerged public record the
  * viewer may see: its own `mature` flag is read, not the row's copy, so a
  * Series rated since the last rebuild leaves at once.
@@ -815,7 +926,8 @@ export const browse = query({
     const order = args.order ?? SORT_INDEX[args.sort].defaultOrder;
     const pageSize = Math.max(1, Math.min(PAGE_MAX, Math.floor(args.pageSize ?? PAGE_DEFAULT)));
     const { field } = SORT_INDEX[args.sort];
-    const keyOf = (row: StatsRow | Entry): Cursor => ({ v: row[field], id: row.publicId });
+    // Rows not yet rebuilt since ratings arrived have no ratingRank: unranked.
+    const keyOf = (row: StatsRow | Entry): Cursor => ({ v: row[field] ?? 0, id: row.publicId });
     const after = decodeCursor(args.cursor);
     const today = after?.t ?? args.todaySort;
     const test = matcher(args, today);
@@ -828,7 +940,8 @@ export const browse = query({
         (entry) => visibleTo(args.showMature, entry.mature) && test(entry),
       );
       const compare = (a: Cursor, b: Cursor) => {
-        if (args.sort === "upcoming" && (a.v === 0) !== (b.v === 0)) return a.v === 0 ? 1 : -1;
+        const zerosLast = args.sort === "upcoming" || args.sort === "rating";
+        if (zerosLast && (a.v === 0) !== (b.v === 0)) return a.v === 0 ? 1 : -1;
         const cmp = a.v < b.v ? -1 : a.v > b.v ? 1 : a.id - b.id;
         return order === "asc" ? cmp : -cmp;
       };
@@ -863,7 +976,10 @@ export const browse = query({
     let cursor = after;
     for (;;) {
       const want = target - items.length;
-      const chunk = await readChunk(ctx, args.sort, order, cursor, want);
+      const chunk =
+        args.sort === "rating"
+          ? await readRatingChunk(ctx, order, cursor, want)
+          : await readChunk(ctx, args.sort, order, cursor, want);
       for (const row of chunk) {
         if (await stillPublic(ctx, row, args.showMature)) items.push(row);
       }

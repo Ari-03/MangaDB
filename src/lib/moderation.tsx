@@ -9,6 +9,7 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 
 import { api } from "../../convex/_generated/api";
+import { FEATURES } from "../../convex/lib/features";
 import { convexClient } from "~/providers";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 
@@ -183,6 +184,31 @@ export function useIsDataTeam(): boolean {
       (viewer.role === "editor" ||
         viewer.role === "moderator" ||
         viewer.role === "administrator"),
+  );
+}
+
+/**
+ * The Comments queue link for the `.mod-tools` navs, with the number of
+ * Comments awaiting review as a badge ("100+" past the query's cap).
+ * Nothing while Comments are switched off (FEATURES.comments).
+ */
+export function CommentsQueueLink() {
+  if (!FEATURES.comments) return null;
+  return <CommentsQueueLinkInner />;
+}
+
+function CommentsQueueLinkInner() {
+  const counts = useQuery(api.comments.queueCounts, {});
+  const pending = counts?.pending ?? 0;
+  return (
+    <Link to="/mod/comments">
+      Comments
+      {pending > 0 ? (
+        <span className="mod-badge" aria-label={`${pending} awaiting review`}>
+          {pending >= 100 ? "100+" : pending}
+        </span>
+      ) : null}
+    </Link>
   );
 }
 

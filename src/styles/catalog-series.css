@@ -91,10 +91,10 @@
 .fact-def a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* --- The tracking bar ---------------------------------------------------
-   Follow, Reading Status, per-Series visibility and reading progress, all of
-   them signed-in only. Each control renders nothing signed out, which leaves
-   the bar with no children at all — so the public page never shows an empty
-   frame. */
+   Reading Status and progress, then per-Series visibility, both signed-in
+   only (Rating, Review, Follow and Favorite live in the TakePanel under the
+   cover). Each control renders nothing signed out, which leaves the bar with
+   no children at all — so the public page never shows an empty frame. */
 
 .owner-bar {
   margin-top: 26px;
@@ -102,39 +102,31 @@
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface);
+  /* reading across the bar, sharing as its footer line */
   display: grid;
-  /* follow and reading side by side while both get a real column; at any
-     narrower width they stack, so nothing is ever squeezed */
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
-  gap: 0;
+  grid-template-columns: minmax(0, 1fr);
 }
 /* signed out, every group is empty: no bar at all */
 .owner-bar:not(:has(.track-group > *)) { display: none; }
 .track-group:empty { display: none; }
 
-/* each group: a small-caps kicker, its controls, a one-line hint; a hairline
-   keeps following and reading visibly apart */
+/* each group: a small-caps kicker, its controls, a one-line hint */
 .track-group {
   display: flex;
   align-items: center;
   align-content: start;
   flex-wrap: wrap;
   gap: 10px 12px;
-  padding: 0 22px;
-  border-left: 1px solid var(--line);
 }
-.track-group:first-child { padding-left: 0; border-left: 0; }
-.track-group--reading { padding-right: 0; }
 .track-group--reading .progress { flex: 1 1 100%; }
-/* sharing is the quiet third: one footer line across the bar, its label
-   inline, so it never competes with the two groups for width */
+/* sharing is the quiet second: one footer line under a hairline, its label
+   inline, so it never competes with reading for width */
 .track-group--sharing {
-  grid-column: 1 / -1;
   margin-top: 14px;
-  padding: 12px 0 0;
-  border-left: 0;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
 }
+.track-group:empty + .track-group--sharing { margin-top: 0; padding-top: 0; border-top: 0; }
 .track-group--sharing .track-kicker { flex-basis: auto; }
 .track-kicker {
   flex-basis: 100%;
@@ -177,6 +169,7 @@
   color: var(--accent-ink);
 }
 .follow-btn.is-following:hover { background: var(--gold); border-color: var(--gold); color: var(--accent-ink); }
+.fav-btn:disabled { cursor: progress; opacity: 0.75; }
 
 /* Per-Series visibility (lib/sharing.tsx) is a popover: its button wears
    the bar's pill, and the panel floats over whatever is below, so opening
@@ -410,19 +403,56 @@
 .volume-cover .cover-ph-num { font-size: 4.6rem; }
 .volume-cover .cover-ph-title { font-size: 1.6rem; -webkit-line-clamp: 7; }
 
-/* Ownership + read count. Both render nothing signed out, so the card is
-   empty then and hides itself. */
+/* Ownership and read count, under the TakePanel. Both render nothing signed
+   out (and ownership nothing with nothing owned), leaving the card's blocks
+   empty, so the card hides itself then. */
 .track-card {
-  margin-top: 44px;
   padding: 16px 18px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface);
   font-size: 0.88rem;
 }
-.track-card:empty { display: none; }
+.track-card:not(:has(> :not(:empty))) { display: none; }
+.track-card > :empty { display: none; }
 .track-card .volume-read { margin-top: 0; }
 .track-card .volume-ownership + .volume-read { margin-top: 12px; }
+
+/* --- The viewer's take under the cover ----------------------------------
+   The TakePanel (lib/reviews.tsx, styled in ratings.css) and, on the Volume
+   page, the tracking card are grid items of the hero in the cover column;
+   the body spans every explicit row. The last row is 1fr, so the cover
+   column's rows size to their own content and the body's extra height lands
+   in that last row: the panel sits right under the cover however tall the
+   body runs. Row gaps are 0 (margins space the column), so an empty row
+   never opens a gap for signed-out visitors.
+   While the review form is open the panel takes a full-width row after the
+   explicit ones (grid-row: -1), so the textarea gets the page's width
+   rather than the cover column's. Stacked (under 720px), everything flows
+   in source order: cover, panel, tracking card, body. */
+@media (min-width: 721px) {
+  .series-hero { grid-template-rows: auto 1fr; row-gap: 0; }
+  .volume-hero { grid-template-rows: auto auto 1fr; row-gap: 0; }
+  .series-hero-aside,
+  .volume-hero-aside,
+  .series-hero > .take-panel,
+  .volume-hero > .take-panel,
+  .volume-hero > .track-card { grid-column: 1; }
+  .series-hero-body,
+  .volume-hero-body { grid-column: 2; grid-row: 1 / -1; }
+  /* clear the ledge the cover stands on */
+  .series-hero > .take-panel { margin-top: 30px; }
+  .volume-hero > .take-panel,
+  .volume-hero > .track-card { margin-top: 44px; }
+  .volume-hero > .take-panel + .track-card { margin-top: 14px; }
+  .series-hero > .take-panel:has(.review-form),
+  .volume-hero > .take-panel:has(.review-form) {
+    grid-column: 1 / -1;
+    grid-row: -1;
+    margin-top: 30px;
+  }
+  .volume-hero:has(> .take-panel .review-form) > .track-card { margin-top: 44px; }
+}
 
 .volume-title {
   font-size: clamp(2rem, 1.5rem + 2vw, 2.9rem);
@@ -545,25 +575,19 @@
 /* --- Responsive --------------------------------------------------------- */
 
 @media (max-width: 960px) {
-  .series-hero { grid-template-columns: 186px minmax(0, 1fr); gap: 28px; }
-  .volume-hero { grid-template-columns: 236px minmax(0, 1fr); gap: 32px; }
+  /* column gaps only: the rows keep the 0 gap set above */
+  .series-hero { grid-template-columns: 186px minmax(0, 1fr); column-gap: 28px; }
+  .volume-hero { grid-template-columns: 236px minmax(0, 1fr); column-gap: 32px; }
 }
 
 @media (max-width: 720px) {
+  /* stacked: the hero's gap spaces cover, TakePanel, tracking card and body */
   .series-hero { grid-template-columns: 1fr; gap: 30px; }
   .series-cover { max-width: 190px; }
   .series-hero-aside .note { margin-top: 24px; }
   .volume-hero { grid-template-columns: 1fr; gap: 34px; }
   .volume-cover { max-width: 210px; }
-  .track-card { margin-top: 34px; }
   .facts { gap: 14px 20px; }
-  .track-group {
-    padding: 14px 0 0;
-    margin-top: 14px;
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-  .track-group:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
   .track-group .select { flex: 1 1 auto; min-width: 0; }
   .vis-pop-btn,
   .follow-btn { width: 100%; justify-content: center; }

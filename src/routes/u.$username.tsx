@@ -1,9 +1,11 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery, type PublicProfileData } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
+import { showMature } from "~/lib/mature";
+import { ScoreText } from "~/lib/ratings";
 import { SITE_NAME } from "~/lib/seo";
 import { slugParams } from "~/lib/slug";
 
@@ -20,7 +22,9 @@ const STATUS_LABELS = {
  * current-state snapshot of what the user chooses to share — public Ownership
  * (Owned Releases with selected Variants, Bundles with derived member
  * ownership; never Wanted/Ordered) and public Reading (Series Reading Status,
- * active pass percentage, Volume read counts). Follows are never shown in v1,
+ * active pass percentage, Volume read counts, and rated Series), plus every
+ * visible Review once public Reviews are switched on (convex/lib/features.ts;
+ * until then the query returns none). Follows and Favorites are never shown,
  * and there is no activity feed. Visibility is enforced in the Convex query
  * (sharing.publicProfile); this page just renders what it is given.
  *
@@ -31,7 +35,10 @@ const STATUS_LABELS = {
  */
 export const Route = createFileRoute("/u/$username")({
   loader: async ({ params }) => {
-    const profile = await catalogQuery(api.sharing.publicProfile, { username: params.username });
+    const profile = await catalogQuery(api.sharing.publicProfile, {
+      username: params.username,
+      showMature: showMature(),
+    });
     if (!profile) throw notFound();
     return profile;
   },
@@ -72,10 +79,11 @@ function ProfileNotFound() {
 
 function ProfilePage() {
   const profile = Route.useLoaderData();
-  const { ownership, reading } = profile;
+  const { ownership, reading, ratings, reviews } = profile;
   const ownsAnything =
     ownership.releases.length > 0 || ownership.bundles.length > 0;
-  const sharesNothing = !ownsAnything && reading.length === 0;
+  const sharesNothing =
+    !ownsAnything && reading.length === 0 && ratings.length === 0 && reviews.length === 0;
 
   return (
     <main className="profile-page">
@@ -111,6 +119,20 @@ function ProfilePage() {
                 </div>
               </div>
             ) : null}
+            {ratings.length > 0 ? (
+              <div className="acct-stat">
+                <div className="acct-num">{ratings.length}</div>
+                <div className="acct-label">Rated</div>
+              </div>
+            ) : null}
+            {reviews.length > 0 ? (
+              <div className="acct-stat">
+                <div className="acct-num">{reviews.length}</div>
+                <div className="acct-label">
+                  {reviews.length === 1 ? "Review" : "Reviews"}
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -134,6 +156,8 @@ function ProfilePage() {
         <>
           {ownsAnything ? <OwnershipSection ownership={ownership} /> : null}
           {reading.length > 0 ? <ReadingSection reading={reading} /> : null}
+          {ratings.length > 0 ? <RatingsSection ratings={ratings} /> : null}
+          {reviews.length > 0 ? <ReviewsSection reviews={reviews} /> : null}
         </>
       )}
     </main>
@@ -346,5 +370,114 @@ function ReadingSection({
         })}
       </ul>
     </section>
+  );
+}
+
+/** A rated or reviewed Series, Volume or omnibus Edition, linked to its page. */
+function TargetLink({
+  target,
+  className,
+}: {
+  target: PublicProfileData["reviews"][number]["target"];
+  className?: string;
+}) {
+  const params = slugParams(target.publicId, target.title);
+  switch (target.kind) {
+    case "series":
+      return (
+        <Link className={className} to="/series/$publicId/$slug" params={params}>
+          {target.title}
+        </Link>
+      );
+    case "volume":
+      return (
+        <Link className={className} to="/volume/$publicId/$slug" params={params}>
+          {target.title}
+        </Link>
+      );
+    case "edition":
+      return (
+        <Link className={className} to="/edition/$publicId/$slug" params={params}>
+          {target.title}
+        </Link>
+      );
+  }
+}
+
+/**
+ * Rated Series and omnibus Editions, highest first — only those whose
+ * Series' Reading the user shares.
+ */
+function RatingsSection({
+  ratings,
+}: {
+  ratings: PublicProfileData["ratings"];
+}) {
+  return (
+    <section className="me-section">
+      <div className="section-head">
+        <h2 className="section-title">Ratings</h2>
+        <p className="section-note">For series whose reading is shared</p>
+      </div>
+      <ul className="profile-ratings">
+        {ratings.map((row) => (
+          <li key={`${row.kind}:${row.publicId}`}>
+            <ScoreText score={row.score} />
+            <TargetLink target={row} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Every visible Review, newest first; spoilers fold behind a button. */
+function ReviewsSection({
+  reviews,
+}: {
+  reviews: PublicProfileData["reviews"];
+}) {
+  return (
+    <section className="me-section">
+      <div className="section-head">
+        <h2 className="section-title">Reviews</h2>
+        <p className="section-note">Newest first</p>
+      </div>
+      <ol className="review-list">
+        {reviews.map((review) => (
+          <li key={`${review.target.kind}:${review.target.publicId}`}>
+            <ProfileReview review={review} />
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function ProfileReview({
+  review,
+}: {
+  review: PublicProfileData["reviews"][number];
+}) {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <article className="review-card">
+      <header className="review-head">
+        <TargetLink target={review.target} className="review-author" />
+        {review.score !== null ? <ScoreText score={review.score} /> : null}
+        {review.spoiler ? <span className="chip chip--spoiler">Spoilers</span> : null}
+      </header>
+      {review.spoiler && !revealed ? (
+        <button
+          type="button"
+          className="btn btn-sm review-reveal"
+          onClick={() => setRevealed(true)}
+        >
+          Show spoiler
+        </button>
+      ) : (
+        <p className="review-body">{review.body}</p>
+      )}
+    </article>
   );
 }

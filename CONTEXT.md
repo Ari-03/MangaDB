@@ -107,6 +107,34 @@ A user's view of Upcoming Releases that either belong to a followed Series and m
 **Tracking Visibility**:
 A user's private-by-default sharing policy for Ownership and Reading, with separate defaults for each and per-Series overrides. Visibility is not configured separately for individual Volumes or Releases.
 
+**Rating**:
+A User's private score for one Series, one Volume, or one omnibus Edition, at most one per target, which the User may change or clear. A single-volume Edition rates its Volume; an omnibus (an Edition collecting more than one Volume) is rated as one book, and if a correction leaves it collecting one Volume, its Ratings, Reviews and Favorites pass to that Volume. It is stored as one whole number from 1 to 100 whatever Rating Format the User entered it in, and every display converts from that. Only the target's average and count are public, apart from the score shown beside the same User's Review; rated Series and omnibuses appear on a profile only where the User's Reading of their Series is public.
+_Avoid_: stars, vote
+
+**Rating Format**:
+A User's choice of how they enter and read scores: 10 points, 5 stars, 100 points, or 3 smileys (negative, neutral, positive). It changes the control and the display, never a stored Rating. A public average shows in the viewer's format when that format is numeric, and out of 10 otherwise.
+_Avoid_: scale, score type
+
+**Favorite**:
+A User's private mark on one Series, one Volume, or one omnibus Edition (a single-volume Edition favorites its Volume; an omnibus is favorited as one book), at most one per target, set and cleared from its page and listed in their library. It is independent of Rating, Series Follow, and Collection Entries, and no other User ever sees it.
+_Avoid_: like, bookmark, heart
+
+**Review**:
+A User's plain-text write-up of one Series, one Volume, or one omnibus Edition (a single-volume Edition reviews its Volume; an omnibus is reviewed as one book), at most one per target, meant to be signed with their username and shown beside their Rating when they have one. For now Reviews are private: only the author reads theirs, until public Reviews are switched on. It may be marked as containing spoilers, and only its author edits or deletes it. A Moderator may hide it, after which only Moderators and the author see it.
+_Avoid_: comment, post
+
+**Comment**:
+A User's short public plain-text post on one Series or one Volume page, signed with their username, or a reply to such a post; replies go one level deep. It may be marked as containing spoilers, and only its author edits or deletes it. It is published at once unless a hold rule sends it to the Data Team first; a Moderator may hide, remove, or restore it. Comments are currently switched off: nobody can post one and pages show none.
+_Avoid_: review, reply thread
+
+**Comment Report**:
+One User's flag on another User's published Comment, with a reason (spam, harassment, spoiler, off-topic, or other). A User reports a Comment at most once; three distinct Comment Reports hide it until a Moderator decides.
+_Avoid_: flag, complaint
+
+**Shadowed User**:
+A User whose Comments a Moderator has quietly muted: they still look published to that User and are hidden from everyone else. Shadowing covers the User's past and future Comments and is lifted by unshadowing.
+_Avoid_: shadow ban, banned user
+
 **User**:
 A person with a MangaDB account who owns personal tracking state and visibility choices. A User remains the same person across linked sign-in methods or email-address changes.
 _Avoid_: Clerk user, account

@@ -12,7 +12,10 @@ import {
   mutation,
   query,
 } from "./_generated/server";
+import { purgeUserComments } from "./comments";
 import { getUserBySubject, requireIdentity, requireUser } from "./lib/auth";
+import { applyRatingDelta, targetOfRow } from "./lib/ratings";
+import { DEFAULT_SCORE_FORMAT, scoreFormatValidator } from "./lib/scoreFormat";
 import { validateUsername } from "./lib/usernames";
 
 /**
@@ -35,6 +38,8 @@ export const viewer = query({
       formatPreference: user.formatPreference,
       ownershipVisibility: user.ownershipVisibility,
       readingVisibility: user.readingVisibility,
+      // Rating Format: how the viewer enters and reads scores.
+      scoreFormat: user.scoreFormat ?? DEFAULT_SCORE_FORMAT,
       suspended: user.suspended ?? false,
     };
   },
@@ -111,6 +116,20 @@ export const setFormatPreference = mutation({
 });
 
 /**
+ * Set the viewer's Rating Format (CONTEXT.md): which control they rate with
+ * and how scores read back to them. Stored Ratings keep their 1-100 score;
+ * only the display changes.
+ */
+export const setScoreFormat = mutation({
+  args: { format: scoreFormatValidator },
+  handler: async (ctx, { format }) => {
+    const user = await requireUser(ctx);
+    await ctx.db.patch(user._id, { scoreFormat: format });
+    return { format };
+  },
+});
+
+/**
  * Delete the viewer's account: the Clerk identity via the Backend API first
  * (nothing is touched if that call fails), then all MangaDB data. Requires
  * CLERK_SECRET_KEY on the Convex deployment. A 404 from Clerk means the
@@ -143,9 +162,11 @@ export const deleteAccount = action({
 });
 
 /**
- * Remove every personal record for a Clerk subject: tracking rows, then the
- * User itself. Public catalog history (Revisions, Proposals, roleAudit) is
- * append-only and survives; it renders as a deleted author.
+ * Remove every personal record for a Clerk subject: tracking rows, Ratings
+ * (decrementing their aggregates), Favorites, Reviews, Comments and Comment
+ * Reports, then the User itself. Public catalog history (Revisions, Proposals,
+ * roleAudit, reviewAudit, commentAudit) is append-only and survives; it
+ * renders as a deleted author.
  */
 export const purgeUser = internalMutation({
   args: { clerkSubject: v.string() },
@@ -173,6 +194,29 @@ export const purgeUser = internalMutation({
     for (const doc of [...collection, ...seriesStates, ...releaseProg, ...volumeProg]) {
       await ctx.db.delete(doc._id);
     }
+
+    // Ratings leave their targets' aggregates as they go; Reviews go too
+    // (their reviewAudit rows stay, like roleAudit).
+    const ratings = await ctx.db
+      .query("ratings")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const row of ratings) {
+      await ctx.db.delete(row._id);
+      const target = targetOfRow(row);
+      if (target) await applyRatingDelta(ctx, target, row.score, null);
+    }
+    const favorites = await ctx.db
+      .query("favorites")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const row of favorites) await ctx.db.delete(row._id);
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const row of reviews) await ctx.db.delete(row._id);
+    await purgeUserComments(ctx, user._id);
     await ctx.db.delete(user._id);
   },
 });

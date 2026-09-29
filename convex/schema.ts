@@ -12,6 +12,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { scoreFormatValidator } from "./lib/scoreFormat";
+
 // ---------- shared validators ----------
 
 // Partial-precision publication date (#13). `sort` is yyyymmdd with zeroed
@@ -38,6 +40,30 @@ const cover = v.object({
 });
 
 const visibility = v.union(v.literal("public"), v.literal("private"));
+
+// A Comment's moderation state (comments.ts): published, held for a
+// Moderator, hidden (by Moderators or 3 reports), removed (by its author
+// or a Moderator; the row stays for audit until the author's account purge),
+// or shadowed (its author is a Shadowed User: published-looking to them,
+// invisible to everyone else; unshadowing turns it back into approved).
+export const commentStatus = v.union(
+  v.literal("pending"),
+  v.literal("approved"),
+  v.literal("hidden"),
+  v.literal("removed"),
+  v.literal("shadowed"),
+);
+
+export const commentReportReason = v.union(
+  v.literal("spam"),
+  v.literal("harassment"),
+  v.literal("spoiler"),
+  v.literal("offTopic"),
+  v.literal("other"),
+);
+
+// A Review's moderation state (reviews.ts mirrors it).
+export const reviewStatus = v.union(v.literal("visible"), v.literal("hidden"));
 
 const dataRole = v.union(
   v.literal("editor"),
@@ -225,6 +251,14 @@ export default defineSchema({
     coverIsbn: v.union(v.string(), v.null()),
     // Copied from series.mature, so the library can leave Mature Series out.
     mature: v.optional(v.literal(true)),
+    // Copied from the Series' ratingStats row by the rebuild and, at once, by
+    // every rating write (lib/ratings.ts), on the 1-100 score scale.
+    // `ratingRank` is the average once RATING_RANK_MIN ratings are in and 0
+    // before, so "Top rated" sorts the thinly rated last. Optional only until
+    // every row has been rebuilt.
+    ratingAverage: v.optional(v.number()),
+    ratingCount: v.optional(v.number()),
+    ratingRank: v.optional(v.number()),
     rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])
@@ -235,6 +269,7 @@ export default defineSchema({
     .index("by_next", ["nextReleaseSort", "publicId"])
     .index("by_followers", ["followers", "publicId"])
     .index("by_collectors", ["collectors", "publicId"])
+    .index("by_rating", ["ratingRank", "publicId"])
     .index("by_rebuiltAt", ["rebuiltAt"]),
 
   // Authors (people.ts): the creators ANN credits on each Series, derived by
@@ -322,6 +357,8 @@ export default defineSchema({
         lastReleasedSort: v.number(),
         followers: v.number(),
         collectors: v.number(),
+        // As on seriesStats; optional until every pack has been rewritten.
+        ratingRank: v.optional(v.number()),
         mature: v.optional(v.literal(true)),
       }),
     ),
@@ -827,6 +864,12 @@ export default defineSchema({
     // Private by default (#7); per-Series overrides live on userSeriesStates.
     ownershipVisibility: visibility,
     readingVisibility: visibility,
+    // Shadowed User (CONTEXT.md): a Moderator's quiet mute. Their Comments
+    // still look published to them and are hidden from everyone else.
+    commentShadowed: v.optional(v.boolean()),
+    // Rating Format (CONTEXT.md): how this User enters and reads scores.
+    // Absent means DEFAULT_SCORE_FORMAT (lib/scoreFormat.ts).
+    scoreFormat: v.optional(scoreFormatValidator),
   })
     .index("by_clerkSubject", ["clerkSubject"])
     .index("by_username", ["usernameNormalized"]),
@@ -900,4 +943,187 @@ export default defineSchema({
     // Reverse lookups for merge transfer + impact previews (ticket #33).
     .index("by_volume", ["volumeId"])
     .index("by_series", ["seriesId"]),
+
+  // Ratings and Reviews (convex/ratings.ts, convex/reviews.ts). Each row
+  // targets exactly one Series, one Volume, or one omnibus Edition (an
+  // Edition collecting more than one Volume; a single-volume Edition rates
+  // its Volume): exactly one of seriesId / volumeId / editionId is set
+  // (enforced in lib/ratings.ts), the collectionEntries shape, so every side
+  // stays indexable. One row per (user, target).
+
+  // A Rating: a private whole-number score from 1 to 100, whatever Rating
+  // Format the User entered it in (lib/scoreFormat.ts). Only the aggregate
+  // (ratingStats) and a Review's own score beside it are ever public.
+  ratings: defineTable({
+    userId: v.id("users"),
+    seriesId: v.optional(v.id("series")),
+    volumeId: v.optional(v.id("volumes")),
+    editionId: v.optional(v.id("editions")),
+    score: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_series", ["userId", "seriesId"])
+    .index("by_user_volume", ["userId", "volumeId"])
+    .index("by_user_edition", ["userId", "editionId"])
+    // Reverse lookups for aggregate recounts and merge transfer.
+    .index("by_series", ["seriesId"])
+    .index("by_volume", ["volumeId"])
+    .index("by_edition", ["editionId"]),
+
+  // Sum and count of one target's Ratings (scores, 1-100), kept in step by
+  // every rating write in the same transaction (lib/ratings.ts), recounted on
+  // merge and split. The average is sum / count; no row, or count 0, means
+  // unrated.
+  ratingStats: defineTable({
+    seriesId: v.optional(v.id("series")),
+    volumeId: v.optional(v.id("volumes")),
+    editionId: v.optional(v.id("editions")),
+    sum: v.number(),
+    count: v.number(),
+  })
+    .index("by_series", ["seriesId"])
+    .index("by_volume", ["volumeId"])
+    .index("by_edition", ["editionId"]),
+
+  // A Favorite (CONTEXT.md): a User's private mark on one Series, one
+  // Volume, or one omnibus Edition (convex/favorites.ts). A Series row has
+  // neither volumeId nor editionId; a Volume or Edition row carries its
+  // target and, denormalised, the target's Series (an Edition's is its
+  // first covered Volume's), like comments. One row per (user, target).
+  favorites: defineTable({
+    userId: v.id("users"),
+    seriesId: v.id("series"),
+    volumeId: v.optional(v.id("volumes")),
+    editionId: v.optional(v.id("editions")),
+  })
+    // Newest first per user (the index ends in _creationTime): the library view.
+    .index("by_user", ["userId"])
+    // A Series favorite is (user, series, volumeId and editionId undefined).
+    .index("by_user_series", ["userId", "seriesId", "volumeId", "editionId"])
+    .index("by_user_volume", ["userId", "volumeId"])
+    .index("by_user_edition", ["userId", "editionId"])
+    // Merge transfer (every row of a Series, Volume and Edition rows included).
+    .index("by_series", ["seriesId"])
+    .index("by_volume", ["volumeId"])
+    .index("by_edition", ["editionId"]),
+
+  // A Review: plain text (line breaks kept, no Markdown) by its author,
+  // public once FEATURES.publicReviews is on (lib/features.ts), and
+  // post-moderated: Moderators hide or unhide it (reviewAudit). A later
+  // user-content report queue can add optional reportCount / lastReportedAt
+  // fields here without a migration.
+  reviews: defineTable({
+    userId: v.id("users"),
+    seriesId: v.optional(v.id("series")),
+    volumeId: v.optional(v.id("volumes")),
+    editionId: v.optional(v.id("editions")),
+    body: v.string(),
+    spoiler: v.boolean(),
+    status: reviewStatus,
+    createdAt: v.number(),
+    // Set on every edit after the first save; the page shows "edited".
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_series", ["userId", "seriesId"])
+    .index("by_user_volume", ["userId", "volumeId"])
+    .index("by_user_edition", ["userId", "editionId"])
+    // Newest first per target (the index ends in _creationTime); the status
+    // variants serve the public list and the Moderators' hidden list.
+    .index("by_series", ["seriesId"])
+    .index("by_volume", ["volumeId"])
+    .index("by_edition", ["editionId"])
+    .index("by_series_status", ["seriesId", "status"])
+    .index("by_volume_status", ["volumeId", "status"])
+    .index("by_edition_status", ["editionId", "status"]),
+
+  // Append-only record of Moderator actions on Reviews, shaped like
+  // roleAudit. Survives the Review's deletion.
+  reviewAudit: defineTable({
+    reviewId: v.id("reviews"),
+    action: v.union(v.literal("hidden"), v.literal("unhidden")),
+    actor: v.union(
+      v.object({ kind: v.literal("user"), userId: v.id("users") }),
+      v.object({ kind: v.literal("system") }),
+    ),
+    reason: v.optional(v.string()),
+  }).index("by_review", ["reviewId"]),
+
+  // Comments (convex/comments.ts, CONTEXT.md: Comment): short public plain
+  // text on a Series or Volume page, one level of replies. Unlike Ratings
+  // and Reviews, `seriesId` is always set: on a Series Comment it is the
+  // target, on a Volume Comment (volumeId set) it is the Volume's Series,
+  // denormalised for merge transfer and any later Mature filtering.
+  comments: defineTable({
+    userId: v.id("users"),
+    seriesId: v.id("series"),
+    volumeId: v.optional(v.id("volumes")),
+    // A reply's top-level Comment; replies never have replies.
+    parentId: v.optional(v.id("comments")),
+    body: v.string(),
+    spoiler: v.boolean(),
+    status: commentStatus,
+    // Distinct Comment Reports since a Moderator last cleared them.
+    reportCount: v.number(),
+    createdAt: v.number(),
+    // Any change after posting (an edit or a moderation decision).
+    updatedAt: v.optional(v.number()),
+    // The author's last edit; the page shows "edited".
+    editedAt: v.optional(v.number()),
+    // Thread heads only: how many approved replies it has, kept in step by
+    // every status change of a reply. Drives "N more replies" and whether a
+    // gone head still needs a placeholder. Absent on heads that never had one.
+    replyCount: v.optional(v.number()),
+  })
+    // A page's threads: (series, volume-or-undefined, top level, status), newest last.
+    .index("by_target_thread_status", ["seriesId", "volumeId", "parentId", "status"])
+    // A thread's replies by status, oldest first.
+    .index("by_parent", ["parentId", "status"])
+    // The hold rule's approved count and the account purge.
+    .index("by_user", ["userId", "status"])
+    // The viewer's own held and hidden Comments on one page.
+    .index("by_user_target", ["userId", "seriesId", "volumeId"])
+    // Merge transfer and impact previews.
+    .index("by_series", ["seriesId"])
+    .index("by_volume", ["volumeId"])
+    // The moderation queue's Reported tab: approved, most reported first.
+    .index("by_status", ["status", "reportCount"])
+    // The other queue tabs by age: pending oldest first, hidden and removed newest first.
+    .index("by_status_time", ["status"]),
+
+  // One User's report of one Comment (CONTEXT.md: Comment Report). Three
+  // distinct reports hide an approved Comment until a Moderator decides.
+  commentReports: defineTable({
+    commentId: v.id("comments"),
+    reporterId: v.id("users"),
+    reason: commentReportReason,
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    // One report per user per Comment; the commentId prefix lists a Comment's reports.
+    .index("by_comment_reporter", ["commentId", "reporterId"])
+    .index("by_reporter", ["reporterId"]),
+
+  // Append-only record of moderation on Comments, shaped like reviewAudit.
+  // `userId` names the author a shadow / unshadow applied to. Survives the
+  // Comment's deletion.
+  commentAudit: defineTable({
+    commentId: v.id("comments"),
+    action: v.union(
+      v.literal("approve"),
+      v.literal("hide"),
+      v.literal("unhide"),
+      v.literal("remove"),
+      v.literal("restore"),
+      v.literal("shadow"),
+      v.literal("unshadow"),
+    ),
+    actor: v.union(
+      v.object({ kind: v.literal("user"), userId: v.id("users") }),
+      v.object({ kind: v.literal("system") }),
+    ),
+    userId: v.optional(v.id("users")),
+    reason: v.optional(v.string()),
+  }).index("by_comment", ["commentId"]),
 });

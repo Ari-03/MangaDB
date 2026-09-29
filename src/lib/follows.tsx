@@ -11,6 +11,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { track } from "~/lib/analytics";
 import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate } from "~/lib/format";
 import { todaySortKey } from "~/lib/month";
@@ -24,9 +25,10 @@ export type FollowSuggestion = { seriesId: Id<"series">; title: string };
 /**
  * The explicit Series Follow toggle on the Series page — the one deliberate
  * way to start tracking a Series' future Releases. Renders nothing signed
- * out. It returns its kicker, the toggle and its hint as bare siblings, so
- * the Series page's tracking bar lays them out as one group (and stays
- * empty, and hidden, for signed-out viewers).
+ * out. It returns the toggle and its hint as bare siblings, so the actions
+ * row of the page's TakePanel (lib/reviews.tsx) sets the toggle beside
+ * Favorite with the hint under both (and stays empty, and hidden, for
+ * signed-out viewers).
  */
 export function SeriesFollowControls({
   seriesPublicId,
@@ -47,14 +49,19 @@ function SeriesFollowControlsInner({
   if (!data) return null; // loading, signed out, or username pending
   return (
     <>
-      <span className="track-kicker">New releases</span>
       <button
         type="button"
         aria-pressed={data.following}
         className={`follow-btn${data.following ? " is-following" : ""}`}
-        onClick={() =>
-          void setFollow({ seriesId: data.seriesId, following: !data.following })
-        }
+        onClick={() => {
+          const following = !data.following;
+          void setFollow({ seriesId: data.seriesId, following }).then(() =>
+            track(following ? "series_followed" : "series_unfollowed", {
+              seriesId: data.seriesId,
+              source: "series_page",
+            }),
+          );
+        }}
       >
         {data.following ? (
           <svg
@@ -118,7 +125,9 @@ export function FollowPrompt({
           <button
             type="button"
             onClick={() => {
-              void setFollow({ seriesId: suggestion.seriesId, following: true });
+              void setFollow({ seriesId: suggestion.seriesId, following: true }).then(() =>
+                track("series_followed", { seriesId: suggestion.seriesId, source: "prompt" }),
+              );
               onDone();
             }}
           >
@@ -225,7 +234,13 @@ function LibraryUpcomingInner() {
                           type="button"
                           className="quick-btn"
                           onClick={() =>
-                            void setFollow({ seriesId: series.seriesId, following: false })
+                            void setFollow({ seriesId: series.seriesId, following: false }).then(
+                              () =>
+                                track("series_unfollowed", {
+                                  seriesId: series.seriesId,
+                                  source: "library",
+                                }),
+                            )
                           }
                         >
                           Unfollow

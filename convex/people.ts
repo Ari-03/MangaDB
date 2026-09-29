@@ -25,6 +25,7 @@ import { annCreditValidator, parseApiResponse, type AnnCredit } from "./lib/ann"
 import { politeFetch } from "./lib/http";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { allocatePublicId } from "./lib/publicIds";
+import { withExceptionCapture } from "./lib/posthog";
 
 export type CreditRole = Doc<"seriesCredits">["role"];
 
@@ -79,38 +80,39 @@ const CREDITS_PER_SERIES = 50;
  */
 export const rebuild = internalAction({
   args: {},
-  handler: async (ctx) => {
-    const startedAt = Date.now();
-    let after: string | null = null;
-    let credits = 0;
-    for (;;) {
-      const batch: { next: string | null; credits: number } = await ctx.runMutation(
-        internal.people.creditBatch,
-        { after, rebuiltAt: startedAt },
-      );
-      credits += batch.credits;
-      if (batch.next === null) break;
-      after = batch.next;
-    }
-    let swept = 0;
-    for (;;) {
-      const n: number = await ctx.runMutation(internal.people.sweepCredits, { before: startedAt });
-      swept += n;
-      if (n < SWEEP_BATCH) break;
-    }
-    let people = 0;
-    let afterPublicId: number | null = null;
-    for (;;) {
-      const batch: { next: number | null; count: number } = await ctx.runMutation(
-        internal.people.statsBatch,
-        { afterPublicId },
-      );
-      people += batch.count;
-      if (batch.next === null) break;
-      afterPublicId = batch.next;
-    }
-    return { credits, swept, people, ms: Date.now() - startedAt };
-  },
+  handler: async (ctx) =>
+    withExceptionCapture("people.rebuild", ctx, async () => {
+      const startedAt = Date.now();
+      let after: string | null = null;
+      let credits = 0;
+      for (;;) {
+        const batch: { next: string | null; credits: number } = await ctx.runMutation(
+          internal.people.creditBatch,
+          { after, rebuiltAt: startedAt },
+        );
+        credits += batch.credits;
+        if (batch.next === null) break;
+        after = batch.next;
+      }
+      let swept = 0;
+      for (;;) {
+        const n: number = await ctx.runMutation(internal.people.sweepCredits, { before: startedAt });
+        swept += n;
+        if (n < SWEEP_BATCH) break;
+      }
+      let people = 0;
+      let afterPublicId: number | null = null;
+      for (;;) {
+        const batch: { next: number | null; count: number } = await ctx.runMutation(
+          internal.people.statsBatch,
+          { afterPublicId },
+        );
+        people += batch.count;
+        if (batch.next === null) break;
+        afterPublicId = batch.next;
+      }
+      return { credits, swept, people, ms: Date.now() - startedAt };
+    }),
 });
 
 /** Credit a batch of ANN manga observations, by source record id. */

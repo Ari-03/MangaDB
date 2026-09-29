@@ -56,11 +56,46 @@ export async function followMerges<T extends MergeableTable>(
   return current && current.status === "active" ? current : null;
 }
 
+/** An Edition's Volume Coverage rows in `order` (the index sorts them). */
+function coverageRows(ctx: QueryCtx, editionId: Id<"editions">) {
+  return ctx.db
+    .query("volumeCoverages")
+    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .collect();
+}
+
+/** A coverage row's Volume and its Series, or null when either is not active. */
+async function activeCoveredVolume(ctx: QueryCtx, row: Doc<"volumeCoverages">) {
+  const volume = await ctx.db.get(row.volumeId);
+  if (!volume || volume.status !== "active") return null;
+  const series = await ctx.db.get(volume.seriesId);
+  if (!series || series.status !== "active") return null;
+  return { volume, series };
+}
+
+/**
+ * An Edition's Series as ratings and favorites key it: the Series of its
+ * first covered Volume in coverage order, hidden Volumes and Series skipped.
+ * `editionCoverage` reports the same Series as `series` for a mapped
+ * Edition (its coverage listing walks the same rows the same way).
+ * Exported for the Edition merge's Favorite denorm (lib/sensitiveOps.ts).
+ */
+export async function primaryVolumeSeries(
+  ctx: QueryCtx,
+  editionId: Id<"editions">,
+): Promise<Doc<"series"> | null> {
+  for (const row of await coverageRows(ctx, editionId)) {
+    const found = await activeCoveredVolume(ctx, row);
+    if (found) return found.series;
+  }
+  return null;
+}
+
 /**
  * An Edition's ordered Volume Coverage joined with each covered Volume and
  * its Series, plus the composed Edition title (lib/titles.ts). Hidden
- * Volumes/Series drop out of the coverage listing. Exported for
- * moderation.ts (edit-form display titles).
+ * Volumes/Series drop out of the coverage listing; `volumeCount` still
+ * counts them. Exported for moderation.ts (edit-form display titles).
  */
 export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   const line = edition.editionLineId
@@ -68,16 +103,12 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
     : null;
   const lineName = line && line.status === "active" ? line.name : null;
 
-  const rows = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-    .collect();
+  const rows = await coverageRows(ctx, edition._id);
   const coverage = [];
   for (const row of rows) {
-    const volume = await ctx.db.get(row.volumeId);
-    if (!volume || volume.status !== "active") continue;
-    const series = await ctx.db.get(volume.seriesId);
-    if (!series || series.status !== "active") continue;
+    const found = await activeCoveredVolume(ctx, row);
+    if (!found) continue;
+    const { volume, series } = found;
     coverage.push({
       volumePublicId: volume.publicId,
       position: volume.position,
@@ -90,7 +121,8 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
     });
   }
 
-  // Unmapped Packaging covers nothing yet: its Series is its line's.
+  // The first listed Volume's Series is primaryVolumeSeries; Unmapped
+  // Packaging covers nothing yet, so its Series is its line's.
   const lineSeries =
     coverage.length === 0 && line && line.status === "active"
       ? await ctx.db.get(line.seriesId)
@@ -110,8 +142,13 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
     title,
     lineName,
     coverage,
-    /** The Edition's Series: the covered Volumes' (first), else its line's. */
+    /** The Edition's Series: primaryVolumeSeries's, else its line's. */
     series,
+    /**
+     * Distinct Volumes the coverage names, hidden ones included: whether the
+     * book is an omnibus does not change while a Volume is hidden.
+     */
+    volumeCount: new Set(rows.map((row) => row.volumeId)).size,
     /** It collects any Mature Series (lib/mature.ts). */
     mature: coverage.some((c) => c.series.mature) || series?.mature === true,
     coverageUnmapped: edition.coverageUnmapped === true,
@@ -170,6 +207,31 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
  */
 function representativeCover(rows: Array<{ coverUrl: string | null }>) {
   return rows.find((row) => row.coverUrl !== null)?.coverUrl ?? null;
+}
+
+/** Releases `editionCover` reads per Edition, bounding the library's cost per Favorite. */
+const COVER_RELEASES = 10;
+
+/**
+ * An Edition's jacket without its full Release rows (the library's
+ * Favorites): among its first COVER_RELEASES Releases, the earliest dated
+ * one carrying a cover, else the first dated ISBN to look one up by. Past
+ * ten Releases this can differ from the Edition page's representative cover.
+ */
+export async function editionCover(ctx: QueryCtx, editionId: Id<"editions">) {
+  const releases = (
+    await ctx.db
+      .query("releases")
+      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+      .take(COVER_RELEASES)
+  )
+    .filter((doc) => doc.status === "active")
+    .sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity));
+  for (const release of releases) {
+    const url = await coverUrl(ctx, release.coverImage?.storageId);
+    if (url) return { coverUrl: url, coverIsbn: release.isbn13 ?? null };
+  }
+  return { coverUrl: null, coverIsbn: releases.find((r) => r.isbn13)?.isbn13 ?? null };
 }
 
 type ReleaseRow = Awaited<ReturnType<typeof releaseRow>>;

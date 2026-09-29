@@ -1,14 +1,19 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
+import { FEATURES } from "../../convex/lib/features";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type VolumePageData } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
+import { FavoriteButton } from "~/lib/favorites";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { ConcealArt } from "~/lib/mature";
+import { RatingAggregate } from "~/lib/ratings";
 import { VolumeReadCount } from "~/lib/reading";
+import { ReviewsSection, TakePanel } from "~/lib/reviews";
 import {
   breadcrumbListJsonLd,
   jsonLdScript,
@@ -27,6 +32,10 @@ import { parsePublicId, seriesPath, slugParams, volumePath } from "~/lib/slug";
  * visibly separate from any Edition Line numbering, and Release rows link
  * their containing Bundles.
  *
+ * The hero: the cover on the left with the viewer's take under it
+ * (TakePanel: Rating, Review, Favorite), then the tracking card (what they
+ * own and how often they have read it); the facts and editions on the right.
+ *
  * The public ID is identity; the slug is cosmetic, computed from the
  * composed Volume title (spec §8/§11). A stale or wrong slug — including the
  * old ID of a merged Volume, which resolves to its survivor — 301s to the
@@ -36,13 +45,23 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await catalogQuery(api.catalogPages.volumePage, { publicId });
+    // The rating aggregate and first pages of Reviews and Comments render
+    // with the page, then follow their live queries (lib/ratings.tsx,
+    // lib/reviews.tsx, lib/comments.tsx). Reviews and Comments only while
+    // their feature flags are on (convex/lib/features.ts).
+    const target = { kind: "volume" as const, publicId };
+    const [page, rating, reviews, comments] = await Promise.all([
+      catalogQuery(api.catalogPages.volumePage, { publicId }),
+      catalogQuery(api.ratings.summary, { target }),
+      FEATURES.publicReviews ? catalogQuery(api.reviews.list, { target }) : null,
+      FEATURES.comments ? catalogQuery(api.comments.list, { target }) : null,
+    ]);
     if (!page) throw notFound();
     const canonical = volumePath(page.volume.publicId, page.volume.title);
     if (`/volume/${params.publicId}/${params.slug}` !== canonical) {
       throw redirect({ href: canonical, statusCode: 301 });
     }
-    return page;
+    return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
   // BreadcrumbList JSON-LD (spec §11, ticket #39). The description falls
@@ -111,6 +130,7 @@ function ConcealedVolumePage() {
 function VolumePage() {
   const page = Route.useLoaderData();
   const { volume, series, credits, editions, coverUrl } = page;
+  const ratingTarget = { kind: "volume" as const, publicId: volume.publicId };
   const complete = editions.filter((e) => e.extentForVolume === "complete");
   const partial = editions.filter((e) => e.extentForVolume === "partial");
   const releaseCount = editions.reduce((n, e) => n + e.releases.length, 0);
@@ -160,19 +180,28 @@ function VolumePage() {
               lazy={false}
             />
           </div>
-          {/* The signed-in tracking card. Both controls render null signed
-              out, leaving the card empty — CSS hides it then. */}
-          <div className="track-card">
-            {/* Volume ownership (#27): displayed purely through the owned
-                Releases covering it — direct or via an Owned Bundle; no
-                stored Volume state. */}
-            <VolumeOwnership volumePublicId={volume.publicId} />
-            {/* Durable, edition-independent read count (#28). */}
-            <VolumeReadCount
-              seriesPublicId={series.publicId}
-              volumePublicId={volume.publicId}
-            />
-          </div>
+        </div>
+
+        {/* The viewer's take, under the cover: their private Rating of this
+            Volume, their own Review, and the private Favorite. A grid item of
+            its own, so opening the review form can give it the full width. */}
+        <TakePanel target={ratingTarget} noun="volume">
+          <FavoriteButton target={ratingTarget} />
+        </TakePanel>
+
+        {/* The signed-in tracking card. Every control renders null signed
+            out (or with nothing owned or read), leaving the card's blocks
+            empty — CSS hides it then. */}
+        <div className="track-card">
+          {/* Volume ownership (#27): displayed purely through the owned
+              Releases covering it — direct or via an Owned Bundle; no
+              stored Volume state. */}
+          <VolumeOwnership volumePublicId={volume.publicId} />
+          {/* Durable, edition-independent read count (#28). */}
+          <VolumeReadCount
+            seriesPublicId={series.publicId}
+            volumePublicId={volume.publicId}
+          />
         </div>
 
         <div className="volume-hero-body">
@@ -194,6 +223,7 @@ function VolumePage() {
             >
               #{volume.position} in the reading path
             </span>
+            <RatingAggregate target={ratingTarget} initial={page.rating} />
             <span className="chip">
               {volume.label !== null
                 ? `Volume label “${volume.label}”`
@@ -263,6 +293,13 @@ function VolumePage() {
           ) : null}
         </div>
       </div>
+
+      {FEATURES.publicReviews ? (
+        <ReviewsSection target={ratingTarget} initial={page.reviews} noun="volume" />
+      ) : null}
+      {FEATURES.comments ? (
+        <CommentsSection target={ratingTarget} initial={page.comments} noun="volume" />
+      ) : null}
 
       {/* Public revision history + the moderator edit entry point (#31). */}
       <RecordHistory type="volume" publicId={volume.publicId} />
