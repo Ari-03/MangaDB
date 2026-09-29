@@ -9,15 +9,16 @@
 //   during SSR, document.cookie in the browser); route loaders pass it on.
 // - `<MatureProvider>` holds it for components; `useMature()` reads and
 //   changes it. A change rewrites the cookie and reloads every route's data.
-// - It is chosen in three places: the first-visit question
-//   (`<MatureWelcome>`, asked once per browser), Library → Settings
+// - It is chosen in three places: the welcome question (`<MatureWelcome>`,
+//   asked once per browser, only on the Series library and Series pages;
+//   the home page stays non-mature without asking), Library → Settings
 //   (`<MatureSettings>`), and the Series filters (`<MatureFilter>`); plus
 //   the notice on a Mature Series' own page. Turning it on always asks for
 //   the 18+ confirmation, except in the welcome, which is that question.
 // - `<ConcealArt>` wraps a Mature Series' page for viewers who have not
 //   opted in: every <Cover> inside draws cloth marked 18+ instead of art.
 
-import { useRouter } from "@tanstack/react-router";
+import { useRouter, useRouterState } from "@tanstack/react-router";
 import { createIsomorphicFn } from "@tanstack/react-start";
 import { getCookie } from "@tanstack/react-start/server";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
@@ -222,16 +223,24 @@ export function MatureFilter() {
   );
 }
 
+/** Where the welcome may open: the Series library and every Series page. */
+const WELCOME_PATHS = /^\/series(\/|$)/;
+
 /**
- * Asked once per browser, on the first visit: allow mature content or keep
- * it hidden. Either answer (or dismissing it) is remembered, and either
- * can be changed later in Settings or the Series filters. Opened after
- * hydration, so the server render never depends on it.
+ * Asked once per browser, the first time the viewer reaches the Series
+ * library or a Series page: allow mature content or keep it hidden. The
+ * home page and everything else stay non-mature without asking. Either
+ * answer (or dismissing it) is remembered, and either can be changed later
+ * in Settings or the Series filters. Opened after hydration, so the server
+ * render never depends on it.
  */
 function MatureWelcome() {
   const { setShowMature } = useMature();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [open, setOpen] = useState(false);
-  useEffect(() => setOpen(!answered()), []);
+  useEffect(() => {
+    if (WELCOME_PATHS.test(pathname) && !answered()) setOpen(true);
+  }, [pathname]);
   if (!open) return null;
   const answer = (allow: boolean) => {
     setShowMature(allow);

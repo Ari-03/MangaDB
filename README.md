@@ -1701,9 +1701,11 @@ who has not opted in they lead with a notice and draw every cover as cloth
 marked 18+. The art isn't even requested. Those pages carry
 `<meta name="rating" content="adult">` and no cover-led social card.
 
-**Who opts in.** Anyone. A first visit asks once, "Allow mature content?",
-and remembers the answer in a `mangadb-mature` cookie (`1` allow, `0` hide;
-`src/lib/mature.tsx`). It can be changed later under Mature content in the
+**Who opts in.** Anyone. The first time a browser reaches the Series
+library or a Series page it asks once, "Allow mature content?", and
+remembers the answer in a `mangadb-mature` cookie (`1` allow, `0` hide;
+`src/lib/mature.tsx`). The home page and every other page never ask; they
+simply stay non-mature until the viewer has opted in. It can be changed later under Mature content in the
 Series filters, in Library → Settings, or from the notice on a mature page.
 Those ask "I'm 18 or older" before allowing.
 The cookie lets the server render and every catalog read agree: public
