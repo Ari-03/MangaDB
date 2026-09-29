@@ -8,7 +8,9 @@ import { Cover, coverIsbns } from "~/lib/cover";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { ConcealArt } from "~/lib/mature";
+import { RatingAggregate, RatingControl } from "~/lib/ratings";
 import { VolumeReadCount } from "~/lib/reading";
+import { ReviewsSection } from "~/lib/reviews";
 import {
   breadcrumbListJsonLd,
   jsonLdScript,
@@ -36,13 +38,20 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await catalogQuery(api.catalogPages.volumePage, { publicId });
+    // The rating aggregate and first page of Reviews render with the page;
+    // both then follow their live queries (lib/ratings.tsx, lib/reviews.tsx).
+    const target = { kind: "volume" as const, publicId };
+    const [page, rating, reviews] = await Promise.all([
+      catalogQuery(api.catalogPages.volumePage, { publicId }),
+      catalogQuery(api.ratings.summary, { target }),
+      catalogQuery(api.reviews.list, { target }),
+    ]);
     if (!page) throw notFound();
     const canonical = volumePath(page.volume.publicId, page.volume.title);
     if (`/volume/${params.publicId}/${params.slug}` !== canonical) {
       throw redirect({ href: canonical, statusCode: 301 });
     }
-    return page;
+    return { ...page, rating, reviews };
   },
   // Title/description formulas, cover-led social card, canonical link, and
   // BreadcrumbList JSON-LD (spec §11, ticket #39). The description falls
@@ -111,6 +120,7 @@ function ConcealedVolumePage() {
 function VolumePage() {
   const page = Route.useLoaderData();
   const { volume, series, credits, editions, coverUrl } = page;
+  const ratingTarget = { kind: "volume" as const, publicId: volume.publicId };
   const complete = editions.filter((e) => e.extentForVolume === "complete");
   const partial = editions.filter((e) => e.extentForVolume === "partial");
   const releaseCount = editions.reduce((n, e) => n + e.releases.length, 0);
@@ -172,6 +182,8 @@ function VolumePage() {
               seriesPublicId={series.publicId}
               volumePublicId={volume.publicId}
             />
+            {/* The viewer's private 1-10 Rating of this Volume. */}
+            <RatingControl target={ratingTarget} wrapperClass="volume-rating" />
           </div>
         </div>
 
@@ -194,6 +206,7 @@ function VolumePage() {
             >
               #{volume.position} in the reading path
             </span>
+            <RatingAggregate target={ratingTarget} initial={page.rating} />
             <span className="chip">
               {volume.label !== null
                 ? `Volume label “${volume.label}”`
@@ -263,6 +276,8 @@ function VolumePage() {
           ) : null}
         </div>
       </div>
+
+      <ReviewsSection target={ratingTarget} initial={page.reviews} noun="volume" />
 
       {/* Public revision history + the moderator edit entry point (#31). */}
       <RecordHistory type="volume" publicId={volume.publicId} />

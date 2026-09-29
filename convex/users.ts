@@ -13,6 +13,7 @@ import {
   query,
 } from "./_generated/server";
 import { getUserBySubject, requireIdentity, requireUser } from "./lib/auth";
+import { applyRatingDelta, targetOfRow } from "./lib/ratings";
 import { validateUsername } from "./lib/usernames";
 
 /**
@@ -143,8 +144,8 @@ export const deleteAccount = action({
 });
 
 /**
- * Remove every personal record for a Clerk subject: tracking rows, then the
- * User itself. Public catalog history (Revisions, Proposals, roleAudit) is
+ * Remove every personal record for a Clerk subject: tracking rows, Ratings
+ * (decrementing their aggregates) and Reviews, then the User itself. Public catalog history (Revisions, Proposals, roleAudit) is
  * append-only and survives; it renders as a deleted author.
  */
 export const purgeUser = internalMutation({
@@ -173,6 +174,23 @@ export const purgeUser = internalMutation({
     for (const doc of [...collection, ...seriesStates, ...releaseProg, ...volumeProg]) {
       await ctx.db.delete(doc._id);
     }
+
+    // Ratings leave their targets' aggregates as they go; Reviews go too
+    // (their reviewAudit rows stay, like roleAudit).
+    const ratings = await ctx.db
+      .query("ratings")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const row of ratings) {
+      await ctx.db.delete(row._id);
+      const target = targetOfRow(row);
+      if (target) await applyRatingDelta(ctx, target, row.rating, null);
+    }
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const row of reviews) await ctx.db.delete(row._id);
     await ctx.db.delete(user._id);
   },
 });

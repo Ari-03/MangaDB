@@ -23,6 +23,8 @@ import { getCookie } from "@tanstack/react-start/server";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+import { track } from "~/lib/analytics";
+
 const COOKIE = "mangadb-mature";
 const YEAR_SECONDS = 60 * 60 * 24 * 365;
 
@@ -52,6 +54,7 @@ export function MatureProvider({ children }: { children: ReactNode }) {
     // A "no" changes nothing on screen; only a "yes" needs fresh data.
     if (next === on) return;
     setOn(next);
+    track("mature_titles_toggled", { showMature: next });
     // Every loader read the old choice; reload what is on screen.
     void router.invalidate();
   };

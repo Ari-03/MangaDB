@@ -34,6 +34,7 @@ import {
 import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
+import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratings";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
 
 export const SORTS = [
@@ -44,6 +45,7 @@ export const SORTS = [
   "upcoming",
   "followers",
   "collectors",
+  "rating",
 ] as const;
 export type Sort = (typeof SORTS)[number];
 
@@ -189,6 +191,41 @@ export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series
   const entries = pack.entries.map((entry, i) =>
     i === at ? { ...entry, mature: mature ? (true as const) : undefined } : entry,
   );
+  await ctx.db.patch(pack._id, { entries });
+}
+
+/**
+ * Carry a Series' new rating aggregate into its library row and pack entry
+ * at once (lib/ratings.ts calls this from every rating write), so "Top
+ * rated" reorders without waiting for the next rebuild. The pack, a large
+ * document many Series share, is rewritten only when the Series' rank
+ * actually moves: ratings below RATING_RANK_MIN leave it at 0 and untouched.
+ * A Series without a row yet (never rebuilt, or bookless) has nothing to
+ * update; the rebuild reads ratingStats itself.
+ */
+export async function syncRatingProjection(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+  summary: RatingSummary,
+) {
+  const row = await ctx.db
+    .query("seriesStats")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .unique();
+  if (!row) return;
+  const ratingRank = ratingRankOf(summary);
+  await ctx.db.patch(row._id, {
+    ratingAverage: summary.average ?? undefined,
+    ratingCount: summary.count,
+    ratingRank,
+  });
+  const pack = await ctx.db
+    .query("seriesStatsPacks")
+    .withIndex("by_block", (q) => q.eq("block", Math.floor(row.publicId / PACK_SPAN)))
+    .unique();
+  const at = pack?.entries.findIndex((entry) => entry.publicId === row.publicId) ?? -1;
+  if (!pack || at < 0 || (pack.entries[at]!.ratingRank ?? 0) === ratingRank) return;
+  const entries = pack.entries.map((entry, i) => (i === at ? { ...entry, ratingRank } : entry));
   await ctx.db.patch(pack._id, { entries });
 }
 
@@ -387,6 +424,8 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
       .collect()
   ).filter((s) => s.following).length;
 
+  const rating = await ratingSummary(ctx, { kind: "series", id: series._id });
+
   const titleSort = sortKeyFor(series.title);
   const row = {
     seriesId: series._id,
@@ -407,6 +446,9 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     searchKey: searchKeyFor([series.title, ...series.altTitles]),
     followers,
     collectors: collectors.size,
+    ...(rating.average !== null ? { ratingAverage: rating.average } : {}),
+    ratingCount: rating.count,
+    ratingRank: ratingRankOf(rating),
     coverUrl: storedCover,
     coverIsbn: seriesCoverIsbn(coverCandidates),
     ...(mature ? { mature: true as const } : {}),
@@ -492,6 +534,7 @@ function entryOf(row: StatsRow): Entry {
     lastReleasedSort: row.lastReleasedSort ?? row.latestReleaseSort,
     followers: row.followers,
     collectors: row.collectors,
+    ratingRank: row.ratingRank ?? 0,
     ...(row.mature ? { mature: true as const } : {}),
   };
 }
@@ -520,6 +563,9 @@ const SORT_INDEX = {
   upcoming: { index: "by_next", field: "nextReleaseSort", defaultOrder: "asc" },
   followers: { index: "by_followers", field: "followers", defaultOrder: "desc" },
   collectors: { index: "by_collectors", field: "collectors", defaultOrder: "desc" },
+  // Ranked Series (RATING_RANK_MIN ratings or more) by average; the rest
+  // carry 0 and sort last either way, as "upcoming" does its unannounced.
+  rating: { index: "by_rating", field: "ratingRank", defaultOrder: "desc" },
 } as const satisfies Record<
   Sort,
   { index: string; field: keyof StatsRow & keyof Entry; defaultOrder: "asc" | "desc" }
@@ -657,6 +703,8 @@ function card(row: StatsRow) {
     nextReleaseSort: row.nextReleaseSort,
     followers: row.followers,
     collectors: row.collectors,
+    ratingAverage: row.ratingAverage ?? null,
+    ratingCount: row.ratingCount ?? 0,
     coverUrl: row.coverUrl,
     coverIsbn: row.coverIsbn,
   };
@@ -712,12 +760,20 @@ async function readChunk(
 ): Promise<Array<StatsRow>> {
   const table = () => ctx.db.query("seriesStats");
   const asc = order === "asc";
+  // "upcoming" and "rating" both keep their zeros (nothing announced,
+  // not enough ratings) last, which an ascending read has to arrange.
   const zerosAfter = (id: number) =>
-    table().withIndex("by_next", (r) => r.eq("nextReleaseSort", 0).gt("publicId", id));
-  const zerosLast = sort === "upcoming" && asc;
+    sort === "rating"
+      ? table().withIndex("by_rating", (r) => r.eq("ratingRank", 0).gt("publicId", id))
+      : table().withIndex("by_next", (r) => r.eq("nextReleaseSort", 0).gt("publicId", id));
+  const zerosLast = (sort === "upcoming" || sort === "rating") && asc;
   const ranges = (() => {
     if (zerosLast && !cursor) {
-      return [table().withIndex("by_next", (r) => r.gt("nextReleaseSort", 0)), zerosAfter(-1)];
+      const nonZero =
+        sort === "rating"
+          ? table().withIndex("by_rating", (r) => r.gt("ratingRank", 0))
+          : table().withIndex("by_next", (r) => r.gt("nextReleaseSort", 0));
+      return [nonZero, zerosAfter(-1)];
     }
     if (zerosLast && cursor?.v === 0) return [zerosAfter(cursor.id)];
     if (!cursor) return [table().withIndex(SORT_INDEX[sort].index)];
@@ -760,6 +816,12 @@ async function readChunk(
         return [
           table().withIndex("by_collectors", (r) => same(r.eq("collectors", num))),
           table().withIndex("by_collectors", (r) => (asc ? r.gt("collectors", num) : r.lt("collectors", num))),
+        ];
+      case "rating":
+        return [
+          table().withIndex("by_rating", (r) => same(r.eq("ratingRank", num))),
+          table().withIndex("by_rating", (r) => (asc ? r.gt("ratingRank", num) : r.lt("ratingRank", num))),
+          ...(zerosLast ? [zerosAfter(-1)] : []),
         ];
     }
   })();
@@ -815,7 +877,8 @@ export const browse = query({
     const order = args.order ?? SORT_INDEX[args.sort].defaultOrder;
     const pageSize = Math.max(1, Math.min(PAGE_MAX, Math.floor(args.pageSize ?? PAGE_DEFAULT)));
     const { field } = SORT_INDEX[args.sort];
-    const keyOf = (row: StatsRow | Entry): Cursor => ({ v: row[field], id: row.publicId });
+    // Rows not yet rebuilt since ratings arrived have no ratingRank: unranked.
+    const keyOf = (row: StatsRow | Entry): Cursor => ({ v: row[field] ?? 0, id: row.publicId });
     const after = decodeCursor(args.cursor);
     const today = after?.t ?? args.todaySort;
     const test = matcher(args, today);
@@ -828,7 +891,8 @@ export const browse = query({
         (entry) => visibleTo(args.showMature, entry.mature) && test(entry),
       );
       const compare = (a: Cursor, b: Cursor) => {
-        if (args.sort === "upcoming" && (a.v === 0) !== (b.v === 0)) return a.v === 0 ? 1 : -1;
+        const zerosLast = args.sort === "upcoming" || args.sort === "rating";
+        if (zerosLast && (a.v === 0) !== (b.v === 0)) return a.v === 0 ? 1 : -1;
         const cmp = a.v < b.v ? -1 : a.v > b.v ? 1 : a.id - b.id;
         return order === "asc" ? cmp : -cmp;
       };

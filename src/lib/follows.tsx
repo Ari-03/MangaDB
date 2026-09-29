@@ -11,6 +11,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { track } from "~/lib/analytics";
 import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate } from "~/lib/format";
 import { todaySortKey } from "~/lib/month";
@@ -52,9 +53,15 @@ function SeriesFollowControlsInner({
         type="button"
         aria-pressed={data.following}
         className={`follow-btn${data.following ? " is-following" : ""}`}
-        onClick={() =>
-          void setFollow({ seriesId: data.seriesId, following: !data.following })
-        }
+        onClick={() => {
+          const following = !data.following;
+          void setFollow({ seriesId: data.seriesId, following }).then(() =>
+            track(following ? "series_followed" : "series_unfollowed", {
+              seriesId: data.seriesId,
+              source: "series_page",
+            }),
+          );
+        }}
       >
         {data.following ? (
           <svg
@@ -118,7 +125,9 @@ export function FollowPrompt({
           <button
             type="button"
             onClick={() => {
-              void setFollow({ seriesId: suggestion.seriesId, following: true });
+              void setFollow({ seriesId: suggestion.seriesId, following: true }).then(() =>
+                track("series_followed", { seriesId: suggestion.seriesId, source: "prompt" }),
+              );
               onDone();
             }}
           >
@@ -225,7 +234,13 @@ function LibraryUpcomingInner() {
                           type="button"
                           className="quick-btn"
                           onClick={() =>
-                            void setFollow({ seriesId: series.seriesId, following: false })
+                            void setFollow({ seriesId: series.seriesId, following: false }).then(
+                              () =>
+                                track("series_unfollowed", {
+                                  seriesId: series.seriesId,
+                                  source: "library",
+                                }),
+                            )
                           }
                         >
                           Unfollow

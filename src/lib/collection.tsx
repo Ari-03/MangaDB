@@ -19,6 +19,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { track } from "~/lib/analytics";
 import { Cover } from "~/lib/cover";
 import { FollowPrompt, type FollowSuggestion } from "~/lib/follows";
 import {
@@ -123,7 +124,10 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
             // Keep the pinned Variant across state changes; removal clears it
             // with the entry.
             variantId: state ? (entry?.variantId ?? undefined) : undefined,
-          }).then((result) => setSuggestFollow(result.suggestFollow))
+          }).then((result) => {
+            track("collection_entry_set", { target: "release", state });
+            setSuggestFollow(result.suggestFollow);
+          })
         }
       />
       <FollowPrompt
@@ -197,7 +201,10 @@ function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
           void setEntry({
             bundleId: data.bundleId,
             state: state ?? undefined,
-          }).then((result) => setSuggestFollow(result.suggestFollow))
+          }).then((result) => {
+            track("collection_entry_set", { target: "bundle", state });
+            setSuggestFollow(result.suggestFollow);
+          })
         }
       />
       <FollowPrompt

@@ -107,6 +107,14 @@ A user's view of Upcoming Releases that either belong to a followed Series and m
 **Tracking Visibility**:
 A user's private-by-default sharing policy for Ownership and Reading, with separate defaults for each and per-Series overrides. Visibility is not configured separately for individual Volumes or Releases.
 
+**Rating**:
+A User's private whole-number score from 1 to 10 for one Series or one Volume, at most one per target, which the User may change or clear. Only the target's average and count are public, apart from the score shown beside the same User's Review; rated Series appear on a profile only where the User's Reading is public.
+_Avoid_: score, stars, vote
+
+**Review**:
+A User's public plain-text write-up of one Series or one Volume, at most one per target, signed with their username and shown beside their Rating when they have one. It may be marked as containing spoilers, and only its author edits or deletes it. A Moderator may hide it, after which only Moderators and the author see it.
+_Avoid_: comment, post
+
 **User**:
 A person with a MangaDB account who owns personal tracking state and visibility choices. A User remains the same person across linked sign-in methods or email-address changes.
 _Avoid_: Clerk user, account

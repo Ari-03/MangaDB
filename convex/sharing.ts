@@ -14,6 +14,9 @@
 // - Series Follows always stay private in v1: nothing here ever reads or
 //   returns the following/followPromptDismissed fields.
 // - The profile is current-state only — no activity feed, no timestamps.
+// - Rated Series ride on the Reading visibility (a Rating is part of how the
+//   user reads a Series); Reviews are public content and always listed.
+//   Both leave Mature Series out unless the viewer opted in.
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -22,6 +25,9 @@ import { resolveActiveSeries } from "./catalog";
 import { followMerges } from "./catalogPages";
 import { releaseLink, variantName } from "./collection";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { showMatureArg, visibleTo } from "./lib/mature";
+import { ratingRow, targetOfRow } from "./lib/ratings";
+import { volumeTitle } from "./lib/titles";
 import { normalizeUsername } from "./lib/usernames";
 import { requireActiveSeries } from "./reading";
 
@@ -218,13 +224,16 @@ export const seriesVisibility = query({
  *   counts, and active passes with their percentage.
  * - Follows are never read into the result. No activity feed: every item is
  *   present state, never an event.
+ * - Ratings: the user's rated Series, where their Reading is public for that
+ *   Series. Reviews: every visible Review, whatever the visibility (Reviews
+ *   are public by nature). Mature Series in either only with `showMature`.
  *
  * Null when no such user exists. A fully private profile returns empty
  * sections — the page exists (public-but-noindex) but shares nothing.
  */
 export const publicProfile = query({
-  args: { username: v.string() },
-  handler: async (ctx, { username }) => {
+  args: { username: v.string(), ...showMatureArg },
+  handler: async (ctx, { username, showMature }) => {
     const user = await ctx.db
       .query("users")
       .withIndex("by_username", (q) =>
@@ -439,10 +448,62 @@ export const publicProfile = query({
     }
     reading.sort((a, b) => a.title.localeCompare(b.title));
 
+    // ----- rated Series (Reading visibility) and Reviews (always public) -----
+
+    const ratings = [];
+    const ratingRows = await ctx.db
+      .query("ratings")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const row of ratingRows) {
+      if (!row.seriesId) continue;
+      const series = await followMerges(ctx, "series", await ctx.db.get(row.seriesId));
+      if (!series || !visibleTo(showMature, series.mature)) continue;
+      if (effectiveVisibility(user, overrides, "reading", series._id) !== "public") continue;
+      ratings.push({ seriesPublicId: series.publicId, title: series.title, rating: row.rating });
+    }
+    ratings.sort((a, b) => b.rating - a.rating || a.title.localeCompare(b.title));
+
+    const reviews = [];
+    const reviewRows = await ctx.db
+      .query("reviews")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .order("desc")
+      .collect();
+    for (const row of reviewRows) {
+      if (row.status !== "visible") continue;
+      const target = targetOfRow(row);
+      if (!target) continue;
+      const found =
+        target.kind === "series"
+          ? await followMerges(ctx, "series", await ctx.db.get(target.id))
+          : await followMerges(ctx, "volumes", await ctx.db.get(target.id));
+      if (!found) continue;
+      const series =
+        "seriesId" in found ? await ctx.db.get(found.seriesId) : found;
+      if (!series || series.status !== "active" || !visibleTo(showMature, series.mature)) continue;
+      const rating = await ratingRow(ctx, user._id, target);
+      reviews.push({
+        target:
+          "seriesId" in found
+            ? {
+                kind: "volume" as const,
+                publicId: found.publicId,
+                title: volumeTitle(series.title, found.label ?? null),
+              }
+            : { kind: "series" as const, publicId: series.publicId, title: series.title },
+        rating: rating?.rating ?? null,
+        body: row.body,
+        spoiler: row.spoiler,
+      });
+    }
+
     return {
       username: user.username,
       ownership: { releases, bundles },
       reading,
+      ratings,
+      reviews,
     };
   },
 });

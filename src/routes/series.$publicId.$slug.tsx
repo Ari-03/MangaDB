@@ -11,8 +11,10 @@ import {
   ProposeNewRecordsLink,
   RecordHistory,
 } from "~/lib/moderation";
+import { RatingAggregate, RatingControl } from "~/lib/ratings";
 import { SeriesReadingControls, SeriesReadingProgress } from "~/lib/reading";
 import { SeriesReportAffordance } from "~/lib/report";
+import { ReviewsSection } from "~/lib/reviews";
 import {
   bookSeriesJsonLd,
   breadcrumbListJsonLd,
@@ -53,13 +55,20 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
   loader: async ({ params }) => {
     const publicId = parsePublicId(params.publicId);
     if (publicId === null) throw notFound();
-    const page = await catalogQuery(api.catalog.seriesPage, { publicId });
+    // The rating aggregate and first page of Reviews render with the page;
+    // both then follow their live queries (lib/ratings.tsx, lib/reviews.tsx).
+    const target = { kind: "series" as const, publicId };
+    const [page, rating, reviews] = await Promise.all([
+      catalogQuery(api.catalog.seriesPage, { publicId }),
+      catalogQuery(api.ratings.summary, { target }),
+      catalogQuery(api.reviews.list, { target }),
+    ]);
     if (!page) throw notFound();
     const canonical = seriesPath(page.series.publicId, page.series.title);
     if (`/series/${params.publicId}/${params.slug}` !== canonical) {
       throw redirect({ href: canonical, statusCode: 301 });
     }
-    return page;
+    return { ...page, rating, reviews };
   },
   // Title/description formulas, cover-led social card, canonical link, and
   // BreadcrumbList + BookSeries JSON-LD (spec §11, ticket #39).
@@ -162,6 +171,7 @@ function SeriesPage() {
   const page = Route.useLoaderData();
   const { edition: editionKey } = Route.useSearch();
   const { series, family, credits, volumes, editionGroups, coverUrl } = page;
+  const ratingTarget = { kind: "series" as const, publicId: series.publicId };
   const facts = packagingFacts(editionGroups);
   // The first path's first book fronts the Series — the standard run leads,
   // so this is its Volume 1 whenever one is on file.
@@ -211,6 +221,7 @@ function SeriesPage() {
             <span className="chip">
               {plural(volumes.length, "volume", "volumes")}
             </span>
+            <RatingAggregate target={ratingTarget} initial={page.rating} />
             {editionGroups.length > 1 ? (
               <span className="chip">
                 {plural(editionGroups.length, "edition", "editions")}
@@ -330,6 +341,11 @@ function SeriesPage() {
                 volumeCount={volumes.length}
               />
             </div>
+            <div className="track-group track-group--rating">
+              {/* The viewer's private 1-10 Rating; the chip above shows the
+                  public average it feeds. */}
+              <RatingControl target={ratingTarget} />
+            </div>
             <div className="track-group track-group--sharing">
               {/* Per-Series visibility overrides for the public profile (#30),
                   in a popover so the bar never reflows. */}
@@ -406,6 +422,8 @@ function SeriesPage() {
       ) : null}
 
       {family ? <FamilySection family={family} self={series} /> : null}
+
+      <ReviewsSection target={ratingTarget} initial={page.reviews} noun="series" />
 
       {/* Partially imported Series show as-is; every Series page carries the
           report affordance feeding the proposal queue (#40, spec §7). */}

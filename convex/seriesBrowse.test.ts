@@ -571,3 +571,65 @@ describe("seriesBrowse.rebuild — Bookless Series", () => {
     expect(after.items.map((i) => i.title)).toContain("Backbone Only");
   });
 });
+
+describe("seriesBrowse Top rated", () => {
+  /** Alpha..Delta with ratingStats written directly: 3x9, 5x7, 2x10 (unranked), none. */
+  async function rated() {
+    const t = await library([
+      { title: "Alpha", publishers: ["viz"], volumes: 1, dates: [] },
+      { title: "Bravo", publishers: ["viz"], volumes: 1, dates: [] },
+      { title: "Charlie", publishers: ["viz"], volumes: 1, dates: [] },
+      { title: "Delta", publishers: ["viz"], volumes: 1, dates: [] },
+    ]);
+    await t.run(async (ctx) => {
+      const byTitle = new Map((await ctx.db.query("series").collect()).map((s) => [s.title, s._id]));
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Alpha")!, sum: 27, count: 3 });
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Bravo")!, sum: 35, count: 5 });
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Charlie")!, sum: 20, count: 2 });
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    return t;
+  }
+  const titles = (page: { items: Array<{ title: string }> }) => page.items.map((i) => i.title);
+
+  it("derives the rating fields in the rebuild, ranking from 3 ratings", async () => {
+    const t = await rated();
+    const rows = await t.run((ctx) => ctx.db.query("seriesStats").collect());
+    const byTitle = Object.fromEntries(rows.map((r) => [r.title, r]));
+    expect(byTitle.Alpha).toMatchObject({ ratingAverage: 9, ratingCount: 3, ratingRank: 9 });
+    expect(byTitle.Charlie).toMatchObject({ ratingAverage: 10, ratingCount: 2, ratingRank: 0 });
+    expect(byTitle.Delta).toMatchObject({ ratingCount: 0, ratingRank: 0 });
+    expect(byTitle.Delta!.ratingAverage).toBeUndefined();
+  });
+
+  it("sorts ranked Series by average, unranked last, in both orders and on both paths", async () => {
+    const t = await rated();
+    const all = await t.query(api.seriesBrowse.browse, { sort: "rating" });
+    // Ties (the unranked zeros) fall back to publicId in the sort's direction.
+    expect(titles(all)).toEqual(["Alpha", "Bravo", "Delta", "Charlie"]);
+
+    const asc = await t.query(api.seriesBrowse.browse, { sort: "rating", order: "asc" });
+    expect(titles(asc)).toEqual(["Bravo", "Alpha", "Charlie", "Delta"]);
+
+    const filtered = await t.query(api.seriesBrowse.browse, { sort: "rating", publishers: ["viz"] });
+    expect(titles(filtered)).toEqual(titles(all));
+    const filteredAsc = await t.query(api.seriesBrowse.browse, { sort: "rating", order: "asc", publishers: ["viz"] });
+    expect(titles(filteredAsc)).toEqual(titles(asc));
+
+    // One at a time, the cursor walks the same order through the zero group.
+    for (const order of ["desc", "asc"] as const) {
+      const whole = order === "desc" ? all : asc;
+      const walked: Array<string> = [];
+      let cursor: string | null = null;
+      do {
+        const page: { items: Array<{ title: string }>; nextCursor: string | null } = await t.query(
+          api.seriesBrowse.browse,
+          { sort: "rating", order, pageSize: 1, cursor },
+        );
+        walked.push(...titles(page));
+        cursor = page.nextCursor;
+      } while (cursor);
+      expect(walked).toEqual(titles(whole));
+    }
+  });
+});

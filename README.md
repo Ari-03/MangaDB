@@ -83,7 +83,7 @@ months, or finished: nothing announced and no release in a year, unless the
 Source Status says Ongoing or Hiatus), Format, Source Status, first letter,
 and a title search that updates as you type (words match the starts of
 title and alt-title words). The sort (title, recently added, most volumes,
-latest release, upcoming next, most followed, most collected) then orders
+latest release, upcoming next, most followed, most collected, top rated) then orders
 whatever matched, under a "123 series match" count, and the shelf loads
 more as you scroll. Everything is in the URL
 (`/series?publisher=viz-media,yen-press&volumes=2-5&timing=past-6m&sort=latest`),
@@ -106,9 +106,12 @@ Worker on SSR, the browser on client navigations), which `fetchSeriesBrowse`
 (`src/lib/catalogData.ts`) passes as `todaySort`, so a cached query never serves an earlier day's
 cutoff; later pages keep the first page's date, which their cursor carries,
 so a view paged across midnight stays one set. Other views get no date and
-keep one cache key. Popularity is the signals the catalog has — Series
-Follows and distinct collectors — not ratings, which v1 does not model. The
-Source Status filter appears once any importer supplies a status.
+keep one cache key. Popularity is Series Follows and distinct collectors;
+"Top rated" is the rating average, ranked only from 3 ratings up (fewer sort
+last). Unlike the other facts, the rating fields are not left to the
+rebuild: every rating write patches the Series' row and, when its rank
+moves, its pack entry (see Ratings and reviews below). The Source Status
+filter appears once any importer supplies a status.
 
 ## Local development
 
@@ -523,6 +526,40 @@ visibility defaults for Ownership and Reading plus per-Series overrides
 - **Public but noindex** (spec §11): the page carries `robots: noindex`,
   profiles are excluded from every sitemap, and there is no activity feed —
   the profile is a snapshot of current state, never a history.
+
+## Ratings and reviews
+
+`convex/ratings.ts`, `convex/reviews.ts`, shared target and aggregate code in
+`convex/lib/ratings.ts`; UI in `src/lib/ratings.tsx` and `src/lib/reviews.tsx`,
+styles in `src/styles/ratings.css`.
+
+- **Rating**: a whole number from 1 to 10 per user per Series or Volume,
+  set from the tracking bar (Series page) or tracking card (Volume page), and
+  changeable or clearable. The number is private; the public sees the
+  target's average and count ("8.4 · 12 ratings") as a chip in the page
+  header. `ratingStats` holds each target's sum and count and moves in the
+  same transaction as the rating; merges and splits recount it. A Series'
+  aggregate is also copied into its `seriesStats` row and pack entry at once
+  (`seriesBrowse.syncRatingProjection`) for the library's "Top rated" sort.
+- **Review**: 20 to 5,000 characters of plain text (line breaks kept, no
+  Markdown), optionally marked as spoilers, one per user per Series or Volume.
+  Reviews are listed publicly under a "Reviews" heading, newest first, 20 at a
+  time, with the author's username and their rating of the same target.
+  Spoilers stay folded until "Show spoiler" is clicked. Authors edit and
+  delete their own.
+- **Moderation** is post-hoc: Moderators and Administrators see Hide /
+  Unhide on each Review. A hidden Review leaves the public list and profile.
+  The author still sees it, with a note, and Moderators see it in a hidden
+  list on the page. Every change writes a `reviewAudit` row (actor, action,
+  optional reason). Editing a hidden Review does not unhide it.
+- **Profiles** list the user's rated Series only where their Reading is
+  public for that Series, and every visible Review. Mature Series are left
+  out of both unless the viewer opted in.
+- **Rate limits** (token buckets per user): `ratingSet` 120/hour, `reviewSave`
+  20/hour.
+- **Account deletion** removes the user's Ratings (decrementing the
+  aggregates) and Reviews; merges move them to the survivor, and where the
+  user already rated or reviewed the survivor, the survivor's row is kept.
 
 ## Moderation core (ticket #31)
 
@@ -1298,6 +1335,13 @@ App:
   `clerkMiddleware()` and SSR auth. Unset → app treats everyone as signed out.
   Dev: `.dev.vars` (workerd reads Worker secrets from there, not `.env.local`).
   Deploy: `npx wrangler secret put CLERK_SECRET_KEY`.
+- `VITE_PUBLIC_POSTHOG_KEY` — PostHog project token (`phc_…`). Public;
+  ships in the client bundle. Unset → analytics off entirely (no script, no
+  requests). Dev: `.env.local` (leave it out unless you are testing
+  analytics). Deploy: build env only; never committed. See "Analytics
+  (PostHog)".
+- `VITE_PUBLIC_POSTHOG_HOST` — optional override of the SDK's `api_host`.
+  Unset → `/_s`, the same-origin proxy.
 - `VITE_SITE_URL` — canonical public origin for SEO URLs (canonical links,
   OG URLs, sitemap locs). Unset → `https://mangadb.org` (spec §11's apex).
   Set it only for preview environments that should self-reference.
@@ -1418,6 +1462,51 @@ recrawling everything:
 ```sh
 npx convex run kodansha:backlistSync '{"onlySeries":["blue-lock","initial-d"]}'
 ```
+
+## Analytics (PostHog)
+
+Product analytics run on PostHog Cloud (US region), through the site's own
+origin so ad blockers do not drop them. The free tier (1M events a month,
+no card) covers this site many times over.
+
+- **Env vars.** `VITE_PUBLIC_POSTHOG_KEY` (the project token) and optionally
+  `VITE_PUBLIC_POSTHOG_HOST` (default `/_s`). Like every `VITE_*` value they
+  are inlined by `npm run build`, so the key must be in the **build**
+  environment: `.env.local` on the machine that deploys, or prefixed on the
+  command (`VITE_PUBLIC_POSTHOG_KEY=phc_… npm run deploy:staging` for a
+  separate staging project). The entries in `wrangler.jsonc` only record the
+  deployed values; the key stays out of git. Without the key the app never
+  loads posthog-js.
+- **Proxy.** `src/server.ts` forwards `/_s/*` via `src/server/posthogProxy.ts`:
+  `/_s/static/*` and `/_s/array/*` to `us-assets.i.posthog.com` (edge
+  cached), everything else to `us.i.posthog.com`, with cookies and auth
+  headers stripped and `X-Forwarded-For` set from `CF-Connecting-IP`.
+  Moving to the EU cloud is the `POSTHOG_REGION` line in that file.
+- **Client.** `src/lib/analytics.tsx` loads posthog-js lazily after
+  hydration (never in the Worker bundle), with autocapture, session replay
+  and feature flags off, `respect_dnt: true`, and person profiles only for
+  signed-in users. Pageviews and pageleaves are automatic. Signed-in users
+  are identified by their Clerk user id with `username` and `role` (no
+  email); sign-out resets the session.
+- **Events.** Capture only through the typed `track(event, props)`. Props
+  are ids, enums and lengths, never free text or personal data.
+
+  | Event | Props |
+  |---|---|
+  | `series_followed`, `series_unfollowed` | `seriesId`, `source` (`series_page` / `prompt` / `library`) |
+  | `collection_entry_set` | `target` (`release` / `bundle`), `state` (`null` = removed) |
+  | `reading_status_changed` | `seriesId`, `status` (`null` = cleared), `source` |
+  | `search_performed` | `queryLength`, `resultCount` (once per query the search page ran) |
+  | `mature_titles_toggled` | `showMature` |
+  | `rating_submitted`, `review_submitted`, `comment_posted` | declared, not wired yet |
+
+- **Querying from Claude Code.** `.mcp.json` registers PostHog's hosted MCP
+  server in read-only mode (`https://mcp.posthog.com/mcp?readonly=true`).
+  Run `/mcp` in Claude Code once and complete the PostHog OAuth login. For
+  PostHog's skills as well, install the plugin:
+  `claude plugin marketplace add PostHog/ai-plugin` then
+  `claude plugin install posthog@posthog`. Never commit a personal API key
+  (`phx_…`) into `.mcp.json`.
 
 ## Mature titles (18+)
 

@@ -17,6 +17,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { track } from "~/lib/analytics";
 import { Cover } from "~/lib/cover";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
@@ -65,7 +66,13 @@ export function CompletedPrompt({
           <button
             type="button"
             onClick={() => {
-              void setStatus({ seriesId: suggestion.seriesId, status: "completed" });
+              void setStatus({ seriesId: suggestion.seriesId, status: "completed" }).then(() =>
+                track("reading_status_changed", {
+                  seriesId: suggestion.seriesId,
+                  status: "completed",
+                  source: "prompt",
+                }),
+              );
               onDone();
             }}
           >
@@ -114,10 +121,14 @@ function SeriesReadingControlsInner({
         value={tracking.readingStatus ?? ""}
         onChange={(event) => {
           const value = event.currentTarget.value as ReadingStatus | "";
-          void setStatus({
-            seriesId: tracking.seriesId,
-            status: value === "" ? undefined : value,
-          });
+          const status = value === "" ? null : value;
+          void setStatus({ seriesId: tracking.seriesId, status: status ?? undefined }).then(() =>
+            track("reading_status_changed", {
+              seriesId: tracking.seriesId,
+              status,
+              source: "series_page",
+            }),
+          );
         }}
       >
         <option value="">No status</option>
@@ -399,7 +410,13 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
                   void setStatus({
                     seriesId: suggestion.seriesId,
                     status: "reading",
-                  });
+                  }).then(() =>
+                    track("reading_status_changed", {
+                      seriesId: suggestion.seriesId,
+                      status: "reading",
+                      source: "prompt",
+                    }),
+                  );
                   setSuggestReading([]);
                 }}
               >
@@ -511,10 +528,15 @@ function LibraryReadingInner() {
                     value={row.readingStatus ?? ""}
                     onChange={(event) => {
                       const value = event.currentTarget.value as ReadingStatus | "";
-                      void setStatus({
-                        seriesId: row.seriesId,
-                        status: value === "" ? undefined : value,
-                      });
+                      const status = value === "" ? null : value;
+                      void setStatus({ seriesId: row.seriesId, status: status ?? undefined }).then(
+                        () =>
+                          track("reading_status_changed", {
+                            seriesId: row.seriesId,
+                            status,
+                            source: "library",
+                          }),
+                      );
                     }}
                   >
                     <option value="">No status</option>

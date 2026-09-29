@@ -1,0 +1,217 @@
+/* Ratings and Reviews (src/lib/ratings.tsx, src/lib/reviews.tsx, the Reviews
+   list on /u/{username}). Composes .chip, .btn, .notice, .section-head and
+   .track-kicker/.track-hint from shell.css and catalog-series.css. */
+
+/* --- The aggregate chip ------------------------------------------------- */
+
+.chip--rating {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 45%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.rating-star { width: 12px; height: 12px; fill: currentColor; }
+
+/* --- The viewer's 1-10 control ------------------------------------------
+   Ten numbered steps that fill up to the chosen one. Hovering previews:
+   the whole scale lights, then everything after the hovered step dims. */
+
+.track-group--rating {
+  grid-column: 1 / -1;
+  margin-top: 14px;
+  padding: 12px 0 0;
+  border-left: 0;
+  border-top: 1px solid var(--line);
+}
+
+.rating-scale { display: inline-flex; gap: 3px; }
+.rating-step {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-mute);
+  font-family: var(--display);
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 110ms ease, color 110ms ease, border-color 110ms ease;
+}
+.rating-step.is-on,
+.rating-scale:hover .rating-step {
+  background: var(--accent-tint);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+}
+.rating-scale:hover .rating-step:hover ~ .rating-step {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  color: var(--text-mute);
+}
+.rating-step[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.rating-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.rating-clear {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--text-mute);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.rating-clear:hover { color: var(--accent); }
+
+/* on the Volume page the control sits in the tracking card */
+.volume-rating { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.track-card > * + .volume-rating { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.volume-rating .rating-step { width: 25px; height: 28px; font-size: 0.82rem; }
+
+/* --- The Reviews section ------------------------------------------------ */
+
+.reviews { max-width: 52rem; }
+.reviews-empty,
+.review-prompt { color: var(--text-mute); font-size: 0.92rem; }
+.review-prompt { margin-bottom: 18px; }
+.review-prompt a { color: var(--text-dim); border-bottom: 1px solid var(--line-strong); }
+.review-prompt a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+.review-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+
+.review-card {
+  padding: 16px 20px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.review-card.is-hidden { border-style: dashed; background: transparent; }
+
+.review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+}
+.review-author { font-weight: 800; color: var(--text); }
+a.review-author:hover { color: var(--accent); }
+.review-score {
+  font-family: var(--display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+.review-score-of { font-size: 0.72rem; color: var(--text-mute); margin-left: 1px; }
+.review-date { font-size: 0.8rem; color: var(--text-mute); }
+.review-head .chip { align-self: center; }
+.chip--spoiler { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 45%, transparent); }
+.chip--hidden { border-style: dashed; color: var(--text-mute); }
+[data-theme="light"] .chip--spoiler { color: #a23c15; }
+
+/* plain text: the author's own line breaks, nothing else */
+.review-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 68ch;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.reviews-more { margin-top: 18px; }
+
+/* --- The viewer's own Review and the form -------------------------------- */
+
+.review-mine { margin-bottom: 26px; }
+.review-mine-kicker {
+  margin-bottom: 8px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+.review-hidden-note { margin-bottom: 10px; font-size: 0.88rem; }
+.review-mine .review-card { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.review-actions,
+.review-mod { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
+.review-mod .form-error,
+.review-actions .form-error { flex-basis: 100%; }
+.reviews .btn-danger { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 55%, transparent); }
+[data-theme="light"] .reviews .btn-danger { color: #a23c15; }
+
+.review-mod-reason {
+  flex: 1 1 16rem;
+  padding: 7px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.review-form {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 26px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.review-field { display: grid; gap: 8px; font-size: 0.9rem; font-weight: 700; }
+.review-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.55;
+  resize: vertical;
+}
+.review-form textarea::placeholder { color: var(--text-mute); }
+.review-form-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; font-size: 0.86rem; }
+.review-spoiler { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); cursor: pointer; }
+.review-spoiler input { accent-color: var(--accent); }
+.review-count { color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.review-count.is-short { color: var(--gold); }
+.review-form .review-actions { margin-top: 0; }
+
+.reviews-hidden { margin-top: 30px; }
+
+/* --- The profile's rated Series ----------------------------------------- */
+
+.profile-ratings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 8px 24px;
+}
+.profile-ratings li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.profile-ratings .review-score { min-width: 3.2ch; }
+.profile-ratings a { font-weight: 700; }
+.profile-ratings a:hover { color: var(--accent); }
+
+@media (max-width: 560px) {
+  .rating-step { width: 26px; height: 28px; font-size: 0.82rem; }
+  .rating-scale { gap: 2px; }
+}
