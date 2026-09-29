@@ -273,7 +273,7 @@ function RatingControlInner({ target }: { target: RatingTarget }) {
   );
 }
 
-type ControlProps = { current: number | null; onSave: (score: number) => void };
+type ControlProps = { current: number | null; onSave: (score: number | null) => void };
 
 const STEPPER_TEXT: Record<NumericFormat, { field: string; unit: string }> = {
   point10: { field: "Your rating, 1 to 10", unit: "point" },
@@ -286,7 +286,8 @@ const STEPPER_TEXT: Record<NumericFormat, { field: string; unit: string }> = {
  * between − and + steppers, "–" while unrated. Typing saves on Enter or
  * when the field loses focus; each stepper click saves at once, so nothing
  * is left waiting in a timer when the user clears the rating or leaves.
- * Values are clamped to the format's range and stored with `fromFormat`; a
+ * A typed 0 or negative clears the rating; other values are clamped to the
+ * format's range (the steppers never go below 1) and stored with `fromFormat`; a
  * commit that lands on the step already shown saves nothing, so an 84 read
  * as 8/10 is never rewritten to 80 by a stray blur.
  */
@@ -301,6 +302,11 @@ function ScoreStepper({ format, current, onSave }: ControlProps & { format: Nume
     const value = Number(raw);
     if (raw.trim() === "" || !Number.isInteger(value)) {
       setDraft(shown);
+      return;
+    }
+    if (value < 1) {
+      setDraft("");
+      if (current !== null) onSave(null);
       return;
     }
     const step = clampStep(value, format);

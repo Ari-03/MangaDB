@@ -873,6 +873,26 @@ describe("guards", () => {
     ).rejects.toMatchObject({ data: { code: "badState" } });
   });
 
+  it("refuses an Edition target at the validator: Comments stay on Series and Volume pages", async () => {
+    const t = makeT();
+    await trustedSetup(t);
+    const comments = () => t.run(async (ctx) => (await ctx.db.query("comments").collect()).length);
+    const before = await comments();
+    const editionId = await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
+      return await ctx.db.insert("editions", { status: "active", publicId: 901, publisherId });
+    });
+    await expect(
+      t.withIdentity({ subject: AUTHOR }).mutation(api.comments.post, {
+        // Not a PageTargetId: the call a stale or hand-built client could make.
+        target: { kind: "edition", id: editionId } as never,
+        body: "Loved the pacing of this arc.",
+        spoiler: false,
+      }),
+    ).rejects.toThrow(/Validator/);
+    expect(await comments()).toBe(before);
+  });
+
   it("says comment, not rate, when the target is gone", async () => {
     const t = makeT();
     const ids = await trustedSetup(t);

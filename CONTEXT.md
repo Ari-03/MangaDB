@@ -108,7 +108,7 @@ A user's view of Upcoming Releases that either belong to a followed Series and m
 A user's private-by-default sharing policy for Ownership and Reading, with separate defaults for each and per-Series overrides. Visibility is not configured separately for individual Volumes or Releases.
 
 **Rating**:
-A User's private score for one Series, one Volume, or one omnibus Edition, at most one per target, which the User may change or clear. A single-volume Edition rates its Volume; an omnibus (an Edition collecting more than one Volume) is rated as one book. It is stored as one whole number from 1 to 100 whatever Rating Format the User entered it in, and every display converts from that. Only the target's average and count are public, apart from the score shown beside the same User's Review; rated Series and omnibuses appear on a profile only where the User's Reading of their Series is public.
+A User's private score for one Series, one Volume, or one omnibus Edition, at most one per target, which the User may change or clear. A single-volume Edition rates its Volume; an omnibus (an Edition collecting more than one Volume) is rated as one book, and if a correction leaves it collecting one Volume, its Ratings, Reviews and Favorites pass to that Volume. It is stored as one whole number from 1 to 100 whatever Rating Format the User entered it in, and every display converts from that. Only the target's average and count are public, apart from the score shown beside the same User's Review; rated Series and omnibuses appear on a profile only where the User's Reading of their Series is public.
 _Avoid_: stars, vote
 
 **Rating Format**:

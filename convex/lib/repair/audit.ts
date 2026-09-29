@@ -11,7 +11,7 @@ import type { MutationCtx } from "../../_generated/server";
 import { revisionsOf } from "../../moderation";
 import type { evidence, recordRef } from "../../schema";
 import { allocatePublicId } from "../publicIds";
-import type { OpMeta } from "../sensitiveOps";
+import { collapseEditionTakes, type OpMeta } from "../sensitiveOps";
 import { sameValue } from "../values";
 
 export type Ref = Infer<typeof recordRef>;
@@ -292,7 +292,11 @@ async function describeCoverage(ctx: MutationCtx, editionId: Id<"editions">) {
 
 /**
  * Replace an Edition's Volume Coverage. Coverage edits land on the Edition
- * as the pseudo-field "volumeCoverage" (schema.ts recordRef note).
+ * as the pseudo-field "volumeCoverage" (schema.ts recordRef note). A remap
+ * onto a single Volume moves the Edition's Ratings, Reviews and Favorites to
+ * that Volume (collapseEditionTakes). That move is one-way: no merge
+ * manifest records it, and remapping the Edition back onto several Volumes
+ * leaves them on the Volume.
  */
 export async function replaceCoverage(
   ctx: MutationCtx,
@@ -316,6 +320,7 @@ export async function replaceCoverage(
   audit.op({ kind: "update", ref, changes: [{ field: "volumeCoverage", before, after }] });
   await audit.revise(ref, [{ field: "volumeCoverage", before, after }]);
   await refreshReleaseDenorms(ctx, editionId);
+  await collapseEditionTakes(ctx, editionId);
   return true;
 }
 

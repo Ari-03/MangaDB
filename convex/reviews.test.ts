@@ -548,6 +548,34 @@ describe("Reviews of an omnibus Edition", () => {
     expect(await t.run((ctx) => ctx.db.query("reviews").collect())).toEqual([]);
   });
 
+  it("the profile leaves a Mature omnibus' rating out unless the viewer opted in", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const adultOmnibus = await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
+      const vol2 = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 32,
+        seriesId: ids.adult.seriesId,
+        position: 2,
+        label: "2",
+      });
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 905, publisherId });
+      for (const [order, volumeId] of [ids.adult.volumeId, vol2].entries()) {
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order, extent: "complete" });
+      }
+      return editionId;
+    });
+    const author = t.withIdentity({ subject: AUTHOR });
+    await author.mutation(api.ratings.set, { target: { kind: "edition", id: adultOmnibus }, score: 70 });
+    await author.mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+
+    expect((await t.query(api.sharing.publicProfile, { username: "carol" }))!.ratings).toEqual([]);
+    expect((await t.query(api.sharing.publicProfile, { username: "carol", showMature: true }))!.ratings).toEqual([
+      { kind: "edition", publicId: 905, title: "Adult Title Vol 1–2", score: 70 },
+    ]);
+  });
+
   it("the profile lists a rated omnibus under its Series' Reading visibility, and its Review", async () => {
     const t = makeT();
     const ids = await seed(t);

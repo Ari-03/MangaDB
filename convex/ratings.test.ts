@@ -8,7 +8,8 @@ import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { TargetId } from "./lib/ratings";
+import { targetOfRow, type TargetId } from "./lib/ratings";
+import { createAudit, replaceCoverage, resolveActor } from "./lib/repair/audit";
 import schema from "./schema";
 
 const MOD = "user_mod";
@@ -505,5 +506,176 @@ describe("omnibus Editions", () => {
     await rate(t, "user_a", { kind: "edition", id: books.twin }, 60);
     const rows = await t.run((ctx) => ctx.db.query("ratings").collect());
     expect(rows.map((r) => r.editionId)).toEqual([books.omnibus]);
+  });
+});
+
+describe("targetOfRow", () => {
+  it("reads a row back only when exactly one target key is set", () => {
+    const seriesId = "s1" as Id<"series">;
+    const volumeId = "v1" as Id<"volumes">;
+    const editionId = "e1" as Id<"editions">;
+    expect(targetOfRow({ volumeId })).toEqual({ kind: "volume", id: volumeId });
+    expect(targetOfRow({ seriesId, volumeId })).toBeNull();
+    expect(targetOfRow({ volumeId, editionId })).toBeNull();
+    expect(targetOfRow({})).toBeNull();
+  });
+});
+
+const volumeIdOf = async (t: T, publicId: number) =>
+  (await t.run((ctx) => ctx.db.query("volumes").withIndex("by_publicId", (q) => q.eq("publicId", publicId)).unique()))!
+    ._id;
+
+async function withAdmin(t: T) {
+  await t.withIdentity({ subject: ADMIN }).mutation(api.users.claimUsername, { username: "alice" });
+  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
+  return t.withIdentity({ subject: ADMIN });
+}
+
+const REVIEW = "Three books in one, and the middle one drags.";
+
+describe("omnibus Editions under hidden coverage", () => {
+  it("reads as hidden, not single-volume, while its Series or one of its two Volumes is hidden", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    const target = { kind: "edition" as const, id: books.omnibus };
+    await rate(t, "user_a", target, 80);
+    const vol2 = await volumeIdOf(t, 12);
+
+    for (const [table, id] of [
+      ["series", ids.one.seriesId],
+      ["volumes", vol2],
+    ] as const) {
+      await t.run((ctx) => ctx.db.patch(id, { status: "hidden" }));
+      expect(await t.query(api.ratings.summary, { target: edition(901) }), table).toBeNull();
+      await expect(rate(t, "user_b", target, 50), table).rejects.toMatchObject({
+        data: { code: "notFound", message: "Nothing to rate here any more." },
+      });
+      await t.run((ctx) => ctx.db.patch(id, { status: "active" }));
+      expect(await t.query(api.ratings.summary, { target: edition(901) }), table).toEqual({ average: 80, count: 1 });
+    }
+  });
+});
+
+describe("omnibus collapse", () => {
+  it("a Volume merge that leaves an omnibus one Volume moves its takes there, and a split moves them back", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    const admin = await withAdmin(t);
+    const vol1 = ids.one.volumeId;
+    const vol2 = await volumeIdOf(t, 12);
+    const omnibus = { kind: "edition" as const, id: books.omnibus };
+
+    await rate(t, "user_a", omnibus, 90);
+    await rate(t, "user_b", omnibus, 70);
+    await rate(t, "user_a", { kind: "volume", id: vol1 }, 40); // clash: the Volume's own wins
+    await t.withIdentity({ subject: "user_c" }).mutation(api.reviews.save, { target: omnibus, body: REVIEW, spoiler: false });
+    await t.withIdentity({ subject: "user_c" }).mutation(api.favorites.toggle, { target: omnibus });
+    await t.withIdentity({ subject: "user_a" }).mutation(api.favorites.toggle, { target: omnibus });
+    await t.withIdentity({ subject: "user_a" }).mutation(api.favorites.toggle, { target: { kind: "volume", id: vol1 } });
+
+    // The preview counts what would move: 2 Ratings, 1 Review, 2 Favorites.
+    const form = await admin.query(api.sensitiveOps.manageForm, { type: "volume", key: "12" });
+    const counts = Object.fromEntries(form!.impact.map((r) => [r.label, r.count]));
+    expect(
+      counts["Ratings, reviews and favorites of two-volume omnibuses (move to the survivor if the other Volume is merged)"],
+    ).toBe(5);
+
+    await admin.mutation(api.sensitiveOps.mergeRecords, {
+      survivor: { type: "volume", id: vol1 },
+      loser: { type: "volume", id: vol2 },
+      reason: "Same book.",
+      confirmImpact: true,
+    });
+    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 55, count: 2 });
+    expect(await t.query(api.ratings.summary, { target: edition(901) })).toBeNull();
+    const state = await t.run(async (ctx) => ({
+      editionStats: await ctx.db.query("ratingStats").withIndex("by_edition", (q) => q.eq("editionId", books.omnibus)).unique(),
+      ratings: await ctx.db.query("ratings").collect(),
+      reviews: await ctx.db.query("reviews").collect(),
+      favorites: await ctx.db.query("favorites").collect(),
+    }));
+    expect(state.editionStats).toBeNull();
+    expect(state.ratings.map(targetOfRow)).toEqual([
+      { kind: "volume", id: vol1 },
+      { kind: "volume", id: vol1 },
+    ]);
+    expect(state.reviews.map(targetOfRow)).toEqual([{ kind: "volume", id: vol1 }]);
+    expect(state.favorites).toHaveLength(2);
+    expect(state.favorites.every((row) => row.volumeId === vol1 && !row.editionId && row.seriesId === ids.one.seriesId)).toBe(
+      true,
+    );
+
+    await admin.mutation(api.sensitiveOps.splitRecord, {
+      ref: { type: "volume", id: vol2 },
+      reason: "Two books after all.",
+      confirmImpact: true,
+    });
+    expect(await t.query(api.ratings.summary, { target: edition(901) })).toEqual({ average: 80, count: 2 });
+    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 40, count: 1 });
+    const after = await t.run(async (ctx) => ({
+      reviews: await ctx.db.query("reviews").collect(),
+      favorites: await ctx.db.query("favorites").collect(),
+    }));
+    expect(after.reviews.map(targetOfRow)).toEqual([omnibus]);
+    expect(after.favorites.filter((row) => row.editionId === books.omnibus)).toHaveLength(2);
+    expect(after.favorites.filter((row) => row.volumeId === vol1)).toHaveLength(1);
+  });
+
+  it("a coverage remap onto one Volume moves the omnibus' takes to it", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    await withAdmin(t);
+    const omnibus = { kind: "edition" as const, id: books.omnibus };
+    await rate(t, "user_a", omnibus, 90);
+    await t.withIdentity({ subject: "user_b" }).mutation(api.favorites.toggle, { target: omnibus });
+
+    await t.run(async (ctx) => {
+      const audit = createAudit(ctx, await resolveActor(ctx, "alice"), "Only Vol 1 inside.", []);
+      await replaceCoverage(ctx, audit, books.omnibus, [{ volumeId: ids.one.volumeId, extent: "complete" }]);
+      await audit.finish();
+    });
+    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 90, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: edition(901) })).toBeNull();
+    const favorites = await t.run((ctx) => ctx.db.query("favorites").collect());
+    expect(favorites).toEqual([expect.objectContaining({ volumeId: ids.one.volumeId, seriesId: ids.one.seriesId })]);
+    expect(favorites[0]!.editionId).toBeUndefined();
+  });
+
+  it("a Series merge leaves an omnibus' Ratings on it", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    const admin = await withAdmin(t);
+    await rate(t, "user_a", { kind: "edition", id: books.omnibus }, 90);
+    await admin.mutation(api.sensitiveOps.mergeRecords, {
+      survivor: { type: "series", id: ids.two.seriesId },
+      loser: { type: "series", id: ids.one.seriesId },
+      reason: "Duplicate.",
+      confirmImpact: true,
+    });
+    expect(await t.query(api.ratings.summary, { target: edition(901) })).toEqual({ average: 90, count: 1 });
+    expect(
+      await t.withIdentity({ subject: "user_a" }).query(api.ratings.mine, { target: edition(901) }),
+    ).toMatchObject({ score: 90 });
+  });
+
+  it("an Edition's impact preview counts its Ratings, Reviews and Favorites", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    const admin = await withAdmin(t);
+    const omnibus = { kind: "edition" as const, id: books.omnibus };
+    await rate(t, "user_a", omnibus, 90);
+    await rate(t, "user_b", omnibus, 70);
+    await t.withIdentity({ subject: "user_a" }).mutation(api.reviews.save, { target: omnibus, body: REVIEW, spoiler: false });
+    for (const subject of ["user_a", "user_b", "user_c"]) {
+      await t.withIdentity({ subject }).mutation(api.favorites.toggle, { target: omnibus });
+    }
+    const form = await admin.query(api.sensitiveOps.manageForm, { type: "edition", key: "901" });
+    const counts = Object.fromEntries(form!.impact.map((r) => [r.label, r.count]));
+    expect(counts).toMatchObject({ Ratings: 2, Reviews: 1, Favorites: 3 });
   });
 });

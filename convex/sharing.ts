@@ -501,6 +501,18 @@ export const publicProfile = query({
     // ----- rated Series and Editions (Reading visibility) and Reviews (public while
     // FEATURES.publicReviews is on; left out entirely until then) -----
 
+    // One resolution per stored target across both lists: a rated and
+    // reviewed omnibus reads its coverage once.
+    const shownTargets = new Map<string, ReturnType<typeof profileTarget>>();
+    const shownOf = (stored: TargetId) => {
+      let shown = shownTargets.get(stored.id);
+      if (!shown) {
+        shown = profileTarget(ctx, stored);
+        shownTargets.set(stored.id, shown);
+      }
+      return shown;
+    };
+
     const ratings = [];
     const ratingRows = await ctx.db
       .query("ratings")
@@ -510,7 +522,7 @@ export const publicProfile = query({
       const stored = targetOfRow(row);
       // Volume Ratings stay off the profile; Series and omnibus ones show.
       if (!stored || stored.kind === "volume") continue;
-      const shown = await profileTarget(ctx, stored);
+      const shown = await shownOf(stored);
       if (!shown || !visibleTo(showMature, shown.mature)) continue;
       if (effectiveVisibility(user, overrides, "reading", shown.series._id) !== "public") continue;
       ratings.push({ ...shown.ref, score: row.score });
@@ -528,7 +540,7 @@ export const publicProfile = query({
     for (const row of reviewRows) {
       if (row.status !== "visible") continue;
       const stored = targetOfRow(row);
-      const shown = stored ? await profileTarget(ctx, stored) : null;
+      const shown = stored ? await shownOf(stored) : null;
       if (!shown || !visibleTo(showMature, shown.mature)) continue;
       // The surviving target: a merge moves Ratings onto it.
       const rating = await ratingRow(ctx, user._id, shown.target);

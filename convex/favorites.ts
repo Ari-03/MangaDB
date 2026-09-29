@@ -22,8 +22,16 @@ import {
 } from "./lib/ratings";
 import { volumeTitle } from "./lib/titles";
 
-/** Favorites the library view lists; older ones past this stay stored. */
-const MINE_MAX = 500;
+/**
+ * Favorites the library view lists; older ones past this stay stored. Sized
+ * against Convex's 16,384 documents read per query: an omnibus Favorite reads
+ * its row, Edition, Edition Line and Series (4), each of its k coverage rows
+ * with that Volume and Series (3k), and up to 10 Releases with their stored
+ * cover metadata (20, editionCover), so 24 + 3k. A 3-in-1 is 33 reads, and
+ * 500 of them (16,500) would pass the limit; 200 of them read 6,600, and even
+ * 200 ten-volume omnibuses (54 each) stay near 10,800.
+ */
+const MINE_MAX = 200;
 
 /** One user's Favorite of one target, or null. */
 async function favoriteRow(
@@ -146,9 +154,13 @@ export const mine = query({
     const seen = new Set<string>();
     for (const row of rows) {
       if (row.editionId) {
-        const found = await omnibusEdition(ctx, await ctx.db.get(row.editionId));
-        if (!("target" in found) || seen.has(found.edition._id)) continue;
-        seen.add(found.edition._id);
+        // Resolve merges first, so Favorites of Editions merged into one read
+        // the survivor's coverage and cover once.
+        const edition = await followMerges(ctx, "editions", await ctx.db.get(row.editionId));
+        if (!edition || seen.has(edition._id)) continue;
+        seen.add(edition._id);
+        const found = await omnibusEdition(ctx, edition);
+        if (!("target" in found)) continue;
         items.push({
           kind: "edition" as const,
           target: found.target,

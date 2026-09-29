@@ -105,11 +105,15 @@ async function activeVolume(
 
 /**
  * An active Edition through merges that is rated as one book: its Volume
- * Coverage is mapped and names more than one active Volume. Its Series is
- * the Edition's own (editionCoverage: the first covered Volume's). A
+ * Coverage is mapped and names more than one Volume. Its Series is the
+ * Edition's own (editionCoverage: the first covered Volume's). A
  * single-volume Edition is refused with `rateVolume`, naming the Volume to
- * rate instead. Exported for the library's Favorites, which list the
- * Edition's title and art from the same read.
+ * rate instead. Whether it is an omnibus counts every covered Volume, hidden
+ * ones too (`volumeCount`), so hiding a Volume or Series never turns an
+ * omnibus into a book "rated through its Volume": while too little of it is
+ * visible to be one book it is `notFound`, like any hidden target. Exported
+ * for the library's Favorites, which list the Edition's title and art from
+ * the same read.
  */
 export async function omnibusEdition(
   ctx: QueryCtx,
@@ -124,9 +128,9 @@ export async function omnibusEdition(
       message: "Which volumes this book collects is not mapped yet, so it cannot be rated.",
     };
   }
-  const volumes = new Map(info.coverage.map((row) => [row.volumePublicId, row]));
-  if (volumes.size <= 1) {
-    const [only] = volumes.values();
+  const visible = new Map(info.coverage.map((row) => [row.volumePublicId, row]));
+  if (info.volumeCount <= 1) {
+    const [only] = visible.values();
     return {
       code: "rateVolume",
       message: only
@@ -134,6 +138,7 @@ export async function omnibusEdition(
         : "This book is rated through the volumes it collects.",
     };
   }
+  if (visible.size <= 1) return { code: "notFound" };
   const series = info.series ? await resolveActiveSeries(ctx, info.series.publicId) : null;
   if (!series) return { code: "notFound" };
   return { target: { kind: "edition", id: edition._id }, series, edition, info };

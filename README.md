@@ -540,7 +540,9 @@ styles in `src/styles/ratings.css`.
   single-volume Edition rates its Volume; an omnibus (an Edition collecting
   more than one Volume) is rated as one book. `ratings.set` refuses a
   single-volume Edition (`rateVolume`, naming the Volume) and Unmapped
-  Packaging (`unmapped`). Public queries take `{ kind, publicId }`,
+  Packaging (`unmapped`). Whether an Edition is an omnibus counts every
+  Volume its coverage names, hidden ones too; an omnibus with fewer than two
+  of them visible reads as hidden (`notFound`). Public queries take `{ kind, publicId }`,
   mutations `{ kind, id }`, with `kind` `series`, `volume` or `edition`. The number is private; the public sees the
   target's average and count as a chip in the page header. `ratingStats`
   holds each target's sum and count of scores and moves in the same
@@ -562,8 +564,9 @@ styles in `src/styles/ratings.css`.
 
   The three numeric formats share one stepper: Enter or blur saves a typed
   value, each − or + click saves at once, values clamp to the format's range
-  (`clampStep`), and a commit that lands on the step already shown saves
-  nothing (so a stored 84 read as 8/10 is not rewritten to 80).
+  (`clampStep`; the steppers stop at 1), a typed 0 or negative clears the
+  rating, and a commit that lands on the step already shown saves nothing
+  (so a stored 84 read as 8/10 is not rewritten to 80).
 
   The page aggregate follows the viewer's format ("8.4", "4.2 ★", "84");
   smiley3 viewers and signed-out visitors see the point10 form. The count
@@ -609,6 +612,15 @@ styles in `src/styles/ratings.css`.
   aggregates) and Reviews; Series, Volume and Edition merges move them to
   the survivor, and where the user already rated or reviewed the survivor,
   the survivor's row is kept.
+- **Omnibus collapse**: when an Edition's coverage comes to name one Volume,
+  its Ratings, Reviews and Favorites move to that Volume, the Volume's row
+  winning a clash, and both aggregates are recounted
+  (`collapseEditionTakes` in `convex/lib/sensitiveOps.ts`). A Volume merge
+  does this for every omnibus of just the two Volumes and records it in its
+  manifest, so Split moves them back; the merge's impact preview counts
+  them. A Data Team coverage remap (`replaceCoverage`, used by Unmapped
+  Packaging mapping and the repair) does it one-way: remapping the Edition
+  onto several Volumes again leaves them on the Volume.
 - **Moderation reasons** are capped at 500 characters.
 
 **Turning public Reviews on.** Set `publicReviews: true` in
@@ -644,7 +656,11 @@ repeats.
   on `comments`; an Edition's is its first covered Volume's). Nobody else
   ever reads them; profiles never show them.
 - **Upkeep**: account deletion deletes them; merges repoint them (the
-  survivor's row wins a clash) and Split replays them back.
+  survivor's row wins a clash) and Split replays them back. An omnibus
+  whose coverage comes to name one Volume hands its Favorites to that
+  Volume (see "Omnibus collapse" under Ratings and reviews).
+- **Size**: the library lists the newest 200 (`MINE_MAX`, sized against the
+  per-query read limit in `convex/favorites.ts`).
 
 ## Comments
 
@@ -865,7 +881,9 @@ no redirects table.
 `mergeManifests` row (each repointed reference with its prior value, each
 deduped row's contents, each inserted row); Split replays it backward —
 skipping references the world re-aimed since — reactivates the loser, and
-consumes the manifest.
+consumes the manifest. The manifest includes the Ratings, Reviews and
+Favorites a Volume merge moved off an omnibus it reduced to one Volume, and
+Split recounts every aggregate those Ratings touched.
 
 **Locks.** Hidden and Merged records reject ordinary edits by status
 (direct edits, proposal drafts, and approvals all refuse them). Moderators
