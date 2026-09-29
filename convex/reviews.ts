@@ -1,5 +1,5 @@
-// Reviews (CONTEXT.md: Review): one plain-text write-up per user per Series
-// or Volume, meant for the target's page under its author's username with
+// Reviews (CONTEXT.md: Review): one plain-text write-up per user per Series,
+// Volume, or omnibus Edition (the targets Ratings take, lib/ratings.ts), meant for the target's page under its author's username with
 // the author's Rating beside it. Plain text only: no Markdown, line breaks
 // kept. Post-moderated: a Moderator hides a Review (reviewAudit records who
 // and why), after which only Moderators and its author see it. Hidden stays
@@ -88,15 +88,21 @@ async function reviewCard(ctx: QueryCtx, review: Doc<"reviews">) {
 
 /** A target's Reviews of one status, newest first. */
 function byStatus(ctx: QueryCtx, target: TargetId, status: Doc<"reviews">["status"]) {
-  return target.kind === "series"
-    ? ctx.db
-        .query("reviews")
+  const reviews = ctx.db.query("reviews");
+  switch (target.kind) {
+    case "series":
+      return reviews
         .withIndex("by_series_status", (q) => q.eq("seriesId", target.id).eq("status", status))
-        .order("desc")
-    : ctx.db
-        .query("reviews")
+        .order("desc");
+    case "volume":
+      return reviews
         .withIndex("by_volume_status", (q) => q.eq("volumeId", target.id).eq("status", status))
         .order("desc");
+    case "edition":
+      return reviews
+        .withIndex("by_edition_status", (q) => q.eq("editionId", target.id).eq("status", status))
+        .order("desc");
+  }
 }
 
 /**
@@ -169,7 +175,7 @@ export const save = mutation({
     const user = await requireUser(ctx);
     await rateLimiter.limit(ctx, "reviewSave", { key: user._id, throws: true });
     const body = cleanBody(args.body);
-    const target = await requireActiveTarget(ctx, args.target);
+    const { target } = await requireActiveTarget(ctx, args.target);
     const existing = await reviewRow(ctx, user._id, target);
     const now = Date.now();
     if (existing) {

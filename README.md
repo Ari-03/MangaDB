@@ -535,8 +535,13 @@ visibility defaults for Ownership and Reading plus per-Series overrides
 (shared with the client); UI in `src/lib/ratings.tsx` and `src/lib/reviews.tsx`,
 styles in `src/styles/ratings.css`.
 
-- **Rating**: one whole-number `score` from 1 to 100 per user per Series or
-  Volume, changeable or clearable. The number is private; the public sees the
+- **Rating**: one whole-number `score` from 1 to 100 per user per Series,
+  Volume, or omnibus Edition, changeable or clearable. The rule for books: a
+  single-volume Edition rates its Volume; an omnibus (an Edition collecting
+  more than one Volume) is rated as one book. `ratings.set` refuses a
+  single-volume Edition (`rateVolume`, naming the Volume) and Unmapped
+  Packaging (`unmapped`). Public queries take `{ kind, publicId }`,
+  mutations `{ kind, id }`, with `kind` `series`, `volume` or `edition`. The number is private; the public sees the
   target's average and count as a chip in the page header. `ratingStats`
   holds each target's sum and count of scores and moves in the same
   transaction as the rating; merges and splits recount it. A Series'
@@ -550,10 +555,15 @@ styles in `src/styles/ratings.css`.
 
   | Format | Control | Stored score | A score reads as |
   |---|---|---|---|
-  | `point10` | buttons 1–10 | n × 10 | max(1, round(score / 10)) |
-  | `star5` | five stars | n × 20 | max(1, round(score / 20)) |
-  | `point100` | number field with −/+ steppers | n | score |
-  | `smiley3` | Negative / Neutral / Positive | 35 / 60 / 85 | ≤ 49 / 50–74 / ≥ 75 |
+  | `point10` | number field /10 with −/+ steppers | n × 10 | max(1, round(score / 10)) |
+  | `star5` | number field /5 with −/+ steppers | n × 20 | max(1, round(score / 20)) |
+  | `point100` | number field /100 with −/+ steppers | n | score |
+  | `smiley3` | one pill: Bad / OK / Good | 35 / 60 / 85 | ≤ 49 / 50–74 / ≥ 75 |
+
+  The three numeric formats share one stepper: Enter or blur saves a typed
+  value, each − or + click saves at once, values clamp to the format's range
+  (`clampStep`), and a commit that lands on the step already shown saves
+  nothing (so a stored 84 read as 8/10 is not rewritten to 80).
 
   The page aggregate follows the viewer's format ("8.4", "4.2 ★", "84");
   smiley3 viewers and signed-out visitors see the point10 form. The count
@@ -566,10 +576,13 @@ styles in `src/styles/ratings.css`.
   moves to a full-width row under the hero. The **Edition page** of a book
   that collects exactly one Volume, completely, shows the same panel for
   that Volume, with a line saying the rating belongs to the Volume, and the
-  Volume's aggregate chip in its header; omnibuses and partial books carry
-  no rating.
+  Volume's aggregate chip in its header. An omnibus shows the panel for
+  itself ("Rates this omnibus as one book.") and its own aggregate chip.
+  Partial single-volume books and Unmapped Packaging carry no rating.
+  Edition aggregates never feed a Series' "Top rated" rank.
 - **Review**: 20 to 5,000 characters of plain text (line breaks kept, no
-  Markdown), optionally marked as spoilers, one per user per Series or Volume.
+  Markdown), optionally marked as spoilers, one per user per Series, Volume,
+  or omnibus Edition (the targets Ratings take).
   Written from "Write a review" (or "Edit your review") under the rating,
   which opens the form in place; a saved Review sits folded beneath it with
   Edit and Delete.
@@ -585,14 +598,17 @@ styles in `src/styles/ratings.css`.
   Moderators see it in a hidden list on the page. Every change writes a
   `reviewAudit` row (actor, action, optional reason). Editing a hidden Review
   does not unhide it.
-- **Profiles** list the user's rated Series (in the viewer's format) only
-  where their Reading is public for that Series. Mature Series are left out
+- **Profiles** list the user's rated Series and omnibus Editions (in the
+  viewer's format, each linking to its page) only where their Reading is
+  public for that Series (an Edition's Series is its first covered
+  Volume's). Mature Series are left out
   unless the viewer opted in.
 - **Rate limits** (token buckets per user): `ratingSet` 120/hour, `reviewSave`
   20/hour.
 - **Account deletion** removes the user's Ratings (decrementing the
-  aggregates) and Reviews; merges move them to the survivor, and where the
-  user already rated or reviewed the survivor, the survivor's row is kept.
+  aggregates) and Reviews; Series, Volume and Edition merges move them to
+  the survivor, and where the user already rated or reviewed the survivor,
+  the survivor's row is kept.
 - **Moderation reasons** are capped at 500 characters.
 
 **Turning public Reviews on.** Set `publicReviews: true` in
@@ -613,17 +629,19 @@ repeats.
 
 `convex/favorites.ts`; UI in `src/lib/favorites.tsx`.
 
-- **Favorite**: a private mark on a Series or a Volume, one per user per
-  target, toggled with "Favorite" / "Favorited" (styled like Follow) at the
-  foot of the panel under the cover on the Series and Volume pages (beside
-  Follow on the Series page), and on a single-volume Edition page for its
-  Volume. `favorites.isFavorite` (null signed
+- **Favorite**: a private mark on a Series, a Volume, or an omnibus Edition,
+  one per user per target, toggled with "Favorite" / "Favorited" (styled
+  like Follow) at the foot of the panel under the cover on the Series and
+  Volume pages (beside Follow on the Series page), and on Edition pages: a
+  single-volume Edition favorites its Volume, an omnibus is favorited as one
+  book. `favorites.isFavorite` (null signed
   out) and `favorites.toggle` (signed in, active target, merges followed).
 - **Library**: `/me` → Favorites lists them newest first as covers
   (`favorites.mine`), Mature covers concealed unless the viewer opted in,
   each with "Unfavorite". Favorites of hidden records drop out while hidden.
-- **Storage**: `favorites` rows carry `seriesId` always and `volumeId` for a
-  Volume (the Volume's Series denormalised, as on `comments`). Nobody else
+- **Storage**: `favorites` rows carry `seriesId` always, plus `volumeId` for a
+  Volume or `editionId` for an Edition (the target's Series denormalised, as
+  on `comments`; an Edition's is its first covered Volume's). Nobody else
   ever reads them; profiles never show them.
 - **Upkeep**: account deletion deletes them; merges repoint them (the
   survivor's row wins a clash) and Split replays them back.

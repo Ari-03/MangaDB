@@ -39,6 +39,17 @@ export const FORMAT_STEPS: Record<ScoreFormat, number> = {
   smiley3: 3,
 };
 
+/** The formats entered as a number between steppers (smiley3 picks a face instead). */
+export type NumericFormat = Exclude<ScoreFormat, "smiley3">;
+
+/**
+ * A typed or stepped value held to a format's steps: rounded, then clamped
+ * to 1..FORMAT_STEPS (1-10, 1-5, 1-100, 1-3).
+ */
+export function clampStep(value: number, format: ScoreFormat): number {
+  return Math.min(FORMAT_STEPS[format], Math.max(1, Math.round(value)));
+}
+
 /** A whole number from SCORE_MIN to SCORE_MAX. */
 export function isValidScore(score: number): boolean {
   return Number.isInteger(score) && score >= SCORE_MIN && score <= SCORE_MAX;

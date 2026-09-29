@@ -108,7 +108,7 @@ A user's view of Upcoming Releases that either belong to a followed Series and m
 A user's private-by-default sharing policy for Ownership and Reading, with separate defaults for each and per-Series overrides. Visibility is not configured separately for individual Volumes or Releases.
 
 **Rating**:
-A User's private score for one Series or one Volume, at most one per target, which the User may change or clear. It is stored as one whole number from 1 to 100 whatever Rating Format the User entered it in, and every display converts from that. Only the target's average and count are public, apart from the score shown beside the same User's Review; rated Series appear on a profile only where the User's Reading is public.
+A User's private score for one Series, one Volume, or one omnibus Edition, at most one per target, which the User may change or clear. A single-volume Edition rates its Volume; an omnibus (an Edition collecting more than one Volume) is rated as one book. It is stored as one whole number from 1 to 100 whatever Rating Format the User entered it in, and every display converts from that. Only the target's average and count are public, apart from the score shown beside the same User's Review; rated Series and omnibuses appear on a profile only where the User's Reading of their Series is public.
 _Avoid_: stars, vote
 
 **Rating Format**:
@@ -116,11 +116,11 @@ A User's choice of how they enter and read scores: 10 points, 5 stars, 100 point
 _Avoid_: scale, score type
 
 **Favorite**:
-A User's private mark on one Series or one Volume, at most one per target, set and cleared from its page and listed in their library. It is independent of Rating, Series Follow, and Collection Entries, and no other User ever sees it.
+A User's private mark on one Series, one Volume, or one omnibus Edition (a single-volume Edition favorites its Volume; an omnibus is favorited as one book), at most one per target, set and cleared from its page and listed in their library. It is independent of Rating, Series Follow, and Collection Entries, and no other User ever sees it.
 _Avoid_: like, bookmark, heart
 
 **Review**:
-A User's plain-text write-up of one Series or one Volume, at most one per target, meant to be signed with their username and shown beside their Rating when they have one. For now Reviews are private: only the author reads theirs, until public Reviews are switched on. It may be marked as containing spoilers, and only its author edits or deletes it. A Moderator may hide it, after which only Moderators and the author see it.
+A User's plain-text write-up of one Series, one Volume, or one omnibus Edition (a single-volume Edition reviews its Volume; an omnibus is reviewed as one book), at most one per target, meant to be signed with their username and shown beside their Rating when they have one. For now Reviews are private: only the author reads theirs, until public Reviews are switched on. It may be marked as containing spoilers, and only its author edits or deletes it. A Moderator may hide it, after which only Moderators and the author see it.
 _Avoid_: comment, post
 
 **Comment**:

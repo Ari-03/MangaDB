@@ -43,22 +43,36 @@ import { editionPath, parsePublicId, seriesPath, slugParams } from "~/lib/slug";
  * fragment. The Edition's title is composed, never stored (spec §8); a stale
  * slug or a merged Edition's old ID 301s to the canonical URL.
  *
- * A book that collects exactly one whole Volume is rated as that Volume:
- * the Volume's aggregate chip joins the header, and the viewer's take
- * (TakePanel: Rating, Review, Favorite, all of the Volume) sits under the
- * cover with a line saying so. Omnibuses and partial books carry no rating;
- * their Volumes are rated on their own pages.
+ * Rating follows CONTEXT.md (Rating): a book that collects exactly one whole
+ * Volume is rated as that Volume, and an omnibus (more than one Volume) is
+ * rated as one book. Either way the target's aggregate chip joins the header
+ * and the viewer's take (TakePanel: Rating, Review, Favorite) sits under the
+ * cover with a line saying what it rates. A partial single-volume book and
+ * Unmapped Packaging carry no rating.
  */
 
 /**
- * The Volume a book is rated as: its only covered Volume, when it covers
- * that Volume completely. Undefined for omnibuses and partial coverage.
+ * What a book is rated as: the Edition itself when it collects more than one
+ * Volume; else its only covered Volume, when it covers that Volume
+ * completely (`volume` then names it); else nothing. The server applies the
+ * same rule (convex/lib/ratings.ts), refusing single-volume Editions.
  */
-function ratedVolume<Covered extends { extent: "complete" | "partial" }>(
-  coverage: ReadonlyArray<Covered>,
-): Covered | undefined {
+function ratedAs<
+  Covered extends { volumePublicId: number; extent: "complete" | "partial" },
+>(editionPublicId: number, coverage: ReadonlyArray<Covered>) {
+  if (new Set(coverage.map((c) => c.volumePublicId)).size > 1) {
+    return {
+      target: { kind: "edition" as const, publicId: editionPublicId },
+      volume: undefined,
+    };
+  }
   const only = coverage.length === 1 ? coverage[0] : undefined;
-  return only?.extent === "complete" ? only : undefined;
+  return only?.extent === "complete"
+    ? {
+        target: { kind: "volume" as const, publicId: only.volumePublicId },
+        volume: only,
+      }
+    : null;
 }
 
 export const Route = createFileRoute("/edition/$publicId/$slug")({
@@ -71,13 +85,11 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
     if (`/edition/${params.publicId}/${params.slug}` !== canonical) {
       throw redirect({ href: canonical, statusCode: 301 });
     }
-    // A single-volume book's aggregate is its Volume's: rendered with the
-    // page, then live (lib/ratings.tsx), as on the Volume page.
-    const rated = ratedVolume(page.coverage);
+    // The aggregate of what the book is rated as (its Volume, or itself as
+    // an omnibus): rendered with the page, then live (lib/ratings.tsx).
+    const rated = ratedAs(page.edition.publicId, page.coverage);
     const rating = rated
-      ? await catalogQuery(api.ratings.summary, {
-          target: { kind: "volume", publicId: rated.volumePublicId },
-        })
+      ? await catalogQuery(api.ratings.summary, { target: rated.target })
       : null;
     return { ...page, rating };
   },
@@ -180,10 +192,8 @@ function EditionPage() {
   const { edition, series, credits, coverage, releases, coverUrl, rating } =
     Route.useLoaderData();
   const primarySeries = series[0];
-  const rated = ratedVolume(coverage);
-  const ratingTarget = rated
-    ? { kind: "volume" as const, publicId: rated.volumePublicId }
-    : null;
+  const rated = ratedAs(edition.publicId, coverage);
+  const ratingTarget = rated?.target ?? null;
   // One covered Volume with a Label gets the numbered cloth spine (one trade
   // dress, a big number); an omnibus keeps the title placeholder.
   const single = coverage.length === 1 ? coverage[0] : undefined;
@@ -229,27 +239,35 @@ function EditionPage() {
           </div>
         </div>
 
-        {/* A single-volume book: the viewer's take on that Volume, under the
-            cover, saying which Volume it rates. A grid item of its own, so
-            opening the review form can give it the full width. */}
-        {rated && ratingTarget ? (
+        {/* The viewer's take under the cover, saying what it rates: the
+            Volume a single-volume book collects, or the omnibus itself. A
+            grid item of its own, so opening the review form can give it the
+            full width. */}
+        {rated ? (
           <TakePanel
-            target={ratingTarget}
-            noun="volume"
+            target={rated.target}
+            noun={rated.volume ? "volume" : "omnibus"}
             note={
-              <>
-                Rates the volume this book collects,{" "}
-                <Link
-                  to="/volume/$publicId/$slug"
-                  params={slugParams(rated.volumePublicId, rated.volumeTitle)}
-                >
-                  {rated.volumeTitle}
-                </Link>
-                , not this edition.
-              </>
+              rated.volume ? (
+                <>
+                  Rates the volume this book collects,{" "}
+                  <Link
+                    to="/volume/$publicId/$slug"
+                    params={slugParams(
+                      rated.volume.volumePublicId,
+                      rated.volume.volumeTitle,
+                    )}
+                  >
+                    {rated.volume.volumeTitle}
+                  </Link>
+                  , not this edition.
+                </>
+              ) : (
+                "Rates this omnibus as one book."
+              )
             }
           >
-            <FavoriteButton target={ratingTarget} />
+            <FavoriteButton target={rated.target} />
           </TakePanel>
         ) : null}
 

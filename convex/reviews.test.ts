@@ -1,5 +1,5 @@
 // Reviews (CONTEXT.md: Review): one public plain-text Review per user per
-// Series or Volume, shown with the author's Rating; edit and delete by the
+// Series, Volume, or omnibus Edition, shown with the author's Rating; edit and delete by the
 // author only; post-moderation by Moderators with an audit trail; upkeep
 // through purge and merge; and the public profile's lists.
 
@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import type { TargetId, TargetRef } from "./lib/ratings";
 import schema from "./schema";
 import { REVIEW_MAX_LENGTH, REVIEW_MIN_LENGTH, REVIEW_REASON_MAX } from "./reviews";
@@ -321,7 +322,7 @@ describe("the public profile", () => {
 
     await author.mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
     profile = await t.query(api.sharing.publicProfile, { username: "carol" });
-    expect(profile!.ratings).toEqual([{ seriesPublicId: 1, title: "Frieren", score: 90 }]);
+    expect(profile!.ratings).toEqual([{ kind: "series", publicId: 1, title: "Frieren", score: 90 }]);
 
     profile = await t.query(api.sharing.publicProfile, { username: "carol", showMature: true });
     expect(profile!.ratings.map((r) => r.title)).toEqual(["Frieren", "Adult Title"]);
@@ -446,5 +447,133 @@ describe("the public profile's Reviews after catalog changes", () => {
       score: 80,
       body: "Written on what turned out to be a duplicate.",
     });
+  });
+});
+
+/**
+ * Books over Series 1 (which gains Vol 2, publicId 12): two omnibuses of
+ * Vol 1-2 (901, 904) and a single-volume book of Vol 1 (902).
+ */
+async function seedEditions(t: T, ids: Ids) {
+  return await t.run(async (ctx) => {
+    const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
+    const vol2 = await ctx.db.insert("volumes", {
+      status: "active",
+      publicId: 12,
+      seriesId: ids.one.seriesId,
+      position: 2,
+      label: "2",
+    });
+    const book = async (publicId: number, volumes: Array<Id<"volumes">>) => {
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
+      for (const [order, volumeId] of volumes.entries()) {
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order, extent: "complete" });
+      }
+      return editionId;
+    };
+    return {
+      omnibus: await book(901, [ids.one.volumeId, vol2]),
+      single: await book(902, [ids.one.volumeId]),
+      twin: await book(904, [ids.one.volumeId, vol2]),
+    };
+  });
+}
+
+const edition = (publicId: number) => ({ kind: "edition" as const, publicId });
+
+describe("Reviews of an omnibus Edition", () => {
+  const save = (t: T, target: TargetId) =>
+    t.withIdentity({ subject: AUTHOR }).mutation(api.reviews.save, { target, body: TEXT, spoiler: false });
+
+  it("reviews a multi-volume Edition as one book, with the author's Rating of it", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    const target = { kind: "edition" as const, id: books.omnibus };
+    const author = t.withIdentity({ subject: AUTHOR });
+    await author.mutation(api.ratings.set, { target, score: 70 });
+    await author.mutation(api.reviews.save, { target, body: TEXT, spoiler: false });
+
+    expect((await list(t, edition(901)))!.items).toEqual([
+      expect.objectContaining({ username: "carol", score: 70, body: TEXT }),
+    ]);
+    expect(await author.query(api.reviews.mine, { target: edition(901) })).toMatchObject({
+      target,
+      review: { body: TEXT },
+    });
+    // Its Volume and Series have none.
+    expect((await list(t, volume(11)))!.items).toEqual([]);
+    expect((await list(t))!.items).toEqual([]);
+  });
+
+  it("refuses a single-volume Edition with rateVolume", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    await expect(save(t, { kind: "edition", id: books.single })).rejects.toMatchObject({
+      data: { code: "rateVolume" },
+    });
+    expect(await list(t, edition(902))).toBeNull();
+  });
+
+  it("an Edition merge repoints Reviews, the survivor's winning a clash", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    const on = (subject: string, editionId: Id<"editions">, body: string) =>
+      t.withIdentity({ subject }).mutation(api.reviews.save, {
+        target: { kind: "edition", id: editionId },
+        body,
+        spoiler: false,
+      });
+    await on(AUTHOR, books.omnibus, "Survivor review, the one to keep.");
+    await on(AUTHOR, books.twin, "Loser review, dropped by the merge.");
+    await on(OTHER, books.twin, "Only on the loser, so it moves over.");
+    await t.withIdentity({ subject: ADMIN }).mutation(api.sensitiveOps.mergeRecords, {
+      survivor: { type: "edition", id: books.omnibus },
+      loser: { type: "edition", id: books.twin },
+      reason: "Same book.",
+      confirmImpact: true,
+    });
+    const bodies = (await list(t, edition(901)))!.items.map((i) => i.body).sort();
+    expect(bodies).toEqual(["Only on the loser, so it moves over.", "Survivor review, the one to keep."]);
+  });
+
+  it("purging a user deletes their Edition Reviews", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    await save(t, { kind: "edition", id: books.omnibus });
+    await t.mutation(internal.users.purgeUser, { clerkSubject: AUTHOR });
+    expect(await t.run((ctx) => ctx.db.query("reviews").collect())).toEqual([]);
+  });
+
+  it("the profile lists a rated omnibus under its Series' Reading visibility, and its Review", async () => {
+    const t = makeT();
+    const ids = await seed(t);
+    const books = await seedEditions(t, ids);
+    const author = t.withIdentity({ subject: AUTHOR });
+    const target = { kind: "edition" as const, id: books.omnibus };
+    await author.mutation(api.ratings.set, { target, score: 80 });
+    await author.mutation(api.reviews.save, { target, body: TEXT, spoiler: false });
+
+    let profile = await t.query(api.sharing.publicProfile, { username: "carol" });
+    expect(profile!.ratings).toEqual([]);
+    expect(profile!.reviews).toEqual([
+      expect.objectContaining({ target: { kind: "edition", publicId: 901, title: "Frieren Vol 1–2" }, score: 80 }),
+    ]);
+
+    await author.mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+    profile = await t.query(api.sharing.publicProfile, { username: "carol" });
+    expect(profile!.ratings).toEqual([{ kind: "edition", publicId: 901, title: "Frieren Vol 1–2", score: 80 }]);
+
+    // The Edition's Series decides: a private override on it hides the rating.
+    await author.mutation(api.sharing.setSeriesVisibility, {
+      seriesId: ids.one.seriesId,
+      kind: "reading",
+      visibility: "private",
+    });
+    profile = await t.query(api.sharing.publicProfile, { username: "carol" });
+    expect(profile!.ratings).toEqual([]);
   });
 });

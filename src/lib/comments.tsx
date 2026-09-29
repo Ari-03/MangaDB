@@ -12,7 +12,7 @@
 
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import type { FunctionReturnType } from "convex/server";
+import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
@@ -20,9 +20,11 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { COMMENT_POLICY } from "../../convex/comments";
 import { track } from "~/lib/analytics";
 import { useIsModerator } from "~/lib/moderation";
-import { writeErrorMessage, type RatingTarget } from "~/lib/ratings";
+import { writeErrorMessage } from "~/lib/ratings";
 import { convexClient } from "~/providers";
 
+/** A Comments page as pages know it: a Series or a Volume, never an Edition. */
+type CommentTarget = FunctionArgs<typeof api.comments.list>["target"];
 /** One page of a target's Comments, as the loader and the live query return it. */
 export type CommentPage = NonNullable<FunctionReturnType<typeof api.comments.list>>;
 type Thread = CommentPage["items"][number];
@@ -81,7 +83,7 @@ export function CommentsSection({
   initial,
   noun,
 }: {
-  target: RatingTarget;
+  target: CommentTarget;
   initial: CommentPage | null;
   noun: string;
 }) {
@@ -105,7 +107,7 @@ function LiveComments({
   initial,
   noun,
 }: {
-  target: RatingTarget;
+  target: CommentTarget;
   initial: CommentPage | null;
   noun: string;
 }) {
@@ -205,7 +207,7 @@ function AllReplies({
   thread,
   fallback,
 }: {
-  target: RatingTarget;
+  target: CommentTarget;
   thread: Thread;
   fallback: (replies: Thread["replies"]) => ReactNode;
 }) {

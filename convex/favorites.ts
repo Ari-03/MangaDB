@@ -1,16 +1,19 @@
-// Favorites (CONTEXT.md: Favorite): a User's private mark on a Series or a
-// Volume, toggled from its page and listed in the library's Favorites view.
+// Favorites (CONTEXT.md: Favorite): a User's private mark on a Series, a
+// Volume, or an omnibus Edition (the targets Ratings take, lib/ratings.ts),
+// toggled from its page and listed in the library's Favorites view.
 // Nothing here is readable by another user; profiles never show Favorites.
-// A Volume row carries its Series too (denormalised, like comments), so a
-// Series merge can move every row of a Series through one index.
+// A Volume or Edition row carries its Series too (denormalised, like
+// comments), so a Series merge can move every row of a Series through one
+// index.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { followMerges } from "./catalogPages";
+import { editionCover, followMerges } from "./catalogPages";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { coverUrl } from "./lib/covers";
 import {
+  omnibusEdition,
   requireActiveTarget,
   resolveTarget,
   targetIdArg,
@@ -28,17 +31,27 @@ async function favoriteRow(
   userId: Id<"users">,
   target: TargetId,
 ): Promise<Doc<"favorites"> | null> {
-  return target.kind === "series"
-    ? await ctx.db
-        .query("favorites")
+  const favorites = ctx.db.query("favorites");
+  switch (target.kind) {
+    case "series":
+      return await favorites
         .withIndex("by_user_series", (q) =>
-          q.eq("userId", userId).eq("seriesId", target.id).eq("volumeId", undefined),
+          q
+            .eq("userId", userId)
+            .eq("seriesId", target.id)
+            .eq("volumeId", undefined)
+            .eq("editionId", undefined),
         )
-        .unique()
-    : await ctx.db
-        .query("favorites")
+        .unique();
+    case "volume":
+      return await favorites
         .withIndex("by_user_volume", (q) => q.eq("userId", userId).eq("volumeId", target.id))
         .unique();
+    case "edition":
+      return await favorites
+        .withIndex("by_user_edition", (q) => q.eq("userId", userId).eq("editionId", target.id))
+        .unique();
+  }
 }
 
 /**
@@ -66,22 +79,24 @@ export const toggle = mutation({
   args: { target: targetIdArg },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    const target = await requireActiveTarget(ctx, args.target, "Nothing to favorite here any more.");
+    const { target, series } = await requireActiveTarget(
+      ctx,
+      args.target,
+      "Nothing to favorite here any more.",
+    );
     const existing = await favoriteRow(ctx, user._id, target);
     if (existing) {
       await ctx.db.delete(existing._id);
       return { favorite: false };
     }
-    if (target.kind === "series") {
-      await ctx.db.insert("favorites", { userId: user._id, seriesId: target.id });
-    } else {
-      const volume = (await ctx.db.get(target.id))!;
-      await ctx.db.insert("favorites", {
-        userId: user._id,
-        seriesId: volume.seriesId,
-        volumeId: target.id,
-      });
-    }
+    // The target's own key beside its Series (a Series row has only that).
+    const key =
+      target.kind === "volume"
+        ? { volumeId: target.id }
+        : target.kind === "edition"
+          ? { editionId: target.id }
+          : {};
+    await ctx.db.insert("favorites", { userId: user._id, seriesId: series._id, ...key });
     return { favorite: true };
   },
 });
@@ -111,11 +126,11 @@ async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
 }
 
 /**
- * The viewer's Favorites, newest first, for the library: each active Series
- * or Volume with its ID for `toggle`, title, cover, and whether it is
- * Mature (the view conceals that art unless the viewer opted in). Favorites
- * of hidden records are left out while hidden. Null when signed out or
- * username pending.
+ * The viewer's Favorites, newest first, for the library: each active Series,
+ * Volume or omnibus Edition with its ID for `toggle`, title, cover, and
+ * whether it is Mature (the view conceals that art unless the viewer opted
+ * in). Favorites of hidden records, and of Editions no longer rated as one
+ * book, are left out while so. Null when signed out or username pending.
  */
 export const mine = query({
   args: {},
@@ -130,7 +145,21 @@ export const mine = query({
     const items = [];
     const seen = new Set<string>();
     for (const row of rows) {
-      if (row.volumeId) {
+      if (row.editionId) {
+        const found = await omnibusEdition(ctx, await ctx.db.get(row.editionId));
+        if (!("target" in found) || seen.has(found.edition._id)) continue;
+        seen.add(found.edition._id);
+        items.push({
+          kind: "edition" as const,
+          target: found.target,
+          publicId: found.edition.publicId,
+          title: found.info.title,
+          seriesTitle: found.series.title,
+          label: null,
+          mature: found.info.mature,
+          ...(await editionCover(ctx, found.edition._id)),
+        });
+      } else if (row.volumeId) {
         const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
         const series = volume ? await ctx.db.get(volume.seriesId) : null;
         if (!volume || !series || series.status !== "active" || seen.has(volume._id)) continue;

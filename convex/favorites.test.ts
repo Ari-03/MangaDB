@@ -1,5 +1,5 @@
-// Favorites (CONTEXT.md: Favorite): one private mark per user per Series or
-// Volume, toggled on and off; the library list; and upkeep through hidden
+// Favorites (CONTEXT.md: Favorite): one private mark per user per Series,
+// Volume, or omnibus Edition, toggled on and off; the library list; and upkeep through hidden
 // and merged targets, account purge, and merge / split.
 
 import { convexTest } from "convex-test";
@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { TargetId } from "./lib/ratings";
 import schema from "./schema";
 
 const ADMIN = "user_admin";
@@ -50,7 +51,7 @@ async function seed() {
   return { t, ids };
 }
 type T = Awaited<ReturnType<typeof seed>>["t"];
-type Target = { kind: "series"; id: Id<"series"> } | { kind: "volume"; id: Id<"volumes"> };
+type Target = TargetId;
 
 const toggle = (t: T, subject: string, target: Target) =>
   t.withIdentity({ subject }).mutation(api.favorites.toggle, { target });
@@ -193,5 +194,160 @@ describe("favorite upkeep", () => {
     const merged = await rows(t);
     expect(merged).toHaveLength(2);
     expect(merged.every((r) => r.volumeId === ids.one.volumeId && r.seriesId === ids.one.seriesId)).toBe(true);
+  });
+});
+
+/**
+ * Books over Series 1 (which gains Vol 2, publicId 12): two omnibuses of
+ * Vol 1-2 (901, with a Release, and 904), a single-volume book of Vol 1
+ * (902), and an Unmapped Packaging line member (903).
+ */
+async function seedEditions(t: T, ids: Awaited<ReturnType<typeof seed>>["ids"]) {
+  return await t.run(async (ctx) => {
+    const seriesId = ids.one.seriesId;
+    const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
+    const vol2 = await ctx.db.insert("volumes", { status: "active", publicId: 12, seriesId, position: 2, label: "2" });
+    const book = async (publicId: number, volumes: Array<Id<"volumes">>) => {
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
+      for (const [order, volumeId] of volumes.entries()) {
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order, extent: "complete" });
+      }
+      return editionId;
+    };
+    const omnibus = await book(901, [ids.one.volumeId, vol2]);
+    await ctx.db.insert("releases", {
+      status: "active",
+      editionId: omnibus,
+      publisherId,
+      seriesIds: [seriesId],
+      format: "physical",
+      language: "en",
+      isbn13: "9781974700001",
+    });
+    const lineId = await ctx.db.insert("editionLines", { status: "active", seriesId, publisherId, name: "3-in-1" });
+    return {
+      omnibus,
+      single: await book(902, [ids.one.volumeId]),
+      unmapped: await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 903,
+        publisherId,
+        editionLineId: lineId,
+        coverageUnmapped: true,
+      }),
+      twin: await book(904, [ids.one.volumeId, vol2]),
+    };
+  });
+}
+
+const edition = (publicId: number) => ({ kind: "edition" as const, publicId });
+
+describe("Favorites of an omnibus Edition", () => {
+  it("favorites a multi-volume Edition apart from its Series, carrying the Series", async () => {
+    const { t, ids } = await seed();
+    const books = await seedEditions(t, ids);
+    const reader = t.withIdentity({ subject: READER });
+    const target = { kind: "edition" as const, id: books.omnibus };
+
+    expect(await reader.query(api.favorites.isFavorite, { target: edition(901) })).toEqual({ target, favorite: false });
+    expect(await toggle(t, READER, target)).toEqual({ favorite: true });
+    expect(await rows(t)).toEqual([expect.objectContaining({ seriesId: ids.one.seriesId, editionId: books.omnibus })]);
+    // Not the Series' Favorite, and the Series' own toggles on and off beside it.
+    expect(await reader.query(api.favorites.isFavorite, { target: series(1) })).toMatchObject({ favorite: false });
+    expect(await toggle(t, READER, { kind: "series", id: ids.one.seriesId })).toEqual({ favorite: true });
+    expect(await toggle(t, READER, { kind: "series", id: ids.one.seriesId })).toEqual({ favorite: false });
+    expect(await reader.query(api.favorites.isFavorite, { target: edition(901) })).toMatchObject({ favorite: true });
+
+    expect(await toggle(t, READER, target)).toEqual({ favorite: false });
+    expect(await rows(t)).toEqual([]);
+  });
+
+  it("refuses a single-volume Edition and Unmapped Packaging", async () => {
+    const { t, ids } = await seed();
+    const books = await seedEditions(t, ids);
+    await expect(toggle(t, READER, { kind: "edition", id: books.single })).rejects.toMatchObject({
+      data: { code: "rateVolume" },
+    });
+    await expect(toggle(t, READER, { kind: "edition", id: books.unmapped })).rejects.toMatchObject({
+      data: { code: "unmapped" },
+    });
+    const reader = t.withIdentity({ subject: READER });
+    expect(await reader.query(api.favorites.isFavorite, { target: edition(902) })).toBeNull();
+  });
+
+  it("lists an Edition Favorite in the library with its title, cover and link kind", async () => {
+    const { t, ids } = await seed();
+    const books = await seedEditions(t, ids);
+    await toggle(t, READER, { kind: "edition", id: books.omnibus });
+    const mine = await t.withIdentity({ subject: READER }).query(api.favorites.mine, {});
+    expect(mine!.items).toEqual([
+      {
+        kind: "edition",
+        target: { kind: "edition", id: books.omnibus },
+        publicId: 901,
+        title: "Frieren Vol 1–2",
+        seriesTitle: "Frieren",
+        label: null,
+        mature: false,
+        coverUrl: null,
+        coverIsbn: "9781974700001",
+      },
+    ]);
+    // A hidden Edition drops out while hidden.
+    await t.run((ctx) => ctx.db.patch(books.omnibus, { status: "hidden" }));
+    expect((await t.withIdentity({ subject: READER }).query(api.favorites.mine, {}))!.items).toEqual([]);
+  });
+
+  it("purging a user deletes their Edition Favorites", async () => {
+    const { t, ids } = await seed();
+    const books = await seedEditions(t, ids);
+    await toggle(t, READER, { kind: "edition", id: books.omnibus });
+    await toggle(t, OTHER, { kind: "edition", id: books.omnibus });
+    await t.mutation(internal.users.purgeUser, { clerkSubject: READER });
+    expect(await rows(t)).toEqual([expect.objectContaining({ editionId: books.omnibus })]);
+  });
+
+  it("an Edition merge repoints Favorites, keeps the survivor's on a clash, and a split undoes it", async () => {
+    const { t, ids } = await seed();
+    const books = await seedEditions(t, ids);
+    await toggle(t, READER, { kind: "edition", id: books.omnibus }); // both: survivor's wins
+    await toggle(t, READER, { kind: "edition", id: books.twin });
+    await toggle(t, OTHER, { kind: "edition", id: books.twin }); // only the loser: moves over
+    const admin = t.withIdentity({ subject: ADMIN });
+    await admin.mutation(api.sensitiveOps.mergeRecords, {
+      survivor: { type: "edition", id: books.omnibus },
+      loser: { type: "edition", id: books.twin },
+      reason: "Same book.",
+      confirmImpact: true,
+    });
+    const merged = await rows(t);
+    expect(merged).toHaveLength(2);
+    expect(merged.every((r) => r.editionId === books.omnibus)).toBe(true);
+
+    await admin.mutation(api.sensitiveOps.splitRecord, {
+      ref: { type: "edition", id: books.twin },
+      reason: "Different printings after all.",
+      confirmImpact: true,
+    });
+    const split = await rows(t);
+    expect(split).toHaveLength(3);
+    expect(split.filter((r) => r.editionId === books.twin)).toHaveLength(2);
+  });
+
+  it("a Series merge keeps an Edition Favorite beside the user's Favorite of the survivor", async () => {
+    const { t, ids } = await seed();
+    const books = await seedEditions(t, ids);
+    await toggle(t, READER, { kind: "series", id: ids.two.seriesId });
+    await toggle(t, READER, { kind: "edition", id: books.omnibus });
+    await t.withIdentity({ subject: ADMIN }).mutation(api.sensitiveOps.mergeRecords, {
+      survivor: { type: "series", id: ids.two.seriesId },
+      loser: { type: "series", id: ids.one.seriesId },
+      reason: "Duplicate.",
+      confirmImpact: true,
+    });
+    const merged = await rows(t);
+    expect(merged).toHaveLength(2);
+    expect(merged.every((r) => r.seriesId === ids.two.seriesId)).toBe(true);
+    expect(merged.find((r) => r.editionId)).toMatchObject({ editionId: books.omnibus });
   });
 });

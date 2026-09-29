@@ -14,9 +14,10 @@
 // - Series Follows always stay private in v1: nothing here ever reads or
 //   returns the following/followPromptDismissed fields.
 // - The profile is current-state only — no activity feed, no timestamps.
-// - Rated Series ride on the Reading visibility (a Rating is part of how the
-//   user reads a Series); Reviews are public content and listed whenever
-//   FEATURES.publicReviews is on (lib/features.ts). Both leave Mature Series out unless the viewer opted in.
+// - Rated Series and omnibus Editions ride on the Reading visibility of
+//   their Series (a Rating is part of how the user reads a Series); Reviews
+//   are public content and listed whenever FEATURES.publicReviews is on
+//   (lib/features.ts). Both leave Mature Series out unless the viewer opted in.
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -27,7 +28,7 @@ import { releaseLink, variantName } from "./collection";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { showMatureArg, visibleTo } from "./lib/mature";
 import { FEATURES } from "./lib/features";
-import { ratingRow, targetOfRow } from "./lib/ratings";
+import { omnibusEdition, ratingRow, targetOfRow, type TargetId } from "./lib/ratings";
 import { volumeTitle } from "./lib/titles";
 import { normalizeUsername } from "./lib/usernames";
 import { requireActiveSeries } from "./reading";
@@ -39,6 +40,53 @@ const kindValidator = v.union(v.literal("ownership"), v.literal("reading"));
 
 type Visibility = "public" | "private";
 type Kind = "ownership" | "reading";
+
+/**
+ * A Rating or Review target as a profile lists it: the surviving record's
+ * kind, public ID and title for the link, the Series its visibility follows
+ * (an omnibus Edition's is its first covered Volume's), and whether it is
+ * Mature. Null when hidden, merged away to nothing, or (an Edition) no
+ * longer rated as one book.
+ */
+async function profileTarget(ctx: QueryCtx, stored: TargetId) {
+  switch (stored.kind) {
+    case "series": {
+      const series = await followMerges(ctx, "series", await ctx.db.get(stored.id));
+      if (!series) return null;
+      return {
+        target: { kind: "series" as const, id: series._id },
+        ref: { kind: "series" as const, publicId: series.publicId, title: series.title },
+        series,
+        mature: series.mature === true,
+      };
+    }
+    case "volume": {
+      const volume = await followMerges(ctx, "volumes", await ctx.db.get(stored.id));
+      const series = volume ? await ctx.db.get(volume.seriesId) : null;
+      if (!volume || !series || series.status !== "active") return null;
+      return {
+        target: { kind: "volume" as const, id: volume._id },
+        ref: {
+          kind: "volume" as const,
+          publicId: volume.publicId,
+          title: volumeTitle(series.title, volume.label ?? null),
+        },
+        series,
+        mature: series.mature === true,
+      };
+    }
+    case "edition": {
+      const found = await omnibusEdition(ctx, await ctx.db.get(stored.id));
+      if (!("target" in found)) return null;
+      return {
+        target: found.target,
+        ref: { kind: "edition" as const, publicId: found.edition.publicId, title: found.info.title },
+        series: found.series,
+        mature: found.info.mature,
+      };
+    }
+  }
+}
 
 // ---------- effective-visibility resolution ----------
 
@@ -450,7 +498,7 @@ export const publicProfile = query({
     }
     reading.sort((a, b) => a.title.localeCompare(b.title));
 
-    // ----- rated Series (Reading visibility) and Reviews (public while
+    // ----- rated Series and Editions (Reading visibility) and Reviews (public while
     // FEATURES.publicReviews is on; left out entirely until then) -----
 
     const ratings = [];
@@ -459,11 +507,13 @@ export const publicProfile = query({
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .collect();
     for (const row of ratingRows) {
-      if (!row.seriesId) continue;
-      const series = await followMerges(ctx, "series", await ctx.db.get(row.seriesId));
-      if (!series || !visibleTo(showMature, series.mature)) continue;
-      if (effectiveVisibility(user, overrides, "reading", series._id) !== "public") continue;
-      ratings.push({ seriesPublicId: series.publicId, title: series.title, score: row.score });
+      const stored = targetOfRow(row);
+      // Volume Ratings stay off the profile; Series and omnibus ones show.
+      if (!stored || stored.kind === "volume") continue;
+      const shown = await profileTarget(ctx, stored);
+      if (!shown || !visibleTo(showMature, shown.mature)) continue;
+      if (effectiveVisibility(user, overrides, "reading", shown.series._id) !== "public") continue;
+      ratings.push({ ...shown.ref, score: row.score });
     }
     ratings.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
 
@@ -477,31 +527,13 @@ export const publicProfile = query({
       : [];
     for (const row of reviewRows) {
       if (row.status !== "visible") continue;
-      const target = targetOfRow(row);
-      if (!target) continue;
-      const found =
-        target.kind === "series"
-          ? await followMerges(ctx, "series", await ctx.db.get(target.id))
-          : await followMerges(ctx, "volumes", await ctx.db.get(target.id));
-      if (!found) continue;
-      const series =
-        "seriesId" in found ? await ctx.db.get(found.seriesId) : found;
-      if (!series || series.status !== "active" || !visibleTo(showMature, series.mature)) continue;
+      const stored = targetOfRow(row);
+      const shown = stored ? await profileTarget(ctx, stored) : null;
+      if (!shown || !visibleTo(showMature, shown.mature)) continue;
       // The surviving target: a merge moves Ratings onto it.
-      const rating = await ratingRow(
-        ctx,
-        user._id,
-        "seriesId" in found ? { kind: "volume", id: found._id } : { kind: "series", id: found._id },
-      );
+      const rating = await ratingRow(ctx, user._id, shown.target);
       reviews.push({
-        target:
-          "seriesId" in found
-            ? {
-                kind: "volume" as const,
-                publicId: found.publicId,
-                title: volumeTitle(series.title, found.label ?? null),
-              }
-            : { kind: "series" as const, publicId: series.publicId, title: series.title },
+        target: shown.ref,
         score: rating?.score ?? null,
         body: row.body,
         spoiler: row.spoiler,

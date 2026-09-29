@@ -172,6 +172,27 @@ function representativeCover(rows: Array<{ coverUrl: string | null }>) {
   return rows.find((row) => row.coverUrl !== null)?.coverUrl ?? null;
 }
 
+/**
+ * An Edition's jacket without its full Release rows (the library's
+ * Favorites): the Edition page's representative cover, else the first
+ * dated Release's ISBN to look one up by.
+ */
+export async function editionCover(ctx: QueryCtx, editionId: Id<"editions">) {
+  const releases = (
+    await ctx.db
+      .query("releases")
+      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+      .collect()
+  )
+    .filter((doc) => doc.status === "active")
+    .sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity));
+  for (const release of releases) {
+    const url = await coverUrl(ctx, release.coverImage?.storageId);
+    if (url) return { coverUrl: url, coverIsbn: release.isbn13 ?? null };
+  }
+  return { coverUrl: null, coverIsbn: releases.find((r) => r.isbn13)?.isbn13 ?? null };
+}
+
 type ReleaseRow = Awaited<ReturnType<typeof releaseRow>>;
 
 const byDate = (a: ReleaseRow, b: ReleaseRow) =>

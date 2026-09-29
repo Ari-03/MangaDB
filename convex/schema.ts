@@ -945,9 +945,11 @@ export default defineSchema({
     .index("by_series", ["seriesId"]),
 
   // Ratings and Reviews (convex/ratings.ts, convex/reviews.ts). Each row
-  // targets exactly one Series or one Volume: exactly one of seriesId /
-  // volumeId is set (enforced in lib/ratings.ts), the collectionEntries
-  // shape, so both sides stay indexable. One row per (user, target).
+  // targets exactly one Series, one Volume, or one omnibus Edition (an
+  // Edition collecting more than one Volume; a single-volume Edition rates
+  // its Volume): exactly one of seriesId / volumeId / editionId is set
+  // (enforced in lib/ratings.ts), the collectionEntries shape, so every side
+  // stays indexable. One row per (user, target).
 
   // A Rating: a private whole-number score from 1 to 100, whatever Rating
   // Format the User entered it in (lib/scoreFormat.ts). Only the aggregate
@@ -956,15 +958,18 @@ export default defineSchema({
     userId: v.id("users"),
     seriesId: v.optional(v.id("series")),
     volumeId: v.optional(v.id("volumes")),
+    editionId: v.optional(v.id("editions")),
     score: v.number(),
     updatedAt: v.number(),
   })
     .index("by_user", ["userId"])
     .index("by_user_series", ["userId", "seriesId"])
     .index("by_user_volume", ["userId", "volumeId"])
+    .index("by_user_edition", ["userId", "editionId"])
     // Reverse lookups for aggregate recounts and merge transfer.
     .index("by_series", ["seriesId"])
-    .index("by_volume", ["volumeId"]),
+    .index("by_volume", ["volumeId"])
+    .index("by_edition", ["editionId"]),
 
   // Sum and count of one target's Ratings (scores, 1-100), kept in step by
   // every rating write in the same transaction (lib/ratings.ts), recounted on
@@ -973,29 +978,35 @@ export default defineSchema({
   ratingStats: defineTable({
     seriesId: v.optional(v.id("series")),
     volumeId: v.optional(v.id("volumes")),
+    editionId: v.optional(v.id("editions")),
     sum: v.number(),
     count: v.number(),
   })
     .index("by_series", ["seriesId"])
-    .index("by_volume", ["volumeId"]),
+    .index("by_volume", ["volumeId"])
+    .index("by_edition", ["editionId"]),
 
-  // A Favorite (CONTEXT.md): a User's private mark on one Series or one
-  // Volume (convex/favorites.ts). A Series row has no volumeId; a Volume row
-  // carries its Volume and, denormalised, the Volume's Series, like
-  // comments. One row per (user, target).
+  // A Favorite (CONTEXT.md): a User's private mark on one Series, one
+  // Volume, or one omnibus Edition (convex/favorites.ts). A Series row has
+  // neither volumeId nor editionId; a Volume or Edition row carries its
+  // target and, denormalised, the target's Series (an Edition's is its
+  // first covered Volume's), like comments. One row per (user, target).
   favorites: defineTable({
     userId: v.id("users"),
     seriesId: v.id("series"),
     volumeId: v.optional(v.id("volumes")),
+    editionId: v.optional(v.id("editions")),
   })
     // Newest first per user (the index ends in _creationTime): the library view.
     .index("by_user", ["userId"])
-    // A Series favorite is (user, series, volumeId undefined).
-    .index("by_user_series", ["userId", "seriesId", "volumeId"])
+    // A Series favorite is (user, series, volumeId and editionId undefined).
+    .index("by_user_series", ["userId", "seriesId", "volumeId", "editionId"])
     .index("by_user_volume", ["userId", "volumeId"])
-    // Merge transfer (every row of a Series, Volume rows included).
+    .index("by_user_edition", ["userId", "editionId"])
+    // Merge transfer (every row of a Series, Volume and Edition rows included).
     .index("by_series", ["seriesId"])
-    .index("by_volume", ["volumeId"]),
+    .index("by_volume", ["volumeId"])
+    .index("by_edition", ["editionId"]),
 
   // A Review: plain text (line breaks kept, no Markdown) by its author,
   // public once FEATURES.publicReviews is on (lib/features.ts), and
@@ -1006,6 +1017,7 @@ export default defineSchema({
     userId: v.id("users"),
     seriesId: v.optional(v.id("series")),
     volumeId: v.optional(v.id("volumes")),
+    editionId: v.optional(v.id("editions")),
     body: v.string(),
     spoiler: v.boolean(),
     status: reviewStatus,
@@ -1016,12 +1028,15 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_user_series", ["userId", "seriesId"])
     .index("by_user_volume", ["userId", "volumeId"])
+    .index("by_user_edition", ["userId", "editionId"])
     // Newest first per target (the index ends in _creationTime); the status
     // variants serve the public list and the Moderators' hidden list.
     .index("by_series", ["seriesId"])
     .index("by_volume", ["volumeId"])
+    .index("by_edition", ["editionId"])
     .index("by_series_status", ["seriesId", "status"])
-    .index("by_volume_status", ["volumeId", "status"]),
+    .index("by_volume_status", ["volumeId", "status"])
+    .index("by_edition_status", ["editionId", "status"]),
 
   // Append-only record of Moderator actions on Reviews, shaped like
   // roleAudit. Survives the Review's deletion.

@@ -1,5 +1,6 @@
-// Ratings (CONTEXT.md: Rating): one private score per user per Series or
-// Volume, stored as a whole number from 1 to 100 whatever Rating Format the
+// Ratings (CONTEXT.md: Rating): one private score per user per Series,
+// Volume, or omnibus Edition (a single-volume Edition rates its Volume;
+// lib/ratings.ts refuses it as a target), stored as a whole number from 1 to 100 whatever Rating Format the
 // user entered it in (lib/scoreFormat.ts). The number itself stays private;
 // the public sees the target's aggregate ("8.4 · 12 ratings"), which moves
 // in the same transaction as the Rating (lib/ratings.ts), and a Review's
@@ -64,7 +65,8 @@ export const mine = query({
 /**
  * Set, change, or clear (`score: null`) the viewer's Rating of a target: a
  * whole number from 1 to 100 (the client converts from the viewer's Rating
- * Format). A merged target resolves to its survivor.
+ * Format). A merged target resolves to its survivor; an Edition that is no
+ * target is refused (`rateVolume`, `unmapped`).
  */
 export const set = mutation({
   args: { target: targetIdArg, score: v.union(v.number(), v.null()) },
@@ -78,7 +80,7 @@ export const set = mutation({
         message: `A score is a whole number from ${SCORE_MIN} to ${SCORE_MAX}.`,
       });
     }
-    const target = await requireActiveTarget(ctx, args.target);
+    const { target } = await requireActiveTarget(ctx, args.target);
     const existing = await ratingRow(ctx, user._id, target);
     const before = existing?.score ?? null;
     if (before === score) return { score };

@@ -1,5 +1,6 @@
 // Favorites UI (CONTEXT.md: Favorite): the private toggle in the TakePanel
-// under the cover of Series, Volume and single-volume Edition pages, styled
+// under the cover of Series, Volume and Edition pages (a single-volume
+// Edition's favorites its Volume; an omnibus is favorited as one book), styled
 // like the Follow button (lib/follows.tsx), and the Favorites view of the
 // library (/me?tab=favorites). Signed out, the queries answer null and
 // nothing renders, so the panel stays empty and hides itself.
@@ -7,7 +8,7 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { track } from "~/lib/analytics";
@@ -32,7 +33,7 @@ function HeartGlyph({ filled }: { filled: boolean }) {
   );
 }
 
-/** The "Favorite" / "Favorited" toggle for a Series or Volume; nothing signed out. */
+/** The "Favorite" / "Favorited" toggle for a Series, Volume or omnibus Edition; nothing signed out. */
 export function FavoriteButton({ target }: { target: RatingTarget }) {
   if (!convexClient) return null;
   return <FavoriteButtonInner target={target} />;
@@ -69,9 +70,9 @@ function FavoriteButtonInner({ target }: { target: RatingTarget }) {
 type FavoriteItem = NonNullable<FunctionReturnType<typeof api.favorites.mine>>["items"][number];
 
 /**
- * The library's Favorites view: every favorited Series and Volume as a
- * cover, newest first, each removable in place. A Mature title's cover is
- * concealed unless the viewer opted in.
+ * The library's Favorites view: every favorited Series, Volume and omnibus
+ * Edition as a cover, newest first, each removable in place. A Mature
+ * title's cover is concealed unless the viewer opted in.
  */
 export function LibraryFavorites() {
   if (!convexClient) return null;
@@ -85,7 +86,7 @@ function LibraryFavoritesInner() {
   if (mine.items.length === 0) {
     return (
       <p className="placeholder">
-        Favorite a series or a volume from its page and it lands here. Favorites are private.
+        Favorite a series, a volume or an omnibus from its page and it lands here. Favorites are private.
       </p>
     );
   }
@@ -104,10 +105,50 @@ function LibraryFavoritesInner() {
   );
 }
 
+const KIND_LABELS: Record<FavoriteItem["kind"], string> = {
+  series: "Series",
+  volume: "Volume",
+  edition: "Edition",
+};
+
+/** A link to a favorite's own page: its Series, Volume or Edition route. */
+function FavoriteLink({
+  item,
+  className,
+  label,
+  children,
+}: {
+  item: FavoriteItem;
+  className: string;
+  label?: string;
+  children: ReactNode;
+}) {
+  const params = slugParams(item.publicId, item.title);
+  switch (item.kind) {
+    case "series":
+      return (
+        <Link className={className} to="/series/$publicId/$slug" params={params} aria-label={label}>
+          {children}
+        </Link>
+      );
+    case "volume":
+      return (
+        <Link className={className} to="/volume/$publicId/$slug" params={params} aria-label={label}>
+          {children}
+        </Link>
+      );
+    case "edition":
+      return (
+        <Link className={className} to="/edition/$publicId/$slug" params={params} aria-label={label}>
+          {children}
+        </Link>
+      );
+  }
+}
+
 function FavoriteCover({ item }: { item: FavoriteItem }) {
   const toggle = useMutation(api.favorites.toggle);
   const [busy, setBusy] = useState(false);
-  const params = slugParams(item.publicId, item.title);
   const cover = (
     <ConcealArt mature={item.mature} notice={false}>
       <Cover
@@ -121,15 +162,9 @@ function FavoriteCover({ item }: { item: FavoriteItem }) {
   return (
     <div className="shelf-item">
       <div className="cover-wrap">
-        {item.kind === "series" ? (
-          <Link className="cover-link" to="/series/$publicId/$slug" params={params} aria-label={item.title}>
-            {cover}
-          </Link>
-        ) : (
-          <Link className="cover-link" to="/volume/$publicId/$slug" params={params} aria-label={item.title}>
-            {cover}
-          </Link>
-        )}
+        <FavoriteLink item={item} className="cover-link" label={item.title}>
+          {cover}
+        </FavoriteLink>
         <div className="cover-actions">
           <div className="cover-actions-row">
             <button
@@ -151,17 +186,11 @@ function FavoriteCover({ item }: { item: FavoriteItem }) {
         </div>
       </div>
       <div className="caption">
-        {item.kind === "series" ? (
-          <Link className="caption-title" to="/series/$publicId/$slug" params={params}>
-            {item.title}
-          </Link>
-        ) : (
-          <Link className="caption-title" to="/volume/$publicId/$slug" params={params}>
-            {item.title}
-          </Link>
-        )}
+        <FavoriteLink item={item} className="caption-title">
+          {item.title}
+        </FavoriteLink>
         <div className="caption-meta">
-          <span>{item.kind === "series" ? "Series" : "Volume"}</span>
+          <span>{KIND_LABELS[item.kind]}</span>
         </div>
       </div>
     </div>

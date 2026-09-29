@@ -373,7 +373,41 @@ function ReadingSection({
   );
 }
 
-/** Rated Series, highest first — only those whose Reading the user shares. */
+/** A rated or reviewed Series, Volume or omnibus Edition, linked to its page. */
+function TargetLink({
+  target,
+  className,
+}: {
+  target: PublicProfileData["reviews"][number]["target"];
+  className?: string;
+}) {
+  const params = slugParams(target.publicId, target.title);
+  switch (target.kind) {
+    case "series":
+      return (
+        <Link className={className} to="/series/$publicId/$slug" params={params}>
+          {target.title}
+        </Link>
+      );
+    case "volume":
+      return (
+        <Link className={className} to="/volume/$publicId/$slug" params={params}>
+          {target.title}
+        </Link>
+      );
+    case "edition":
+      return (
+        <Link className={className} to="/edition/$publicId/$slug" params={params}>
+          {target.title}
+        </Link>
+      );
+  }
+}
+
+/**
+ * Rated Series and omnibus Editions, highest first — only those whose
+ * Series' Reading the user shares.
+ */
 function RatingsSection({
   ratings,
 }: {
@@ -387,14 +421,9 @@ function RatingsSection({
       </div>
       <ul className="profile-ratings">
         {ratings.map((row) => (
-          <li key={row.seriesPublicId}>
+          <li key={`${row.kind}:${row.publicId}`}>
             <ScoreText score={row.score} />
-            <Link
-              to="/series/$publicId/$slug"
-              params={slugParams(row.seriesPublicId, row.title)}
-            >
-              {row.title}
-            </Link>
+            <TargetLink target={row} />
           </li>
         ))}
       </ul>
@@ -431,20 +460,10 @@ function ProfileReview({
   review: PublicProfileData["reviews"][number];
 }) {
   const [revealed, setRevealed] = useState(false);
-  const { target } = review;
-  const params = slugParams(target.publicId, target.title);
   return (
     <article className="review-card">
       <header className="review-head">
-        {target.kind === "series" ? (
-          <Link className="review-author" to="/series/$publicId/$slug" params={params}>
-            {target.title}
-          </Link>
-        ) : (
-          <Link className="review-author" to="/volume/$publicId/$slug" params={params}>
-            {target.title}
-          </Link>
-        )}
+        <TargetLink target={review.target} className="review-author" />
         {review.score !== null ? <ScoreText score={review.score} /> : null}
         {review.spoiler ? <span className="chip chip--spoiler">Spoilers</span> : null}
       </header>

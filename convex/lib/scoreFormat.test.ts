@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   FORMAT_STEPS,
   SCORE_FORMATS,
+  clampStep,
   formatAverage,
   formatScore,
   fromFormat,
@@ -18,6 +19,31 @@ describe("isValidScore", () => {
   it("takes whole numbers from 1 to 100 only", () => {
     for (const good of [1, 35, 100]) expect(isValidScore(good)).toBe(true);
     for (const bad of [0, 101, 7.5, -3, Number.NaN]) expect(isValidScore(bad)).toBe(false);
+  });
+});
+
+describe("clampStep", () => {
+  it("holds a value to 1..steps of its format", () => {
+    expect(clampStep(0, "point10")).toBe(1);
+    expect(clampStep(11, "point10")).toBe(10);
+    expect(clampStep(7, "point10")).toBe(7);
+    expect(clampStep(9, "star5")).toBe(5);
+    expect(clampStep(-4, "star5")).toBe(1);
+    expect(clampStep(250, "point100")).toBe(100);
+    expect(clampStep(4, "smiley3")).toBe(3);
+  });
+
+  it("rounds a fraction to the nearest step", () => {
+    expect(clampStep(7.4, "point10")).toBe(7);
+    expect(clampStep(3.5, "star5")).toBe(4);
+  });
+
+  it("round-trips every step of every format through fromFormat and toFormat", () => {
+    for (const format of SCORE_FORMATS) {
+      for (let step = 1; step <= FORMAT_STEPS[format]; step++) {
+        expect(toFormat(fromFormat(clampStep(step, format), format), format)).toBe(step);
+      }
+    }
   });
 });
 

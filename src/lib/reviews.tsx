@@ -173,9 +173,10 @@ function ReviewCard({ item, moderated = false }: { item: ReviewCardData; moderat
 
 /**
  * The viewer's take on a target, under the cover of its page (Series,
- * Volume, a single-volume Edition): their Rating, their own Review, then a
- * row of the page's private toggles (`children`: Follow, Favorite). `note`
- * is a line above the rating (the Edition page says which Volume it rates).
+ * Volume, Edition: a single-volume book's Volume or an omnibus itself):
+ * their Rating, their own Review, then a row of the page's private toggles
+ * (`children`: Follow, Favorite). `note` is a line above the rating (the
+ * Edition page says what it rates).
  * Every control renders nothing signed out and CSS hides the panel then; the
  * note alone never keeps it up (styles/ratings.css). While the review form
  * is open, each hero moves the panel to a full-width row under the cover and

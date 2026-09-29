@@ -328,10 +328,11 @@ async function transferRatingsAndReviews(
   }
 }
 
-/** A Series or Volume ref as a rating target; other record types have none. */
+/** A Series, Volume or Edition ref as a rating target; other record types have none. */
 function ratingTarget(ref: RecordRef): TargetId | null {
   if (ref.type === "series") return { kind: "series", id: ref.id as Id<"series"> };
   if (ref.type === "volume") return { kind: "volume", id: ref.id as Id<"volumes"> };
+  if (ref.type === "edition") return { kind: "edition", id: ref.id as Id<"editions"> };
   return null;
 }
 
@@ -531,18 +532,23 @@ async function transferReferences(
         { kind: "series", id: survivorId },
       );
       // Favorites: a Series favorite moves over unless the user already
-      // favorited the survivor; a Volume favorite keeps its Volume (which just
-      // moved above) and follows it with the Series denorm.
+      // favorited the survivor; a Volume or Edition favorite keeps its
+      // target (a Volume just moved above) and follows it with the Series
+      // denorm.
       const favorites = await ctx.db
         .query("favorites")
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
         .collect();
       for (const row of favorites) {
-        if (row.volumeId === undefined) {
+        if (row.volumeId === undefined && row.editionId === undefined) {
           const existing = await ctx.db
             .query("favorites")
             .withIndex("by_user_series", (q) =>
-              q.eq("userId", row.userId).eq("seriesId", survivorId).eq("volumeId", undefined),
+              q
+                .eq("userId", row.userId)
+                .eq("seriesId", survivorId)
+                .eq("volumeId", undefined)
+                .eq("editionId", undefined),
             )
             .unique();
           if (existing) {
@@ -698,6 +704,35 @@ async function transferReferences(
       // Moved releases (and any the coverage change affected) get fresh
       // seriesIds/publisherId denorms from the survivor edition.
       await recomputeReleaseDenorms(ctx, log, survivorId);
+
+      // An omnibus is a rating target of its own: its Ratings, Reviews and
+      // Favorites move to the survivor, the survivor's row winning a clash.
+      // A moved Favorite takes the survivor's Series denorm (its first
+      // covered Volume's, as lib/ratings.ts reads it).
+      await transferRatingsAndReviews(
+        ctx,
+        log,
+        { kind: "edition", id: loserId },
+        { kind: "edition", id: survivorId },
+      );
+      const firstCovered = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", survivorId))
+        .first();
+      const firstVolume = firstCovered ? await ctx.db.get(firstCovered.volumeId) : null;
+      const seriesDenorm = firstVolume ? { seriesId: firstVolume.seriesId } : {};
+      const favorites = await ctx.db
+        .query("favorites")
+        .withIndex("by_edition", (q) => q.eq("editionId", loserId))
+        .collect();
+      for (const row of favorites) {
+        const existing = await ctx.db
+          .query("favorites")
+          .withIndex("by_user_edition", (q) => q.eq("userId", row.userId).eq("editionId", survivorId))
+          .unique();
+        if (existing) await removeRow(ctx, log, "favorites", row);
+        else await repoint(ctx, log, "favorites", row, { editionId: survivorId, ...seriesDenorm });
+      }
       return;
     }
 
@@ -1229,6 +1264,17 @@ export async function impactOf(
         (
           await ctx.db
             .query("releases")
+            .withIndex("by_edition", (q) => q.eq("editionId", id))
+            .collect()
+        ).length,
+      );
+      add("Ratings", (await ratingsOf(ctx, { kind: "edition", id })).length);
+      add("Reviews", (await reviewsOf(ctx, { kind: "edition", id })).length);
+      add(
+        "Favorites",
+        (
+          await ctx.db
+            .query("favorites")
             .withIndex("by_edition", (q) => q.eq("editionId", id))
             .collect()
         ).length,

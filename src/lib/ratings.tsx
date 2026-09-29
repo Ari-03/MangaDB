@@ -2,8 +2,8 @@
 // ("8.4 · 12 ratings"), single scores beside Reviews and on profiles, the
 // viewer's own rating control, and the Rating Format choice on /me. Scores
 // are stored as 1-100 (convex/lib/scoreFormat.ts) and read here in the
-// viewer's format: point10 buttons, five stars, a 1-100 number, or three
-// smileys. The aggregate is server-rendered from the page loader in the
+// viewer's format: a number between − and + steppers (out of 10, 5 or 100)
+// or three smileys. The aggregate is server-rendered from the page loader in the
 // point10 form and then follows the live queries, so a rating or a format
 // change shows at once; the control is a signed-in overlay that renders
 // nothing signed out, like the other tracking controls.
@@ -16,21 +16,21 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import {
   FORMAT_STEPS,
-  SCORE_MAX,
-  SCORE_MIN,
   SMILEY_LABELS,
   SMILEYS,
+  clampStep,
   formatAverage,
   formatScore,
   fromFormat,
   smileyOf,
   toFormat,
+  type NumericFormat,
   type ScoreFormat,
   type Smiley,
 } from "../../convex/lib/scoreFormat";
 import { convexClient } from "~/providers";
 
-/** A rating target as pages know it: `{ kind: "series" | "volume", publicId }`. */
+/** A rating target as pages know it: `{ kind: "series" | "volume" | "edition", publicId }`. */
 export type RatingTarget = FunctionArgs<typeof api.ratings.summary>["target"];
 /** A target's public aggregate: unrounded 1-100 average (null when unrated) and count. */
 export type RatingSummary = NonNullable<FunctionReturnType<typeof api.ratings.summary>>;
@@ -186,9 +186,9 @@ function ScoreParts({ score, format }: { score: number; format: ScoreFormat }) {
 
 // ---------- glyphs ----------
 
-function StarGlyph({ className = "rating-star" }: { className?: string }) {
+function StarGlyph() {
   return (
-    <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
+    <svg className="rating-star" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M8 1.4 10 5.7l4.6.5-3.4 3.1 1 4.6L8 11.6 3.8 13.9l1-4.6L1.4 6.2 6 5.7Z" />
     </svg>
   );
@@ -262,12 +262,10 @@ function RatingControlInner({ target }: { target: RatingTarget }) {
           </button>
         ) : null}
       </span>
-      {format === "point100" ? (
-        <HundredPointInput current={current} onSave={save} />
-      ) : format === "smiley3" ? (
-        <SmileyScale current={current} onSave={save} />
+      {format === "smiley3" ? (
+        <SmileyPill current={current} onSave={save} />
       ) : (
-        <StepScale format={format} current={current} onSave={save} />
+        <ScoreStepper format={format} current={current} onSave={save} />
       )}
       {error ? <span className="form-error">{error}</span> : null}
       <span className="track-hint">Only the average is public.</span>
@@ -275,37 +273,89 @@ function RatingControlInner({ target }: { target: RatingTarget }) {
   );
 }
 
-type ScaleProps = { current: number | null; onSave: (score: number) => void };
+type ControlProps = { current: number | null; onSave: (score: number) => void };
 
-/** point10's numbered steps or star5's stars, filling up to the chosen one. */
-function StepScale({ format, current, onSave }: ScaleProps & { format: "point10" | "star5" }) {
+const STEPPER_TEXT: Record<NumericFormat, { field: string; unit: string }> = {
+  point10: { field: "Your rating, 1 to 10", unit: "point" },
+  star5: { field: "Your rating, 1 to 5 stars", unit: "star" },
+  point100: { field: "Your rating, 1 to 100", unit: "point" },
+};
+
+/**
+ * point10, star5 and point100: the format's number (out of 10, 5 or 100)
+ * between − and + steppers, "–" while unrated. Typing saves on Enter or
+ * when the field loses focus; each stepper click saves at once, so nothing
+ * is left waiting in a timer when the user clears the rating or leaves.
+ * Values are clamped to the format's range and stored with `fromFormat`; a
+ * commit that lands on the step already shown saves nothing, so an 84 read
+ * as 8/10 is never rewritten to 80 by a stray blur.
+ */
+function ScoreStepper({ format, current, onSave }: ControlProps & { format: NumericFormat }) {
   const steps = FORMAT_STEPS[format];
-  const chosen = current === null ? null : toFormat(current, format);
-  const stars = format === "star5";
+  const shown = current === null ? "" : String(toFormat(current, format));
+  const [draft, setDraft] = useState(shown);
+  // Follow the stored value when it changes elsewhere (another tab, a clear, a format switch).
+  useEffect(() => setDraft(shown), [shown]);
+
+  const commit = (raw: string) => {
+    const value = Number(raw);
+    if (raw.trim() === "" || !Number.isInteger(value)) {
+      setDraft(shown);
+      return;
+    }
+    const step = clampStep(value, format);
+    setDraft(String(step));
+    if (String(step) !== shown) onSave(fromFormat(step, format));
+  };
+  const nudge = (delta: number) => {
+    const base = Number(draft) || (current === null ? Math.ceil(steps / 2) : toFormat(current, format));
+    commit(String(clampStep(base + delta, format)));
+  };
+  const { field, unit } = STEPPER_TEXT[format];
+
   return (
-    <div
-      className={`rating-scale${stars ? " rating-scale--stars" : ""}`}
-      role="group"
-      aria-label={stars ? "Your rating, 1 to 5 stars" : "Your rating, 1 to 10"}
+    <form
+      className="rating-stepper"
+      onSubmit={(event) => {
+        event.preventDefault();
+        commit(draft);
+      }}
     >
-      {Array.from({ length: steps }, (_, i) => i + 1).map((step) => (
-        <button
-          key={step}
-          type="button"
-          aria-pressed={chosen === step}
-          aria-label={stars ? `${step} of 5 stars` : `${step} out of 10`}
-          className={`rating-step${chosen !== null && step <= chosen ? " is-on" : ""}`}
-          onClick={() => onSave(fromFormat(step, format))}
-        >
-          {stars ? <StarGlyph className="rating-step-star" /> : step}
-        </button>
-      ))}
-    </div>
+      <button type="button" className="rating-stepper-btn" aria-label={`One ${unit} lower`} onClick={() => nudge(-1)}>
+        {"\u2212"}
+      </button>
+      <input
+        className="rating-stepper-input"
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={steps}
+        step={1}
+        value={draft}
+        placeholder="–"
+        aria-label={field}
+        onChange={(event) => setDraft(event.currentTarget.value)}
+        onBlur={() => commit(draft)}
+      />
+      <span className="rating-stepper-of" aria-hidden="true">
+        /{steps}
+      </span>
+      <button type="button" className="rating-stepper-btn" aria-label={`One ${unit} higher`} onClick={() => nudge(1)}>
+        +
+      </button>
+    </form>
   );
 }
 
-/** smiley3: three labelled faces; only the chosen one is pressed. */
-function SmileyScale({ current, onSave }: ScaleProps) {
+/** The short label each smiley shows in the pill; its title spells it out. */
+const SMILEY_SHORT: Record<Smiley, string> = { negative: "Bad", neutral: "OK", positive: "Good" };
+
+/**
+ * smiley3: one segmented pill of three equal faces, only the chosen one lit.
+ * It never wraps: the segments share the width and the labels shrink in a
+ * narrow cover column (styles/ratings.css).
+ */
+function SmileyPill({ current, onSave }: ControlProps) {
   const chosen = current === null ? null : smileyOf(current);
   return (
     <div className="rating-smileys" role="group" aria-label="Your rating">
@@ -314,74 +364,15 @@ function SmileyScale({ current, onSave }: ScaleProps) {
           key={smiley}
           type="button"
           aria-pressed={chosen === smiley}
+          title={SMILEY_LABELS[smiley]}
           className={`rating-smiley-btn rating-smiley-btn--${smiley}`}
           onClick={() => onSave(fromFormat(i + 1, "smiley3"))}
         >
           <SmileyGlyph smiley={smiley} />
-          {SMILEY_LABELS[smiley]}
+          <span className="rating-smiley-label">{SMILEY_SHORT[smiley]}</span>
         </button>
       ))}
     </div>
-  );
-}
-
-/**
- * point100: a number field with -1 / +1 steppers. Typing saves on Enter or
- * when the field loses focus; each stepper click saves at once, so nothing
- * is left waiting in a timer when the user clears the rating or leaves.
- */
-function HundredPointInput({ current, onSave }: ScaleProps) {
-  const [draft, setDraft] = useState(current === null ? "" : String(current));
-  // Follow the stored value when it changes elsewhere (another tab, a clear).
-  useEffect(() => setDraft(current === null ? "" : String(current)), [current]);
-
-  const commit = (raw: string) => {
-    const value = Number(raw);
-    if (raw.trim() === "" || !Number.isInteger(value)) {
-      setDraft(current === null ? "" : String(current));
-      return;
-    }
-    const score = Math.min(SCORE_MAX, Math.max(SCORE_MIN, value));
-    setDraft(String(score));
-    onSave(score);
-  };
-  const step = (delta: number) => {
-    const base = Number(draft) || (current ?? 50);
-    const next = String(Math.min(SCORE_MAX, Math.max(SCORE_MIN, base + delta)));
-    commit(next);
-  };
-
-  return (
-    <form
-      className="rating-hundred"
-      onSubmit={(event) => {
-        event.preventDefault();
-        commit(draft);
-      }}
-    >
-      <button type="button" className="rating-hundred-step" aria-label="One point lower" onClick={() => step(-1)}>
-        −
-      </button>
-      <input
-        className="rating-hundred-input"
-        type="number"
-        inputMode="numeric"
-        min={SCORE_MIN}
-        max={SCORE_MAX}
-        step={1}
-        value={draft}
-        placeholder="–"
-        aria-label="Your rating, 1 to 100"
-        onChange={(event) => setDraft(event.currentTarget.value)}
-        onBlur={() => commit(draft)}
-      />
-      <span className="rating-hundred-of" aria-hidden="true">
-        /100
-      </span>
-      <button type="button" className="rating-hundred-step" aria-label="One point higher" onClick={() => step(1)}>
-        +
-      </button>
-    </form>
   );
 }
 
@@ -411,7 +402,7 @@ function ScoreFormatSettingsInner() {
   return (
     <div className="sharing-settings">
       <p className="sharing-lede">
-        How you rate series and volumes, and how scores read to you. Switching keeps every rating
+        How you rate series, volumes and omnibuses, and how scores read to you. Switching keeps every rating
         you have made; it only changes how they show.
       </p>
       <div className="vis-field">

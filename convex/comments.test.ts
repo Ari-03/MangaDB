@@ -12,7 +12,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { COMMENT_POLICY } from "./comments";
-import type { TargetRef } from "./lib/ratings";
+import type { PageTargetRef } from "./lib/ratings";
 
 // These tests cover Comments switched on; features.test.ts covers them off.
 vi.mock("./lib/features", () => ({ FEATURES: { publicReviews: true, comments: true } }));
@@ -135,7 +135,7 @@ function post(
   });
 }
 
-const listAs = (t: T, subject: string | null, target: TargetRef = series(1)) =>
+const listAs = (t: T, subject: string | null, target: PageTargetRef = series(1)) =>
   subject === null
     ? t.query(api.comments.list, { target })
     : t.withIdentity({ subject }).query(api.comments.list, { target });

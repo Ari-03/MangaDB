@@ -34,7 +34,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { FEATURES } from "./lib/features";
-import { requireActiveTarget, resolveTarget, targetIdArg, targetRefArg, type TargetId } from "./lib/ratings";
+import {
+  pageTargetIdArg,
+  pageTargetRefArg,
+  requireActiveTarget,
+  resolveTarget,
+  type PageTargetId,
+} from "./lib/ratings";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { volumeTitle } from "./lib/titles";
 import { commentReportReason } from "./schema";
@@ -127,7 +133,7 @@ async function holdReasons(ctx: QueryCtx, user: User, body: string) {
 }
 
 /** The (seriesId, volumeId) pair a target's Comments are stored under. */
-async function keysOf(ctx: QueryCtx, target: TargetId) {
+async function keysOf(ctx: QueryCtx, target: PageTargetId) {
   if (target.kind === "series") return { seriesId: target.id, volumeId: undefined };
   const volume = await ctx.db.get(target.id);
   if (!volume) return fail("notFound", "Nothing to comment on here any more.");
@@ -277,7 +283,7 @@ async function threadReplies(
  * an empty page while FEATURES.comments is off.
  */
 export const list = query({
-  args: { target: targetRefArg, limit: v.optional(v.number()) },
+  args: { target: pageTargetRefArg, limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const resolved = await resolveTarget(ctx, args.target);
     if (!resolved) return null;
@@ -341,7 +347,7 @@ export const list = query({
  * Comment is not a thread head on it.
  */
 export const replies = query({
-  args: { target: targetRefArg, commentId: v.id("comments") },
+  args: { target: pageTargetRefArg, commentId: v.id("comments") },
   handler: async (ctx, args) => {
     const resolved = await resolveTarget(ctx, args.target);
     if (!resolved) return null;
@@ -368,7 +374,7 @@ export const replies = query({
  */
 export const post = mutation({
   args: {
-    target: targetIdArg,
+    target: pageTargetIdArg,
     parentId: v.optional(v.id("comments")),
     body: v.string(),
     spoiler: v.boolean(),
@@ -378,7 +384,8 @@ export const post = mutation({
     const user = await requireUser(ctx);
     await rateLimiter.limit(ctx, "commentPost", { key: user._id, throws: true });
     const body = cleanBody(args.body);
-    const keys = await keysOf(ctx, await requireActiveTarget(ctx, args.target, "Nothing to comment on here any more."));
+    const { target } = await requireActiveTarget(ctx, args.target, "Nothing to comment on here any more.");
+    const keys = await keysOf(ctx, target);
     if (args.parentId) {
       const parent = await ctx.db.get(args.parentId);
       if (!parent) return fail("notFound", "That comment is gone.");

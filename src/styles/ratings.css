@@ -12,11 +12,11 @@
 .rating-star { width: 12px; height: 12px; fill: currentColor; }
 
 /* --- The viewer's control ------------------------------------------------
-   One of four, by Rating Format (convex/lib/scoreFormat.ts): ten numbered
-   steps or five stars that fill up to the chosen one (hovering previews:
-   the whole scale lights, then everything after the hovered step dims),
-   three labelled smileys, or a 1-100 number with steppers. It lives in the
-   TakePanel under the cover (.take-rating, below). */
+   One of two, by Rating Format (convex/lib/scoreFormat.ts): the format's
+   number between − and + steppers with its "/10", "/5" or "/100", or three
+   smileys in one segmented pill. It lives in the TakePanel under the cover
+   (.take-rating, below), whose column can be as narrow as ~156px inside
+   (the Series page under 960px): neither control ever wraps. */
 
 .rating-clear {
   margin-left: 10px;
@@ -34,109 +34,45 @@
 }
 .rating-clear:hover { color: var(--accent); }
 
-/* ten steps share the column's width, never wider than they need */
-.rating-scale {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
-  gap: 3px;
-  width: 100%;
-  max-width: 330px;
-}
-.rating-step {
-  min-width: 0;
-  height: 30px;
-  padding: 0;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--line-strong);
-  background: var(--surface-2);
-  color: var(--text-mute);
-  font-family: var(--display);
-  font-size: 0.88rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  transition: background 110ms ease, color 110ms ease, border-color 110ms ease;
-}
-.rating-step.is-on,
-.rating-scale:hover .rating-step {
-  background: var(--accent-tint);
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  color: var(--accent);
-}
-.rating-scale:hover .rating-step:hover ~ .rating-step {
-  background: var(--surface-2);
-  border-color: var(--line-strong);
-  color: var(--text-mute);
-}
-.rating-step[aria-pressed="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-.rating-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-/* five stars: bare glyphs, gold up to the chosen one */
-.rating-scale--stars { grid-auto-columns: 34px; width: auto; gap: 2px; }
-.rating-scale--stars .rating-step,
-.rating-scale--stars .rating-step[aria-pressed="true"],
-.rating-scale--stars:hover .rating-step,
-.rating-scale--stars:hover .rating-step:hover ~ .rating-step {
-  height: 34px;
-  border-color: transparent;
-  background: none;
-  color: var(--line-strong);
-}
-.rating-scale--stars .rating-step.is-on,
-.rating-scale--stars:hover .rating-step { color: var(--gold); }
-.rating-scale--stars:hover .rating-step:hover ~ .rating-step { color: var(--line-strong); }
-.rating-step-star { width: 26px; height: 26px; fill: currentColor; vertical-align: middle; }
-
-/* three smileys: labelled pills, only the chosen one lit */
-.rating-smileys { display: flex; flex-wrap: wrap; gap: 6px; }
-.rating-smiley-btn {
+/* point10 / star5 / point100: a number between two round steppers */
+.rating-stepper {
+  --stepper-size: 30px;
   display: inline-flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px 6px 9px;
-  border-radius: var(--r-pill);
-  border: 1px solid var(--line-strong);
-  background: var(--surface-2);
-  color: var(--text-dim);
-  font-size: 0.82rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 110ms ease, color 110ms ease, border-color 110ms ease;
 }
-.rating-smiley-btn:hover { border-color: var(--accent); color: var(--accent); }
-.rating-smiley-btn[aria-pressed="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-.rating-smiley-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.rating-smiley { width: 17px; height: 17px; flex: none; }
-
-/* 1-100: a number between two steppers */
-.rating-hundred { display: inline-flex; align-items: center; gap: 6px; }
-.rating-hundred-step {
-  width: 30px;
-  height: 30px;
+/* The glyph's line box is the button's inner height and the grid centres
+   it; − (U+2212) and + share the maths axis, which in Nunito Sans sits
+   about 0.035em below the line box's middle, so a 0.07em bottom padding
+   (in a row pinned to the content box, so the lift is not absorbed by an
+   auto-sized row) puts both at the optical centre of the circle. */
+.rating-stepper-btn {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+  flex: none;
+  width: var(--stepper-size);
+  height: var(--stepper-size);
+  padding: 0 0 0.07em;
   border-radius: 50%;
   border: 1px solid var(--line-strong);
   background: var(--surface-2);
   color: var(--text-dim);
-  font-size: 1rem;
+  font-family: var(--sans);
+  font-size: 1.1rem;
   font-weight: 700;
-  line-height: 1;
+  line-height: calc(var(--stepper-size) - 2px);
   cursor: pointer;
+  transition: border-color 110ms ease, color 110ms ease;
 }
-.rating-hundred-step:hover { border-color: var(--accent); color: var(--accent); }
-.rating-hundred-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.rating-hundred-input {
-  width: 4.2rem;
-  height: 32px;
-  padding: 0 8px;
+.rating-stepper-btn:hover { border-color: var(--accent); color: var(--accent); }
+.rating-stepper-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rating-stepper-input {
+  width: 3.4rem;
+  min-width: 0;
+  height: calc(var(--stepper-size) + 2px);
+  padding: 0 4px;
   border-radius: var(--r-sm);
   border: 1px solid var(--line-strong);
   background: var(--surface-2);
@@ -146,13 +82,56 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
 }
-.rating-hundred-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.rating-hundred-of { color: var(--text-mute); font-size: 0.8rem; }
+/* the steppers are the buttons: no browser spinners inside the field */
+.rating-stepper-input::-webkit-outer-spin-button,
+.rating-stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.rating-stepper-input::placeholder { color: var(--text-mute); }
+.rating-stepper-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rating-stepper-of { flex: none; color: var(--text-mute); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+
+/* smiley3: three equal segments of one pill (the .seg-pill look), only the
+   chosen one lit. The segments share the width and never wrap. */
+.rating-smileys {
+  display: flex;
+  flex-wrap: nowrap;
+  width: 100%;
+  max-width: 300px;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.rating-smiley-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: none;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease;
+}
+.rating-smiley-btn:hover { color: var(--text); }
+.rating-smiley-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.rating-smiley-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rating-smiley-label { min-width: 0; overflow: hidden; text-overflow: clip; }
+.rating-smiley { width: 17px; height: 17px; flex: none; }
 
 /* --- The viewer's take, under the cover -----------------------------------
-   TakePanel (lib/reviews.tsx) on the Series, Volume and single-volume
-   Edition pages: an optional note, the rating, the viewer's own Review, then
+   TakePanel (lib/reviews.tsx) on the Series, Volume and Edition pages (a
+   single-volume book's Volume, or an omnibus itself): an optional note, the rating, the viewer's own Review, then
    a row of private toggles (Follow, Favorite) with the follow hint under
    both. Every control renders nothing signed out, leaving the panel's blocks
    empty: the panel then hides, and a note alone (the Edition page's) never
@@ -160,7 +139,7 @@
    (catalog-series.css, catalog-edition.css). */
 
 .take-panel {
-  /* a size container, so a narrow cover column can refit the scale below */
+  /* a size container, so a narrow cover column can refit the controls below */
   container-type: inline-size;
   display: grid;
   gap: 14px;
@@ -188,14 +167,15 @@
 .take-panel:has(.review-form) .take-actions .follow-btn { flex: none; }
 .take-actions .track-hint { order: 1; }
 
-/* a cover column too narrow for ten steps in a row (the Series page's, the
-   Volume and Edition pages' under 960/1080px): two rows of five, stars
-   sharing the width, a slimmer 1-100 field */
-@container (max-width: 239px) {
-  .rating-scale { grid-auto-flow: row; grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .rating-scale--stars { width: 100%; }
-  .rating-hundred { gap: 4px; }
-  .rating-hundred-input { width: 3rem; }
+/* a narrow cover column (the Series page's under 960px, ~156px inside):
+   tighter steppers, and smaller smiley faces and labels so the pill keeps
+   one row */
+@container (max-width: 199px) {
+  .rating-stepper { --stepper-size: 28px; gap: 4px; }
+  .rating-stepper-input { width: 2.9rem; }
+  .rating-smileys { padding: 2px; gap: 1px; }
+  .rating-smiley-btn { gap: 2px; padding-inline: 0; font-size: 0.68rem; }
+  .rating-smiley { width: 13px; height: 13px; }
 }
 
 /* --- The viewer's own Review, under the rating ---------------------------- */
@@ -356,7 +336,3 @@ a.review-author:hover { color: var(--accent); }
 .profile-ratings a { font-weight: 700; }
 .profile-ratings a:hover { color: var(--accent); }
 
-@media (max-width: 560px) {
-  .rating-step { height: 28px; font-size: 0.82rem; }
-  .rating-scale { gap: 2px; }
-}

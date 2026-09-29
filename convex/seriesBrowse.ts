@@ -201,7 +201,9 @@ export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series
  * document many Series share, is rewritten only when the Series' rank
  * actually moves: ratings below RATING_RANK_MIN leave it at 0 and untouched.
  * A Series without a row yet (never rebuilt, or bookless) has nothing to
- * update; the rebuild reads ratingStats itself.
+ * update; the rebuild reads ratingStats itself. Only a Series-target
+ * aggregate lands here: Volume and omnibus Edition Ratings never rank a
+ * Series.
  */
 export async function syncRatingProjection(
   ctx: MutationCtx,
