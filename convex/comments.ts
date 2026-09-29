@@ -34,6 +34,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { FEATURES } from "./lib/features";
+import { captureModeration } from "./lib/posthog";
 import {
   pageTargetIdArg,
   pageTargetRefArg,
@@ -586,6 +587,7 @@ export const moderate = mutation({
       await patchComment(ctx, comment, { status: to, updatedAt: Date.now() });
     }
     await audit(ctx, comment._id, args.action, { kind: "user", userId: moderator._id }, reasonOf(args.reason));
+    await captureModeration(ctx, moderator, args.action, "comment");
     return null;
   },
 });
@@ -634,6 +636,7 @@ export const setShadowed = mutation({
       ...reasonOf(args.reason),
       userId: author._id,
     });
+    await captureModeration(ctx, moderator, args.shadowed ? "shadow" : "unshadow", "comment_author");
     return null;
   },
 });

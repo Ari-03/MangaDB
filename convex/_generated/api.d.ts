@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as analytics from "../analytics.js";
 import type * as ann from "../ann.js";
 import type * as catalog from "../catalog.js";
 import type * as catalogPages from "../catalogPages.js";
@@ -42,6 +43,7 @@ import type * as lib_observations from "../lib/observations.js";
 import type * as lib_occ from "../lib/occ.js";
 import type * as lib_openLibrary from "../lib/openLibrary.js";
 import type * as lib_pipeline from "../lib/pipeline.js";
+import type * as lib_posthog from "../lib/posthog.js";
 import type * as lib_prh from "../lib/prh.js";
 import type * as lib_proposalCreates from "../lib/proposalCreates.js";
 import type * as lib_publicIds from "../lib/publicIds.js";
@@ -94,6 +96,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  analytics: typeof analytics;
   ann: typeof ann;
   catalog: typeof catalog;
   catalogPages: typeof catalogPages;
@@ -128,6 +131,7 @@ declare const fullApi: ApiFromModules<{
   "lib/occ": typeof lib_occ;
   "lib/openLibrary": typeof lib_openLibrary;
   "lib/pipeline": typeof lib_pipeline;
+  "lib/posthog": typeof lib_posthog;
   "lib/prh": typeof lib_prh;
   "lib/proposalCreates": typeof lib_proposalCreates;
   "lib/publicIds": typeof lib_publicIds;

@@ -34,6 +34,7 @@ import {
   type BrowseCache,
 } from "./releases";
 import { showMatureArg, visibleTo } from "./lib/mature";
+import { withExceptionCapture } from "./lib/posthog";
 
 // The Spotlight's months after this one are bounded (prototype #17): at most
 // LANE_CAP books within the horizon the route requests (~3 months), enough
@@ -582,42 +583,43 @@ const BOARD_VERSION = 2;
  */
 export const rebuildBoards = internalAction({
   args: { scope: v.optional(v.literal("near")) },
-  handler: async (ctx, { scope }) => {
-    const startedAt = Date.now();
-    const window = boardWindow(new Date(startedAt));
-    const { from, to } = scope === "near" ? nearMonths(new Date(startedAt)) : window;
-    let changed = 0;
-    let failed = 0;
-    for (let key = from; key <= to; key = key % 100 === 12 ? key + 89 : key + 1) {
-      let boards: { general: MonthBoard; mature: MonthBoard } | null = null;
-      try {
-        boards = await ctx.runQuery(internal.publisher.computeBoard, {
-          year: Math.floor(key / 100),
-          month: key % 100,
-        });
-      } catch (error) {
-        failed++;
-        console.error(`publisher board ${key} failed to build`, error);
+  handler: async (ctx, { scope }) =>
+    withExceptionCapture("publisher.rebuildBoards", async () => {
+      const startedAt = Date.now();
+      const window = boardWindow(new Date(startedAt));
+      const { from, to } = scope === "near" ? nearMonths(new Date(startedAt)) : window;
+      let changed = 0;
+      let failed = 0;
+      for (let key = from; key <= to; key = key % 100 === 12 ? key + 89 : key + 1) {
+        let boards: { general: MonthBoard; mature: MonthBoard } | null = null;
+        try {
+          boards = await ctx.runQuery(internal.publisher.computeBoard, {
+            year: Math.floor(key / 100),
+            month: key % 100,
+          });
+        } catch (error) {
+          failed++;
+          console.error(`publisher board ${key} failed to build`, error);
+        }
+        for (const mature of [false, true]) {
+          const board = boards && (mature ? boards.mature : boards.general);
+          const json = board ? JSON.stringify(board) : "";
+          // A payload near Convex's 1 MiB value limit can't be stored; that
+          // month computes live instead (today's boards are ~40 KB).
+          const payload =
+            board && board.board.length > 0 && json.length < MAX_BOARD_PAYLOAD ? json : null;
+          const wrote: boolean = await ctx.runMutation(internal.publisher.storeBoard, {
+            month: key,
+            ...(mature ? { mature: true as const } : {}),
+            payload,
+            builtAt: startedAt,
+          });
+          if (wrote) changed++;
+        }
       }
-      for (const mature of [false, true]) {
-        const board = boards && (mature ? boards.mature : boards.general);
-        const json = board ? JSON.stringify(board) : "";
-        // A payload near Convex's 1 MiB value limit can't be stored; that
-        // month computes live instead (today's boards are ~40 KB).
-        const payload =
-          board && board.board.length > 0 && json.length < MAX_BOARD_PAYLOAD ? json : null;
-        const wrote: boolean = await ctx.runMutation(internal.publisher.storeBoard, {
-          month: key,
-          ...(mature ? { mature: true as const } : {}),
-          payload,
-          builtAt: startedAt,
-        });
-        if (wrote) changed++;
-      }
-    }
-    const dropped: number = await ctx.runMutation(internal.publisher.dropBoardsOutside, window);
-    return { changed, failed, dropped, ms: Date.now() - startedAt };
-  },
+      const dropped: number = await ctx.runMutation(internal.publisher.dropBoardsOutside, window);
+      return { changed, failed, dropped, ms: Date.now() - startedAt };
+    }),
 });
 
 /**

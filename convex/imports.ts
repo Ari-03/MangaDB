@@ -20,6 +20,7 @@ import { getSourceByKey, recordSourceOutcome } from "./importSources";
 import { todaySortKey } from "./lib/dates";
 import { sendAdminEmail } from "./lib/email";
 import { alreadyHandled } from "./lib/pipeline";
+import { captureFromMutation, withExceptionCapture } from "./lib/posthog";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { revisionsOf } from "./moderation";
 
@@ -64,13 +65,16 @@ export const stopIfAutomatic = internalMutation({
     if (!run || run.status !== "running") return true;
     if (!run.automatic) return false;
     // Its own status, not "succeeded": the sweep is incomplete.
+    const errors = [...args.errors, "Stopped: the source was disabled mid-run."].slice(0, MAX_RUN_ERRORS);
+    const finishedAt = Date.now();
     await ctx.db.patch(args.runId, {
       status: "stopped",
-      finishedAt: Date.now(),
+      finishedAt,
       recordsSeen: args.recordsSeen,
       recordsChanged: args.recordsChanged,
-      errors: [...args.errors, "Stopped: the source was disabled mid-run."].slice(0, MAX_RUN_ERRORS),
+      errors,
     });
+    await captureRunFinished(ctx, run, { ...args, status: "stopped", errors, finishedAt });
     return true;
   },
 });
@@ -93,13 +97,15 @@ export const finishRun = internalMutation({
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
     if (!run || run.status !== "running") return;
+    const finishedAt = Date.now();
     await ctx.db.patch(args.runId, {
       status: args.status,
-      finishedAt: Date.now(),
+      finishedAt,
       recordsSeen: args.recordsSeen,
       recordsChanged: args.recordsChanged,
       errors: args.errors.slice(0, MAX_RUN_ERRORS),
     });
+    await captureRunFinished(ctx, run, { ...args, finishedAt });
     if (args.healthNeutral && args.status === "succeeded") return;
     await recordSourceOutcome(
       ctx,
@@ -109,6 +115,28 @@ export const finishRun = internalMutation({
     );
   },
 });
+
+/** `import_run_finished` for a run closing now with these totals. */
+async function captureRunFinished(
+  ctx: MutationCtx,
+  run: Doc<"importRuns">,
+  closing: {
+    status: "succeeded" | "failed" | "stopped";
+    recordsSeen: number;
+    recordsChanged: number;
+    errors: string[];
+    finishedAt: number;
+  },
+) {
+  await captureFromMutation(ctx, null, "import_run_finished", {
+    source_key: run.sourceKey,
+    status: closing.status,
+    records_seen: closing.recordsSeen,
+    records_changed: closing.recordsChanged,
+    error_count: closing.errors.length,
+    duration_ms: closing.finishedAt - run._creationTime,
+  });
+}
 
 /** Recent runs of one source (or all), newest first — Data Team inspection
  * of source, timing, records seen/changed, and errors (spec §6, #37). */
@@ -295,34 +323,35 @@ export const enabledSources = internalQuery({
  */
 export const runScheduled = internalAction({
   args: {},
-  handler: async (ctx) => {
-    // The canonical publisher rows (launch.ts) must exist before any source
-    // runs: ANN's release pages and Open Library resolve a distributor NAME
-    // against them and create nothing for an unknown one. A fresh
-    // deployment that was never seeded (staging, 2026-09-27) imported 5,600
-    // series and not one VIZ release. Idempotent by slug, so every tick may
-    // call it.
-    await ctx.runMutation(internal.launch.seedPublishers, {});
-    const sources = await ctx.runQuery(internal.imports.enabledSources, {});
-    const now = Date.now();
-    const started: string[] = [];
-    for (const source of sources) {
-      const adapter = ADAPTERS[source.key];
-      if (!adapter) continue;
-      if (source.lastStatus === "running") continue;
-      if (!isDue(source.cadence, source.lastStartedAt, now)) {
-        if (CADENCE_INTERVALS_MS[source.cadence.trim().toLowerCase()] === undefined) {
-          console.warn(
-            `[imports] source "${source.key}" has unrecognized cadence "${source.cadence}" — skipping`,
-          );
+  handler: async (ctx) =>
+    withExceptionCapture("imports.runScheduled", async () => {
+      // The canonical publisher rows (launch.ts) must exist before any source
+      // runs: ANN's release pages and Open Library resolve a distributor NAME
+      // against them and create nothing for an unknown one. A fresh
+      // deployment that was never seeded (staging, 2026-09-27) imported 5,600
+      // series and not one VIZ release. Idempotent by slug, so every tick may
+      // call it.
+      await ctx.runMutation(internal.launch.seedPublishers, {});
+      const sources = await ctx.runQuery(internal.imports.enabledSources, {});
+      const now = Date.now();
+      const started: string[] = [];
+      for (const source of sources) {
+        const adapter = ADAPTERS[source.key];
+        if (!adapter) continue;
+        if (source.lastStatus === "running") continue;
+        if (!isDue(source.cadence, source.lastStartedAt, now)) {
+          if (CADENCE_INTERVALS_MS[source.cadence.trim().toLowerCase()] === undefined) {
+            console.warn(
+              `[imports] source "${source.key}" has unrecognized cadence "${source.cadence}" — skipping`,
+            );
+          }
+          continue;
         }
-        continue;
+        await ctx.scheduler.runAfter(0, adapter, {});
+        started.push(source.key);
       }
-      await ctx.scheduler.runAfter(0, adapter, {});
-      started.push(source.key);
-    }
-    return { started };
-  },
+      return { started };
+    }),
 });
 
 // ---------- covers (spec §6) ----------

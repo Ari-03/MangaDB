@@ -10,9 +10,13 @@
 // IP so PostHog's GeoIP still works.
 //
 // This module has no Worker-only imports: the client reads the proxy path
-// and UI host from it too, so a region move (US → EU) is the one line below.
+// and UI host from it too, so a region move (US → EU) is the line below
+// (plus its twin in convex/lib/posthog.ts).
 
-/** PostHog Cloud region the project lives in: "us" or "eu". */
+/**
+ * PostHog Cloud region the project lives in: "us" or "eu". Keep in sync with
+ * POSTHOG_REGION in convex/lib/posthog.ts (backend events).
+ */
 const POSTHOG_REGION = "us";
 
 const INGEST_ORIGIN = `https://${POSTHOG_REGION}.i.posthog.com`;

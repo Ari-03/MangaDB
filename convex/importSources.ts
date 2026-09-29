@@ -18,6 +18,7 @@ import {
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { AuthorityLevel } from "./lib/authority";
+import { captureFromMutation } from "./lib/posthog";
 import { requireModerator, requireRole } from "./lib/roles";
 
 const authorityLevel = v.union(
@@ -275,8 +276,9 @@ const ALERT_ERROR_LINES = 5;
  * unhealthy, the first success flips it back and resets the streak. Each
  * transition — and only the transition, never a repeat while the state
  * holds — schedules exactly one Administrator alert email (#37,
- * imports.healthAlert): the flip and the scheduling commit atomically in
- * this mutation, and the guards below never fire twice for one state.
+ * imports.healthAlert) and one PostHog `source_unhealthy`/`source_recovered`
+ * event: the flip and the scheduling commit atomically in this mutation, and
+ * the guards below never fire twice for one state.
  */
 export async function recordSourceOutcome(
   ctx: MutationCtx,
@@ -294,6 +296,10 @@ export async function recordSourceOutcome(
         transition: "recovered",
         consecutiveFailures: source.consecutiveFailures,
         errors: [],
+      });
+      await captureFromMutation(ctx, null, "source_recovered", {
+        source_key: sourceKey,
+        consecutive_failures: source.consecutiveFailures,
       });
     }
     await ctx.db.patch(source._id, {
@@ -313,6 +319,10 @@ export async function recordSourceOutcome(
       transition: "unhealthy",
       consecutiveFailures: failures,
       errors: errors.slice(0, ALERT_ERROR_LINES),
+    });
+    await captureFromMutation(ctx, null, "source_unhealthy", {
+      source_key: sourceKey,
+      consecutive_failures: failures,
     });
   }
   await ctx.db.patch(source._id, {

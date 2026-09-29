@@ -37,6 +37,7 @@ import {
   yenTitleValidator,
   type YenTitleSnapshot,
 } from "./lib/yenPress";
+import { withExceptionCapture } from "./lib/posthog";
 
 export const SOURCE_KEY = "yenpress";
 const SITEMAP_URL = "https://yenpress.com/sitemap.xml";
@@ -133,157 +134,158 @@ export const sync = internalAction({
     errors: v.optional(v.array(v.string())),
     pageFailed: v.optional(v.boolean()),
   },
-  handler: async (ctx, args): Promise<SyncResult> => {
-    // Explicit annotations break the type cycle with imports.ts's adapter map.
-    const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-      internal.importSources.getByKey,
-      { key: SOURCE_KEY },
-    );
-    if (!source) {
-      throw new Error(
-        "The approved-source registry has no \"yenpress\" row. Run: npx convex run importSources:seedRegistry '{}'",
+  handler: async (ctx, args): Promise<SyncResult> =>
+    withExceptionCapture("yenPress.sync", async () => {
+      // Explicit annotations break the type cycle with imports.ts's adapter map.
+      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
+        internal.importSources.getByKey,
+        { key: SOURCE_KEY },
       );
-    }
-    const runId = await runToContinue(ctx, source, args);
-    if (runId === null) return { skipped: "disabled" as const };
-    const delay = args.politeDelayMs ?? YEN_DELAY_MS;
-    const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
-    const errors = [...(args.errors ?? [])];
-    let pageFailed = args.pageFailed ?? false;
-    let seen = args.seen ?? 0;
-    let changed = args.changed ?? 0;
-    let fetchedTotal = args.fetched ?? 0;
-    let fetchedHere = 0;
-    let lastSlug = args.afterSlug;
+      if (!source) {
+        throw new Error(
+          "The approved-source registry has no \"yenpress\" row. Run: npx convex run importSources:seedRegistry '{}'",
+        );
+      }
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
+      const delay = args.politeDelayMs ?? YEN_DELAY_MS;
+      const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
+      const errors = [...(args.errors ?? [])];
+      let pageFailed = args.pageFailed ?? false;
+      let seen = args.seen ?? 0;
+      let changed = args.changed ?? 0;
+      let fetchedTotal = args.fetched ?? 0;
+      let fetchedHere = 0;
+      let lastSlug = args.afterSlug;
 
-    try {
-      const sitemap = await (await politeFetch(SITEMAP_URL, delay)).text();
-      // A shared slug does not guarantee a shared page: older titles can
-      // expose print and digital separately. Plan every ISBN, and suppress
-      // another fetch only after that ISBN was actually observed.
-      const books = new Map(
-        parseSitemap(sitemap)
-          .filter((entry) => !skipsWithoutFetch(entry.slug))
-          .map((entry) => [`${entry.slug}/${entry.isbn13}`, entry] as const),
-      );
-      if (books.size === 0) throw new Error("Yen sitemap contained no eligible title URLs");
-      const slugs = [...books.keys()]
-        .sort()
-        .filter((key) => args.afterSlug === undefined || key > args.afterSlug);
-      const observedHere = new Set<string>();
+      try {
+        const sitemap = await (await politeFetch(SITEMAP_URL, delay)).text();
+        // A shared slug does not guarantee a shared page: older titles can
+        // expose print and digital separately. Plan every ISBN, and suppress
+        // another fetch only after that ISBN was actually observed.
+        const books = new Map(
+          parseSitemap(sitemap)
+            .filter((entry) => !skipsWithoutFetch(entry.slug))
+            .map((entry) => [`${entry.slug}/${entry.isbn13}`, entry] as const),
+        );
+        if (books.size === 0) throw new Error("Yen sitemap contained no eligible title URLs");
+        const slugs = [...books.keys()]
+          .sort()
+          .filter((key) => args.afterSlug === undefined || key > args.afterSlug);
+        const observedHere = new Set<string>();
 
-      let budgetSpent = false;
-      for (let offset = 0; offset < slugs.length && !budgetSpent; offset += PLAN_CHUNK) {
-        const chunk = slugs.slice(offset, offset + PLAN_CHUNK);
-        const due: number[] = await ctx.runQuery(internal.yenPress.booksToFetch, {
-          books: chunk.map((slug) => [books.get(slug)!.isbn13]),
-          now: Date.now(),
-        });
-        const dueSet = new Set(due);
-        for (const [i, slug] of chunk.entries()) {
-          if (!dueSet.has(i) || observedHere.has(books.get(slug)!.isbn13)) {
-            lastSlug = slug;
-            continue;
-          }
-          if (fetchedHere >= maxFetches) {
-            budgetSpent = true;
-            break;
-          }
-          const book = books.get(slug)!;
-          fetchedHere++;
-          fetchedTotal++;
-          try {
-            const res = await politeFetch(book.url, delay);
-            const page = parseTitlePage(await res.text());
-            if (!page) {
-              pageFailed = true;
-              errors.push(`page ${book.url}: not a title page`);
-            } else {
-              const snapshots = toSnapshots(page, book.url);
-              if (snapshots.length === 0) {
+        let budgetSpent = false;
+        for (let offset = 0; offset < slugs.length && !budgetSpent; offset += PLAN_CHUNK) {
+          const chunk = slugs.slice(offset, offset + PLAN_CHUNK);
+          const due: number[] = await ctx.runQuery(internal.yenPress.booksToFetch, {
+            books: chunk.map((slug) => [books.get(slug)!.isbn13]),
+            now: Date.now(),
+          });
+          const dueSet = new Set(due);
+          for (const [i, slug] of chunk.entries()) {
+            if (!dueSet.has(i) || observedHere.has(books.get(slug)!.isbn13)) {
+              lastSlug = slug;
+              continue;
+            }
+            if (fetchedHere >= maxFetches) {
+              budgetSpent = true;
+              break;
+            }
+            const book = books.get(slug)!;
+            fetchedHere++;
+            fetchedTotal++;
+            try {
+              const res = await politeFetch(book.url, delay);
+              const page = parseTitlePage(await res.text());
+              if (!page) {
                 pageFailed = true;
-                errors.push(`page ${book.url}: no usable ISBNs`);
-              }
-              for (const snapshot of snapshots) {
-                seen++;
-                const result = await applyRetrying(ctx, internal.yenPress.applyTitle, { snapshot });
-                observedHere.add(snapshot.isbn13);
-                if (result.changed) changed++;
-                if (result.status === "needsReview") {
-                  errors.push(`review ${snapshot.isbn13}: ${result.reason ?? "conflict"}`);
+                errors.push(`page ${book.url}: not a title page`);
+              } else {
+                const snapshots = toSnapshots(page, book.url);
+                if (snapshots.length === 0) {
+                  pageFailed = true;
+                  errors.push(`page ${book.url}: no usable ISBNs`);
+                }
+                for (const snapshot of snapshots) {
+                  seen++;
+                  const result = await applyRetrying(ctx, internal.yenPress.applyTitle, { snapshot });
+                  observedHere.add(snapshot.isbn13);
+                  if (result.changed) changed++;
+                  if (result.status === "needsReview") {
+                    errors.push(`review ${snapshot.isbn13}: ${result.reason ?? "conflict"}`);
+                  }
                 }
               }
+            } catch (e) {
+              // The book stays unobserved/due and is retried next run either
+              // way. A removed title (404) is only a notice; any other error
+              // fails the run.
+              const message = errorMessage(e);
+              if (!message.startsWith("HTTP 404")) pageFailed = true;
+              errors.push(`page ${book.url}: ${message}`);
             }
-          } catch (e) {
-            // The book stays unobserved/due and is retried next run either
-            // way. A removed title (404) is only a notice; any other error
-            // fails the run.
-            const message = errorMessage(e);
-            if (!message.startsWith("HTTP 404")) pageFailed = true;
-            errors.push(`page ${book.url}: ${message}`);
+            lastSlug = slug;
           }
-          lastSlug = slug;
         }
-      }
 
-      if (budgetSpent) {
-        await ctx.scheduler.runAfter(0, internal.yenPress.sync, {
-          politeDelayMs: args.politeDelayMs,
-          maxFetches: args.maxFetches,
-          afterSlug: lastSlug,
+        if (budgetSpent) {
+          await ctx.scheduler.runAfter(0, internal.yenPress.sync, {
+            politeDelayMs: args.politeDelayMs,
+            maxFetches: args.maxFetches,
+            afterSlug: lastSlug,
+            runId,
+            seen,
+            changed,
+            fetched: fetchedTotal,
+            errors: errors.slice(0, MAX_CARRIED_ERRORS),
+            pageFailed,
+          });
+          return {
+            runId,
+            recordsSeen: seen,
+            recordsChanged: changed,
+            fetched: fetchedTotal,
+            continued: true,
+            errorCount: errors.length,
+          };
+        }
+
+        await ctx.runMutation(internal.imports.finishRun, {
           runId,
-          seen,
-          changed,
-          fetched: fetchedTotal,
-          errors: errors.slice(0, MAX_CARRIED_ERRORS),
-          pageFailed,
+          status: pageFailed ? "failed" : "succeeded",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
         });
         return {
           runId,
           recordsSeen: seen,
           recordsChanged: changed,
           fetched: fetchedTotal,
-          continued: true,
+          continued: false,
+          failed: pageFailed || undefined,
           errorCount: errors.length,
         };
+      } catch (e) {
+        errors.push(errorMessage(e));
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: "failed",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          fetched: fetchedTotal,
+          continued: false,
+          errorCount: errors.length,
+          failed: true,
+        };
       }
-
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: pageFailed ? "failed" : "succeeded",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        fetched: fetchedTotal,
-        continued: false,
-        failed: pageFailed || undefined,
-        errorCount: errors.length,
-      };
-    } catch (e) {
-      errors.push(errorMessage(e));
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: "failed",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        fetched: fetchedTotal,
-        continued: false,
-        errorCount: errors.length,
-        failed: true,
-      };
-    }
-  },
+    }),
 });
 
 // ---------- applying one title ----------

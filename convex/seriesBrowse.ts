@@ -36,6 +36,7 @@ import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
 import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
+import { withExceptionCapture } from "./lib/posthog";
 
 export const SORTS = [
   "title",
@@ -76,38 +77,39 @@ const STALE_SWEEP = 200;
  */
 export const rebuild = internalAction({
   args: {},
-  handler: async (ctx) => {
-    const startedAt = Date.now();
-    let cursor: number | null = null;
-    let rows = 0;
-    for (;;) {
-      const batch: { next: number | null; count: number } = await ctx.runMutation(
-        internal.seriesBrowse.rebuildBatch,
-        { afterPublicId: cursor, rebuiltAt: startedAt },
-      );
-      rows += batch.count;
-      if (batch.next === null) break;
-      cursor = batch.next;
-    }
-    let swept = 0;
-    for (;;) {
-      const n: number = await ctx.runMutation(internal.seriesBrowse.sweepStale, {
-        before: startedAt,
-      });
-      swept += n;
-      if (n < STALE_SWEEP) break;
-    }
-    // Then the packs the filtered views read, from the rows as they now are.
-    let blocks = 0;
-    for (;;) {
-      const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: blocks });
-      blocks++;
-      if (!more) break;
-    }
-    // The home page's catalog totals ride along on the same schedule.
-    const counts = await recountCatalog(ctx);
-    return { rows, swept, blocks, counts, ms: Date.now() - startedAt };
-  },
+  handler: async (ctx) =>
+    withExceptionCapture("seriesBrowse.rebuild", async () => {
+      const startedAt = Date.now();
+      let cursor: number | null = null;
+      let rows = 0;
+      for (;;) {
+        const batch: { next: number | null; count: number } = await ctx.runMutation(
+          internal.seriesBrowse.rebuildBatch,
+          { afterPublicId: cursor, rebuiltAt: startedAt },
+        );
+        rows += batch.count;
+        if (batch.next === null) break;
+        cursor = batch.next;
+      }
+      let swept = 0;
+      for (;;) {
+        const n: number = await ctx.runMutation(internal.seriesBrowse.sweepStale, {
+          before: startedAt,
+        });
+        swept += n;
+        if (n < STALE_SWEEP) break;
+      }
+      // Then the packs the filtered views read, from the rows as they now are.
+      let blocks = 0;
+      for (;;) {
+        const more: boolean = await ctx.runMutation(internal.seriesBrowse.repackBlock, { block: blocks });
+        blocks++;
+        if (!more) break;
+      }
+      // The home page's catalog totals ride along on the same schedule.
+      const counts = await recountCatalog(ctx);
+      return { rows, swept, blocks, counts, ms: Date.now() - startedAt };
+    }),
 });
 
 export const rebuildBatch = internalMutation({

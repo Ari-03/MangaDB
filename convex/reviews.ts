@@ -16,6 +16,7 @@ import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { FEATURES } from "./lib/features";
+import { captureFromMutation, captureModeration } from "./lib/posthog";
 import {
   ratingRow,
   requireActiveTarget,
@@ -66,6 +67,14 @@ function cleanBody(raw: string): string {
     });
   }
   return body;
+}
+
+/** A Review's length as an analytics bucket (never the text itself). */
+export function lengthBucket(length: number): string {
+  if (length < 100) return "under_100";
+  if (length < 500) return "100_499";
+  if (length < 2000) return "500_1999";
+  return "2000_plus";
 }
 
 /** One Review as the page shows it: author, their Rating of the same target, and the text. */
@@ -178,6 +187,12 @@ export const save = mutation({
     const { target } = await requireActiveTarget(ctx, args.target);
     const existing = await reviewRow(ctx, user._id, target);
     const now = Date.now();
+    await captureFromMutation(ctx, user, "review_saved", {
+      kind: target.kind,
+      spoiler: args.spoiler,
+      length_bucket: lengthBucket(body.length),
+      edited: existing !== null,
+    });
     if (existing) {
       await ctx.db.patch(existing._id, { body, spoiler: args.spoiler, updatedAt: now });
       return { reviewId: existing._id };
@@ -238,6 +253,7 @@ export const setHidden = mutation({
       actor: { kind: "user", userId: moderator._id },
       ...(reason ? { reason } : {}),
     });
+    await captureModeration(ctx, moderator, args.hidden ? "hide" : "unhide", "review");
     return null;
   },
 });

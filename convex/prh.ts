@@ -38,6 +38,7 @@ import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { parseTitleList, prhTitleValidator } from "./lib/prh";
+import { withExceptionCapture } from "./lib/posthog";
 
 export const SOURCE_KEY = "prh";
 const API_BASE = "https://api.penguinrandomhouse.com/resources/v2/title/domains/PRH.US";
@@ -111,213 +112,214 @@ export const sync = internalAction({
     completeSweep: v.optional(v.boolean()),
     errors: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, args): Promise<SyncResult> => {
-    const linkStartedAt = Date.now();
-    // Explicit annotations break the type cycle with imports.ts's adapter map.
-    const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-      internal.importSources.getByKey,
-      { key: SOURCE_KEY },
-    );
-    if (!source) {
-      throw new Error(
-        "The approved-source registry has no \"prh\" row. Run: npx convex run importSources:seedRegistry '{}'",
+  handler: async (ctx, args): Promise<SyncResult> =>
+    withExceptionCapture("prh.sync", async () => {
+      const linkStartedAt = Date.now();
+      // Explicit annotations break the type cycle with imports.ts's adapter map.
+      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
+        internal.importSources.getByKey,
+        { key: SOURCE_KEY },
       );
-    }
-    // A continuation link whose source was disabled or unconfigured between
-    // links must not leave its run open forever: close it as failed, saying why.
-    const closeResumed = async (why: string) => {
-      if (args.runId === undefined) return;
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId: args.runId,
-        status: "failed",
-        recordsSeen: args.seen ?? 0,
-        recordsChanged: args.changed ?? 0,
-        errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
-      });
-    };
-    if (!source.enabled) {
-      await closeResumed("the source was disabled.");
-      return { skipped: "disabled" as const };
-    }
-    const apiKey = process.env.PRH_API_KEY;
-    const configured = (process.env.PRH_IMPRINT_CODES ?? "")
-      .split(",")
-      .map((code) => code.trim())
-      .filter((code) => code !== "");
-    const imprints = args.imprints ?? configured;
-    if (!apiKey || imprints.length === 0) {
-      console.warn(
-        "[imports] PRH adapter is unconfigured (set PRH_API_KEY and PRH_IMPRINT_CODES) — skipping",
-      );
-      await closeResumed("PRH_API_KEY / PRH_IMPRINT_CODES were removed.");
-      return { skipped: "unconfigured" as const };
-    }
-    const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
-    const runId: Id<"importRuns"> =
-      args.runId ??
-      (await ctx.runMutation(internal.imports.startRun, {
-        sourceKey: SOURCE_KEY,
-      }));
-    const runStartedAt = args.runStartedAt ?? linkStartedAt;
-    const delay = args.politeDelayMs ?? 350;
-    const maxPages = args.maxPages ?? 50;
-    const linkBudgetMs = args.linkBudgetMs ?? LINK_BUDGET_MS;
-    const errors: string[] = [...(args.errors ?? [])];
-    let seen = args.seen ?? 0;
-    let changed = args.changed ?? 0;
-    let recordFailures = args.recordFailures ?? 0;
-    // A subset sweep can't prove absence, so it never withdraws.
-    let completeSweep = args.completeSweep ?? (mode === "full" && args.imprints === undefined);
-    const todayKey = todaySortKey();
-    const firstImprint = args.imprintIndex ?? 0;
-    // Schedule the next link with the run state. The EFFECTIVE imprint list
-    // travels with it: a configured list re-read from the environment could
-    // change between links and shift imprintIndex onto another imprint.
-    const handOff = async (imprintIndex: number, start: number, pages: number): Promise<SyncResult> => {
-      await ctx.scheduler.runAfter(0, internal.prh.sync, {
-        mode,
-        imprints,
-        maxPages: args.maxPages,
-        politeDelayMs: args.politeDelayMs,
-        linkBudgetMs: args.linkBudgetMs,
-        runId,
-        runStartedAt,
-        imprintIndex,
-        start,
-        pages,
-        seen,
-        changed,
-        recordFailures,
-        completeSweep,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        mode,
-        completeSweep: false,
-        errorCount: errors.length,
-        continued: true,
-      };
-    };
-
-    try {
-      for (let index = firstImprint; index < imprints.length; index++) {
-        const imprint = imprints[index]!;
-        // A continuation link resumes its imprint mid-listing.
-        let start = index === firstImprint ? (args.start ?? 0) : 0;
-        let pages = index === firstImprint ? (args.pages ?? 0) : 0;
-        for (;;) {
-          if (pages >= maxPages) {
-            completeSweep = false;
-            break;
-          }
-          const params = new URLSearchParams({
-            api_key: apiKey,
-            rows: String(ROWS_PER_PAGE),
-            start: String(start),
-            sort: "onsale",
-            dir: mode === "future" ? "desc" : "asc",
-            // Embeds each title's flap copy: the blurb, with no extra request.
-            zoom: CONTENT_ZOOM,
-          });
-          const res = await politeFetch(
-            `${API_BASE}/imprints/${encodeURIComponent(imprint)}/titles?${params}`,
-            delay,
-          );
-          const { titles, recordCount, rawCount } = parseTitleList(await res.json());
-          pages++;
-          if (rawCount === 0 && recordCount !== undefined && start < recordCount) {
-            throw new Error("PRH returned an empty page before its reported record count");
-          }
-
-          // Newest-first, so the first title dated before today ends the
-          // imprint; undated titles neither apply nor end it.
-          const pastReached =
-            mode === "future" &&
-            titles.some((t) => t.onsale !== undefined && dateKey(t.onsale) < todayKey);
-          const toApply =
-            mode === "future"
-              ? titles.filter((t) => t.onsale !== undefined && dateKey(t.onsale) >= todayKey)
-              : titles;
-
-          for (const snapshot of toApply) {
-            seen++;
-            try {
-              const result = await applyRetrying(ctx, internal.prh.applyTitle, {
-                snapshot,
-              });
-              if (result.changed) changed++;
-              if (result.status === "needsReview") {
-                errors.push(`review ${snapshot.isbn13}: ${result.reason ?? "conflict"}`);
-              }
-            } catch (e) {
-              recordFailures++;
-              completeSweep = false;
-              errors.push(`title ${snapshot.isbn13}: ${redactKey(errorMessage(e))}`);
-            }
-          }
-
-          start += ROWS_PER_PAGE;
-          const exhausted =
-            rawCount === 0 || (recordCount !== undefined && start >= recordCount) || pastReached;
-          if (exhausted) break;
-          if (Date.now() - linkStartedAt >= linkBudgetMs) return await handOff(index, start, pages);
-        }
-        // An imprint that fits on one page never reaches the check above; a
-        // sweep of many small imprints would run past the action limit.
-        if (index + 1 < imprints.length && Date.now() - linkStartedAt >= linkBudgetMs) {
-          return await handOff(index + 1, 0, 0);
-        }
+      if (!source) {
+        throw new Error(
+          "The approved-source registry has no \"prh\" row. Run: npx convex run importSources:seedRegistry '{}'",
+        );
       }
-      // Disappearance → withdrawn, only after a COMPLETE full-catalog sweep
-      // (absence is never evidence on a future-only or capped run).
-      if (mode === "full" && completeSweep) {
-        await ctx.runMutation(internal.imports.markWithdrawn, {
-          sourceKey: SOURCE_KEY,
-          notSeenSince: runStartedAt,
+      // A continuation link whose source was disabled or unconfigured between
+      // links must not leave its run open forever: close it as failed, saying why.
+      const closeResumed = async (why: string) => {
+        if (args.runId === undefined) return;
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId: args.runId,
+          status: "failed",
+          recordsSeen: args.seen ?? 0,
+          recordsChanged: args.changed ?? 0,
+          errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
         });
+      };
+      if (!source.enabled) {
+        await closeResumed("the source was disabled.");
+        return { skipped: "disabled" as const };
       }
+      const apiKey = process.env.PRH_API_KEY;
+      const configured = (process.env.PRH_IMPRINT_CODES ?? "")
+        .split(",")
+        .map((code) => code.trim())
+        .filter((code) => code !== "");
+      const imprints = args.imprints ?? configured;
+      if (!apiKey || imprints.length === 0) {
+        console.warn(
+          "[imports] PRH adapter is unconfigured (set PRH_API_KEY and PRH_IMPRINT_CODES) — skipping",
+        );
+        await closeResumed("PRH_API_KEY / PRH_IMPRINT_CODES were removed.");
+        return { skipped: "unconfigured" as const };
+      }
+      const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
+      const runId: Id<"importRuns"> =
+        args.runId ??
+        (await ctx.runMutation(internal.imports.startRun, {
+          sourceKey: SOURCE_KEY,
+        }));
+      const runStartedAt = args.runStartedAt ?? linkStartedAt;
+      const delay = args.politeDelayMs ?? 350;
+      const maxPages = args.maxPages ?? 50;
+      const linkBudgetMs = args.linkBudgetMs ?? LINK_BUDGET_MS;
+      const errors: string[] = [...(args.errors ?? [])];
+      let seen = args.seen ?? 0;
+      let changed = args.changed ?? 0;
+      let recordFailures = args.recordFailures ?? 0;
+      // A subset sweep can't prove absence, so it never withdraws.
+      let completeSweep = args.completeSweep ?? (mode === "full" && args.imprints === undefined);
+      const todayKey = todaySortKey();
+      const firstImprint = args.imprintIndex ?? 0;
+      // Schedule the next link with the run state. The EFFECTIVE imprint list
+      // travels with it: a configured list re-read from the environment could
+      // change between links and shift imprintIndex onto another imprint.
+      const handOff = async (imprintIndex: number, start: number, pages: number): Promise<SyncResult> => {
+        await ctx.scheduler.runAfter(0, internal.prh.sync, {
+          mode,
+          imprints,
+          maxPages: args.maxPages,
+          politeDelayMs: args.politeDelayMs,
+          linkBudgetMs: args.linkBudgetMs,
+          runId,
+          runStartedAt,
+          imprintIndex,
+          start,
+          pages,
+          seen,
+          changed,
+          recordFailures,
+          completeSweep,
+          errors,
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          mode,
+          completeSweep: false,
+          errorCount: errors.length,
+          continued: true,
+        };
+      };
 
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: recordFailures > 0 ? "failed" : "succeeded",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        mode,
-        completeSweep: mode === "full" && completeSweep,
-        errorCount: errors.length,
-        ...(recordFailures > 0 ? { failed: true } : {}),
-      };
-    } catch (e) {
-      // politeFetch errors quote the request URL, api_key included; run
-      // errors are operator-visible, so the key never reaches them.
-      errors.push(redactKey(errorMessage(e)));
-      await ctx.runMutation(internal.imports.finishRun, {
-        runId,
-        status: "failed",
-        recordsSeen: seen,
-        recordsChanged: changed,
-        errors,
-      });
-      return {
-        runId,
-        recordsSeen: seen,
-        recordsChanged: changed,
-        mode,
-        completeSweep: false,
-        errorCount: errors.length,
-        failed: true,
-      };
-    }
-  },
+      try {
+        for (let index = firstImprint; index < imprints.length; index++) {
+          const imprint = imprints[index]!;
+          // A continuation link resumes its imprint mid-listing.
+          let start = index === firstImprint ? (args.start ?? 0) : 0;
+          let pages = index === firstImprint ? (args.pages ?? 0) : 0;
+          for (;;) {
+            if (pages >= maxPages) {
+              completeSweep = false;
+              break;
+            }
+            const params = new URLSearchParams({
+              api_key: apiKey,
+              rows: String(ROWS_PER_PAGE),
+              start: String(start),
+              sort: "onsale",
+              dir: mode === "future" ? "desc" : "asc",
+              // Embeds each title's flap copy: the blurb, with no extra request.
+              zoom: CONTENT_ZOOM,
+            });
+            const res = await politeFetch(
+              `${API_BASE}/imprints/${encodeURIComponent(imprint)}/titles?${params}`,
+              delay,
+            );
+            const { titles, recordCount, rawCount } = parseTitleList(await res.json());
+            pages++;
+            if (rawCount === 0 && recordCount !== undefined && start < recordCount) {
+              throw new Error("PRH returned an empty page before its reported record count");
+            }
+
+            // Newest-first, so the first title dated before today ends the
+            // imprint; undated titles neither apply nor end it.
+            const pastReached =
+              mode === "future" &&
+              titles.some((t) => t.onsale !== undefined && dateKey(t.onsale) < todayKey);
+            const toApply =
+              mode === "future"
+                ? titles.filter((t) => t.onsale !== undefined && dateKey(t.onsale) >= todayKey)
+                : titles;
+
+            for (const snapshot of toApply) {
+              seen++;
+              try {
+                const result = await applyRetrying(ctx, internal.prh.applyTitle, {
+                  snapshot,
+                });
+                if (result.changed) changed++;
+                if (result.status === "needsReview") {
+                  errors.push(`review ${snapshot.isbn13}: ${result.reason ?? "conflict"}`);
+                }
+              } catch (e) {
+                recordFailures++;
+                completeSweep = false;
+                errors.push(`title ${snapshot.isbn13}: ${redactKey(errorMessage(e))}`);
+              }
+            }
+
+            start += ROWS_PER_PAGE;
+            const exhausted =
+              rawCount === 0 || (recordCount !== undefined && start >= recordCount) || pastReached;
+            if (exhausted) break;
+            if (Date.now() - linkStartedAt >= linkBudgetMs) return await handOff(index, start, pages);
+          }
+          // An imprint that fits on one page never reaches the check above; a
+          // sweep of many small imprints would run past the action limit.
+          if (index + 1 < imprints.length && Date.now() - linkStartedAt >= linkBudgetMs) {
+            return await handOff(index + 1, 0, 0);
+          }
+        }
+        // Disappearance → withdrawn, only after a COMPLETE full-catalog sweep
+        // (absence is never evidence on a future-only or capped run).
+        if (mode === "full" && completeSweep) {
+          await ctx.runMutation(internal.imports.markWithdrawn, {
+            sourceKey: SOURCE_KEY,
+            notSeenSince: runStartedAt,
+          });
+        }
+
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: recordFailures > 0 ? "failed" : "succeeded",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          mode,
+          completeSweep: mode === "full" && completeSweep,
+          errorCount: errors.length,
+          ...(recordFailures > 0 ? { failed: true } : {}),
+        };
+      } catch (e) {
+        // politeFetch errors quote the request URL, api_key included; run
+        // errors are operator-visible, so the key never reaches them.
+        errors.push(redactKey(errorMessage(e)));
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: "failed",
+          recordsSeen: seen,
+          recordsChanged: changed,
+          errors,
+        });
+        return {
+          runId,
+          recordsSeen: seen,
+          recordsChanged: changed,
+          mode,
+          completeSweep: false,
+          errorCount: errors.length,
+          failed: true,
+        };
+      }
+    }),
 });
 
 // ---------- applying one title ----------

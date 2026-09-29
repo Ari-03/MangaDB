@@ -1544,6 +1544,9 @@ Convex deployment (Convex dashboard → Settings → Environment Variables, or
 - `RESEND_API_KEY` + `IMPORT_ALERT_EMAIL_TO` (+ optional
   `IMPORT_ALERT_EMAIL_FROM`) — the Administrator source-health alert emails
   (ticket #37); unset → alerts log and skip.
+- `POSTHOG_API_KEY` — PostHog project key (`phc_…`) for backend events;
+  unset → no server events, nothing scheduled, no logging. See "Analytics
+  (PostHog)" → Backend.
 
 Other commands:
 
@@ -1663,7 +1666,8 @@ no card) covers this site many times over.
   `/_s/static/*` and `/_s/array/*` to `us-assets.i.posthog.com` (edge
   cached), everything else to `us.i.posthog.com`, with cookies and auth
   headers stripped and `X-Forwarded-For` set from `CF-Connecting-IP`.
-  Moving to the EU cloud is the `POSTHOG_REGION` line in that file.
+  Moving to the EU cloud is the `POSTHOG_REGION` line in that file and
+  its twin in `convex/lib/posthog.ts`.
 - **Client.** `src/lib/analytics.tsx` loads posthog-js lazily after
   hydration (never in the Worker bundle), with autocapture, session replay
   and feature flags off, `respect_dnt: true`, and person profiles only for
@@ -1684,6 +1688,46 @@ no card) covers this site many times over.
   | `favorite_toggled` | `target` (`series` / `volume`), `publicId`, `favorite` |
   | `rating_submitted`, `review_submitted` | declared, not wired yet |
 
+- **Backend.** Convex sends its own events straight to PostHog's capture
+  API (`POST https://us.i.posthog.com/batch/`, no SDK) from
+  `convex/lib/posthog.ts`. It is off until the deployment has the project
+  key; set it per deployment:
+
+  ```sh
+  npx convex env set --deployment brave-kingfisher-844 POSTHOG_API_KEY phc_…  # staging
+  npx convex env set --prod POSTHOG_API_KEY phc_…                             # production, when agreed
+  ```
+
+  Actions send directly (5 s timeout, never throws, one `console.warn` per
+  failure). Mutations cannot fetch, so `captureFromMutation` schedules
+  `analytics:capture`, which commits (or rolls back) with the mutation. An
+  event a user caused has the user's Clerk id as its distinct id, the id the
+  browser identifies them by, so both land on one person. System events use
+  `server` with `$process_person_profile: false` and create no person.
+  Every server event has `$lib: mangadb-convex`; filter on it where a name
+  also exists client-side (`favorite_toggled`). The region constant in
+  `convex/lib/posthog.ts` mirrors `POSTHOG_REGION` in the proxy.
+
+  | Event | Distinct id | Props |
+  |---|---|---|
+  | `import_run_finished` | `server` | `source_key`, `status` (`succeeded` / `failed` / `stopped`), `records_seen`, `records_changed`, `error_count`, `duration_ms` |
+  | `source_unhealthy`, `source_recovered` | `server` | `source_key`, `consecutive_failures` |
+  | `moderation_action` | the Moderator | `action`, `target_kind` (`comment` / `comment_author` / `review` / `proposal`), `actor_role` |
+  | `rating_set` | the user | `kind` (`series` / `volume` / `edition`), `score` (1–100, `null` when cleared), `cleared` |
+  | `review_saved` | the user | `kind`, `spoiler`, `length_bucket` (`under_100` / `100_499` / `500_1999` / `2000_plus`), `edited` |
+  | `favorite_toggled` | the user | `kind`, `favorite` |
+
+  `moderation_action` covers comment `moderate` (approve, hide, unhide,
+  remove, restore) and `setShadowed` (shadow, unshadow), review
+  `setHidden` (hide, unhide), and proposal approve, reject and
+  request_changes (a stale approval that applied nothing is not sent).
+
+  **Exceptions.** The unattended actions (the hourly import tick, every
+  source adapter's sync, and the rebuild crons) run inside
+  `withExceptionCapture`: an error that escapes is sent as PostHog's
+  `$exception` (`$exception_list` with type, message and the V8 stack as
+  raw frames, plus `function_name`, e.g. `ann.sync`) and then rethrown, so
+  Convex still logs the failure. It shows up in PostHog Error tracking.
 - **Querying from Claude Code.** `.mcp.json` registers PostHog's hosted MCP
   server in read-only mode (`https://mcp.posthog.com/mcp?readonly=true`).
   Run `/mcp` in Claude Code once and complete the PostHog OAuth login. For

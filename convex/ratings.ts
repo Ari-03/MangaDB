@@ -11,6 +11,7 @@ import { ConvexError, v } from "convex/values";
 import { components } from "./_generated/api";
 import { mutation, query } from "./_generated/server";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { captureFromMutation } from "./lib/posthog";
 import {
   applyRatingDelta,
   ratingRow,
@@ -98,6 +99,11 @@ export const set = mutation({
       });
     }
     await applyRatingDelta(ctx, target, before, score);
+    await captureFromMutation(ctx, user, "rating_set", {
+      kind: target.kind,
+      score,
+      cleared: score === null,
+    });
     return { score };
   },
 });
