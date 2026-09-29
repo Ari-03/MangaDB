@@ -2,8 +2,9 @@
 // a Series or Volume page. The first page of threads is server-rendered from
 // the page loader, then follows the live query (which, signed in, adds the
 // viewer's own held and hidden Comments); "More comments" asks for another
-// page's worth. Threads are newest first with replies nested one level,
-// oldest first. Plain text: the body renders with its line breaks, nothing
+// page's worth, up to COMMENT_POLICY.maxThreads. Threads are newest first
+// with replies nested one level, oldest first; past the first few, "N more
+// replies" loads the rest of a thread (comments.replies). Plain text: the body renders with its line breaks, nothing
 // is parsed. Every action is re-checked on the server (convex/comments.ts).
 
 import { Link } from "@tanstack/react-router";
@@ -13,20 +14,16 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { COMMENT_POLICY } from "../../convex/comments";
 import { track } from "~/lib/analytics";
 import { useIsModerator } from "~/lib/moderation";
 import { writeErrorMessage, type RatingTarget } from "~/lib/ratings";
 import { convexClient } from "~/providers";
 
-// Mirrors COMMENT_POLICY.maxLength / .noteMaxLength / .page in convex/comments.ts.
-const MAX_LENGTH = 2000;
-const NOTE_MAX = 500;
-const PAGE = 20;
-
 /** One page of a target's Comments, as the loader and the live query return it. */
 export type CommentPage = NonNullable<FunctionReturnType<typeof api.comments.list>>;
 type Thread = CommentPage["items"][number];
-type CommentData = Omit<Thread, "replies">;
+type CommentData = Omit<Thread, "replies" | "moreReplies">;
 type TargetId = CommentPage["target"];
 
 const REPORT_REASONS = [
@@ -109,7 +106,7 @@ function LiveComments({
   initial: CommentPage | null;
   noun: string;
 }) {
-  const [limit, setLimit] = useState(PAGE);
+  const [limit, setLimit] = useState<number>(COMMENT_POLICY.page);
   const live = useQuery(api.comments.list, { target, limit });
   // While a bigger page loads, keep showing the last one rather than blinking.
   const last = useRef(initial);
@@ -129,10 +126,15 @@ function LiveComments({
         renderReply={(thread, close) => (
           <CommentForm targetId={page.target} parentId={thread.commentId} onDone={close} onCancel={close} />
         )}
+        renderMoreReplies={(thread, fallback) => <AllReplies target={target} thread={thread} fallback={fallback} />}
       />
-      {page.hasMore ? (
+      {page.hasMore && limit < COMMENT_POLICY.maxThreads ? (
         <p className="comments-more">
-          <button type="button" className="btn btn-sm" onClick={() => setLimit(limit + PAGE)}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setLimit(Math.min(limit + COMMENT_POLICY.page, COMMENT_POLICY.maxThreads))}
+          >
             More comments
           </button>
         </p>
@@ -143,50 +145,50 @@ function LiveComments({
 
 // ---------- the list ----------
 
-function ThreadList({
-  items,
-  noun,
-  renderActions,
-  renderReply,
-}: {
-  items: ReadonlyArray<Thread>;
-  noun: string;
+type ListRenderers = {
   renderActions?: (item: CommentData, isReply: boolean, openReply: () => void) => ReactNode;
   renderReply?: (thread: Thread, close: () => void) => ReactNode;
-}) {
+  /** A thread's full reply list once "N more replies" is pressed; `fallback` renders a reply list. */
+  renderMoreReplies?: (thread: Thread, fallback: (replies: Thread["replies"]) => ReactNode) => ReactNode;
+};
+
+function ThreadList({ items, noun, ...renderers }: { items: ReadonlyArray<Thread>; noun: string } & ListRenderers) {
   if (items.length === 0) {
     return <p className="comments-empty">No comments on this {noun} yet.</p>;
   }
   return (
     <ol className="comment-list">
       {items.map((thread) => (
-        <ThreadItem key={thread.commentId} thread={thread} renderActions={renderActions} renderReply={renderReply} />
+        <ThreadItem key={thread.commentId} thread={thread} {...renderers} />
       ))}
     </ol>
   );
 }
 
-function ThreadItem({
-  thread,
-  renderActions,
-  renderReply,
-}: {
-  thread: Thread;
-  renderActions?: (item: CommentData, isReply: boolean, openReply: () => void) => ReactNode;
-  renderReply?: (thread: Thread, close: () => void) => ReactNode;
-}) {
+function ThreadItem({ thread, renderActions, renderReply, renderMoreReplies }: { thread: Thread } & ListRenderers) {
   const [replying, setReplying] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const openReply = () => setReplying(true);
+  const replyItems = (replies: Thread["replies"]) =>
+    replies.map((reply) => (
+      <li key={reply.commentId}>
+        <CommentCard item={reply}>{renderActions?.(reply, true, openReply)}</CommentCard>
+      </li>
+    ));
+  const canExpand = renderMoreReplies !== undefined && thread.moreReplies > 0;
   return (
     <li>
       <CommentCard item={thread}>{renderActions?.(thread, false, openReply)}</CommentCard>
-      {thread.replies.length > 0 || replying ? (
+      {thread.replies.length > 0 || canExpand || replying ? (
         <ol className="comment-replies">
-          {thread.replies.map((reply) => (
-            <li key={reply.commentId}>
-              <CommentCard item={reply}>{renderActions?.(reply, true, openReply)}</CommentCard>
+          {expanded && renderMoreReplies ? renderMoreReplies(thread, replyItems) : replyItems(thread.replies)}
+          {canExpand && !expanded ? (
+            <li>
+              <button type="button" className="comment-action" onClick={() => setExpanded(true)}>
+                {thread.moreReplies} more {thread.moreReplies === 1 ? "reply" : "replies"}
+              </button>
             </li>
-          ))}
+          ) : null}
           {replying && renderReply ? <li>{renderReply(thread, () => setReplying(false))}</li> : null}
         </ol>
       ) : null}
@@ -194,17 +196,32 @@ function ThreadItem({
   );
 }
 
+/** Every visible reply to one thread, live; the inline ones until they arrive. */
+function AllReplies({
+  target,
+  thread,
+  fallback,
+}: {
+  target: RatingTarget;
+  thread: Thread;
+  fallback: (replies: Thread["replies"]) => ReactNode;
+}) {
+  const all = useQuery(api.comments.replies, { target, commentId: thread.commentId });
+  return <>{fallback(all ?? thread.replies)}</>;
+}
+
 /**
  * One Comment: author, time, "edited", the text (folded behind a button
  * when marked as a spoiler), and the author's notes on a held or hidden
- * one. A removed thread head is a bare "[removed]" placeholder.
+ * one. A thread head kept for its replies is a bare "[removed]" or
+ * "[hidden]" placeholder.
  */
 function CommentCard({ item, children }: { item: CommentData; children?: ReactNode }) {
   const [revealed, setRevealed] = useState(false);
-  if (item.state === "removed") {
+  if (item.state === "removed" || item.state === "withheld") {
     return (
       <article className="comment-card is-removed">
-        <p className="comment-removed">[removed]</p>
+        <p className="comment-removed">{item.state === "removed" ? "[removed]" : "[hidden]"}</p>
       </article>
     );
   }
@@ -330,7 +347,7 @@ function CommentForm({
           value={body}
           onChange={(event) => setBody(event.target.value)}
           rows={parentId || existing ? 2 : 3}
-          maxLength={MAX_LENGTH}
+          maxLength={COMMENT_POLICY.maxLength}
           aria-label={label}
           placeholder={parentId ? "Write a reply" : "Plain text; line breaks are kept."}
         />
@@ -341,7 +358,7 @@ function CommentForm({
           Contains spoilers
         </label>
         <span className="review-count">
-          {length.toLocaleString("en-US")} / {MAX_LENGTH.toLocaleString("en-US")}
+          {length.toLocaleString("en-US")} / {COMMENT_POLICY.maxLength.toLocaleString("en-US")}
         </span>
       </div>
       {error ? <p className="form-error">{error}</p> : null}
@@ -382,7 +399,7 @@ function CommentActions({
   const [panel, setPanel] = useState<Panel>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const close = () => setPanel(null);
-  if (!viewer || viewer.needsUsername || item.state === "removed") return null;
+  if (!viewer || viewer.needsUsername || item.state === "removed" || item.state === "withheld") return null;
 
   const editable = item.own && (item.state === "approved" || item.state === "pending");
   const buttons = [
@@ -495,7 +512,7 @@ function ReportForm({
         value={note}
         onChange={(event) => setNote(event.target.value)}
         placeholder="Anything the moderators should know (optional)"
-        maxLength={NOTE_MAX}
+        maxLength={COMMENT_POLICY.noteMaxLength}
       />
       <button type="submit" className="btn btn-sm btn-danger">
         Send report

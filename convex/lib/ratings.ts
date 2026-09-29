@@ -88,7 +88,11 @@ export async function resolveTarget(
 }
 
 /** The mutation-side twin of resolveTarget: follows merges, throws when gone. */
-export async function requireActiveTarget(ctx: QueryCtx, target: TargetId): Promise<TargetId> {
+export async function requireActiveTarget(
+  ctx: QueryCtx,
+  target: TargetId,
+  goneMessage = "Nothing to rate here any more.",
+): Promise<TargetId> {
   if (target.kind === "series") {
     const series = await followMerges(ctx, "series", await ctx.db.get(target.id));
     if (series) return { kind: "series", id: series._id };
@@ -96,7 +100,7 @@ export async function requireActiveTarget(ctx: QueryCtx, target: TargetId): Prom
     const found = await activeVolume(ctx, await ctx.db.get(target.id));
     if (found) return { kind: "volume", id: found.volume._id };
   }
-  throw new ConvexError({ code: "notFound", message: "Nothing to rate here any more." });
+  throw new ConvexError({ code: "notFound", message: goneMessage });
 }
 
 /** One user's Rating of one target, or null. */

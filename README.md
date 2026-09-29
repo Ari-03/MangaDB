@@ -579,10 +579,14 @@ the queue at `/mod/comments` (`src/routes/mod.comments.tsx`); styles in
 
 - **Comment**: 1 to 2,000 characters of plain text, optionally marked as a
   spoiler, on a Series or Volume page. Threads are newest first, 20 at a time
-  ("More comments"); replies nest one level, oldest first. Authors edit
+  ("More comments", up to 60); replies nest one level, oldest first, 5 under
+  each thread and the rest behind "N more replies" (`comments.replies`, up to
+  100; a head's `replyCount` keeps the approved-reply count). Authors edit
   ("edited") and delete their own. A deleted or removed thread head with
-  replies stays as a `[removed]` placeholder; without replies it disappears.
-  The first page is server-rendered by the page loader, then goes live.
+  replies stays as a `[removed]` placeholder, a hidden or shadowed one as
+  `[hidden]` (except to its author); without replies it disappears.
+  Placeholders carry no author or date. The first page is server-rendered by
+  the page loader, then goes live.
 - **Post-moderation with holds.** A Comment publishes at once unless a hold
   rule fires, in which case it is `pending` and only its author ("Awaiting
   review") and the queue see it:
@@ -599,15 +603,23 @@ the queue at `/mod/comments` (`src/routes/mod.comments.tsx`); styles in
   by moderators" in place of the body.
 - **Queue** (`/mod/comments`, Data Team; Editors read-only): tabs for
   Pending (oldest first), Reported (published with reports, most reported
-  first), Hidden, and Removed, with the report reasons and notes. Moderators
-  Approve, Hide, Unhide, Remove, Restore, and Shadow / Unshadow the author,
-  each with an optional reason. Every decision writes a `commentAudit` row.
+  first; index `by_status`), Hidden, and Removed (newest first), with the
+  report reasons and notes. Pending, Hidden, and Removed read index
+  `by_status_time`, so a re-held Comment with reports keeps its place by
+  age. Moderators Approve, Dismiss reports (on Reported), Hide, Unhide,
+  Remove, Restore, and Shadow / Unshadow the author, each with an optional
+  reason. Every decision writes a `commentAudit` row.
   Any move back to approved clears the Comment's reports. A Comment its
   author deleted cannot be restored. The `.mod-tools` navs show the pending
   count as a badge.
 - **Shadowed users** (`users.commentShadowed`): their Comments keep looking
-  published to them and are hidden from everyone else, including ones
-  already posted. Data Team members cannot be shadowed.
+  published to them and are hidden from everyone else. Shadowing is a
+  status: new Comments are stored `shadowed` (skipping the hold rules), and
+  Shadow turns the user's approved Comments into `shadowed` ones (up to
+  2,000, 500 per batch; any left over stay hidden by a read-time check).
+  Unshadow publishes every `shadowed` one, including those written while
+  shadowed. A Moderator's approve, unhide, or restore of a shadowed user's
+  Comment leaves it `shadowed`. Data Team members cannot be shadowed.
 - **Rate limits** (token buckets per user): `commentPost` 20/hour, burst 5;
   `commentReport` 10/hour, burst 3. Edits are not rate limited.
 - **Account deletion** hard-deletes the user's Comments, the reports they
@@ -619,9 +631,8 @@ the queue at `/mod/comments` (`src/routes/mod.comments.tsx`); styles in
   home or profile feed), so there is nothing extra to filter.
 - **Deferred**: Cloudflare Turnstile on the composer, Akismet or LLM triage
   of held Comments, reply and moderator notifications, thresholds tunable
-  from `appConfig` without a deploy, the global posting cap, and a placeholder
-  for hidden (not removed) thread heads. A hidden thread head hides its
-  replies with it.
+  from `appConfig` without a deploy, the global posting cap, and cursor
+  paging past 60 threads.
 
 ## Moderation core (ticket #31)
 

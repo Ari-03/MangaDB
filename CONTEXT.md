@@ -117,7 +117,7 @@ _Avoid_: comment, post
 
 **Comment**:
 A User's short public plain-text post on one Series or one Volume page, signed with their username, or a reply to such a post; replies go one level deep. It may be marked as containing spoilers, and only its author edits or deletes it. It is published at once unless a hold rule sends it to the Data Team first; a Moderator may hide, remove, or restore it.
-_Avoid_: review, post, reply thread
+_Avoid_: review, reply thread
 
 **Comment Report**:
 One User's flag on another User's published Comment, with a reason (spam, harassment, spoiler, off-topic, or other). A User reports a Comment at most once; three distinct Comment Reports hide it until a Moderator decides.

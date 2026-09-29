@@ -6,15 +6,24 @@
 // Moderator decision lands in commentAudit.
 //
 // Visibility, per viewer:
-// - approved: everyone, unless its author is shadowed;
+// - approved: everyone;
 // - pending: its author ("Awaiting review") and the queue;
 // - hidden: its author ("Hidden by moderators", no body) and the queue;
-// - removed: nobody; a removed top-level Comment with visible replies
-//   stays as a "[removed]" placeholder so the thread keeps its shape;
-// - a shadowed author sees their own pending, hidden and approved Comments
-//   as published; nobody else sees any of them.
+// - shadowed (written while its author is a Shadowed User, or turned so by
+//   setShadowed): its author, as if approved; nobody else;
+// - removed: nobody;
+// - a thread head that is removed, or that the viewer cannot see (hidden or
+//   shadowed), stays as a "[removed]" / "[hidden]" placeholder while it has
+//   replies the viewer can see, so the thread keeps its shape.
+//
+// Shadowing is a status rather than a read-time filter so the page's
+// indexes stay exact: a shadowed spammer's rows never take a page's slots.
+// A head's `replyCount` (approved replies) moves with every status change
+// of a reply (`patchComment`), which bounds both the page's reply reads and
+// the placeholder scan.
 
 import { HOUR, RateLimiter } from "@convex-dev/rate-limiter";
+import type { WithoutSystemFields } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { components } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -41,10 +50,21 @@ export const COMMENT_POLICY = {
   noteMaxLength: 500,
   /** Top-level Comments per page; "more" asks for another page's worth. */
   page: 20,
+  /** The most top-level Comments one `list` call returns; "More comments" stops there. */
+  maxThreads: 60,
+  /** Replies shown under a thread before "N more replies" (the `replies` query). */
+  inlineReplies: 5,
 } as const;
 
-const LIMIT_MAX = 200;
+/** The most replies the `replies` query returns for one thread. */
 const REPLIES_MAX = 100;
+/** The viewer's own Comments on one page that `list` and `replies` consider. */
+const OWN_MAX = 200;
+/** Gone thread heads `list` reads per status while looking for ones that need a placeholder. */
+const PLACEHOLDER_SCAN = 200;
+/** setShadowed moves an author's Comments this many at a time, up to SHADOW_MAX. */
+const SHADOW_BATCH = 500;
+const SHADOW_MAX = 2000;
 const QUEUE_PAGE = 100;
 const REASON_MAX = 500;
 
@@ -56,6 +76,7 @@ export const COMMENT_RATE_LIMIT = {
 const rateLimiter = new RateLimiter(components.rateLimiter, COMMENT_RATE_LIMIT);
 
 type Comment = Doc<"comments">;
+type Status = Comment["status"];
 type User = Doc<"users">;
 
 const isModerator = (user: User | null) =>
@@ -102,6 +123,7 @@ async function keysOf(ctx: QueryCtx, target: TargetId) {
   if (!volume) return fail("notFound", "Nothing to comment on here any more.");
   return { seriesId: volume.seriesId, volumeId: target.id };
 }
+type Keys = Awaited<ReturnType<typeof keysOf>>;
 
 function reasonOf(raw: string | undefined) {
   const reason = raw?.trim().slice(0, REASON_MAX);
@@ -118,16 +140,41 @@ async function audit(
   await ctx.db.insert("commentAudit", { commentId, action, actor, ...extra });
 }
 
+/** Add `delta` to a thread head's approved-reply count. */
+async function bumpReplyCount(ctx: MutationCtx, headId: Id<"comments">, delta: number) {
+  if (delta === 0) return;
+  const head = await ctx.db.get(headId);
+  if (head) await ctx.db.patch(head._id, { replyCount: Math.max(0, (head.replyCount ?? 0) + delta) });
+}
+
+/**
+ * Patch a Comment. When a reply's status moves into or out of approved, its
+ * head's `replyCount` follows in the same transaction. Every status change
+ * goes through here.
+ */
+async function patchComment(ctx: MutationCtx, comment: Comment, patch: Partial<WithoutSystemFields<Comment>>) {
+  await ctx.db.patch(comment._id, patch);
+  if (comment.parentId && patch.status !== undefined) {
+    const delta = Number(patch.status === "approved") - Number(comment.status === "approved");
+    await bumpReplyCount(ctx, comment.parentId, delta);
+  }
+}
+
 // ---------- reading ----------
 
 /** A Comment as the viewer sees it; null when they see nothing at all. */
 type Shown = "approved" | "pending" | "hidden";
+/** A thread head kept only for its replies: removed, or withheld from this viewer. */
+type Placeholder = "removed" | "withheld";
 
 function shownAs(comment: Comment, author: User | null, viewer: User | null): Shown | null {
   if (comment.status === "removed") return null;
   if (viewer && comment.userId === viewer._id) {
-    return viewer.commentShadowed ? "approved" : comment.status;
+    // A Shadowed User sees their own Comments as published.
+    if (comment.status === "shadowed" || viewer.commentShadowed) return "approved";
+    return comment.status;
   }
+  // The author check covers approved rows setShadowed's cap left behind.
   if (comment.status !== "approved" || author?.commentShadowed) return null;
   return "approved";
 }
@@ -140,79 +187,130 @@ function authorCache(ctx: QueryCtx) {
     return cache.get(userId) ?? null;
   };
 }
+type AuthorOf = ReturnType<typeof authorCache>;
 
-function card(comment: Comment, author: User | null, viewer: User | null, state: Shown | "removed") {
-  const hideBody = state === "hidden" || state === "removed";
+/** A Comment for the page. A placeholder carries nothing about the Comment beyond its ID. */
+function card(comment: Comment, author: User | null, viewer: User | null, state: Shown | Placeholder) {
+  const placeholder = state === "removed" || state === "withheld";
+  const hideBody = placeholder || state === "hidden";
   return {
     commentId: comment._id,
-    username: state === "removed" ? null : (author?.username ?? null),
-    own: state !== "removed" && viewer !== null && comment.userId === viewer._id,
+    username: placeholder ? null : (author?.username ?? null),
+    own: !placeholder && viewer !== null && comment.userId === viewer._id,
     state,
     body: hideBody ? "" : comment.body,
     spoiler: hideBody ? false : comment.spoiler,
-    createdAt: comment.createdAt,
-    edited: comment.editedAt !== undefined,
+    createdAt: placeholder ? 0 : comment.createdAt,
+    edited: !placeholder && comment.editedAt !== undefined,
   };
+}
+
+/** The viewer's own Comments on one page, newest first, grouped by thread head (top level under null). */
+async function ownRows(ctx: QueryCtx, viewer: User | null, keys: Keys) {
+  const byParent = new Map<Id<"comments"> | null, Comment[]>();
+  if (!viewer) return byParent;
+  const rows = await ctx.db
+    .query("comments")
+    .withIndex("by_user_target", (q) =>
+      q.eq("userId", viewer._id).eq("seriesId", keys.seriesId).eq("volumeId", keys.volumeId),
+    )
+    .order("desc")
+    .take(OWN_MAX);
+  for (const row of rows) {
+    const key = row.parentId ?? null;
+    byParent.set(key, [...(byParent.get(key) ?? []), row]);
+  }
+  return byParent;
+}
+type OwnRows = Awaited<ReturnType<typeof ownRows>>;
+
+/**
+ * The replies to one thread head the viewer sees, oldest first: the first
+ * `take` approved ones plus every one of the viewer's own (so a fresh or
+ * held reply always shows), and how many approved ones wait behind
+ * "N more replies".
+ */
+async function threadReplies(
+  ctx: QueryCtx,
+  head: Comment,
+  own: OwnRows,
+  authorOf: AuthorOf,
+  viewer: User | null,
+  take: number,
+) {
+  const approved = await ctx.db
+    .query("comments")
+    .withIndex("by_parent", (q) => q.eq("parentId", head._id).eq("status", "approved"))
+    .take(take);
+  const seen = new Set(approved.map((row) => row._id));
+  const rows = [...approved, ...(own.get(head._id) ?? []).filter((row) => !seen.has(row._id))];
+  rows.sort((a, b) => a._creationTime - b._creationTime);
+  const replies = [];
+  for (const reply of rows) {
+    const author = await authorOf(reply.userId);
+    const state = shownAs(reply, author, viewer);
+    if (state) replies.push(card(reply, author, viewer, state));
+  }
+  const shownApproved = rows.filter((row) => row.status === "approved").length;
+  return { replies, moreReplies: Math.max(0, (head.replyCount ?? 0) - shownApproved) };
 }
 
 /**
  * A page's Comments for the viewer: the newest `limit` top-level threads
- * (default one page), each with its visible replies oldest first, plus the
- * target ID `post` takes. Signed out it is the same for everyone, so the page
- * loaders render it; signed in it adds the viewer's own held and hidden
- * Comments. Null when the target is unknown or hidden.
+ * (default one page, at most `maxThreads`), each with its first
+ * `inlineReplies` visible replies oldest first and the count behind them,
+ * plus the target ID `post` takes. Signed out it is the same for everyone,
+ * so the page loaders render it; signed in it adds the viewer's own held,
+ * hidden, and shadowed Comments. Null when the target is unknown or hidden.
  */
 export const list = query({
   args: { target: targetRefArg, limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const resolved = await resolveTarget(ctx, args.target);
     if (!resolved) return null;
-    const limit = Math.max(1, Math.min(LIMIT_MAX, Math.floor(args.limit ?? COMMENT_POLICY.page)));
+    const limit = Math.max(1, Math.min(COMMENT_POLICY.maxThreads, Math.floor(args.limit ?? COMMENT_POLICY.page)));
     const viewer = await viewerOrNull(ctx);
     const authorOf = authorCache(ctx);
-    const { seriesId, volumeId } = await keysOf(ctx, resolved.target);
+    const keys = await keysOf(ctx, resolved.target);
+    const own = await ownRows(ctx, viewer, keys);
 
-    const threads = (status: Comment["status"]) =>
+    const heads = (status: Status) =>
       ctx.db
         .query("comments")
         .withIndex("by_target_thread_status", (q) =>
-          q.eq("seriesId", seriesId).eq("volumeId", volumeId).eq("parentId", undefined).eq("status", status),
+          q.eq("seriesId", keys.seriesId).eq("volumeId", keys.volumeId).eq("parentId", undefined).eq("status", status),
         )
-        .order("desc")
-        .take(limit + 1);
-    // Published threads, removed ones that may still carry replies, and the
-    // viewer's own that only they see; merged newest first.
-    const candidates = [...(await threads("approved")), ...(await threads("removed"))];
-    if (viewer) {
-      const own = await ctx.db
-        .query("comments")
-        .withIndex("by_user_target", (q) =>
-          q.eq("userId", viewer._id).eq("seriesId", seriesId).eq("volumeId", volumeId),
-        )
-        .take(LIMIT_MAX);
-      const seen = new Set(candidates.map((row) => row._id));
-      candidates.push(...own.filter((row) => row.parentId === undefined && !seen.has(row._id)));
+        .order("desc");
+    // Published threads, the viewer's own, and gone heads that still carry
+    // replies (a placeholder). Only heads with approved replies, or the
+    // viewer's own, can need one; the scan per status is capped.
+    const candidates = new Map<Id<"comments">, Comment>();
+    for (const row of await heads("approved").take(limit + 1)) candidates.set(row._id, row);
+    for (const row of own.get(null) ?? []) candidates.set(row._id, row);
+    for (const status of ["removed", "hidden", "shadowed"] as const) {
+      let scanned = 0;
+      let found = 0;
+      for await (const row of heads(status)) {
+        if (scanned++ >= PLACEHOLDER_SCAN || found > limit) break;
+        if ((row.replyCount ?? 1) > 0 || own.has(row._id)) {
+          candidates.set(row._id, row);
+          found++;
+        }
+      }
     }
-    candidates.sort((a, b) => b._creationTime - a._creationTime);
+    const ordered = [...candidates.values()].sort((a, b) => b._creationTime - a._creationTime);
 
     const items = [];
-    for (const comment of candidates) {
+    for (const head of ordered) {
       if (items.length > limit) break;
-      const replyRows = await ctx.db
-        .query("comments")
-        .withIndex("by_parent", (q) => q.eq("parentId", comment._id))
-        .take(REPLIES_MAX);
-      const replies = [];
-      for (const reply of replyRows) {
-        const author = await authorOf(reply.userId);
-        const state = shownAs(reply, author, viewer);
-        if (state) replies.push(card(reply, author, viewer, state));
-      }
-      const author = await authorOf(comment.userId);
-      const state = shownAs(comment, author, viewer);
-      if (state) items.push({ ...card(comment, author, viewer, state), replies });
-      else if (comment.status === "removed" && replies.length > 0) {
-        items.push({ ...card(comment, author, viewer, "removed"), replies });
+      const author = await authorOf(head.userId);
+      const state = shownAs(head, author, viewer);
+      // A pending head nobody else sees has no replies anyone else sees either.
+      if (!state && head.status === "pending") continue;
+      const thread = await threadReplies(ctx, head, own, authorOf, viewer, COMMENT_POLICY.inlineReplies);
+      if (state) items.push({ ...card(head, author, viewer, state), ...thread });
+      else if (thread.replies.length > 0) {
+        items.push({ ...card(head, author, viewer, head.status === "removed" ? "removed" : "withheld"), ...thread });
       }
     }
     return {
@@ -223,13 +321,35 @@ export const list = query({
   },
 });
 
+/**
+ * Every reply to one thread the viewer sees (up to 100), oldest first, for
+ * "N more replies". Null when the target is unknown or hidden, or the
+ * Comment is not a thread head on it.
+ */
+export const replies = query({
+  args: { target: targetRefArg, commentId: v.id("comments") },
+  handler: async (ctx, args) => {
+    const resolved = await resolveTarget(ctx, args.target);
+    if (!resolved) return null;
+    const keys = await keysOf(ctx, resolved.target);
+    const head = await ctx.db.get(args.commentId);
+    if (!head || head.parentId || head.seriesId !== keys.seriesId || head.volumeId !== keys.volumeId) return null;
+    const viewer = await viewerOrNull(ctx);
+    const own = await ownRows(ctx, viewer, keys);
+    const thread = await threadReplies(ctx, head, own, authorCache(ctx), viewer, REPLIES_MAX);
+    return thread.replies;
+  },
+});
+
 // ---------- writing ----------
 
 /**
  * Post a Comment, or a reply to a top-level one, on a Series or Volume:
  * 1 to 2,000 characters of plain text, optionally marked as a spoiler.
  * Published at once unless a hold rule fires (`held`), in which case only
- * its author and the queue see it until a Moderator approves it.
+ * its author and the queue see it until a Moderator approves it. A Shadowed
+ * User's Comment is stored as shadowed, whatever the hold rules say, and
+ * reported to them as published.
  */
 export const post = mutation({
   args: {
@@ -242,7 +362,7 @@ export const post = mutation({
     const user = await requireUser(ctx);
     await rateLimiter.limit(ctx, "commentPost", { key: user._id, throws: true });
     const body = cleanBody(args.body);
-    const keys = await keysOf(ctx, await requireActiveTarget(ctx, args.target));
+    const keys = await keysOf(ctx, await requireActiveTarget(ctx, args.target, "Nothing to comment on here any more."));
     if (args.parentId) {
       const parent = await ctx.db.get(args.parentId);
       if (!parent) return fail("notFound", "That comment is gone.");
@@ -250,20 +370,22 @@ export const post = mutation({
       if (parent.seriesId !== keys.seriesId || parent.volumeId !== keys.volumeId) {
         fail("wrongTarget", "That comment belongs to another page.");
       }
-      const open = parent.status === "approved" || (parent.status === "pending" && parent.userId === user._id);
-      if (!open) fail("closed", "That comment is no longer open for replies.");
+      const ownOpen = parent.userId === user._id && (parent.status === "pending" || parent.status === "shadowed");
+      if (parent.status !== "approved" && !ownOpen) fail("closed", "That comment is no longer open for replies.");
     }
-    const held = (await holdReasons(ctx, user, body)).length > 0;
+    const held = !user.commentShadowed && (await holdReasons(ctx, user, body)).length > 0;
+    const status = user.commentShadowed ? "shadowed" : held ? "pending" : "approved";
     const commentId = await ctx.db.insert("comments", {
       userId: user._id,
       ...keys,
-      ...(args.parentId ? { parentId: args.parentId } : {}),
+      ...(args.parentId ? { parentId: args.parentId } : { replyCount: 0 }),
       body,
       spoiler: args.spoiler,
-      status: held ? "pending" : "approved",
+      status,
       reportCount: 0,
       createdAt: Date.now(),
     });
+    if (args.parentId && status === "approved") await bumpReplyCount(ctx, args.parentId, 1);
     return { commentId, held, seriesId: keys.seriesId };
   },
 });
@@ -276,22 +398,24 @@ async function requireOwn(ctx: MutationCtx, user: User, commentId: Id<"comments"
 }
 
 /**
- * Rewrite the viewer's own approved or pending Comment. An edit that adds
- * more than two links sends an approved Comment back to the queue, so a
- * clean post cannot be turned into spam afterwards.
+ * Rewrite the viewer's own approved, pending, or shadowed Comment. An edit
+ * that adds more than two links sends an approved Comment back to the
+ * queue, so a clean post cannot be turned into spam afterwards (a shadowed
+ * one stays shadowed).
  */
 export const edit = mutation({
   args: { commentId: v.id("comments"), body: v.string(), spoiler: v.boolean() },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
     const comment = await requireOwn(ctx, user, args.commentId);
-    if (comment.status !== "approved" && comment.status !== "pending") {
+    if (comment.status !== "approved" && comment.status !== "pending" && comment.status !== "shadowed") {
       fail("badState", "This comment can no longer be edited.");
     }
     const body = cleanBody(args.body);
-    const relinked = !isDataTeam(user) && linkCount(body) > COMMENT_POLICY.maxLinks;
+    const relinked =
+      comment.status === "approved" && !isDataTeam(user) && linkCount(body) > COMMENT_POLICY.maxLinks;
     const now = Date.now();
-    await ctx.db.patch(comment._id, {
+    await patchComment(ctx, comment, {
       body,
       spoiler: args.spoiler,
       editedAt: now,
@@ -313,7 +437,7 @@ export const remove = mutation({
     const user = await requireUser(ctx);
     const comment = await requireOwn(ctx, user, commentId);
     if (comment.status === "removed") return null;
-    await ctx.db.patch(comment._id, { status: "removed", updatedAt: Date.now() });
+    await patchComment(ctx, comment, { status: "removed", updatedAt: Date.now() });
     await audit(ctx, comment._id, "remove", { kind: "user", userId: user._id }, { reason: "Deleted by its author" });
     return null;
   },
@@ -354,7 +478,10 @@ export const report = mutation({
     });
     const reportCount = comment.reportCount + 1;
     const hide = reportCount >= COMMENT_POLICY.autoHideReports;
-    await ctx.db.patch(comment._id, { reportCount, ...(hide ? { status: "hidden" as const, updatedAt: Date.now() } : {}) });
+    await patchComment(ctx, comment, {
+      reportCount,
+      ...(hide ? { status: "hidden" as const, updatedAt: Date.now() } : {}),
+    });
     if (hide) {
       await audit(ctx, comment._id, "hide", { kind: "system" }, { reason: `${reportCount} reports` });
     }
@@ -383,18 +510,20 @@ const moderationAction = v.union(
 
 /** The statuses each action applies to, and where it leaves the Comment. */
 const TRANSITIONS = {
-  // Approving a published Comment dismisses its reports.
+  // On a published Comment, approve means "dismiss its reports".
   approve: { from: ["pending", "approved"], to: "approved" },
-  hide: { from: ["approved", "pending"], to: "hidden" },
+  hide: { from: ["approved", "pending", "shadowed"], to: "hidden" },
   unhide: { from: ["hidden"], to: "approved" },
-  remove: { from: ["approved", "pending", "hidden"], to: "removed" },
+  remove: { from: ["approved", "pending", "hidden", "shadowed"], to: "removed" },
   restore: { from: ["removed"], to: "approved" },
-} as const satisfies Record<string, { from: ReadonlyArray<Comment["status"]>; to: Comment["status"] }>;
+} as const satisfies Record<string, { from: ReadonlyArray<Status>; to: Status }>;
 
 /**
  * A Moderator's decision on one Comment, audited with an optional reason.
- * Every move to `approved` clears the Comment's reports. Restore refuses a
- * Comment its author deleted.
+ * Every move to `approved` clears the Comment's reports, and lands on
+ * `shadowed` instead while its author is a Shadowed User. Approving a
+ * published Comment needs reports to dismiss. Restore refuses a Comment its
+ * author deleted.
  */
 export const moderate = mutation({
   args: { commentId: v.id("comments"), action: moderationAction, reason: v.optional(v.string()) },
@@ -403,8 +532,11 @@ export const moderate = mutation({
     const comment = await ctx.db.get(args.commentId);
     if (!comment) return fail("notFound", "That comment is gone.");
     const { from, to } = TRANSITIONS[args.action];
-    if (!(from as ReadonlyArray<Comment["status"]>).includes(comment.status)) {
+    if (!(from as ReadonlyArray<Status>).includes(comment.status)) {
       fail("badState", `Can't ${args.action} a comment that is ${comment.status}.`);
+    }
+    if (args.action === "approve" && comment.status === "approved" && comment.reportCount === 0) {
+      fail("badState", "This comment is published and has no reports to dismiss.");
     }
     if (args.action === "restore") {
       const removals = await ctx.db
@@ -418,10 +550,15 @@ export const moderate = mutation({
       }
     }
     if (to === "approved") {
+      const author = await ctx.db.get(comment.userId);
       await dismissReports(ctx, comment);
-      await ctx.db.patch(comment._id, { status: to, reportCount: 0, updatedAt: Date.now() });
+      await patchComment(ctx, comment, {
+        status: author?.commentShadowed ? "shadowed" : "approved",
+        reportCount: 0,
+        updatedAt: Date.now(),
+      });
     } else {
-      await ctx.db.patch(comment._id, { status: to, updatedAt: Date.now() });
+      await patchComment(ctx, comment, { status: to, updatedAt: Date.now() });
     }
     await audit(ctx, comment._id, args.action, { kind: "user", userId: moderator._id }, reasonOf(args.reason));
     return null;
@@ -429,9 +566,31 @@ export const moderate = mutation({
 });
 
 /**
+ * Move a user's Comments from one status to another, SHADOW_BATCH at a
+ * time, stopping after SHADOW_MAX. Rows past the cap keep their status:
+ * leftover approved rows of a Shadowed User are still hidden by `shownAs`,
+ * they just take page slots.
+ */
+async function moveStatus(ctx: MutationCtx, userId: Id<"users">, from: Status, to: Status) {
+  let moved = 0;
+  while (moved < SHADOW_MAX) {
+    const batch = await ctx.db
+      .query("comments")
+      .withIndex("by_user", (q) => q.eq("userId", userId).eq("status", from))
+      .take(Math.min(SHADOW_BATCH, SHADOW_MAX - moved));
+    for (const row of batch) await patchComment(ctx, row, { status: to });
+    moved += batch.length;
+    if (batch.length < SHADOW_BATCH) break;
+  }
+  return moved;
+}
+
+/**
  * Shadow or unshadow a Comment's author (a Shadowed User's Comments look
- * published to them and are hidden from everyone else). Audited against the
- * Comment that prompted it. A no-op change records nothing.
+ * published to them and are hidden from everyone else). Shadowing turns
+ * their approved Comments into shadowed ones; unshadowing publishes every
+ * shadowed one, including those written while shadowed. Audited against
+ * the Comment that prompted it. A no-op change records nothing.
  */
 export const setShadowed = mutation({
   args: { commentId: v.id("comments"), shadowed: v.boolean(), reason: v.optional(v.string()) },
@@ -444,6 +603,8 @@ export const setShadowed = mutation({
     if (Boolean(author.commentShadowed) === args.shadowed) return null;
     if (args.shadowed && isDataTeam(author)) fail("forbidden", "Data Team members can't be shadowed.");
     await ctx.db.patch(author._id, { commentShadowed: args.shadowed ? true : undefined });
+    if (args.shadowed) await moveStatus(ctx, author._id, "approved", "shadowed");
+    else await moveStatus(ctx, author._id, "shadowed", "approved");
     await audit(ctx, comment._id, args.shadowed ? "shadow" : "unshadow", { kind: "user", userId: moderator._id }, {
       ...reasonOf(args.reason),
       userId: author._id,
@@ -457,17 +618,17 @@ export const setShadowed = mutation({
 const queueTab = v.union(v.literal("pending"), v.literal("reported"), v.literal("hidden"), v.literal("removed"));
 
 function tabRows(ctx: QueryCtx, tab: "pending" | "reported" | "hidden" | "removed", take: number) {
-  const byStatus = ctx.db.query("comments");
+  const comments = ctx.db.query("comments");
   switch (tab) {
     case "pending": // oldest first: the longest wait at the top
-      return byStatus.withIndex("by_status", (q) => q.eq("status", "pending")).order("asc").take(take);
+      return comments.withIndex("by_status_time", (q) => q.eq("status", "pending")).order("asc").take(take);
     case "reported": // most reported first
-      return byStatus
+      return comments
         .withIndex("by_status", (q) => q.eq("status", "approved").gte("reportCount", 1))
         .order("desc")
         .take(take);
-    default:
-      return byStatus.withIndex("by_status", (q) => q.eq("status", tab)).order("desc").take(take);
+    default: // newest first
+      return comments.withIndex("by_status_time", (q) => q.eq("status", tab)).order("desc").take(take);
   }
 }
 
@@ -568,8 +729,10 @@ export async function purgeUserComments(ctx: MutationCtx, userId: Id<"users">) {
       .withIndex("by_parent", (q) => q.eq("parentId", comment._id))
       .collect();
     for (const reply of replies) {
-      if (reply.userId !== userId) await ctx.db.patch(reply._id, { parentId: undefined });
+      if (reply.userId !== userId) await ctx.db.patch(reply._id, { parentId: undefined, replyCount: 0 });
     }
+    // Another user's thread loses one approved reply (a no-op once its head is gone).
+    if (comment.parentId && comment.status === "approved") await bumpReplyCount(ctx, comment.parentId, -1);
     await ctx.db.delete(comment._id);
   }
 }

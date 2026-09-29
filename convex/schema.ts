@@ -40,13 +40,16 @@ const cover = v.object({
 const visibility = v.union(v.literal("public"), v.literal("private"));
 
 // A Comment's moderation state (comments.ts): published, held for a
-// Moderator, hidden (by Moderators or 3 reports), or removed (by its author
-// or a Moderator; the row stays for audit until the author's account purge).
+// Moderator, hidden (by Moderators or 3 reports), removed (by its author
+// or a Moderator; the row stays for audit until the author's account purge),
+// or shadowed (its author is a Shadowed User: published-looking to them,
+// invisible to everyone else; unshadowing turns it back into approved).
 export const commentStatus = v.union(
   v.literal("pending"),
   v.literal("approved"),
   v.literal("hidden"),
   v.literal("removed"),
+  v.literal("shadowed"),
 );
 
 export const commentReportReason = v.union(
@@ -1026,10 +1029,15 @@ export default defineSchema({
     updatedAt: v.optional(v.number()),
     // The author's last edit; the page shows "edited".
     editedAt: v.optional(v.number()),
+    // Thread heads only: how many approved replies it has, kept in step by
+    // every status change of a reply. Drives "N more replies" and whether a
+    // gone head still needs a placeholder. Absent on heads that never had one.
+    replyCount: v.optional(v.number()),
   })
     // A page's threads: (series, volume-or-undefined, top level, status), newest last.
     .index("by_target_thread_status", ["seriesId", "volumeId", "parentId", "status"])
-    .index("by_parent", ["parentId"])
+    // A thread's replies by status, oldest first.
+    .index("by_parent", ["parentId", "status"])
     // The hold rule's approved count and the account purge.
     .index("by_user", ["userId", "status"])
     // The viewer's own held and hidden Comments on one page.
@@ -1037,8 +1045,10 @@ export default defineSchema({
     // Merge transfer and impact previews.
     .index("by_series", ["seriesId"])
     .index("by_volume", ["volumeId"])
-    // The moderation queue: pending and hidden by age, reported by count.
-    .index("by_status", ["status", "reportCount"]),
+    // The moderation queue's Reported tab: approved, most reported first.
+    .index("by_status", ["status", "reportCount"])
+    // The other queue tabs by age: pending oldest first, hidden and removed newest first.
+    .index("by_status_time", ["status"]),
 
   // One User's report of one Comment (CONTEXT.md: Comment Report). Three
   // distinct reports hide an approved Comment until a Moderator decides.

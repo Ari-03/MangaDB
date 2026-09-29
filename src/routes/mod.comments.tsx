@@ -29,7 +29,7 @@ type Action = FunctionArgs<typeof api.comments.moderate>["action"];
 
 const TABS: ReadonlyArray<{ tab: Tab; label: string; hint: string }> = [
   { tab: "pending", label: "Pending", hint: "Held by a hold rule, oldest first. Approve publishes; nobody else sees them yet." },
-  { tab: "reported", label: "Reported", hint: "Published with one or more reports, most reported first. Approve dismisses the reports." },
+  { tab: "reported", label: "Reported", hint: "Published with one or more reports, most reported first. Dismiss reports keeps it published." },
   { tab: "hidden", label: "Hidden", hint: "Hidden by a Moderator or by three reports. Only the author sees that they are there." },
   { tab: "removed", label: "Removed", hint: "Removed by a Moderator or deleted by the author, newest first. Only Moderator removals can be restored." },
 ];
@@ -49,8 +49,9 @@ const ACTIONS: Record<Row["status"], ReadonlyArray<{ action: Action; label: stri
     { action: "hide", label: "Hide" },
     { action: "remove", label: "Remove" },
   ],
+  // Only the Reported tab lists published Comments; approving one dismisses its reports.
   approved: [
-    { action: "approve", label: "Approve" },
+    { action: "approve", label: "Dismiss reports" },
     { action: "hide", label: "Hide" },
     { action: "remove", label: "Remove" },
   ],
@@ -59,6 +60,11 @@ const ACTIONS: Record<Row["status"], ReadonlyArray<{ action: Action; label: stri
     { action: "remove", label: "Remove" },
   ],
   removed: [{ action: "restore", label: "Restore" }],
+  // No tab lists a Shadowed User's Comments; kept for completeness.
+  shadowed: [
+    { action: "hide", label: "Hide" },
+    { action: "remove", label: "Remove" },
+  ],
 };
 
 function CommentsQueuePage() {
