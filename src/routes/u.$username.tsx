@@ -5,6 +5,7 @@ import { api } from "../../convex/_generated/api";
 import { catalogQuery, type PublicProfileData } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
 import { showMature } from "~/lib/mature";
+import { ScoreText } from "~/lib/ratings";
 import { SITE_NAME } from "~/lib/seo";
 import { slugParams } from "~/lib/slug";
 
@@ -22,7 +23,8 @@ const STATUS_LABELS = {
  * (Owned Releases with selected Variants, Bundles with derived member
  * ownership; never Wanted/Ordered) and public Reading (Series Reading Status,
  * active pass percentage, Volume read counts, and rated Series), plus every
- * visible Review, which is public by nature. Follows are never shown in v1,
+ * visible Review once public Reviews are switched on (convex/lib/features.ts;
+ * until then the query returns none). Follows and Favorites are never shown,
  * and there is no activity feed. Visibility is enforced in the Convex query
  * (sharing.publicProfile); this page just renders what it is given.
  *
@@ -381,15 +383,12 @@ function RatingsSection({
     <section className="me-section">
       <div className="section-head">
         <h2 className="section-title">Ratings</h2>
-        <p className="section-note">Out of 10, for series whose reading is shared</p>
+        <p className="section-note">For series whose reading is shared</p>
       </div>
       <ul className="profile-ratings">
         {ratings.map((row) => (
           <li key={row.seriesPublicId}>
-            <span className="review-score">
-              {row.rating}
-              <span className="review-score-of">/10</span>
-            </span>
+            <ScoreText score={row.score} />
             <Link
               to="/series/$publicId/$slug"
               params={slugParams(row.seriesPublicId, row.title)}
@@ -446,12 +445,7 @@ function ProfileReview({
             {target.title}
           </Link>
         )}
-        {review.rating !== null ? (
-          <span className="review-score">
-            {review.rating}
-            <span className="review-score-of">/10</span>
-          </span>
-        ) : null}
+        {review.score !== null ? <ScoreText score={review.score} /> : null}
         {review.spoiler ? <span className="chip chip--spoiler">Spoilers</span> : null}
       </header>
       {review.spoiler && !revealed ? (

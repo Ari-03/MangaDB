@@ -77,13 +77,22 @@ export const useArtConcealed = () => useContext(ConcealContext);
  * A Mature Series' page (or an adult-only publisher's) for this viewer:
  * when they have not opted in, a notice leads and every cover inside is
  * drawn as cloth marked 18+. When they have, the children render untouched.
+ * `notice={false}` conceals without the notice, for one cover in a list.
  */
-export function ConcealArt({ mature, children }: { mature: boolean; children: ReactNode }) {
+export function ConcealArt({
+  mature,
+  notice = true,
+  children,
+}: {
+  mature: boolean;
+  notice?: boolean;
+  children: ReactNode;
+}) {
   const { showMature } = useMature();
   const concealed = mature && !showMature;
   return (
     <ConcealContext.Provider value={concealed}>
-      {concealed ? <MatureNotice /> : null}
+      {concealed && notice ? <MatureNotice /> : null}
       {children}
     </ConcealContext.Provider>
   );

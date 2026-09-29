@@ -1,9 +1,13 @@
-// Reviews (CONTEXT.md: Review): one public plain-text write-up per user per
-// Series or Volume, shown on the target's page under its author's username
-// with the author's Rating beside it. Plain text only: no Markdown, line
-// breaks kept. Post-moderated: a Moderator hides a Review (reviewAudit
-// records who and why), after which only Moderators and its author see it.
-// Hidden stays hidden through the author's edits.
+// Reviews (CONTEXT.md: Review): one plain-text write-up per user per Series
+// or Volume, meant for the target's page under its author's username with
+// the author's Rating beside it. Plain text only: no Markdown, line breaks
+// kept. Post-moderated: a Moderator hides a Review (reviewAudit records who
+// and why), after which only Moderators and its author see it. Hidden stays
+// hidden through the author's edits.
+//
+// While FEATURES.publicReviews is off (lib/features.ts), writing stays open
+// but only the author reads a Review (`mine`): `list` and `hiddenList`
+// answer empty, and profiles leave Reviews out.
 
 import { HOUR, RateLimiter } from "@convex-dev/rate-limiter";
 import { ConvexError, v } from "convex/values";
@@ -11,6 +15,7 @@ import { components } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { FEATURES } from "./lib/features";
 import {
   ratingRow,
   requireActiveTarget,
@@ -71,7 +76,8 @@ async function reviewCard(ctx: QueryCtx, review: Doc<"reviews">) {
   return {
     reviewId: review._id,
     username: author?.username ?? null,
-    rating: rating?.rating ?? null,
+    // The author's 1-100 score; the client renders it in the viewer's format.
+    score: rating?.score ?? null,
     body: review.body,
     spoiler: review.spoiler,
     hidden: review.status === "hidden",
@@ -97,13 +103,15 @@ function byStatus(ctx: QueryCtx, target: TargetId, status: Doc<"reviews">["statu
  * A target's visible Reviews, newest first: the first `limit` (default one
  * page) and whether more exist. The same for every viewer, so the page
  * loaders can render it; hidden Reviews come from `hiddenList` and `mine`.
- * Null when the target is unknown or hidden.
+ * Null when the target is unknown or hidden; an empty page while
+ * FEATURES.publicReviews is off.
  */
 export const list = query({
   args: { target: targetRefArg, limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const resolved = await resolveTarget(ctx, args.target);
     if (!resolved) return null;
+    if (!FEATURES.publicReviews) return { items: [], hasMore: false };
     const limit = Math.max(1, Math.min(REVIEW_LIMIT_MAX, Math.floor(args.limit ?? REVIEW_PAGE)));
     const rows = await byStatus(ctx, resolved.target, "visible").take(limit + 1);
     const items = [];
@@ -112,10 +120,14 @@ export const list = query({
   },
 });
 
-/** A target's hidden Reviews, newest first, for Moderators only; null for everyone else. */
+/**
+ * A target's hidden Reviews, newest first, for Moderators only; null for
+ * everyone else, and for everyone while FEATURES.publicReviews is off.
+ */
 export const hiddenList = query({
   args: { target: targetRefArg },
   handler: async (ctx, { target }) => {
+    if (!FEATURES.publicReviews) return null;
     if (!isModerator(await viewerOrNull(ctx))) return null;
     const resolved = await resolveTarget(ctx, target);
     if (!resolved) return null;

@@ -23,6 +23,22 @@ describe("users.viewer", () => {
   });
 });
 
+describe("users.setScoreFormat", () => {
+  it("defaults to point10, stores the choice, and needs a signed-in user", async () => {
+    const t = convexTest(schema);
+    const asA = t.withIdentity({ subject: SUBJECT_A });
+    await asA.mutation(api.users.claimUsername, { username: "alice" });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ scoreFormat: "point10" });
+
+    await asA.mutation(api.users.setScoreFormat, { format: "smiley3" });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ scoreFormat: "smiley3" });
+
+    await expect(t.mutation(api.users.setScoreFormat, { format: "star5" })).rejects.toBeInstanceOf(
+      ConvexError,
+    );
+  });
+});
+
 describe("users.claimUsername", () => {
   it("rejects unauthenticated claims", async () => {
     const t = convexTest(schema);

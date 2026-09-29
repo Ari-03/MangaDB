@@ -107,8 +107,8 @@ Worker on SSR, the browser on client navigations), which `fetchSeriesBrowse`
 cutoff; later pages keep the first page's date, which their cursor carries,
 so a view paged across midnight stays one set. Other views get no date and
 keep one cache key. Popularity is Series Follows and distinct collectors;
-"Top rated" is the rating average, ranked only from 3 ratings up (fewer sort
-last). Unlike the other facts, the rating fields are not left to the
+"Top rated" is the rating average (1–100 scores), ranked only from 3 ratings
+up (fewer sort last). Unlike the other facts, the rating fields are not left to the
 rebuild: every rating write patches the Series' row and, when its rank
 moves, its pack entry (see Ratings and reviews below). The Source Status
 filter appears once any importer supplies a status.
@@ -460,7 +460,8 @@ owning and reading (`convex/follows.ts`; UI in `src/lib/follows.tsx`).
 Follows are always private in v1 — the profile never shows them.
 
 - **Explicit follow toggle** on the Series page, in its own "New releases"
-  group of the tracking bar — visibly apart from the "Your reading" group
+  column of the tracking bar (beside the private Favorite toggle, between
+  "Your rating" and "Your reading") — visibly apart from the "Your reading" group
   (status + progress), since following a Series says nothing about reading
   it. `setSeriesFollow` is the
   single write path; nothing follows a Series as a side effect of anything.
@@ -531,31 +532,56 @@ visibility defaults for Ownership and Reading plus per-Series overrides
 
 `convex/ratings.ts`, `convex/reviews.ts`, shared target and aggregate code in
 `convex/lib/ratings.ts` (reading the aggregate and the "Top rated" rank in
-`convex/lib/ratingStats.ts`); UI in `src/lib/ratings.tsx` and `src/lib/reviews.tsx`,
+`convex/lib/ratingStats.ts`), score conversions in `convex/lib/scoreFormat.ts`
+(shared with the client); UI in `src/lib/ratings.tsx` and `src/lib/reviews.tsx`,
 styles in `src/styles/ratings.css`.
 
-- **Rating**: a whole number from 1 to 10 per user per Series or Volume,
-  set from the tracking bar (Series page) or tracking card (Volume page), and
-  changeable or clearable. The number is private; the public sees the
-  target's average and count ("8.4 · 12 ratings") as a chip in the page
-  header. `ratingStats` holds each target's sum and count and moves in the
-  same transaction as the rating; merges and splits recount it. A Series'
+- **Rating**: one whole-number `score` from 1 to 100 per user per Series or
+  Volume, changeable or clearable. The number is private; the public sees the
+  target's average and count as a chip in the page header. `ratingStats`
+  holds each target's sum and count of scores and moves in the same
+  transaction as the rating; merges and splits recount it. A Series'
   aggregate is also copied into its `seriesStats` row and pack entry at once
-  (`seriesBrowse.syncRatingProjection`) for the library's "Top rated" sort.
+  (`seriesBrowse.syncRatingProjection`) for the library's "Top rated" sort,
+  whose `ratingRank` is the 1–100 average once 3 ratings are in.
+- **Rating format** (AniList style): each user picks how they rate and read
+  scores in `/me` → Settings → Rating format (`users.setScoreFormat`, stored
+  as `users.scoreFormat`, default `point10`; `users.viewer` returns it). The
+  stored score never changes with the format.
+
+  | Format | Control | Stored score | A score reads as |
+  |---|---|---|---|
+  | `point10` | buttons 1–10 | n × 10 | max(1, round(score / 10)) |
+  | `star5` | five stars | n × 20 | max(1, round(score / 20)) |
+  | `point100` | number field with −/+ steppers | n | score |
+  | `smiley3` | Negative / Neutral / Positive | 35 / 60 / 85 | ≤ 49 / 50–74 / ≥ 75 |
+
+  The page aggregate follows the viewer's format ("8.4", "4.2 ★", "84");
+  smiley3 viewers and signed-out visitors see the point10 form. The count
+  stays beside it ("8.4 · 12 ratings").
+- **Where**: "Your rating" is the first column of the tracking bar on the
+  Series page and the first block of the tracking card on the Volume page,
+  with a one-line note that the number is private.
 - **Review**: 20 to 5,000 characters of plain text (line breaks kept, no
   Markdown), optionally marked as spoilers, one per user per Series or Volume.
-  Reviews are listed publicly under a "Reviews" heading, newest first, 20 at a
-  time, with the author's username and their rating of the same target.
-  Spoilers stay folded until "Show spoiler" is clicked. Authors edit and
-  delete their own.
+  Written from "Write a review" (or "Edit your review") under the rating,
+  which opens the form in place; a saved Review sits folded beneath it with
+  Edit and Delete.
+- **Reviews are private for now.** `FEATURES.publicReviews` in
+  `convex/lib/features.ts` is `false`: `reviews.list` answers an empty page,
+  `reviews.hiddenList` answers null, `sharing.publicProfile` leaves Reviews
+  out, and the Series and Volume pages neither load nor render the public
+  "Reviews" section. Only the author reads their Review (`reviews.mine`),
+  under a note saying so.
 - **Moderation** is post-hoc: Moderators and Administrators see Hide /
-  Unhide on each Review. A hidden Review leaves the public list and profile.
-  The author still sees it, with a note, and Moderators see it in a hidden
-  list on the page. Every change writes a `reviewAudit` row (actor, action,
-  optional reason). Editing a hidden Review does not unhide it.
-- **Profiles** list the user's rated Series only where their Reading is
-  public for that Series, and every visible Review. Mature Series are left
-  out of both unless the viewer opted in.
+  Unhide on each Review in the public section. A hidden Review leaves the
+  public list and profile. The author still sees it, with a note, and
+  Moderators see it in a hidden list on the page. Every change writes a
+  `reviewAudit` row (actor, action, optional reason). Editing a hidden Review
+  does not unhide it.
+- **Profiles** list the user's rated Series (in the viewer's format) only
+  where their Reading is public for that Series. Mature Series are left out
+  unless the viewer opted in.
 - **Rate limits** (token buckets per user): `ratingSet` 120/hour, `reviewSave`
   20/hour.
 - **Account deletion** removes the user's Ratings (decrementing the
@@ -563,19 +589,59 @@ styles in `src/styles/ratings.css`.
   user already rated or reviewed the survivor, the survivor's row is kept.
 - **Moderation reasons** are capped at 500 characters.
 
+**Turning public Reviews on.** Set `publicReviews: true` in
+`convex/lib/features.ts` and deploy both halves (Convex and the Worker; the
+page reads the same constant). The "Reviews" section returns under the
+editions, listing everyone's visible Reviews newest first, 20 at a time,
+with each author's username and score; spoilers stay folded until "Show
+spoiler". Profiles list every visible Review again, and the note under the
+viewer's own Review changes to say it is public. Staff the moderation first.
+
 **Rolling it out.** After deploying, `npx convex run --prod
 seriesBrowse:rebuild` gives every existing library row and pack entry its
 rating fields now rather than on schedule. Until then "Top rated" treats
 rows without a rank as unranked, so it sorts them last and pages without
 repeats.
 
+## Favorites
+
+`convex/favorites.ts`; UI in `src/lib/favorites.tsx`.
+
+- **Favorite**: a private mark on a Series or a Volume, one per user per
+  target, toggled with "Favorite" / "Favorited" (styled like Follow): in the
+  tracking bar's "New releases" column on the Series page, and at the foot of
+  the tracking card on the Volume page. `favorites.isFavorite` (null signed
+  out) and `favorites.toggle` (signed in, active target, merges followed).
+- **Library**: `/me` → Favorites lists them newest first as covers
+  (`favorites.mine`), Mature covers concealed unless the viewer opted in,
+  each with "Unfavorite". Favorites of hidden records drop out while hidden.
+- **Storage**: `favorites` rows carry `seriesId` always and `volumeId` for a
+  Volume (the Volume's Series denormalised, as on `comments`). Nobody else
+  ever reads them; profiles never show them.
+- **Upkeep**: account deletion deletes them; merges repoint them (the
+  survivor's row wins a clash) and Split replays them back.
+
 ## Comments
 
 `convex/comments.ts` (policy numbers in its `COMMENT_POLICY`); page UI in
-`src/lib/comments.tsx` under the Reviews section of Series and Volume pages;
+`src/lib/comments.tsx` near the foot of Series and Volume pages;
 the queue at `/mod/comments` (`src/routes/mod.comments.tsx`); styles in
 `src/styles/comments.css`. Background and alternatives:
 `docs/research/comments-moderation.md`.
+
+**Comments are switched off for now.** `FEATURES.comments` in
+`convex/lib/features.ts` is `false`: `comments.post`, `edit`, and `report`
+throw `ConvexError({ code: "disabled" })`; `comments.list` and `replies`
+answer an empty page; the Series and Volume pages neither load nor render
+the Comments section; the `.mod-tools` navs drop the "Comments" link and
+its badge; and `/mod/comments` only says Comments are switched off.
+Deleting one's own Comment, moderation mutations, and the account purge
+still work. The code and its tests stay (`convex/comments.test.ts` mocks
+the flag on; `convex/features.test.ts` covers it off).
+
+**Turning them on.** Set `comments: true` in `convex/lib/features.ts` and
+deploy both halves (Convex and the Worker). Everything below applies again
+from the next page load. Staff the queue first.
 
 - **Comment**: 1 to 2,000 characters of plain text, optionally marked as a
   spoiler, on a Series or Volume page. Threads are newest first, 20 at a time
@@ -1572,6 +1638,7 @@ no card) covers this site many times over.
   | `search_performed` | `queryLength`, `resultCount` (once per query the search page ran) |
   | `mature_titles_toggled` | `showMature` |
   | `comment_posted` | `target` (`series` / `volume`), `seriesId`, `isReply`, `held` |
+  | `favorite_toggled` | `target` (`series` / `volume`), `publicId`, `favorite` |
   | `rating_submitted`, `review_submitted` | declared, not wired yet |
 
 - **Querying from Claude Code.** `.mcp.json` registers PostHog's hosted MCP

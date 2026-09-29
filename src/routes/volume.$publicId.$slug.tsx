@@ -1,17 +1,19 @@
 import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
+import { FEATURES } from "../../convex/lib/features";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type VolumePageData } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
+import { FavoriteButton } from "~/lib/favorites";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { ConcealArt } from "~/lib/mature";
 import { RatingAggregate, RatingControl } from "~/lib/ratings";
 import { VolumeReadCount } from "~/lib/reading";
-import { ReviewsSection } from "~/lib/reviews";
+import { OwnReview, ReviewsSection } from "~/lib/reviews";
 import {
   breadcrumbListJsonLd,
   jsonLdScript,
@@ -41,13 +43,14 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
     if (publicId === null) throw notFound();
     // The rating aggregate and first pages of Reviews and Comments render
     // with the page, then follow their live queries (lib/ratings.tsx,
-    // lib/reviews.tsx, lib/comments.tsx).
+    // lib/reviews.tsx, lib/comments.tsx). Reviews and Comments only while
+    // their feature flags are on (convex/lib/features.ts).
     const target = { kind: "volume" as const, publicId };
     const [page, rating, reviews, comments] = await Promise.all([
       catalogQuery(api.catalogPages.volumePage, { publicId }),
       catalogQuery(api.ratings.summary, { target }),
-      catalogQuery(api.reviews.list, { target }),
-      catalogQuery(api.comments.list, { target }),
+      FEATURES.publicReviews ? catalogQuery(api.reviews.list, { target }) : null,
+      FEATURES.comments ? catalogQuery(api.comments.list, { target }) : null,
     ]);
     if (!page) throw notFound();
     const canonical = volumePath(page.volume.publicId, page.volume.title);
@@ -173,9 +176,15 @@ function VolumePage() {
               lazy={false}
             />
           </div>
-          {/* The signed-in tracking card. Both controls render null signed
-              out, leaving the card empty — CSS hides it then. */}
+          {/* The signed-in tracking card. Every control renders null signed
+              out, leaving the card's blocks empty — CSS hides it then. */}
           <div className="track-card">
+            {/* The viewer's private Rating of this Volume, in their Rating
+                Format, with their own Review in place under it. */}
+            <div className="volume-rating">
+              <RatingControl target={ratingTarget} />
+              <OwnReview target={ratingTarget} noun="volume" />
+            </div>
             {/* Volume ownership (#27): displayed purely through the owned
                 Releases covering it — direct or via an Owned Bundle; no
                 stored Volume state. */}
@@ -185,8 +194,10 @@ function VolumePage() {
               seriesPublicId={series.publicId}
               volumePublicId={volume.publicId}
             />
-            {/* The viewer's private 1-10 Rating of this Volume. */}
-            <RatingControl target={ratingTarget} wrapperClass="volume-rating" />
+            {/* The private Favorite toggle. */}
+            <div className="volume-favorite">
+              <FavoriteButton target={ratingTarget} />
+            </div>
           </div>
         </div>
 
@@ -280,8 +291,12 @@ function VolumePage() {
         </div>
       </div>
 
-      <ReviewsSection target={ratingTarget} initial={page.reviews} noun="volume" />
-      <CommentsSection target={ratingTarget} initial={page.comments} noun="volume" />
+      {FEATURES.publicReviews ? (
+        <ReviewsSection target={ratingTarget} initial={page.reviews} noun="volume" />
+      ) : null}
+      {FEATURES.comments ? (
+        <CommentsSection target={ratingTarget} initial={page.comments} noun="volume" />
+      ) : null}
 
       {/* Public revision history + the moderator edit entry point (#31). */}
       <RecordHistory type="volume" publicId={volume.publicId} />

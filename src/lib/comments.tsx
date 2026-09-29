@@ -1,11 +1,14 @@
-// Comments UI (CONTEXT.md: Comment): the "Comments" section under Reviews on
-// a Series or Volume page. The first page of threads is server-rendered from
-// the page loader, then follows the live query (which, signed in, adds the
-// viewer's own held and hidden Comments); "More comments" asks for another
-// page's worth, up to COMMENT_POLICY.maxThreads. Threads are newest first
-// with replies nested one level, oldest first; past the first few, "N more
-// replies" loads the rest of a thread (comments.replies). Plain text: the body renders with its line breaks, nothing
-// is parsed. Every action is re-checked on the server (convex/comments.ts).
+// Comments UI (CONTEXT.md: Comment): the "Comments" section near the foot of
+// a Series or Volume page, rendered only while FEATURES.comments is on (the
+// page decides; convex/lib/features.ts). The first page of threads is
+// server-rendered from the page loader, then follows the live query (which,
+// signed in, adds the viewer's own held and hidden Comments); "More
+// comments" asks for another page's worth, up to COMMENT_POLICY.maxThreads.
+// Threads are newest first with replies nested one level, oldest first; past
+// the first few, "N more replies" loads the rest of a thread
+// (comments.replies). Plain text: the body renders with its line breaks,
+// nothing is parsed. Every action is re-checked on the server
+// (convex/comments.ts).
 
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";

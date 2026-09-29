@@ -14,6 +14,9 @@ import schema from "./schema";
 import { COMMENT_POLICY } from "./comments";
 import type { TargetRef } from "./lib/ratings";
 
+// These tests cover Comments switched on; features.test.ts covers them off.
+vi.mock("./lib/features", () => ({ FEATURES: { publicReviews: true, comments: true } }));
+
 const ADMIN = "user_admin";
 const MOD = "user_mod";
 const EDITOR = "user_editor";

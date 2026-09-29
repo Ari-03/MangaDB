@@ -11,28 +11,49 @@
 }
 .rating-star { width: 12px; height: 12px; fill: currentColor; }
 
-/* --- The viewer's 1-10 control ------------------------------------------
-   Ten numbered steps that fill up to the chosen one. Hovering previews:
-   the whole scale lights, then everything after the hovered step dims. */
+/* --- The viewer's control ------------------------------------------------
+   One of four, by Rating Format (convex/lib/scoreFormat.ts): ten numbered
+   steps or five stars that fill up to the chosen one (hovering previews:
+   the whole scale lights, then everything after the hovered step dims),
+   three labelled smileys, or a 1-100 number with steppers. It lives in the
+   Series page's tracking bar (.track-group--rating) and the Volume page's
+   tracking card (.volume-rating). */
 
-.track-group--rating {
-  grid-column: 1 / -1;
-  margin-top: 14px;
-  padding: 12px 0 0;
-  border-left: 0;
-  border-top: 1px solid var(--line);
+.rating-clear {
+  margin-left: 10px;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--text-mute);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
 }
+.rating-clear:hover { color: var(--accent); }
 
-.rating-scale { display: inline-flex; gap: 3px; }
+/* ten steps share the column's width, never wider than they need */
+.rating-scale {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 3px;
+  width: 100%;
+  max-width: 330px;
+}
 .rating-step {
-  width: 30px;
+  min-width: 0;
   height: 30px;
+  padding: 0;
   border-radius: var(--r-sm);
   border: 1px solid var(--line-strong);
   background: var(--surface-2);
   color: var(--text-mute);
   font-family: var(--display);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
@@ -56,23 +77,99 @@
 }
 .rating-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.rating-clear {
-  border: 0;
+/* five stars: bare glyphs, gold up to the chosen one */
+.rating-scale--stars { grid-auto-columns: 34px; width: auto; gap: 2px; }
+.rating-scale--stars .rating-step,
+.rating-scale--stars .rating-step[aria-pressed="true"],
+.rating-scale--stars:hover .rating-step,
+.rating-scale--stars:hover .rating-step:hover ~ .rating-step {
+  height: 34px;
+  border-color: transparent;
   background: none;
-  padding: 0;
-  color: var(--text-mute);
-  font-size: 0.8rem;
+  color: var(--line-strong);
+}
+.rating-scale--stars .rating-step.is-on,
+.rating-scale--stars:hover .rating-step { color: var(--gold); }
+.rating-scale--stars:hover .rating-step:hover ~ .rating-step { color: var(--line-strong); }
+.rating-step-star { width: 26px; height: 26px; fill: currentColor; vertical-align: middle; }
+
+/* three smileys: labelled pills, only the chosen one lit */
+.rating-smileys { display: flex; flex-wrap: wrap; gap: 6px; }
+.rating-smiley-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 9px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.82rem;
   font-weight: 700;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: background 110ms ease, color 110ms ease, border-color 110ms ease;
+}
+.rating-smiley-btn:hover { border-color: var(--accent); color: var(--accent); }
+.rating-smiley-btn[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.rating-smiley-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rating-smiley { width: 17px; height: 17px; flex: none; }
+
+/* 1-100: a number between two steppers */
+.rating-hundred { display: inline-flex; align-items: center; gap: 6px; }
+.rating-hundred-step {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
   cursor: pointer;
 }
-.rating-clear:hover { color: var(--accent); }
+.rating-hundred-step:hover { border-color: var(--accent); color: var(--accent); }
+.rating-hundred-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rating-hundred-input {
+  width: 4.2rem;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.rating-hundred-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rating-hundred-of { color: var(--text-mute); font-size: 0.8rem; }
 
-/* on the Volume page the control sits in the tracking card */
+/* on the Volume page the rating block leads the tracking card */
 .volume-rating { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.track-card > * + .volume-rating { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
-.volume-rating .rating-step { width: 25px; height: 28px; font-size: 0.82rem; }
+
+/* --- The viewer's own Review, under the rating ---------------------------- */
+
+.own-review { flex-basis: 100%; min-width: 0; display: grid; gap: 10px; margin-top: 4px; }
+.own-review-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.own-review-row .track-hint { flex-basis: auto; }
+.own-review-saved summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.own-review-saved summary:hover { color: var(--accent); }
+.own-review-saved .review-body { margin-top: 8px; font-size: 0.88rem; }
+.own-review-saved .review-hidden-note { margin-top: 8px; }
+.own-review .review-form { margin-bottom: 0; padding: 14px; background: var(--surface-2); }
+.own-review .review-form textarea { background: var(--surface); }
 
 /* --- The Reviews section ------------------------------------------------ */
 
@@ -111,6 +208,8 @@ a.review-author:hover { color: var(--accent); }
   font-variant-numeric: tabular-nums;
 }
 .review-score-of { font-size: 0.72rem; color: var(--text-mute); margin-left: 1px; }
+.review-score--smiley { display: inline-flex; align-items: center; gap: 5px; }
+.review-score--smiley .rating-smiley { width: 18px; height: 18px; }
 .review-date { font-size: 0.8rem; color: var(--text-mute); }
 .review-head .chip { align-self: center; }
 .chip--spoiler { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 45%, transparent); }
@@ -146,8 +245,10 @@ a.review-author:hover { color: var(--accent); }
 .review-mod { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
 .review-mod .form-error,
 .review-actions .form-error { flex-basis: 100%; }
-.reviews .btn-danger { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 55%, transparent); }
-[data-theme="light"] .reviews .btn-danger { color: #a23c15; }
+.reviews .btn-danger,
+.own-review .btn-danger { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 55%, transparent); }
+[data-theme="light"] .reviews .btn-danger,
+[data-theme="light"] .own-review .btn-danger { color: #a23c15; }
 
 .review-mod-reason {
   flex: 1 1 16rem;
@@ -212,6 +313,6 @@ a.review-author:hover { color: var(--accent); }
 .profile-ratings a:hover { color: var(--accent); }
 
 @media (max-width: 560px) {
-  .rating-step { width: 26px; height: 28px; font-size: 0.82rem; }
+  .rating-step { height: 28px; font-size: 0.82rem; }
   .rating-scale { gap: 2px; }
 }

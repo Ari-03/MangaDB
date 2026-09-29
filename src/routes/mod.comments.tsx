@@ -4,6 +4,7 @@ import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { FEATURES } from "../../convex/lib/features";
 import { CommentsQueueLink, useIsDataTeam, useIsModerator } from "~/lib/moderation";
 import { writeErrorMessage } from "~/lib/ratings";
 import { slugParams } from "~/lib/slug";
@@ -14,7 +15,7 @@ import { convexClient } from "~/providers";
  * held Comments awaiting approval, published ones with reports, hidden
  * ones (by a Moderator or three reports), and recently removed ones.
  * Data-Team-visible; Editors read it, Moderators act (convex/comments.ts).
- * Never indexed.
+ * Never indexed. While FEATURES.comments is off it only says so.
  */
 export const Route = createFileRoute("/mod/comments")({
   head: () => ({
@@ -68,6 +69,20 @@ const ACTIONS: Record<Row["status"], ReadonlyArray<{ action: Action; label: stri
 };
 
 function CommentsQueuePage() {
+  if (!FEATURES.comments) {
+    return (
+      <main className="mod-page">
+        <nav className="breadcrumbs" aria-label="Breadcrumb">
+          <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span> <span>Comments</span>
+        </nav>
+        <h1>Comments</h1>
+        <p className="notice">
+          Comments are switched off. Nobody can post, and pages show none. The switch is{" "}
+          <code>FEATURES.comments</code> in <code>convex/lib/features.ts</code>.
+        </p>
+      </main>
+    );
+  }
   if (!convexClient) {
     return (
       <main className="mod-page">

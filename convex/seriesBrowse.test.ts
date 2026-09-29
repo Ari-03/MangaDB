@@ -573,7 +573,7 @@ describe("seriesBrowse.rebuild — Bookless Series", () => {
 });
 
 describe("seriesBrowse Top rated", () => {
-  /** Alpha..Delta with ratingStats written directly: 3x9, 5x7, 2x10 (unranked), none. */
+  /** Alpha..Delta with ratingStats written directly: 3x90, 5x70, 2x100 (unranked), none. */
   async function rated() {
     const t = await library([
       { title: "Alpha", publishers: ["viz"], volumes: 1, dates: [] },
@@ -583,9 +583,9 @@ describe("seriesBrowse Top rated", () => {
     ]);
     await t.run(async (ctx) => {
       const byTitle = new Map((await ctx.db.query("series").collect()).map((s) => [s.title, s._id]));
-      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Alpha")!, sum: 27, count: 3 });
-      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Bravo")!, sum: 35, count: 5 });
-      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Charlie")!, sum: 20, count: 2 });
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Alpha")!, sum: 270, count: 3 });
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Bravo")!, sum: 350, count: 5 });
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Charlie")!, sum: 200, count: 2 });
     });
     await t.action(internal.seriesBrowse.rebuild, {});
     return t;
@@ -596,8 +596,8 @@ describe("seriesBrowse Top rated", () => {
     const t = await rated();
     const rows = await t.run((ctx) => ctx.db.query("seriesStats").collect());
     const byTitle = Object.fromEntries(rows.map((r) => [r.title, r]));
-    expect(byTitle.Alpha).toMatchObject({ ratingAverage: 9, ratingCount: 3, ratingRank: 9 });
-    expect(byTitle.Charlie).toMatchObject({ ratingAverage: 10, ratingCount: 2, ratingRank: 0 });
+    expect(byTitle.Alpha).toMatchObject({ ratingAverage: 90, ratingCount: 3, ratingRank: 90 });
+    expect(byTitle.Charlie).toMatchObject({ ratingAverage: 100, ratingCount: 2, ratingRank: 0 });
     expect(byTitle.Delta).toMatchObject({ ratingCount: 0, ratingRank: 0 });
     expect(byTitle.Delta!.ratingAverage).toBeUndefined();
   });
@@ -644,8 +644,8 @@ describe("seriesBrowse Top rated", () => {
     );
     await t.run(async (ctx) => {
       const byTitle = new Map((await ctx.db.query("series").collect()).map((s) => [s.title, s._id]));
-      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Alpha")!, sum: 27, count: 3 });
-      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Bravo")!, sum: 35, count: 5 });
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Alpha")!, sum: 270, count: 3 });
+      await ctx.db.insert("ratingStats", { seriesId: byTitle.get("Bravo")!, sum: 350, count: 5 });
     });
     await t.action(internal.seriesBrowse.rebuild, {});
     // Charlie (3) and Echo (5) as a pre-ratings deploy left them: no ratingRank

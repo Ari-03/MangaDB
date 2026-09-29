@@ -31,9 +31,10 @@ type AnalyticsEvents = {
   reading_status_changed: { seriesId: string; status: ReadingStatus | null; source: Source };
   search_performed: { queryLength: number; resultCount: number };
   mature_titles_toggled: { showMature: boolean };
-  rating_submitted: { seriesPublicId: number; volumePublicId?: number; rating: number };
+  rating_submitted: { seriesPublicId: number; volumePublicId?: number; score: number };
   review_submitted: { seriesPublicId: number; volumePublicId?: number; length: number };
   comment_posted: { target: "series" | "volume"; seriesId: string; isReply: boolean; held: boolean };
+  favorite_toggled: { target: "series" | "volume"; publicId: number; favorite: boolean };
 };
 
 export type AnalyticsEvent = keyof AnalyticsEvents;

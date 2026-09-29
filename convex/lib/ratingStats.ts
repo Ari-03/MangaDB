@@ -18,6 +18,7 @@ export const targetIdArg = v.union(
 );
 export type TargetId = Infer<typeof targetIdArg>;
 
+/** `average` is on the 1-100 score scale; clients render it in a Rating Format. */
 export type RatingSummary = { average: number | null; count: number };
 
 /** A target's ratingStats row, or null when nobody has rated it. */
@@ -44,7 +45,7 @@ export async function ratingSummary(ctx: QueryCtx, target: TargetId): Promise<Ra
   return summaryOf(await statsRow(ctx, target));
 }
 
-/** A Series' "Top rated" sort key: its average once RATING_RANK_MIN ratings are in, else 0. */
+/** A Series' "Top rated" sort key: its 1-100 average once RATING_RANK_MIN ratings are in, else 0. */
 export function ratingRankOf(summary: RatingSummary): number {
   return summary.count >= RATING_RANK_MIN && summary.average !== null ? summary.average : 0;
 }

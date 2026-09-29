@@ -108,15 +108,23 @@ A user's view of Upcoming Releases that either belong to a followed Series and m
 A user's private-by-default sharing policy for Ownership and Reading, with separate defaults for each and per-Series overrides. Visibility is not configured separately for individual Volumes or Releases.
 
 **Rating**:
-A User's private whole-number score from 1 to 10 for one Series or one Volume, at most one per target, which the User may change or clear. Only the target's average and count are public, apart from the score shown beside the same User's Review; rated Series appear on a profile only where the User's Reading is public.
-_Avoid_: score, stars, vote
+A User's private score for one Series or one Volume, at most one per target, which the User may change or clear. It is stored as one whole number from 1 to 100 whatever Rating Format the User entered it in, and every display converts from that. Only the target's average and count are public, apart from the score shown beside the same User's Review; rated Series appear on a profile only where the User's Reading is public.
+_Avoid_: stars, vote
+
+**Rating Format**:
+A User's choice of how they enter and read scores: 10 points, 5 stars, 100 points, or 3 smileys (negative, neutral, positive). It changes the control and the display, never a stored Rating. A public average shows in the viewer's format when that format is numeric, and out of 10 otherwise.
+_Avoid_: scale, score type
+
+**Favorite**:
+A User's private mark on one Series or one Volume, at most one per target, set and cleared from its page and listed in their library. It is independent of Rating, Series Follow, and Collection Entries, and no other User ever sees it.
+_Avoid_: like, bookmark, heart
 
 **Review**:
-A User's public plain-text write-up of one Series or one Volume, at most one per target, signed with their username and shown beside their Rating when they have one. It may be marked as containing spoilers, and only its author edits or deletes it. A Moderator may hide it, after which only Moderators and the author see it.
+A User's plain-text write-up of one Series or one Volume, at most one per target, meant to be signed with their username and shown beside their Rating when they have one. For now Reviews are private: only the author reads theirs, until public Reviews are switched on. It may be marked as containing spoilers, and only its author edits or deletes it. A Moderator may hide it, after which only Moderators and the author see it.
 _Avoid_: comment, post
 
 **Comment**:
-A User's short public plain-text post on one Series or one Volume page, signed with their username, or a reply to such a post; replies go one level deep. It may be marked as containing spoilers, and only its author edits or deletes it. It is published at once unless a hold rule sends it to the Data Team first; a Moderator may hide, remove, or restore it.
+A User's short public plain-text post on one Series or one Volume page, signed with their username, or a reply to such a post; replies go one level deep. It may be marked as containing spoilers, and only its author edits or deletes it. It is published at once unless a hold rule sends it to the Data Team first; a Moderator may hide, remove, or restore it. Comments are currently switched off: nobody can post one and pages show none.
 _Avoid_: review, reply thread
 
 **Comment Report**:

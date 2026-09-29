@@ -12,6 +12,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { scoreFormatValidator } from "./lib/scoreFormat";
+
 // ---------- shared validators ----------
 
 // Partial-precision publication date (#13). `sort` is yyyymmdd with zeroed
@@ -250,9 +252,10 @@ export default defineSchema({
     // Copied from series.mature, so the library can leave Mature Series out.
     mature: v.optional(v.literal(true)),
     // Copied from the Series' ratingStats row by the rebuild and, at once, by
-    // every rating write (lib/ratings.ts). `ratingRank` is the average once
-    // RATING_RANK_MIN ratings are in and 0 before, so "Top rated" sorts the
-    // thinly rated last. Optional only until every row has been rebuilt.
+    // every rating write (lib/ratings.ts), on the 1-100 score scale.
+    // `ratingRank` is the average once RATING_RANK_MIN ratings are in and 0
+    // before, so "Top rated" sorts the thinly rated last. Optional only until
+    // every row has been rebuilt.
     ratingAverage: v.optional(v.number()),
     ratingCount: v.optional(v.number()),
     ratingRank: v.optional(v.number()),
@@ -864,6 +867,9 @@ export default defineSchema({
     // Shadowed User (CONTEXT.md): a Moderator's quiet mute. Their Comments
     // still look published to them and are hidden from everyone else.
     commentShadowed: v.optional(v.boolean()),
+    // Rating Format (CONTEXT.md): how this User enters and reads scores.
+    // Absent means DEFAULT_SCORE_FORMAT (lib/scoreFormat.ts).
+    scoreFormat: v.optional(scoreFormatValidator),
   })
     .index("by_clerkSubject", ["clerkSubject"])
     .index("by_username", ["usernameNormalized"]),
@@ -943,13 +949,14 @@ export default defineSchema({
   // volumeId is set (enforced in lib/ratings.ts), the collectionEntries
   // shape, so both sides stay indexable. One row per (user, target).
 
-  // A Rating: a private 1-10 score. Only the aggregate (ratingStats) and a
-  // Review's own score beside it are ever public.
+  // A Rating: a private whole-number score from 1 to 100, whatever Rating
+  // Format the User entered it in (lib/scoreFormat.ts). Only the aggregate
+  // (ratingStats) and a Review's own score beside it are ever public.
   ratings: defineTable({
     userId: v.id("users"),
     seriesId: v.optional(v.id("series")),
     volumeId: v.optional(v.id("volumes")),
-    rating: v.number(),
+    score: v.number(),
     updatedAt: v.number(),
   })
     .index("by_user", ["userId"])
@@ -959,9 +966,10 @@ export default defineSchema({
     .index("by_series", ["seriesId"])
     .index("by_volume", ["volumeId"]),
 
-  // Sum and count of one target's Ratings, kept in step by every rating
-  // write in the same transaction (lib/ratings.ts), recounted on merge and
-  // split. The average is sum / count; no row, or count 0, means unrated.
+  // Sum and count of one target's Ratings (scores, 1-100), kept in step by
+  // every rating write in the same transaction (lib/ratings.ts), recounted on
+  // merge and split. The average is sum / count; no row, or count 0, means
+  // unrated.
   ratingStats: defineTable({
     seriesId: v.optional(v.id("series")),
     volumeId: v.optional(v.id("volumes")),
@@ -971,10 +979,29 @@ export default defineSchema({
     .index("by_series", ["seriesId"])
     .index("by_volume", ["volumeId"]),
 
-  // A Review: public plain text (line breaks kept, no Markdown) by its
-  // author, post-moderated: Moderators hide or unhide it (reviewAudit). A
-  // later user-content report queue can add optional reportCount /
-  // lastReportedAt fields here without a migration.
+  // A Favorite (CONTEXT.md): a User's private mark on one Series or one
+  // Volume (convex/favorites.ts). A Series row has no volumeId; a Volume row
+  // carries its Volume and, denormalised, the Volume's Series, like
+  // comments. One row per (user, target).
+  favorites: defineTable({
+    userId: v.id("users"),
+    seriesId: v.id("series"),
+    volumeId: v.optional(v.id("volumes")),
+  })
+    // Newest first per user (the index ends in _creationTime): the library view.
+    .index("by_user", ["userId"])
+    // A Series favorite is (user, series, volumeId undefined).
+    .index("by_user_series", ["userId", "seriesId", "volumeId"])
+    .index("by_user_volume", ["userId", "volumeId"])
+    // Merge transfer (every row of a Series, Volume rows included).
+    .index("by_series", ["seriesId"])
+    .index("by_volume", ["volumeId"]),
+
+  // A Review: plain text (line breaks kept, no Markdown) by its author,
+  // public once FEATURES.publicReviews is on (lib/features.ts), and
+  // post-moderated: Moderators hide or unhide it (reviewAudit). A later
+  // user-content report queue can add optional reportCount / lastReportedAt
+  // fields here without a migration.
   reviews: defineTable({
     userId: v.id("users"),
     seriesId: v.optional(v.id("series")),

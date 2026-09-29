@@ -1,9 +1,14 @@
-// Reviews UI (CONTEXT.md: Review): the "Reviews" section of a Series or
-// Volume page. The visible list is server-rendered from the page loader and
-// then follows the live query; "More reviews" asks for another page's
-// worth. Signed in, the viewer's own Review sits above the list with its
-// edit and delete buttons (and, when a Moderator hid it, says so);
-// Moderators get Hide / Unhide on every Review and a list of hidden ones.
+// Reviews UI (CONTEXT.md: Review), in two places:
+// - `OwnReview`, the viewer's own Review in the page's tracking card, under
+//   their Rating: "Write a review" (or "Edit your review") opens the form in
+//   place, and a saved Review sits folded beneath it. Always on.
+// - `ReviewsSection`, the public "Reviews" section of a Series or Volume
+//   page, rendered only while FEATURES.publicReviews is on (the page decides;
+//   convex/lib/features.ts). The visible list is server-rendered from the
+//   page loader and then follows the live query; "More reviews" asks for
+//   another page's worth. The viewer's own Review stays in the card, not the
+//   list. Moderators get Hide / Unhide on every Review and a list of hidden
+//   ones.
 // Reviews are plain text: the body renders with its line breaks, nothing
 // is parsed.
 
@@ -14,8 +19,9 @@ import { useRef, useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { FEATURES } from "../../convex/lib/features";
 import { useIsModerator } from "~/lib/moderation";
-import { writeErrorMessage, type RatingTarget } from "~/lib/ratings";
+import { ScoreText, writeErrorMessage, type RatingTarget } from "~/lib/ratings";
 import { convexClient } from "~/providers";
 
 // Mirrors REVIEW_MIN_LENGTH / REVIEW_MAX_LENGTH / REVIEW_PAGE in convex/reviews.ts.
@@ -88,7 +94,7 @@ function LiveReviews({
 
   return (
     <>
-      <MyReview target={target} mine={mine} noun={noun} />
+      <ReviewPrompt noun={noun} />
       <ReviewList items={items} noun={noun} moderated />
       {hasMore ? (
         <p className="reviews-more">
@@ -130,17 +136,9 @@ function ReviewList({
  * spoiler flag folds behind a button. `moderated` adds the Moderators'
  * Hide / Unhide (the button only shows for them; the server checks again).
  */
-function ReviewCard({
-  item,
-  moderated = false,
-  own = false,
-}: {
-  item: ReviewCardData;
-  moderated?: boolean;
-  own?: boolean;
-}) {
+function ReviewCard({ item, moderated = false }: { item: ReviewCardData; moderated?: boolean }) {
   const [revealed, setRevealed] = useState(false);
-  const folded = item.spoiler && !revealed && !own;
+  const folded = item.spoiler && !revealed;
   return (
     <article className={`review-card${item.hidden ? " is-hidden" : ""}`}>
       <header className="review-head">
@@ -151,12 +149,7 @@ function ReviewCard({
         ) : (
           <span className="review-author">A former reader</span>
         )}
-        {item.rating !== null ? (
-          <span className="review-score" title="The author's rating">
-            {item.rating}
-            <span className="review-score-of">/10</span>
-          </span>
-        ) : null}
+        {item.score !== null ? <ScoreText score={item.score} /> : null}
         <span className="review-date">
           {dateFormat.format(item.createdAt)}
           {item.edited ? " · edited" : ""}
@@ -178,12 +171,10 @@ function ReviewCard({
 
 // ---------- the viewer's own Review ----------
 
-type Mine = FunctionReturnType<typeof api.reviews.mine> | undefined;
-
-function MyReview({ target, mine, noun }: { target: RatingTarget; mine: Mine; noun: string }) {
+/** Signed out or without a username, the Reviews section says how to join in. */
+function ReviewPrompt({ noun }: { noun: string }) {
   const viewer = useQuery(api.users.viewer, {});
-  const [editing, setEditing] = useState(false);
-  if (viewer === undefined || mine === undefined) return null;
+  if (viewer === undefined) return null;
   if (viewer === null) {
     return (
       <p className="review-prompt">
@@ -198,29 +189,64 @@ function MyReview({ target, mine, noun }: { target: RatingTarget; mine: Mine; no
       </p>
     );
   }
-  if (!mine) return null;
+  return null;
+}
+
+/**
+ * The viewer's own Review of a target, for the tracking card under their
+ * Rating: a button that opens the form in place, a one-line note on who can
+ * read it, and the saved Review folded beneath (with Edit / Delete when
+ * unfolded). Renders nothing signed out or before a username is claimed, so
+ * the card can hide itself.
+ */
+export function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
+  if (!convexClient) return null;
+  return <OwnReviewInner target={target} noun={noun} />;
+}
+
+function OwnReviewInner({ target, noun }: { target: RatingTarget; noun: string }) {
+  const mine = useQuery(api.reviews.mine, { target });
+  const [editing, setEditing] = useState(false);
+  if (!mine) return null; // loading, signed out, or username pending
   const review = mine.review;
-  if (!review || editing) {
-    return (
-      <ReviewForm
-        targetId={mine.target}
-        existing={review}
-        noun={noun}
-        onDone={() => setEditing(false)}
-        canCancel={review !== null}
-      />
-    );
-  }
   return (
-    <div className="review-mine">
-      <p className="review-mine-kicker">Your review</p>
-      {review.hidden ? (
-        <p className="notice review-hidden-note">
-          Your review is hidden by moderators. Only you and the moderators can see it.
-        </p>
+    <div className="own-review">
+      {editing ? (
+        <ReviewForm
+          targetId={mine.target}
+          existing={review}
+          noun={noun}
+          onDone={() => setEditing(false)}
+          canCancel
+        />
+      ) : (
+        <div className="own-review-row">
+          <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
+            {review ? "Edit your review" : "Write a review"}
+          </button>
+          <span className="track-hint">
+            {FEATURES.publicReviews
+              ? "Shown on this page under your username."
+              : "Only you can see this for now."}
+          </span>
+        </div>
+      )}
+      {review && !editing ? (
+        <details className="own-review-saved">
+          <summary>
+            Your review
+            {review.spoiler ? " · spoilers" : ""}
+            {review.edited ? " · edited" : ""}
+          </summary>
+          {review.hidden ? (
+            <p className="notice review-hidden-note">
+              Hidden by moderators. Only you and the moderators can see it.
+            </p>
+          ) : null}
+          <p className="review-body">{review.body}</p>
+          <DeleteOwnReview reviewId={review.reviewId} onEdit={() => setEditing(true)} />
+        </details>
       ) : null}
-      <ReviewCard item={review} own />
-      <DeleteOwnReview reviewId={review.reviewId} onEdit={() => setEditing(true)} />
     </div>
   );
 }

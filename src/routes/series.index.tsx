@@ -13,7 +13,7 @@ import {
 import { Cover } from "~/lib/cover";
 import { MatureFilter, showMature } from "~/lib/mature";
 import { MONTH_NAMES } from "~/lib/month";
-import { ratingLine } from "~/lib/ratings";
+import { RatingLine } from "~/lib/ratings";
 import {
   breadcrumbListJsonLd,
   jsonLdScript,
@@ -896,7 +896,10 @@ function SortDetail({ item, sort }: { item: SeriesBrowseItem; sort: SeriesSort }
     case "rating":
       return (
         <p className="caption-sub">
-          {ratingLine({ average: item.ratingAverage, count: item.ratingCount }) ?? "No ratings yet"}
+          <RatingLine
+            summary={{ average: item.ratingAverage, count: item.ratingCount }}
+            fallback="No ratings yet"
+          />
         </p>
       );
     default:

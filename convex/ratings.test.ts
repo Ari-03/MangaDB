@@ -1,4 +1,4 @@
-// Ratings (CONTEXT.md: Rating): one private 1-10 score per user per Series
+// Ratings (CONTEXT.md: Rating): one private 1-100 score per user per Series
 // or Volume, an aggregate that moves in the same transaction, the "Top
 // rated" projection, and the aggregate's upkeep through purge and merge.
 
@@ -51,8 +51,8 @@ async function seed(t: T) {
   });
 }
 
-async function rate(t: T, subject: string, target: { kind: "series"; id: Id<"series"> } | { kind: "volume"; id: Id<"volumes"> }, rating: number | null) {
-  return await t.withIdentity({ subject }).mutation(api.ratings.set, { target, rating });
+async function rate(t: T, subject: string, target: { kind: "series"; id: Id<"series"> } | { kind: "volume"; id: Id<"volumes"> }, score: number | null) {
+  return await t.withIdentity({ subject }).mutation(api.ratings.set, { target, score });
 }
 
 describe("ratings queries", () => {
@@ -64,7 +64,7 @@ describe("ratings queries", () => {
     expect(await t.query(api.ratings.summary, { target: series(999) })).toBeNull();
 
     const mine = await t.withIdentity({ subject: "user_a" }).query(api.ratings.mine, { target: series(1) });
-    expect(mine).toEqual({ target: { kind: "series", id: ids.one.seriesId }, rating: null });
+    expect(mine).toEqual({ target: { kind: "series", id: ids.one.seriesId }, score: null });
   });
 });
 
@@ -74,18 +74,18 @@ describe("ratings.set", () => {
     const ids = await seed(t);
     const target = { kind: "series" as const, id: ids.one.seriesId };
 
-    await rate(t, "user_a", target, 8);
-    await rate(t, "user_b", target, 6);
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 7, count: 2 });
+    await rate(t, "user_a", target, 80);
+    await rate(t, "user_b", target, 60);
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 70, count: 2 });
 
-    await rate(t, "user_a", target, 10); // change
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 8, count: 2 });
+    await rate(t, "user_a", target, 100); // change
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 80, count: 2 });
     expect(
       await t.withIdentity({ subject: "user_a" }).query(api.ratings.mine, { target: series(1) }),
-    ).toMatchObject({ rating: 10 });
+    ).toMatchObject({ score: 100 });
 
     await rate(t, "user_b", target, null); // clear
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 10, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 100, count: 1 });
     await rate(t, "user_a", target, null);
     expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: null, count: 0 });
     // An emptied aggregate leaves no row behind; clearing twice is a no-op.
@@ -97,38 +97,38 @@ describe("ratings.set", () => {
   it("keeps one Rating per user per target, Series and Volume apart", async () => {
     const t = makeT();
     const ids = await seed(t);
-    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 7);
-    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 9);
-    await rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 4);
+    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 70);
+    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 90);
+    await rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 40);
     const rows = await t.run((ctx) => ctx.db.query("ratings").collect());
     expect(rows).toHaveLength(2);
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 9, count: 1 });
-    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 4, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 90, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 40, count: 1 });
   });
 
-  it("rejects anything but a whole number from 1 to 10, and signed-out callers", async () => {
+  it("rejects anything but a whole number from 1 to 100, and signed-out callers", async () => {
     const t = makeT();
     const ids = await seed(t);
     const target = { kind: "series" as const, id: ids.one.seriesId };
-    for (const bad of [0, 11, 7.5, -3, Number.NaN]) {
-      await expect(rate(t, "user_a", target, bad)).rejects.toMatchObject({ data: { code: "invalidRating" } });
+    for (const bad of [0, 101, 7.5, -3, Number.NaN]) {
+      await expect(rate(t, "user_a", target, bad)).rejects.toMatchObject({ data: { code: "invalidScore" } });
     }
-    await expect(t.mutation(api.ratings.set, { target, rating: 5 })).rejects.toMatchObject({
+    await expect(t.mutation(api.ratings.set, { target, score: 50 })).rejects.toMatchObject({
       data: { code: "unauthenticated" },
     });
     await rate(t, "user_a", target, 1);
-    await rate(t, "user_a", target, 10);
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 10, count: 1 });
+    await rate(t, "user_a", target, 100);
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 100, count: 1 });
   });
 
   it("refuses a hidden target", async () => {
     const t = makeT();
     const ids = await seed(t);
     await t.run((ctx) => ctx.db.patch(ids.one.seriesId, { status: "hidden" }));
-    await expect(rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 5)).rejects.toMatchObject({
+    await expect(rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 50)).rejects.toMatchObject({
       data: { code: "notFound" },
     });
-    await expect(rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 5)).rejects.toMatchObject({
+    await expect(rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 50)).rejects.toMatchObject({
       data: { code: "notFound" },
     });
   });
@@ -140,7 +140,7 @@ describe("ratings.set", () => {
     let limited = false;
     for (let i = 0; i < 40 && !limited; i++) {
       try {
-        await rate(t, "user_a", target, (i % 10) + 1);
+        await rate(t, "user_a", target, ((i % 10) + 1) * 10);
       } catch (err) {
         expect(err).toMatchObject({ data: { kind: "RateLimited" } });
         limited = true;
@@ -148,7 +148,7 @@ describe("ratings.set", () => {
     }
     expect(limited).toBe(true);
     // Someone else's bucket is untouched.
-    await rate(t, "user_b", target, 5);
+    await rate(t, "user_b", target, 50);
   });
 });
 
@@ -172,20 +172,20 @@ describe("the Top rated projection", () => {
     const packRank = () =>
       t.run(async (ctx) => (await ctx.db.query("seriesStatsPacks").first())?.entries.find((e) => e.publicId === 1)?.ratingRank);
 
-    await rate(t, "user_a", target, 9);
-    await rate(t, "user_b", target, 7);
-    expect(await row()).toMatchObject({ ratingAverage: 8, ratingCount: 2, ratingRank: 0 });
+    await rate(t, "user_a", target, 90);
+    await rate(t, "user_b", target, 70);
+    expect(await row()).toMatchObject({ ratingAverage: 80, ratingCount: 2, ratingRank: 0 });
     expect(await packRank()).toBe(0);
 
-    await rate(t, "user_c", target, 8);
-    expect(await row()).toMatchObject({ ratingAverage: 8, ratingCount: 3, ratingRank: 8 });
-    expect(await packRank()).toBe(8);
+    await rate(t, "user_c", target, 80);
+    expect(await row()).toMatchObject({ ratingAverage: 80, ratingCount: 3, ratingRank: 80 });
+    expect(await packRank()).toBe(80);
 
     // Both paths of "Top rated": ranked first, the thinly rated last.
     const titles = (page: { items: Array<{ title: string }> }) => page.items.map((i) => i.title);
     const unfiltered = await t.query(api.seriesBrowse.browse, { sort: "rating" });
     expect(titles(unfiltered)).toEqual(["Frieren", "Frieren (duplicate)"]);
-    expect(unfiltered.items[0]).toMatchObject({ ratingAverage: 8, ratingCount: 3 });
+    expect(unfiltered.items[0]).toMatchObject({ ratingAverage: 80, ratingCount: 3 });
     const ascending = await t.query(api.seriesBrowse.browse, { sort: "rating", order: "asc" });
     expect(titles(ascending)).toEqual(["Frieren", "Frieren (duplicate)"]);
     const filtered = await t.query(api.seriesBrowse.browse, { sort: "rating", publishers: ["viz"] });
@@ -193,7 +193,7 @@ describe("the Top rated projection", () => {
 
     // A rebuild derives the same numbers from ratingStats.
     await t.action(internal.seriesBrowse.rebuild, {});
-    expect(await row()).toMatchObject({ ratingAverage: 8, ratingCount: 3, ratingRank: 8 });
+    expect(await row()).toMatchObject({ ratingAverage: 80, ratingCount: 3, ratingRank: 80 });
 
     await rate(t, "user_c", target, null);
     expect(await row()).toMatchObject({ ratingCount: 2, ratingRank: 0 });
@@ -205,12 +205,12 @@ describe("rating upkeep", () => {
   it("purging a user deletes their Ratings and takes them out of the aggregates", async () => {
     const t = makeT();
     const ids = await seed(t);
-    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 10);
-    await rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 2);
-    await rate(t, "user_b", { kind: "series", id: ids.one.seriesId }, 6);
+    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 100);
+    await rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 20);
+    await rate(t, "user_b", { kind: "series", id: ids.one.seriesId }, 60);
 
     await t.mutation(internal.users.purgeUser, { clerkSubject: "user_a" });
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 6, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 60, count: 1 });
     expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: null, count: 0 });
     expect(await t.run((ctx) => ctx.db.query("ratings").collect())).toHaveLength(1);
   });
@@ -225,10 +225,10 @@ describe("rating upkeep", () => {
 
     const survivor = { kind: "series" as const, id: ids.one.seriesId };
     const loser = { kind: "series" as const, id: ids.two.seriesId };
-    await rate(t, "user_a", survivor, 9); // user_a rated both: survivor's 9 wins
-    await rate(t, "user_a", loser, 3);
-    await rate(t, "user_b", loser, 5); // only the loser: moves over
-    await rate(t, "user_c", { kind: "volume", id: ids.two.volumeId }, 7); // Volume ratings stay on their Volume
+    await rate(t, "user_a", survivor, 90); // user_a rated both: survivor's 90 wins
+    await rate(t, "user_a", loser, 30);
+    await rate(t, "user_b", loser, 50); // only the loser: moves over
+    await rate(t, "user_c", { kind: "volume", id: ids.two.volumeId }, 70); // Volume ratings stay on their Volume
 
     const mod = t.withIdentity({ subject: MOD });
     await mod.mutation(api.sensitiveOps.mergeRecords, {
@@ -237,13 +237,13 @@ describe("rating upkeep", () => {
       reason: "Duplicate.",
       confirmImpact: true,
     });
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 7, count: 2 });
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 70, count: 2 });
     // The loser's public ID resolves to the survivor now.
-    expect(await t.query(api.ratings.summary, { target: series(2) })).toEqual({ average: 7, count: 2 });
-    expect(await t.query(api.ratings.summary, { target: volume(21) })).toEqual({ average: 7, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: series(2) })).toEqual({ average: 70, count: 2 });
+    expect(await t.query(api.ratings.summary, { target: volume(21) })).toEqual({ average: 70, count: 1 });
     expect(
       await t.withIdentity({ subject: "user_a" }).query(api.ratings.mine, { target: series(1) }),
-    ).toMatchObject({ rating: 9 });
+    ).toMatchObject({ score: 90 });
     const loserStats = await t.run((ctx) =>
       ctx.db.query("ratingStats").withIndex("by_series", (q) => q.eq("seriesId", ids.two.seriesId)).unique(),
     );
@@ -254,8 +254,8 @@ describe("rating upkeep", () => {
       reason: "Not a duplicate after all.",
       confirmImpact: true,
     });
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 9, count: 1 });
-    expect(await t.query(api.ratings.summary, { target: series(2) })).toEqual({ average: 4, count: 2 });
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 90, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: series(2) })).toEqual({ average: 40, count: 2 });
   });
 
   it("a Volume merge repoints its Ratings the same way", async () => {
@@ -263,16 +263,16 @@ describe("rating upkeep", () => {
     const ids = await seed(t);
     await t.withIdentity({ subject: ADMIN }).mutation(api.users.claimUsername, { username: "alice" });
     await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-    await rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 8);
-    await rate(t, "user_a", { kind: "volume", id: ids.two.volumeId }, 2);
-    await rate(t, "user_b", { kind: "volume", id: ids.two.volumeId }, 6);
+    await rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 80);
+    await rate(t, "user_a", { kind: "volume", id: ids.two.volumeId }, 20);
+    await rate(t, "user_b", { kind: "volume", id: ids.two.volumeId }, 60);
     await t.withIdentity({ subject: ADMIN }).mutation(api.sensitiveOps.mergeRecords, {
       survivor: { type: "volume", id: ids.one.volumeId },
       loser: { type: "volume", id: ids.two.volumeId },
       reason: "Same book.",
       confirmImpact: true,
     });
-    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 7, count: 2 });
+    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 70, count: 2 });
     expect(await t.run((ctx) => ctx.db.query("ratings").collect())).toHaveLength(2);
   });
 });
@@ -285,12 +285,12 @@ describe("ratings.set on merged and hidden targets", () => {
       await ctx.db.patch(ids.two.seriesId, { status: "merged", mergedIntoId: ids.one.seriesId });
       await ctx.db.patch(ids.two.volumeId, { status: "merged", mergedIntoId: ids.one.volumeId });
     });
-    await rate(t, "user_a", { kind: "series", id: ids.two.seriesId }, 6);
-    await rate(t, "user_a", { kind: "volume", id: ids.two.volumeId }, 3);
+    await rate(t, "user_a", { kind: "series", id: ids.two.seriesId }, 60);
+    await rate(t, "user_a", { kind: "volume", id: ids.two.volumeId }, 30);
     const rows = await t.run((ctx) => ctx.db.query("ratings").collect());
     expect(rows.map((r) => r.seriesId ?? r.volumeId).sort()).toEqual([ids.one.seriesId, ids.one.volumeId].sort());
-    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 6, count: 1 });
-    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 3, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 60, count: 1 });
+    expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: 30, count: 1 });
     const stats = await t.run((ctx) => ctx.db.query("ratingStats").collect());
     expect(stats.every((s) => s.seriesId !== ids.two.seriesId && s.volumeId !== ids.two.volumeId)).toBe(true);
   });
@@ -299,11 +299,11 @@ describe("ratings.set on merged and hidden targets", () => {
     const t = makeT();
     const ids = await seed(t);
     await t.run((ctx) => ctx.db.patch(ids.one.volumeId, { status: "hidden" }));
-    await expect(rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 5)).rejects.toMatchObject({
+    await expect(rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 50)).rejects.toMatchObject({
       data: { code: "notFound" },
     });
     // The Series itself is still rateable.
-    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 5);
+    await rate(t, "user_a", { kind: "series", id: ids.one.seriesId }, 50);
   });
 });
 
@@ -335,12 +335,12 @@ describe("syncRatingProjection with a partial library", () => {
       const { t, ids } = await library(damage);
       const packsBefore = await t.run((ctx) => ctx.db.query("seriesStatsPacks").collect());
       for (const reader of ["user_a", "user_b", "user_c"]) {
-        await rate(t, reader, { kind: "series", id: ids.one.seriesId }, 8);
+        await rate(t, reader, { kind: "series", id: ids.one.seriesId }, 80);
       }
       const row = await t.run((ctx) =>
         ctx.db.query("seriesStats").withIndex("by_series", (q) => q.eq("seriesId", ids.one.seriesId)).unique(),
       );
-      expect(row).toMatchObject({ ratingAverage: 8, ratingCount: 3, ratingRank: 8 });
+      expect(row).toMatchObject({ ratingAverage: 80, ratingCount: 3, ratingRank: 80 });
       expect(await t.run((ctx) => ctx.db.query("seriesStatsPacks").collect())).toEqual(packsBefore);
     });
   }

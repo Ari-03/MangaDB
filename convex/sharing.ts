@@ -15,8 +15,8 @@
 //   returns the following/followPromptDismissed fields.
 // - The profile is current-state only — no activity feed, no timestamps.
 // - Rated Series ride on the Reading visibility (a Rating is part of how the
-//   user reads a Series); Reviews are public content and always listed.
-//   Both leave Mature Series out unless the viewer opted in.
+//   user reads a Series); Reviews are public content and listed whenever
+//   FEATURES.publicReviews is on (lib/features.ts). Both leave Mature Series out unless the viewer opted in.
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -26,6 +26,7 @@ import { followMerges } from "./catalogPages";
 import { releaseLink, variantName } from "./collection";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { showMatureArg, visibleTo } from "./lib/mature";
+import { FEATURES } from "./lib/features";
 import { ratingRow, targetOfRow } from "./lib/ratings";
 import { volumeTitle } from "./lib/titles";
 import { normalizeUsername } from "./lib/usernames";
@@ -226,7 +227,8 @@ export const seriesVisibility = query({
  *   present state, never an event.
  * - Ratings: the user's rated Series, where their Reading is public for that
  *   Series. Reviews: every visible Review, whatever the visibility (Reviews
- *   are public by nature). Mature Series in either only with `showMature`.
+ *   are public by nature), or none while FEATURES.publicReviews is off.
+ *   Mature Series in either only with `showMature`.
  *
  * Null when no such user exists. A fully private profile returns empty
  * sections — the page exists (public-but-noindex) but shares nothing.
@@ -448,7 +450,8 @@ export const publicProfile = query({
     }
     reading.sort((a, b) => a.title.localeCompare(b.title));
 
-    // ----- rated Series (Reading visibility) and Reviews (always public) -----
+    // ----- rated Series (Reading visibility) and Reviews (public while
+    // FEATURES.publicReviews is on; left out entirely until then) -----
 
     const ratings = [];
     const ratingRows = await ctx.db
@@ -460,16 +463,18 @@ export const publicProfile = query({
       const series = await followMerges(ctx, "series", await ctx.db.get(row.seriesId));
       if (!series || !visibleTo(showMature, series.mature)) continue;
       if (effectiveVisibility(user, overrides, "reading", series._id) !== "public") continue;
-      ratings.push({ seriesPublicId: series.publicId, title: series.title, rating: row.rating });
+      ratings.push({ seriesPublicId: series.publicId, title: series.title, score: row.score });
     }
-    ratings.sort((a, b) => b.rating - a.rating || a.title.localeCompare(b.title));
+    ratings.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
 
     const reviews = [];
-    const reviewRows = await ctx.db
-      .query("reviews")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .order("desc")
-      .collect();
+    const reviewRows = FEATURES.publicReviews
+      ? await ctx.db
+          .query("reviews")
+          .withIndex("by_user", (q) => q.eq("userId", user._id))
+          .order("desc")
+          .collect()
+      : [];
     for (const row of reviewRows) {
       if (row.status !== "visible") continue;
       const target = targetOfRow(row);
@@ -497,7 +502,7 @@ export const publicProfile = query({
                 title: volumeTitle(series.title, found.label ?? null),
               }
             : { kind: "series" as const, publicId: series.publicId, title: series.title },
-        rating: rating?.rating ?? null,
+        score: rating?.score ?? null,
         body: row.body,
         spoiler: row.spoiler,
       });

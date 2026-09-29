@@ -91,10 +91,10 @@
 .fact-def a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* --- The tracking bar ---------------------------------------------------
-   Follow, Reading Status, per-Series visibility and reading progress, all of
-   them signed-in only. Each control renders nothing signed out, which leaves
-   the bar with no children at all — so the public page never shows an empty
-   frame. */
+   Rating (with the viewer's own Review), Follow and Favorite, Reading Status
+   and progress, and per-Series visibility, all of them signed-in only. Each
+   control renders nothing signed out, which leaves the bar with no children
+   at all — so the public page never shows an empty frame. */
 
 .owner-bar {
   margin-top: 26px;
@@ -103,9 +103,9 @@
   border-radius: var(--r-md);
   background: var(--surface);
   display: grid;
-  /* follow and reading side by side while both get a real column; at any
-     narrower width they stack, so nothing is ever squeezed */
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+  /* rating, following, reading in one row; the rating column is the widest
+     because its ten-step scale is */
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 0;
 }
 /* signed out, every group is empty: no bar at all */
@@ -124,7 +124,33 @@
   border-left: 1px solid var(--line);
 }
 .track-group:first-child { padding-left: 0; border-left: 0; }
+.track-group--rating { padding-left: 0; border-left: 0; }
 .track-group--reading { padding-right: 0; }
+/* Follow and Favorite sit side by side, the follow hint under both */
+.track-group--follow .track-hint { order: 1; }
+
+/* Too narrow for three columns, or while the viewer writes a review: the
+   rating takes a row of its own above following and reading. */
+.owner-bar:has(.track-group--rating .review-form) {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+.owner-bar:has(.track-group--rating .review-form) .track-group--rating {
+  grid-column: 1 / -1;
+  padding: 0 0 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.owner-bar:has(.track-group--rating .review-form) .track-group--follow { padding-left: 0; border-left: 0; }
+@media (max-width: 1180px) {
+  .owner-bar { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+  .track-group--rating {
+    grid-column: 1 / -1;
+    padding: 0 0 14px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .track-group--follow { padding-left: 0; border-left: 0; }
+}
 .track-group--reading .progress { flex: 1 1 100%; }
 /* sharing is the quiet third: one footer line across the bar, its label
    inline, so it never competes with the two groups for width */
@@ -177,6 +203,7 @@
   color: var(--accent-ink);
 }
 .follow-btn.is-following:hover { background: var(--gold); border-color: var(--gold); color: var(--accent-ink); }
+.fav-btn:disabled { cursor: progress; opacity: 0.75; }
 
 /* Per-Series visibility (lib/sharing.tsx) is a popover: its button wears
    the bar's pill, and the panel floats over whatever is below, so opening
@@ -410,8 +437,9 @@
 .volume-cover .cover-ph-num { font-size: 4.6rem; }
 .volume-cover .cover-ph-title { font-size: 1.6rem; -webkit-line-clamp: 7; }
 
-/* Ownership + read count. Both render nothing signed out, so the card is
-   empty then and hides itself. */
+/* Rating (with the viewer's own Review), ownership, read count, Favorite.
+   Every control renders nothing signed out, leaving the card's blocks
+   empty, so the card hides itself then. */
 .track-card {
   margin-top: 44px;
   padding: 16px 18px;
@@ -420,9 +448,18 @@
   background: var(--surface);
   font-size: 0.88rem;
 }
-.track-card:empty { display: none; }
+.track-card:not(:has(> :not(:empty))) { display: none; }
+.track-card > :empty { display: none; }
 .track-card .volume-read { margin-top: 0; }
 .track-card .volume-ownership + .volume-read { margin-top: 12px; }
+/* the rating block leads; a hairline keeps it apart from the shelf facts */
+.track-card > .volume-rating:not(:empty) + :not(:empty) {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.track-card > .volume-favorite { margin-top: 12px; }
+.track-card > .volume-favorite:first-child { margin-top: 0; }
 
 .volume-title {
   font-size: clamp(2rem, 1.5rem + 2vw, 2.9rem);
@@ -564,6 +601,15 @@
     border-top: 1px solid var(--line);
   }
   .track-group:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
+  /* one column: every group stacked under a hairline */
+  .owner-bar,
+  .owner-bar:has(.track-group--rating .review-form) { grid-template-columns: minmax(0, 1fr); }
+  .owner-bar .track-group--rating,
+  .owner-bar:has(.track-group--rating .review-form) .track-group--rating {
+    padding-bottom: 0;
+    margin-bottom: 0;
+    border-bottom: 0;
+  }
   .track-group .select { flex: 1 1 auto; min-width: 0; }
   .vis-pop-btn,
   .follow-btn { width: 100%; justify-content: center; }

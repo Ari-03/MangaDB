@@ -4,13 +4,17 @@
 // through purge and merge; and the public profile's lists.
 
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "./_generated/api";
 import type { TargetId, TargetRef } from "./lib/ratings";
 import schema from "./schema";
 import { REVIEW_MAX_LENGTH, REVIEW_MIN_LENGTH, REVIEW_REASON_MAX } from "./reviews";
+
+// These tests cover Reviews as public content, so they run with the flag on;
+// features.test.ts covers the switched-off behaviour.
+vi.mock("./lib/features", () => ({ FEATURES: { publicReviews: true, comments: true } }));
 
 const ADMIN = "user_admin";
 const MOD = "user_mod";
@@ -84,7 +88,7 @@ describe("reviews.save", () => {
 
     await t
       .withIdentity({ subject: AUTHOR })
-      .mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, rating: 9 });
+      .mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, score: 90 });
     await write(t, AUTHOR, ids, `  ${TEXT.replace("\n", "\r\n")}  `);
 
     const page = await list(t);
@@ -92,7 +96,7 @@ describe("reviews.save", () => {
     expect(page!.items).toHaveLength(1);
     expect(page!.items[0]).toMatchObject({
       username: "carol",
-      rating: 9,
+      score: 90,
       body: TEXT, // trimmed, line endings unified, line breaks kept
       spoiler: false,
       hidden: false,
@@ -100,7 +104,7 @@ describe("reviews.save", () => {
     });
     // Without a Rating the score is simply absent.
     await write(t, OTHER, ids);
-    expect((await list(t))!.items.find((i) => i.username === "dave")).toMatchObject({ rating: null });
+    expect((await list(t))!.items.find((i) => i.username === "dave")).toMatchObject({ score: null });
   });
 
   it("holds the body to 20-5,000 characters", async () => {
@@ -295,9 +299,9 @@ describe("the public profile", () => {
     const t = makeT();
     const ids = await seed(t);
     const author = t.withIdentity({ subject: AUTHOR });
-    await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, rating: 9 });
-    await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.adult.seriesId }, rating: 6 });
-    await author.mutation(api.ratings.set, { target: { kind: "volume", id: ids.one.volumeId }, rating: 4 });
+    await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, score: 90 });
+    await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.adult.seriesId }, score: 60 });
+    await author.mutation(api.ratings.set, { target: { kind: "volume", id: ids.one.volumeId }, score: 40 });
     await write(t, AUTHOR, ids, TEXT, true);
     await author.mutation(api.reviews.save, {
       target: { kind: "series", id: ids.adult.seriesId },
@@ -311,13 +315,13 @@ describe("the public profile", () => {
     expect(profile!.reviews).toHaveLength(1);
     expect(profile!.reviews[0]).toMatchObject({
       target: { kind: "series", publicId: 1, title: "Frieren" },
-      rating: 9,
+      score: 90,
       spoiler: true,
     });
 
     await author.mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
     profile = await t.query(api.sharing.publicProfile, { username: "carol" });
-    expect(profile!.ratings).toEqual([{ seriesPublicId: 1, title: "Frieren", rating: 9 }]);
+    expect(profile!.ratings).toEqual([{ seriesPublicId: 1, title: "Frieren", score: 90 }]);
 
     profile = await t.query(api.sharing.publicProfile, { username: "carol", showMature: true });
     expect(profile!.ratings.map((r) => r.title)).toEqual(["Frieren", "Adult Title"]);
@@ -419,7 +423,7 @@ describe("the public profile's Reviews after catalog changes", () => {
     const t = makeT();
     const ids = await seed(t);
     const author = t.withIdentity({ subject: AUTHOR });
-    await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, rating: 8 });
+    await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, score: 80 });
     await author.mutation(api.reviews.save, {
       target: { kind: "series", id: ids.two.seriesId },
       body: "Written on what turned out to be a duplicate.",
@@ -439,7 +443,7 @@ describe("the public profile's Reviews after catalog changes", () => {
     expect(profile!.reviews).toHaveLength(1);
     expect(profile!.reviews[0]).toMatchObject({
       target: { kind: "series", publicId: 1, title: "Frieren" },
-      rating: 8,
+      score: 80,
       body: "Written on what turned out to be a duplicate.",
     });
   });

@@ -5,7 +5,8 @@
 // projection. Reading the aggregate lives in lib/ratingStats.ts, a leaf both
 // this module and seriesBrowse.ts import, so the dependency runs one way.
 //
-// The aggregate moves in the same transaction as the Rating that changes it
+// The aggregate sums canonical 1-100 scores (lib/scoreFormat.ts) and moves
+// in the same transaction as the Rating that changes it
 // (`applyRatingDelta`), so "8.4 · 12 ratings" is exact the moment a rating
 // lands; merges and splits, which move many rows at once, recount instead
 // (`recountRatings`). A Series' aggregate is also copied into its library
@@ -27,9 +28,6 @@ export {
   type RatingSummary,
   type TargetId,
 } from "./ratingStats";
-
-export const RATING_MIN = 1;
-export const RATING_MAX = 10;
 
 /** A target as public pages know it: its kind and public ID. */
 export const targetRefArg = v.object({
@@ -181,8 +179,8 @@ async function writeStats(ctx: MutationCtx, target: TargetId, sum: number, count
 }
 
 /**
- * Move a target's aggregate by one Rating changing from `before` to `after`
- * (null is "no rating"): set, change, and clear are all this one step.
+ * Move a target's aggregate by one Rating's score changing from `before` to
+ * `after` (null is "no rating"): set, change, and clear are all this one step.
  */
 export async function applyRatingDelta(
   ctx: MutationCtx,
@@ -202,7 +200,7 @@ export async function recountRatings(ctx: MutationCtx, target: TargetId) {
   await writeStats(
     ctx,
     target,
-    rows.reduce((sum, row) => sum + row.rating, 0),
+    rows.reduce((sum, row) => sum + row.score, 0),
     rows.length,
   );
 }

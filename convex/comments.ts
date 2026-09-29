@@ -21,6 +21,10 @@
 // A head's `replyCount` (approved replies) moves with every status change
 // of a reply (`patchComment`), which bounds both the page's reply reads and
 // the placeholder scan.
+//
+// While FEATURES.comments is off (lib/features.ts), `post`, `edit`, and
+// `report` refuse with code "disabled" and `list` / `replies` answer empty.
+// Deleting one's own Comment, moderation, and the account purge still work.
 
 import { HOUR, RateLimiter } from "@convex-dev/rate-limiter";
 import type { WithoutSystemFields } from "convex/server";
@@ -29,6 +33,7 @@ import { components } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { FEATURES } from "./lib/features";
 import { requireActiveTarget, resolveTarget, targetIdArg, targetRefArg, type TargetId } from "./lib/ratings";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { volumeTitle } from "./lib/titles";
@@ -86,6 +91,11 @@ const isDataTeam = (user: User | null) => Boolean(user && !user.suspended && use
 const fail = (code: string, message: string): never => {
   throw new ConvexError({ code, message });
 };
+
+/** Refuse a Comment write while FEATURES.comments is off. */
+function requireCommentsOn() {
+  if (!FEATURES.comments) fail("disabled", "Comments are switched off for now.");
+}
 
 /** Trim, unify line endings, and hold a Comment body to 1-2,000 characters. */
 function cleanBody(raw: string): string {
@@ -263,13 +273,15 @@ async function threadReplies(
  * `inlineReplies` visible replies oldest first and the count behind them,
  * plus the target ID `post` takes. Signed out it is the same for everyone,
  * so the page loaders render it; signed in it adds the viewer's own held,
- * hidden, and shadowed Comments. Null when the target is unknown or hidden.
+ * hidden, and shadowed Comments. Null when the target is unknown or hidden;
+ * an empty page while FEATURES.comments is off.
  */
 export const list = query({
   args: { target: targetRefArg, limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const resolved = await resolveTarget(ctx, args.target);
     if (!resolved) return null;
+    if (!FEATURES.comments) return { target: resolved.target, items: [], hasMore: false };
     const limit = Math.max(1, Math.min(COMMENT_POLICY.maxThreads, Math.floor(args.limit ?? COMMENT_POLICY.page)));
     const viewer = await viewerOrNull(ctx);
     const authorOf = authorCache(ctx);
@@ -333,6 +345,7 @@ export const replies = query({
   handler: async (ctx, args) => {
     const resolved = await resolveTarget(ctx, args.target);
     if (!resolved) return null;
+    if (!FEATURES.comments) return [];
     const keys = await keysOf(ctx, resolved.target);
     const head = await ctx.db.get(args.commentId);
     if (!head || head.parentId || head.seriesId !== keys.seriesId || head.volumeId !== keys.volumeId) return null;
@@ -361,6 +374,7 @@ export const post = mutation({
     spoiler: v.boolean(),
   },
   handler: async (ctx, args) => {
+    requireCommentsOn();
     const user = await requireUser(ctx);
     await rateLimiter.limit(ctx, "commentPost", { key: user._id, throws: true });
     const body = cleanBody(args.body);
@@ -408,6 +422,7 @@ async function requireOwn(ctx: MutationCtx, user: User, commentId: Id<"comments"
 export const edit = mutation({
   args: { commentId: v.id("comments"), body: v.string(), spoiler: v.boolean() },
   handler: async (ctx, args) => {
+    requireCommentsOn();
     const user = await requireUser(ctx);
     const comment = await requireOwn(ctx, user, args.commentId);
     if (comment.status !== "approved" && comment.status !== "pending" && comment.status !== "shadowed") {
@@ -457,6 +472,7 @@ export const report = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    requireCommentsOn();
     const user = await requireUser(ctx);
     await rateLimiter.limit(ctx, "commentReport", { key: user._id, throws: true });
     const comment = await ctx.db.get(args.commentId);

@@ -530,6 +530,28 @@ async function transferReferences(
         { kind: "series", id: loserId },
         { kind: "series", id: survivorId },
       );
+      // Favorites: a Series favorite moves over unless the user already
+      // favorited the survivor; a Volume favorite keeps its Volume (which just
+      // moved above) and follows it with the Series denorm.
+      const favorites = await ctx.db
+        .query("favorites")
+        .withIndex("by_series", (q) => q.eq("seriesId", loserId))
+        .collect();
+      for (const row of favorites) {
+        if (row.volumeId === undefined) {
+          const existing = await ctx.db
+            .query("favorites")
+            .withIndex("by_user_series", (q) =>
+              q.eq("userId", row.userId).eq("seriesId", survivorId).eq("volumeId", undefined),
+            )
+            .unique();
+          if (existing) {
+            await removeRow(ctx, log, "favorites", row);
+            continue;
+          }
+        }
+        await repoint(ctx, log, "favorites", row, { seriesId: survivorId });
+      }
       // Comments carry the Series on every row (Volume Comments too, whose
       // Volumes just moved above); there is no per-user clash to resolve.
       const comments = await ctx.db
@@ -593,6 +615,23 @@ async function transferReferences(
         { kind: "volume", id: loserId },
         { kind: "volume", id: survivorId },
       );
+      const favorites = await ctx.db
+        .query("favorites")
+        .withIndex("by_volume", (q) => q.eq("volumeId", loserId))
+        .collect();
+      for (const row of favorites) {
+        const existing = await ctx.db
+          .query("favorites")
+          .withIndex("by_user_volume", (q) => q.eq("userId", row.userId).eq("volumeId", survivorId))
+          .unique();
+        if (existing) await removeRow(ctx, log, "favorites", row);
+        else {
+          await repoint(ctx, log, "favorites", row, {
+            volumeId: survivorId,
+            seriesId: survivor.seriesId,
+          });
+        }
+      }
       const comments = await ctx.db
         .query("comments")
         .withIndex("by_volume", (q) => q.eq("volumeId", loserId))
@@ -1101,6 +1140,15 @@ export async function impactOf(
       add("Ratings", (await ratingsOf(ctx, { kind: "series", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "series", id })).length);
       add(
+        "Favorites (of the series and its volumes)",
+        (
+          await ctx.db
+            .query("favorites")
+            .withIndex("by_series", (q) => q.eq("seriesId", id))
+            .collect()
+        ).length,
+      );
+      add(
         "Comments (on the series and its volumes)",
         (
           await ctx.db
@@ -1133,6 +1181,15 @@ export async function impactOf(
       );
       add("Ratings", (await ratingsOf(ctx, { kind: "volume", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "volume", id })).length);
+      add(
+        "Favorites",
+        (
+          await ctx.db
+            .query("favorites")
+            .withIndex("by_volume", (q) => q.eq("volumeId", id))
+            .collect()
+        ).length,
+      );
       add(
         "Comments",
         (
