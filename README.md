@@ -93,7 +93,10 @@ works before hydration.
 It reads `seriesStats`, one denormalized row per active Series that
 `seriesBrowse.rebuild` refreshes every six hours (`crons.ts`;
 `npx convex run seriesBrowse:rebuild` by hand), so no import write path
-changed. The unfiltered shelf pages straight off each sort's index. Filtered
+changed. A run that outgrows a three-minute leg schedules itself to continue
+from the last publicId under the same timestamp, so the walk over production
+never meets Convex's ten-minute action limit; the CLI call returns after the
+first leg and the chain finishes on its own. The unfiltered shelf pages straight off each sort's index. Filtered
 views read `seriesStatsPacks` instead, the same facts packed about a thousand
 Series to a document at the end of each rebuild, then filter, sort, and page
 in memory with an exact keyset cursor and total (a filtered page reads about
@@ -633,7 +636,8 @@ viewer's own Review changes to say it is public. Staff the moderation first.
 
 **Rolling it out.** After deploying, `npx convex run --prod
 seriesBrowse:rebuild` gives every existing library row and pack entry its
-rating fields now rather than on schedule. Until then "Top rated" treats
+rating fields now rather than on schedule (the command returns after the
+first leg; the rest runs as scheduled continuations). Until then "Top rated" treats
 rows without a rank as unranked, so it sorts them last and pages without
 repeats.
 
