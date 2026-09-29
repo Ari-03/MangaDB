@@ -149,7 +149,7 @@ export const sync = internalAction({
     detailsReached: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
-    withExceptionCapture("ann.sync", async () => {
+    withExceptionCapture("ann.sync", ctx, async () => {
       // Explicit annotations break the type cycle with imports.ts's adapter map.
       const source: Doc<"approvedSources"> | null = await ctx.runQuery(
         internal.importSources.getByKey,
@@ -981,7 +981,7 @@ export const syncReleasePages = internalAction({
     afterFailedMirror: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<PageSyncResult> =>
-    withExceptionCapture("ann.syncReleasePages", async () => {
+    withExceptionCapture("ann.syncReleasePages", ctx, async () => {
       const source: Doc<"approvedSources"> | null = await ctx.runQuery(
         internal.importSources.getByKey,
         { key: SOURCE_KEY },

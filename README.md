@@ -1544,9 +1544,11 @@ Convex deployment (Convex dashboard → Settings → Environment Variables, or
 - `RESEND_API_KEY` + `IMPORT_ALERT_EMAIL_TO` (+ optional
   `IMPORT_ALERT_EMAIL_FROM`) — the Administrator source-health alert emails
   (ticket #37); unset → alerts log and skip.
-- `POSTHOG_API_KEY` — PostHog project key (`phc_…`) for backend events;
-  unset → no server events, nothing scheduled, no logging. See "Analytics
-  (PostHog)" → Backend.
+- `POSTHOG_PROJECT_TOKEN` — PostHog project token (`phc_…`) for backend
+  events. **Required on every deployment**: a push fails until it is set.
+  Empty (`npx convex env set POSTHOG_PROJECT_TOKEN ""`) → no server events,
+  nothing scheduled, no logging. Optional `POSTHOG_HOST` overrides the
+  default `https://us.i.posthog.com`. See "Analytics (PostHog)" → Backend.
 
 Other commands:
 
@@ -1570,7 +1572,8 @@ history, and dashboard. It deploys with `npm run deploy:staging`, which reads
 `.env.staging` (gitignored; `CONVEX_DEPLOYMENT=dev:<staging dev deployment>`)
 to pick the staging project, builds the Worker with `CLOUDFLARE_ENV=staging` so
 the `env.staging` block in `wrangler.jsonc` applies, and deploys it. Staging
-has only the two Clerk variables set on Convex — no importer keys, no Resend —
+has only the two Clerk variables and `POSTHOG_PROJECT_TOKEN` set on Convex — no
+importer keys, no Resend —
 and every Approved Source is disabled there, so it never scrapes publishers or
 emails anyone. In the Clerk dashboard the staging origin must be allowed for
 sign-in to work there.
@@ -1666,8 +1669,8 @@ no card) covers this site many times over.
   `/_s/static/*` and `/_s/array/*` to `us-assets.i.posthog.com` (edge
   cached), everything else to `us.i.posthog.com`, with cookies and auth
   headers stripped and `X-Forwarded-For` set from `CF-Connecting-IP`.
-  Moving to the EU cloud is the `POSTHOG_REGION` line in that file and
-  its twin in `convex/lib/posthog.ts`.
+  Moving to the EU cloud is the `POSTHOG_REGION` line in that file plus
+  `POSTHOG_HOST=https://eu.i.posthog.com` on each Convex deployment.
 - **Client.** `src/lib/analytics.tsx` loads posthog-js lazily after
   hydration (never in the Worker bundle), with autocapture, session replay
   and feature flags off, `respect_dnt: true`, and person profiles only for
@@ -1688,25 +1691,33 @@ no card) covers this site many times over.
   | `favorite_toggled` | `target` (`series` / `volume`), `publicId`, `favorite` |
   | `rating_submitted`, `review_submitted` | declared, not wired yet |
 
-- **Backend.** Convex sends its own events straight to PostHog's capture
-  API (`POST https://us.i.posthog.com/batch/`, no SDK) from
-  `convex/lib/posthog.ts`. It is off until the deployment has the project
-  key; set it per deployment:
+- **Backend.** Convex sends its own events through PostHog's official
+  Convex component, [`@posthog/convex`](https://posthog.com/docs/libraries/convex),
+  registered in `convex/convex.config.ts` and wrapped by `convex/lib/posthog.ts`
+  (`capture`, `captureModeration`, `withExceptionCapture`). The component
+  requires `POSTHOG_PROJECT_TOKEN`, and the app forwards it, so **every
+  deployment must have it set before its next push**, even to an empty
+  string. Empty means off: the wrapper schedules nothing and logs nothing.
 
   ```sh
-  npx convex env set --deployment brave-kingfisher-844 POSTHOG_API_KEY phc_…  # staging
-  npx convex env set --prod POSTHOG_API_KEY phc_…                             # production, when agreed
+  npx convex env set POSTHOG_PROJECT_TOKEN ""                                       # local dev (off)
+  npx convex env set --deployment brave-kingfisher-844 POSTHOG_PROJECT_TOKEN phc_…  # staging
+  npx convex env set --prod POSTHOG_PROJECT_TOKEN phc_…                             # production, when agreed
   ```
 
-  Actions send directly (5 s timeout, never throws, one `console.warn` per
-  failure). Mutations cannot fetch, so `captureFromMutation` schedules
-  `analytics:capture`, which commits (or rolls back) with the mutation. An
+  `POSTHOG_HOST` (optional) overrides the default `https://us.i.posthog.com`.
+  Every capture, from a mutation or an action, schedules the component's
+  send action (`ctx.scheduler.runAfter(0, …)`); from a mutation it commits
+  or rolls back with the mutation, and the event keeps the caller's
+  timestamp. Feature flags are not enabled: no `POSTHOG_PERSONAL_API_KEY` is
+  forwarded, so the component's five-minute flag-refresh cron is a no-op. An
   event a user caused has the user's Clerk id as its distinct id, the id the
   browser identifies them by, so both land on one person. System events use
   `server` with `$process_person_profile: false` and create no person.
-  Every server event has `$lib: mangadb-convex`; filter on it where a name
-  also exists client-side (`favorite_toggled`). The region constant in
-  `convex/lib/posthog.ts` mirrors `POSTHOG_REGION` in the proxy.
+  The component stamps every server event `$lib: posthog-convex` (plus
+  `$is_server: true`; browser events have `$lib: web`) and overrides any
+  `$lib` we pass; filter on it where a name also exists client-side
+  (`favorite_toggled`).
 
   | Event | Distinct id | Props |
   |---|---|---|
@@ -1724,10 +1735,11 @@ no card) covers this site many times over.
 
   **Exceptions.** The unattended actions (the hourly import tick, every
   source adapter's sync, and the rebuild crons) run inside
-  `withExceptionCapture`: an error that escapes is sent as PostHog's
-  `$exception` (`$exception_list` with type, message and the V8 stack as
-  raw frames, plus `function_name`, e.g. `ann.sync`) and then rethrown, so
-  Convex still logs the failure. It shows up in PostHog Error tracking.
+  `withExceptionCapture`: an error that escapes is sent through the
+  component's `captureException` as PostHog's `$exception` (type, message
+  and stack, plus `function_name`, e.g. `ann.sync`, on distinct id `server`)
+  and then rethrown, so Convex still logs the failure. It shows up in
+  PostHog Error tracking.
 - **Querying from Claude Code.** `.mcp.json` registers PostHog's hosted MCP
   server in read-only mode (`https://mcp.posthog.com/mcp?readonly=true`).
   Run `/mcp` in Claude Code once and complete the PostHog OAuth login. For

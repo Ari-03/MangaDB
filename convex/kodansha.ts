@@ -139,7 +139,7 @@ export const sync = internalAction({
     politeDelayMs: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
-    withExceptionCapture("kodansha.sync", async () => {
+    withExceptionCapture("kodansha.sync", ctx, async () => {
       // Explicit annotations break the type cycle with imports.ts's adapter map.
       const source: Doc<"approvedSources"> | null = await ctx.runQuery(
         internal.importSources.getByKey,
@@ -412,7 +412,7 @@ export const backlistSync = internalAction({
     failures: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<BacklistResult> =>
-    withExceptionCapture("kodansha.backlistSync", async () => {
+    withExceptionCapture("kodansha.backlistSync", ctx, async () => {
       // Explicit annotations break the type cycle with imports.ts's adapter map.
       const source: Doc<"approvedSources"> | null = await ctx.runQuery(
         internal.importSources.getByKey,

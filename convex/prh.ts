@@ -113,7 +113,7 @@ export const sync = internalAction({
     errors: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
-    withExceptionCapture("prh.sync", async () => {
+    withExceptionCapture("prh.sync", ctx, async () => {
       const linkStartedAt = Date.now();
       // Explicit annotations break the type cycle with imports.ts's adapter map.
       const source: Doc<"approvedSources"> | null = await ctx.runQuery(

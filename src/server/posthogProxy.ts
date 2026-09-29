@@ -11,11 +11,11 @@
 //
 // This module has no Worker-only imports: the client reads the proxy path
 // and UI host from it too, so a region move (US → EU) is the line below
-// (plus its twin in convex/lib/posthog.ts).
+// (plus POSTHOG_HOST on each Convex deployment, for backend events).
 
 /**
  * PostHog Cloud region the project lives in: "us" or "eu". Keep in sync with
- * POSTHOG_REGION in convex/lib/posthog.ts (backend events).
+ * the Convex env var POSTHOG_HOST (backend events; unset means US).
  */
 const POSTHOG_REGION = "us";
 

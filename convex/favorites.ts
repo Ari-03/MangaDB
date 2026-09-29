@@ -12,7 +12,7 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 import { editionCover, followMerges } from "./catalogPages";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { coverUrl } from "./lib/covers";
-import { captureFromMutation } from "./lib/posthog";
+import { capture } from "./lib/posthog";
 import {
   omnibusEdition,
   requireActiveTarget,
@@ -94,7 +94,7 @@ export const toggle = mutation({
       "Nothing to favorite here any more.",
     );
     const existing = await favoriteRow(ctx, user._id, target);
-    await captureFromMutation(ctx, user, "favorite_toggled", { kind: target.kind, favorite: !existing });
+    await capture(ctx, user, "favorite_toggled", { kind: target.kind, favorite: !existing });
     if (existing) {
       await ctx.db.delete(existing._id);
       return { favorite: false };

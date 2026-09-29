@@ -98,7 +98,7 @@ export const sync = internalAction({
     force: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
-    withExceptionCapture("sevenSeas.sync", async () => {
+    withExceptionCapture("sevenSeas.sync", ctx, async () => {
       // Explicit annotations break the type cycle with imports.ts's adapter map.
       const source: Doc<"approvedSources"> | null = await ctx.runQuery(
         internal.importSources.getByKey,

@@ -16,7 +16,7 @@ import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { FEATURES } from "./lib/features";
-import { captureFromMutation, captureModeration } from "./lib/posthog";
+import { capture, captureModeration } from "./lib/posthog";
 import {
   ratingRow,
   requireActiveTarget,
@@ -187,7 +187,7 @@ export const save = mutation({
     const { target } = await requireActiveTarget(ctx, args.target);
     const existing = await reviewRow(ctx, user._id, target);
     const now = Date.now();
-    await captureFromMutation(ctx, user, "review_saved", {
+    await capture(ctx, user, "review_saved", {
       kind: target.kind,
       spoiler: args.spoiler,
       length_bucket: lengthBucket(body.length),

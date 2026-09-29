@@ -584,7 +584,7 @@ const BOARD_VERSION = 2;
 export const rebuildBoards = internalAction({
   args: { scope: v.optional(v.literal("near")) },
   handler: async (ctx, { scope }) =>
-    withExceptionCapture("publisher.rebuildBoards", async () => {
+    withExceptionCapture("publisher.rebuildBoards", ctx, async () => {
       const startedAt = Date.now();
       const window = boardWindow(new Date(startedAt));
       const { from, to } = scope === "near" ? nearMonths(new Date(startedAt)) : window;

@@ -8,7 +8,6 @@
  * @module
  */
 
-import type * as analytics from "../analytics.js";
 import type * as ann from "../ann.js";
 import type * as catalog from "../catalog.js";
 import type * as catalogPages from "../catalogPages.js";
@@ -96,7 +95,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  analytics: typeof analytics;
   ann: typeof ann;
   catalog: typeof catalog;
   catalogPages: typeof catalogPages;
@@ -205,5 +203,6 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
+  posthog: import("@posthog/convex/_generated/component.js").ComponentApi<"posthog">;
   rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
 };

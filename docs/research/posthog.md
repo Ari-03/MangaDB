@@ -1,5 +1,13 @@
 # PostHog for MangaDB: product analytics + Claude Code connector
 
+> **Update (2026-09-29):** PostHog ships an official Convex component,
+> [`@posthog/convex`](https://posthog.com/docs/libraries/convex) (2.1.5,
+> wrapping `posthog-node/edge`). Backend events and `$exception` capture now
+> go through it (`convex/convex.config.ts`, `convex/lib/posthog.ts`); it
+> replaced a hand-rolled `/batch/` client. It needs `POSTHOG_PROJECT_TOKEN`
+> on every deployment (empty = off). Section 4's "skip" verdict predates it.
+> See README "Analytics (PostHog)" → Backend.
+
 Researched 2026-09-28 against posthog.com docs, npm, and GitHub. Versions
 quoted are the npm `latest` tags on that date.
 

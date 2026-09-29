@@ -81,7 +81,7 @@ const CREDITS_PER_SERIES = 50;
 export const rebuild = internalAction({
   args: {},
   handler: async (ctx) =>
-    withExceptionCapture("people.rebuild", async () => {
+    withExceptionCapture("people.rebuild", ctx, async () => {
       const startedAt = Date.now();
       let after: string | null = null;
       let credits = 0;

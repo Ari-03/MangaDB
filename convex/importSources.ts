@@ -18,7 +18,7 @@ import {
 } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { AuthorityLevel } from "./lib/authority";
-import { captureFromMutation } from "./lib/posthog";
+import { capture } from "./lib/posthog";
 import { requireModerator, requireRole } from "./lib/roles";
 
 const authorityLevel = v.union(
@@ -297,7 +297,7 @@ export async function recordSourceOutcome(
         consecutiveFailures: source.consecutiveFailures,
         errors: [],
       });
-      await captureFromMutation(ctx, null, "source_recovered", {
+      await capture(ctx, null, "source_recovered", {
         source_key: sourceKey,
         consecutive_failures: source.consecutiveFailures,
       });
@@ -320,7 +320,7 @@ export async function recordSourceOutcome(
       consecutiveFailures: failures,
       errors: errors.slice(0, ALERT_ERROR_LINES),
     });
-    await captureFromMutation(ctx, null, "source_unhealthy", {
+    await capture(ctx, null, "source_unhealthy", {
       source_key: sourceKey,
       consecutive_failures: failures,
     });

@@ -135,7 +135,7 @@ export const sync = internalAction({
     pageFailed: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
-    withExceptionCapture("yenPress.sync", async () => {
+    withExceptionCapture("yenPress.sync", ctx, async () => {
       // Explicit annotations break the type cycle with imports.ts's adapter map.
       const source: Doc<"approvedSources"> | null = await ctx.runQuery(
         internal.importSources.getByKey,

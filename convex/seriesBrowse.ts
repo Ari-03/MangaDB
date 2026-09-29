@@ -78,7 +78,7 @@ const STALE_SWEEP = 200;
 export const rebuild = internalAction({
   args: {},
   handler: async (ctx) =>
-    withExceptionCapture("seriesBrowse.rebuild", async () => {
+    withExceptionCapture("seriesBrowse.rebuild", ctx, async () => {
       const startedAt = Date.now();
       let cursor: number | null = null;
       let rows = 0;

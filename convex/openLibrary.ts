@@ -92,7 +92,7 @@ export const sync = internalAction({
     errors: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
-    withExceptionCapture("openLibrary.sync", async () => {
+    withExceptionCapture("openLibrary.sync", ctx, async () => {
       // Explicit annotations break the type cycle with imports.ts's adapter map.
       const source: Doc<"approvedSources"> | null = await ctx.runQuery(
         internal.importSources.getByKey,

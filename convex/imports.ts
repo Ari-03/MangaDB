@@ -20,7 +20,7 @@ import { getSourceByKey, recordSourceOutcome } from "./importSources";
 import { todaySortKey } from "./lib/dates";
 import { sendAdminEmail } from "./lib/email";
 import { alreadyHandled } from "./lib/pipeline";
-import { captureFromMutation, withExceptionCapture } from "./lib/posthog";
+import { capture, withExceptionCapture } from "./lib/posthog";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { revisionsOf } from "./moderation";
 
@@ -128,7 +128,7 @@ async function captureRunFinished(
     finishedAt: number;
   },
 ) {
-  await captureFromMutation(ctx, null, "import_run_finished", {
+  await capture(ctx, null, "import_run_finished", {
     source_key: run.sourceKey,
     status: closing.status,
     records_seen: closing.recordsSeen,
@@ -324,7 +324,7 @@ export const enabledSources = internalQuery({
 export const runScheduled = internalAction({
   args: {},
   handler: async (ctx) =>
-    withExceptionCapture("imports.runScheduled", async () => {
+    withExceptionCapture("imports.runScheduled", ctx, async () => {
       // The canonical publisher rows (launch.ts) must exist before any source
       // runs: ANN's release pages and Open Library resolve a distributor NAME
       // against them and create nothing for an unknown one. A fresh
