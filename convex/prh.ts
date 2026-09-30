@@ -37,7 +37,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
-import { getObservation, retireLapsedCancellation } from "./lib/observations";
+import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { parseTitleList, prhTitleValidator } from "./lib/prh";
 import { withExceptionCapture } from "./lib/posthog";
@@ -357,10 +357,7 @@ export const notePresent = internalMutation({
     for (const isbn of isbns) {
       const obs = await getObservation(ctx, SOURCE_KEY, isbn);
       if (!obs) continue;
-      await ctx.db.patch(obs._id, { lastSeenAt: now, withdrawn: false });
-      if (obs.withdrawn) {
-        await retireLapsedCancellation(ctx, { ...obs, lastSeenAt: now, withdrawn: false }, now);
-      }
+      await markSeen(ctx, obs, now);
     }
     return null;
   },

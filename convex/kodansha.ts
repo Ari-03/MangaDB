@@ -78,16 +78,20 @@ import {
   type SeriesListingEntry,
 } from "./lib/kodansha";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
-import { getObservation, upsertObservation } from "./lib/observations";
+import { getObservation, markSeen, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
   creationGates,
+  IMPORT_LANGUAGE,
+  isbnHeldElsewhere,
+  isbnHolderBesides,
   linkSeriesObservation,
   publisherBySlug,
   queueCreationProposal,
   reconcileLinkedSeries,
   removedSeriesFor,
+  recordIsbnConflict,
   recordUnplaced,
   toPartialDate,
 } from "./lib/pipeline";
@@ -307,7 +311,8 @@ export const recordSeriesCrawl = internalMutation({
     const existing = await getObservation(ctx, BACKLIST_KEY, slug);
     const stored = existing?.snapshot as SeriesCrawl | undefined;
     if (existing && sameValue({ ...stored, fullCrawledAt: crawl.fullCrawledAt }, crawl)) {
-      await ctx.db.patch(existing._id, { snapshot: crawl, lastSeenAt: now, withdrawn: false });
+      await ctx.db.patch(existing._id, { snapshot: crawl });
+      await markSeen(ctx, existing, now);
       return;
     }
     await upsertObservation(ctx, {
@@ -770,6 +775,16 @@ export const applyVolume = internalMutation({
           reason: "ISBN differs from the linked Release's",
         };
       }
+      // So is an ISBN another Release holds, whatever this link lacks: a
+      // calendar duplicate awaiting a merge, or a legacy record's facts.
+      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+        return {
+          status: "needsReview",
+          changed,
+          releaseId: release._id,
+          reason: "ISBN held by another Release",
+        };
+      }
       const seriesResult = await reconcileLinkedSeries(ctx, {
         sourceKey: SOURCE_KEY,
         seriesKey: snapshot.seriesSlug,
@@ -778,15 +793,11 @@ export const applyVolume = internalMutation({
         citation,
         now,
       });
-      const offered = offeredReleaseFields(snapshot);
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot, now)) {
-        delete offered.isbn13;
-      }
       const result = await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
         ref: { type: "release", id: release._id },
         doc: release,
-        offered,
+        offered: offeredReleaseFields(snapshot),
         observation,
         citation,
         now,
@@ -845,6 +856,8 @@ export const applyVolume = internalMutation({
       volumeLabel: packaging ? null : (snapshot.volumeLabel ?? null),
       multiVolume: packaging !== null,
       format: snapshot.format,
+      binding: snapshot.binding,
+      language: IMPORT_LANGUAGE,
       isbn13: snapshot.isbn13,
       publisherId: publisher && publisher.status === "active" ? publisher._id : null,
     };
@@ -1004,59 +1017,19 @@ export const applyVolume = internalMutation({
 });
 
 /**
- * A calendar-created Release (linked by slug, no ISBN) may duplicate one
- * PRH or ANN already created under the ISBN the volume page now states.
- * Then the ISBN is never copied onto it — two Releases would share one —
- * and the observation records the pair for an Editor to merge.
- */
-async function isbnHeldElsewhere(
-  ctx: MutationCtx,
-  observation: Doc<"sourceObservations">,
-  release: Doc<"releases">,
-  snapshot: KodanshaSnapshot,
-  now: number,
-): Promise<boolean> {
-  const isbn13 = snapshot.isbn13;
-  if (isbn13 === undefined || release.isbn13 === isbn13) return false;
-  const holder = await ctx.db
-    .query("releases")
-    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-    .first();
-  if (!holder || holder._id === release._id || holder.status !== "active") return false;
-  await recordIsbnConflict(
-    ctx,
-    observation,
-    isbn13,
-    `ISBN ${isbn13} is already on Release ${holder._id}; the Release this record links to (${release._id}) looks like its duplicate — an Editor merges them.`,
-    now,
-  );
-  return true;
-}
-
-/** Record (or replace) the observation's ISBN conflict for an Editor. */
-async function recordIsbnConflict(
-  ctx: MutationCtx,
-  observation: Doc<"sourceObservations">,
-  isbn13: string,
-  reason: string,
-  now: number,
-): Promise<void> {
-  const kept = (observation.conflicts ?? []).filter((c) => c.field !== "isbn13");
-  await ctx.db.patch(observation._id, {
-    conflicts: [...kept, { field: "isbn13", offered: isbn13, at: now, reason }],
-  });
-}
-
-/**
  * The identity a volume-page offer is stored under. Page order only proposes
  * one (lib/kodansha.ts `toBacklistSnapshots`): the base key
  * `{series}/{volume}#{format}` belongs to the ISBN it already holds (its
  * linked Release's, else its stored snapshot's), and every other ISBN of that
  * format takes `…:{isbn}`, so reordered bindings never trade records. A base
  * key an older order-keyed crawl rewrote is reclaimed by its linked Release's
- * ISBN, so stored observations need no migration. With no ISBN on the base
- * yet (none stored, or calendar-only), an existing ISBN key wins, else the
- * proposal stands.
+ * ISBN, so stored observations need no migration. A base linked to an
+ * ISBN-less Release is not the offer's when that Release's known Binding
+ * differs, nor by its stored snapshot's ISBN alone while another Release
+ * holds that ISBN (an older crawl may have stored another binding's facts
+ * there): the offer takes its ISBN key. With no ISBN on the base yet (none
+ * stored, or calendar-only), an existing ISBN key wins, else the proposal
+ * stands.
  */
 async function offerRecordId(
   ctx: MutationCtx,
@@ -1070,8 +1043,20 @@ async function offerRecordId(
   const stored = await getObservation(ctx, SOURCE_KEY, base);
   const ref = stored?.recordRef;
   const linked = ref?.type === "release" ? await ctx.db.get(ref.id) : null;
-  const owner = linked?.isbn13 ?? (stored?.snapshot as KodanshaSnapshot | undefined)?.isbn13;
-  if (owner !== undefined) return owner === isbn13 ? base : keyed;
+  if (linked?.isbn13 !== undefined) return linked.isbn13 === isbn13 ? base : keyed;
+  if (
+    linked?.binding !== undefined &&
+    snapshot.binding !== undefined &&
+    linked.binding.toLowerCase() !== snapshot.binding.toLowerCase()
+  ) {
+    return keyed;
+  }
+  const claimed = (stored?.snapshot as KodanshaSnapshot | undefined)?.isbn13;
+  if (claimed !== undefined) {
+    if (claimed !== isbn13) return keyed;
+    const holder = linked === null ? null : await isbnHolderBesides(ctx, linked, isbn13);
+    return holder === null ? base : keyed;
+  }
   return (await getObservation(ctx, SOURCE_KEY, keyed)) ? keyed : proposed;
 }
 

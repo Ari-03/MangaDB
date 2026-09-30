@@ -1,0 +1,22 @@
+# Fix plan, wave 2 (findings from `fix-review-2026-09-30.md`)
+
+Validity check: R01, R02, R04, R06, R10, R12 and R18 were re-read against
+the code at `5677249` and confirmed. The others have retained reproductions
+under `/tmp`; each builder must reproduce its finding through the real
+entry point (public API, importer mutation or action) before fixing it.
+
+The review's main lesson: wave 1 tested helpers, and production callers
+bypassed them. Wave 2 regressions therefore go through real callers, every
+verifier greps all call sites, and every leg ends with a full-suite run.
+
+| Lane | Legs (serial within a lane) | Owned files |
+| ---- | --------------------------- | ----------- |
+| P privacy in canonical ops | 1: R01, R02, R04, S2. 2: R03, R05, R16. 3: S1 | `convex/lib/sensitiveOps.ts`, `convex/lib/repair/ops.ts`, `convex/lib/repair/audit.ts`, `convex/repair.ts` |
+| R importer wiring | 1: R06, R07. 2: R08, R09. 3: R10, R13. 4: R12 | `convex/kodansha.ts`, `convex/lib/kodansha.ts`, `convex/sevenSeas.ts`, `convex/lib/catalogTitle.ts`, `convex/openLibrary.ts`, `convex/lib/openLibrary.ts`, `convex/prh.ts`, `convex/lib/pipeline.ts`, `convex/lib/observations.ts`, `convex/lib/coverage.ts`, `convex/lib/bookTitle.ts` |
+| S proposal ISBN invariant | R11 | `convex/lib/proposalCreates.ts`, `convex/proposals.ts` |
+| U mature content | R14, R15 | `convex/catalogPages.ts`, `convex/seo.ts` |
+| V frontend interaction | R17, R18 | `src/lib/quickActions.tsx`, `src/lib/editForm.tsx`, `src/routes/mod.edit.$type.$key.tsx` |
+
+S1 and S2 are the two Standards findings (bounded personal repair work;
+imprint count). Opus 5.5 builds, Fable 5.1 verifies, up to two repair
+rounds per leg.

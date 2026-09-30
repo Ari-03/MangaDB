@@ -37,6 +37,7 @@ import {
   unavailableCreateRefs,
   CREATABLE_TABLES,
   type CreateOpInput,
+  type IsbnUpdate,
 } from "./lib/proposalCreates";
 import { fieldDescriptor } from "./lib/moderationFields";
 import { captureModeration } from "./lib/posthog";
@@ -133,11 +134,6 @@ async function buildDraftOps(
       `One proposal carries at most ${MAX_OPS_PER_PROPOSAL} operations — split unrelated work.`,
     );
   }
-  await planCreateOps(
-    ctx,
-    submitted.filter((op): op is CreateOpInput => op.kind === "create"),
-  );
-
   const ops: StoredOp[] = [];
   const updatedRecords = new Set<string>();
   for (const op of submitted) {
@@ -172,7 +168,34 @@ async function buildDraftOps(
       changes,
     });
   }
+  await planOps(ctx, ops);
   return ops;
+}
+
+/**
+ * Validate an op set's creates together with the Release ISBNs its updates
+ * write, so the proposal's final ISBN assignments are checked as one (R11).
+ * Save, submission, and approval all run this; approval inside its
+ * transaction, before anything is written.
+ */
+async function planOps(ctx: MutationCtx, ops: StoredOp[]) {
+  const isbnUpdates: IsbnUpdate[] = [];
+  for (const op of ops) {
+    if (op.kind !== "update" || op.ref.type !== "release") continue;
+    for (const { field, after } of op.changes) {
+      if (field !== "isbn13" && field !== "isbn10") continue;
+      isbnUpdates.push({
+        releaseId: op.ref.id,
+        field,
+        isbn: typeof after === "string" ? after : undefined,
+      });
+    }
+  }
+  return await planCreateOps(
+    ctx,
+    ops.filter((op): op is CreateOpInput => op.kind === "create"),
+    isbnUpdates,
+  );
 }
 
 /** Malformed evidence never reaches a version: check each row now. */
@@ -361,10 +384,7 @@ export const submitProposal = mutation({
         stale,
       });
     }
-    await planCreateOps(
-      ctx,
-      draft!.ops.filter((op): op is CreateOpInput => op.kind === "create"),
-    );
+    await planOps(ctx, draft!.ops);
     for (const op of draft!.ops) {
       if (op.kind !== "update") continue;
       const ref = op.ref as RecordRef;
@@ -718,10 +738,7 @@ export const approveProposal = mutation({
 
     // Approval re-runs validation (spec §5) before anything is written; a
     // throw here rolls back the whole approval.
-    const plans = await planCreateOps(
-      ctx,
-      version.ops.filter((op): op is CreateOpInput => op.kind === "create"),
-    );
+    const plans = await planOps(ctx, version.ops);
 
     const temp = new Map<string, string>();
     const created: Array<{
@@ -737,6 +754,8 @@ export const approveProposal = mutation({
         const plan = plans[planCursor++];
         if (!plan) return fail("invalidCreate", "Create plan out of sync.");
         const record = await applyCreatePlan(ctx, plan, temp);
+        // A joined existing record was not created: no creation Revision.
+        if (record.existing) continue;
         revisionIds.push(
           await ctx.db.insert("revisions", {
             ref: record.ref as never,

@@ -3,8 +3,9 @@
 // Yen Press. One record → the matching ladder → authority reconciliation
 // on a match, or the standard creation boundaries under the imprint's
 // publisher row: omnibus/deluxe books become Edition Line members covering
-// real Volumes, box sets Release Bundles, and packaging whose coverage the
-// title never states stays on its observation for an Editor. Each adapter
+// real Volumes, box sets Release Bundles (which pick up books arriving after
+// them), and packaging whose coverage the title never states stays on its
+// observation for an Editor. Each adapter
 // wraps `applyCatalogTitle` in its own internalMutation (one atomic
 // mutation per record, spec §6).
 
@@ -23,7 +24,10 @@ import {
   creationGates,
   ensurePublisher,
   findPublisherByName,
+  IMPORT_LANGUAGE,
+  isbnHeldElsewhere,
   queueCreationProposal,
+  reconcileLinkedBundle,
   recordUnplaced,
   removedSeriesFor,
   toPartialDate,
@@ -162,6 +166,58 @@ export async function resolveBaseSeries(
 }
 
 /**
+ * The Volume labels a title covers: for packaging, the range its title
+ * states, else its blurbs, else a line name that declares its size
+ * (lib/coverage.ts), [] when none does; else its own Volume, if any.
+ */
+function coveredLabels(snapshot: CatalogTitle, volumeLabel: string | null): string[] {
+  if (snapshot.packaging) {
+    const range = inferCoverage(snapshot.packaging, [
+      snapshot.description,
+      ...(snapshot.coverageHints ?? []),
+    ]);
+    return range ? rangeLabels(range) : [];
+  }
+  return volumeLabel !== null ? [volumeLabel] : [];
+}
+
+/**
+ * Rung ① for a box set already placed as a Release Bundle: the bundle picks
+ * up the members whose books arrived after it (lib/pipeline.ts
+ * reconcileLinkedBundle), from the box's snapshot alone — so a planner that
+ * skips re-reading a fresh box can still pass its stored snapshot. The base
+ * Series is the one active Series the title names. Returns how many members
+ * it added; 0 when the observation links no bundle.
+ */
+export async function reconcileCatalogBox(
+  ctx: MutationCtx,
+  args: {
+    sourceKey: string;
+    importComment: string;
+    citation: { sourceName: string; url: string };
+    observation: Doc<"sourceObservations">;
+    snapshot: CatalogTitle;
+    now: number;
+  },
+): Promise<number> {
+  const { observation, snapshot } = args;
+  if (observation.recordRef?.type !== "releaseBundle" || !snapshot.packaging) return 0;
+  const { volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
+  const labels = coveredLabels(snapshot, volumeLabel);
+  if (candidates.length !== 1 || labels.length === 0) return 0;
+  return await reconcileLinkedBundle(ctx, observation.recordRef.id, {
+    sourceKey: args.sourceKey,
+    observation,
+    citation: args.citation,
+    importComment: args.importComment,
+    seriesId: candidates[0]!._id,
+    labels,
+    format: snapshot.format,
+    now: args.now,
+  });
+}
+
+/**
  * Reconcile one catalog title into the canonical catalog: ISBN matching
  * links it to the existing skeleton record, then the source's dates/ISBNs/
  * prices, titles/format, and blurb reconcile in at its registry authority.
@@ -202,6 +258,16 @@ export async function applyCatalogTitle(
       return { status: "recordOnly", changed: false };
     }
     if (!changed) return { status: "unchanged", changed: false };
+    // An ISBN another Release holds is that book's: none of the record's
+    // facts are reconciled onto this link until an Editor resolves the pair.
+    if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+      return {
+        status: "needsReview",
+        changed,
+        releaseId: release._id,
+        reason: "ISBN held by another Release",
+      };
+    }
     const result = await reconcileFields(ctx, {
       sourceKey: opts.sourceKey,
       ref: { type: "release", id: release._id },
@@ -219,8 +285,19 @@ export async function applyCatalogTitle(
     };
   }
 
-  // A box set already placed as a Release Bundle has nothing to reconcile.
+  // A box set already placed as a Release Bundle: its only reconcile is the
+  // members that arrived after it, changed record or not (they arrive
+  // through other records, never through the box's own).
   if (observation.recordRef?.type === "releaseBundle") {
+    const added = await reconcileCatalogBox(ctx, {
+      sourceKey: opts.sourceKey,
+      importComment: opts.importComment,
+      citation,
+      observation,
+      snapshot,
+      now,
+    });
+    if (added > 0) return { status: "updated", changed: true };
     return { status: changed ? "recordOnly" : "unchanged", changed: false };
   }
 
@@ -229,20 +306,10 @@ export async function applyCatalogTitle(
   const seriesId = candidates.length === 1 ? candidates[0]!._id : null;
 
   // Packaging maps onto the base Series' real Volumes — never a Volume or
-  // Series of its own. The coverage comes from the title, else the blurbs,
-  // else a line name that declares its size (lib/coverage.ts); without any
-  // of those it links by ISBN or not at all.
+  // Series of its own; without a stated coverage it links by ISBN or not at
+  // all.
   const packaging = snapshot.packaging ?? null;
-  const coverRange = packaging
-    ? inferCoverage(packaging, [snapshot.description, ...(snapshot.coverageHints ?? [])])
-    : null;
-  const labels = packaging
-    ? coverRange
-      ? rangeLabels(coverRange)
-      : []
-    : volumeLabel !== null
-      ? [volumeLabel]
-      : [];
+  const labels = coveredLabels(snapshot, volumeLabel);
 
   // The publisher key is the imprint, resolved against existing rows (a
   // duplicate string like "Kodansha Comics" resolves to its company; an
@@ -301,6 +368,8 @@ export async function applyCatalogTitle(
     volumeLabel: packaging ? null : volumeLabel,
     multiVolume: packaging !== null,
     format: snapshot.format,
+    binding: snapshot.binding,
+    language: IMPORT_LANGUAGE,
     isbn13: snapshot.isbn13,
     publisherId: publisher?._id ?? null,
   };
@@ -331,8 +400,8 @@ export async function applyCatalogTitle(
   // line's member is still created, as Unmapped Packaging under its line
   // (CONTEXT.md): the book shows in the publisher's own numbering and a
   // Moderator maps its Volumes later. A bare range with no line name, an
-  // ambiguous Series, or steady state (whose review queue cannot yet carry
-  // an Edition Line) keeps the book on its observation instead.
+  // ambiguous Series, or steady state (which never queues a guess without
+  // coverage) keeps the book on its observation instead.
   const unmapped =
     packaging !== null &&
     labels.length === 0 &&
@@ -351,6 +420,8 @@ export async function applyCatalogTitle(
   }
 
   const linePosition = packaging?.linePosition ?? undefined;
+  // A queued packaging guess carries its Edition Line, so approval files the
+  // Edition under the base Series' line of that name (or creates it).
   const queue = async (comment: string, reason?: string): Promise<ApplyResult> => {
     if (await alreadyHandled(ctx, observation)) {
       return { status: "alreadyQueued", changed: false, reason };
@@ -368,6 +439,7 @@ export async function applyCatalogTitle(
       seriesId,
       seriesTitle,
       labels,
+      editionLine,
       linePosition,
       release: { ...releasePayload, publisherSlug: row.slug },
       now,

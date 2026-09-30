@@ -620,10 +620,20 @@ describe("steady-state creation boundaries", () => {
     expect(open).toHaveLength(1);
     const version = await versionOf(t, open[0]!);
     expect(version?.changeComment).toContain("Edition Line: Deluxe Edition");
-    // Pre-filled: volumes 4-6 + the Edition covering them + the Release;
-    // the Deluxe number is the line position, never a Volume.
+    // Pre-filled: volumes 4-6 + the Edition Line + the Edition covering
+    // them in that line + the Release; the Deluxe number is the line
+    // position, never a Volume.
     const tables = version?.ops.map((op) => (op.kind === "create" ? op.table : op.kind));
-    expect(tables).toEqual(["volumes", "volumes", "volumes", "editions", "releases"]);
+    expect(tables).toEqual([
+      "volumes",
+      "volumes",
+      "volumes",
+      "editionLines",
+      "editions",
+      "releases",
+    ]);
+    const line = version?.ops.find((op) => op.kind === "create" && op.table === "editionLines");
+    expect(line).toMatchObject({ tempId: "edition-line", fields: { name: "Deluxe Edition" } });
     const labels = version?.ops.flatMap((op) =>
       op.kind === "create" && op.table === "volumes"
         ? [(op.fields as { label?: string }).label]
@@ -631,7 +641,9 @@ describe("steady-state creation boundaries", () => {
     );
     expect(labels).toEqual(["4", "5", "6"]);
     const edition = version?.ops.find((op) => op.kind === "create" && op.table === "editions");
-    expect(edition).toMatchObject({ fields: { linePosition: "2" } });
+    expect(edition).toMatchObject({
+      fields: { editionLineId: "edition-line", linePosition: "2" },
+    });
   });
 
   // In Bootstrap Mode a named line's member with no coverage signal becomes

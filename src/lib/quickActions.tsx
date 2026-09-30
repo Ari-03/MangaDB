@@ -12,7 +12,7 @@
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
-import { useState, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -48,6 +48,8 @@ export type QuickBook = {
   derivedOwned: boolean;
   /** Whether every completely covered Volume is read; null when none is. */
   read: boolean | null;
+  /** The Volumes (public IDs) it covers completely: what marking it read writes. */
+  completeVolumes: number[];
 };
 
 /**
@@ -108,6 +110,7 @@ export function quickBookFor(book: OverlayBook, overlay: SeriesOverlay): QuickBo
       complete.length === 0
         ? null
         : complete.every((cov) => (overlay.volumesRead.get(cov.volumePublicId) ?? 0) > 0),
+    completeVolumes: complete.map((cov) => cov.volumePublicId),
   };
 }
 
@@ -164,10 +167,101 @@ export function ShelfPrompts({
 }
 
 /**
+ * What whole runs have not finished writing, shared by every control in the
+ * app (it outlives a shelf the viewer navigates away from mid-run): entry
+ * runs claim the Releases they write, read runs the Volumes (public IDs)
+ * their books cover completely — reading is per Volume, so another Edition
+ * covering the same Volume (an omnibus on another path) is locked too. A
+ * run claims everything when it starts and frees each batch once it lands
+ * (keeping what a later batch still writes); until then the claimed books'
+ * cover controls, and any other run over them, are locked, so a later batch
+ * never overwrites a choice made meanwhile. Every other control that writes
+ * an entry or Volume Progress (the Release row, the Volume read count, the
+ * pass completion) locks on it through useRunLock.
+ */
+export type RunClaims = { entries: ReadonlySet<Id<"releases">>; reads: ReadonlySet<number> };
+
+/** What a whole run marks: one collection state, or read. */
+type RunAction = EntryState | "read";
+
+/** Some Releases and/or Volumes, to claim, free, or test against RunClaims. */
+type Claim = { entries?: Id<"releases">[]; reads?: number[] };
+
+/** What a run of `action` over `books` writes, and so claims. */
+function claimFor(action: RunAction, books: QuickBook[]): Claim {
+  return action === "read"
+    ? { reads: books.flatMap((book) => book.completeVolumes) }
+    : { entries: books.flatMap((book) => book.targetReleaseId ?? []) };
+}
+
+/** What a landed `batch` frees: its claim, less what the `rest` of the run still writes. */
+function landedClaim(action: RunAction, batch: QuickBook[], rest: QuickBook[]): Claim {
+  const pending = claimFor(action, rest);
+  const own = claimFor(action, batch);
+  const entries = new Set(pending.entries);
+  const reads = new Set(pending.reads);
+  return {
+    entries: own.entries?.filter((id) => !entries.has(id)),
+    reads: own.reads?.filter((id) => !reads.has(id)),
+  };
+}
+
+let runClaims: RunClaims = { entries: new Set(), reads: new Set() };
+const claimListeners = new Set<() => void>();
+
+const readRunClaims = () => runClaims;
+
+function subscribeRunClaims(listener: () => void) {
+  claimListeners.add(listener);
+  return () => void claimListeners.delete(listener);
+}
+
+/** Claim (held) or free, then re-render the subscribed controls. */
+function setRunClaims(claim: Claim, held: boolean) {
+  const update = <T,>(current: ReadonlySet<T>, keys: T[] = []) => {
+    const next = new Set(current);
+    for (const key of keys) {
+      if (held) next.add(key);
+      else next.delete(key);
+    }
+    return next;
+  };
+  runClaims = {
+    entries: update(runClaims.entries, claim.entries),
+    reads: update(runClaims.reads, claim.reads),
+  };
+  for (const listener of claimListeners) listener();
+}
+
+/** Whether any part of `claim` is still held by a run. */
+function isClaimed(current: RunClaims, claim: Claim): boolean {
+  return (
+    (claim.entries ?? []).some((id) => current.entries.has(id)) ||
+    (claim.reads ?? []).some((id) => current.reads.has(id))
+  );
+}
+
+/** The current claims, re-rendering the caller whenever they change. */
+function useRunClaims(): RunClaims {
+  return useSyncExternalStore(subscribeRunClaims, readRunClaims, readRunClaims);
+}
+
+/**
+ * Whether a whole run still holds what a control writes, `claimed` picking
+ * that out of the claims: `locked` for the render (disable the control),
+ * `held()` for the click, which rechecks the live claims since a run may
+ * have started after the render.
+ */
+export function useRunLock(claimed: (claims: RunClaims) => boolean) {
+  return { locked: claimed(useRunClaims()), held: () => claimed(readRunClaims()) };
+}
+
+/**
  * The hover controls on one cover: the three collection states (the active
  * one pressed; pressing it again removes the entry) and the read toggle for
  * books with completely covered Volumes. Sits inside `.cover-wrap`, after
- * the cover link, so the shelf's hover reveals it.
+ * the cover link, so the shelf's hover reveals it. Each row locks while a
+ * whole run still has this book to write (RunClaims).
  */
 export function BookQuickActions({
   book,
@@ -181,8 +275,12 @@ export function BookQuickActions({
   // a pinned Variant, read inside the same transaction.
   const setEntries = useMutation(api.collection.setManyReleaseEntries);
   const setRead = useMutation(api.reading.setEditionRead);
+  const entryLock = useRunLock((claims) =>
+    isClaimed(claims, { entries: book.targetReleaseId ? [book.targetReleaseId] : [] }),
+  );
+  const readLock = useRunLock((claims) => isClaimed(claims, claimFor("read", [book])));
   const pick = (state: EntryState) => {
-    if (!book.targetReleaseId) return;
+    if (!book.targetReleaseId || entryLock.held()) return;
     void setEntries({
       releaseIds: [book.targetReleaseId],
       state: book.state === state ? undefined : state,
@@ -199,7 +297,7 @@ export function BookQuickActions({
             type="button"
             className="quick-btn"
             aria-pressed={book.state === state}
-            disabled={book.targetReleaseId === null}
+            disabled={book.targetReleaseId === null || entryLock.locked}
             title={
               book.state === state
                 ? "Remove from your collection"
@@ -217,8 +315,10 @@ export function BookQuickActions({
             type="button"
             className="quick-btn"
             aria-pressed={book.read}
+            disabled={readLock.locked}
             title={book.read ? "Mark as not read" : "Mark every volume in this book read"}
-            onClick={() =>
+            onClick={() => {
+              if (readLock.held()) return;
               void setRead({
                 editionPublicId: book.editionPublicId,
                 read: !book.read,
@@ -226,8 +326,8 @@ export function BookQuickActions({
                 if (result.suggestCompleted.length > 0) {
                   onPrompt({ completed: result.suggestCompleted });
                 }
-              })
-            }
+              });
+            }}
           >
             {book.read ? "Read ✓" : "Mark read"}
           </button>
@@ -244,8 +344,6 @@ export function BookQuickActions({
  */
 export const RUN_BATCH = 200;
 
-type RunAction = EntryState | "read";
-
 function errorMessage(err: unknown): string {
   if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
     const message = (err.data as { message?: string }).message;
@@ -261,8 +359,9 @@ function errorMessage(err: unknown): string {
  * than RUN_BATCH goes out batch by batch with the count shown; a rejected
  * batch stops the run and says how many books were marked before it. A
  * button whose state every book already holds reads as done and does
- * nothing; nothing here ever removes entries in bulk. Signed-in only (needs
- * the overlay).
+ * nothing; nothing here ever removes entries in bulk. A running run claims
+ * its books (RunClaims), locking their covers and any other run over them
+ * until their batch lands. Signed-in only (needs the overlay).
  */
 export function RunActions({
   books,
@@ -279,6 +378,7 @@ export function RunActions({
     null,
   );
   const [failure, setFailure] = useState<string | null>(null);
+  const claims = useRunClaims();
   const quick = books.map((book) => quickBookFor(book, overlay));
   const pendingFor = (state: EntryState) =>
     quick.filter((book) => book.state !== state && book.targetReleaseId !== null);
@@ -286,16 +386,19 @@ export function RunActions({
   const total = quick.filter((book) => book.targetReleaseId !== null).length;
   if (total === 0) return null;
 
-  // Write `items` in RUN_BATCH slices, one after another, merging each
-  // batch's prompt suggestions by Series and raising them once at the end —
-  // also after a failure, for the batches that did land.
-  const inBatches = async <T, S extends SeriesSuggestion>(
+  // Write `items` in RUN_BATCH slices, one after another, claiming them all
+  // up front and freeing each slice once it lands (landedClaim); merges each batch's
+  // prompt suggestions by Series and raises them once at the end — also
+  // after a failure, for the batches that did land.
+  const inBatches = async <S extends SeriesSuggestion>(
     action: RunAction,
-    items: T[],
-    write: (batch: T[]) => Promise<S[]>,
+    items: QuickBook[],
+    write: (batch: QuickBook[]) => Promise<S[]>,
     prompt: (suggestions: S[]) => void,
   ) => {
-    if (items.length === 0 || busy) return;
+    // The live claims, not the render's: a run may have started since.
+    if (items.length === 0 || busy || isClaimed(readRunClaims(), claimFor(action, items))) return;
+    setRunClaims(claimFor(action, items), true);
     setFailure(null);
     const suggestions = new Map<Id<"series">, S>();
     let done = 0;
@@ -306,6 +409,7 @@ export function RunActions({
         for (const suggestion of await write(batch)) {
           suggestions.set(suggestion.seriesId, suggestion);
         }
+        setRunClaims(landedClaim(action, batch, items.slice(start + RUN_BATCH)), false);
         done += batch.length;
         setBusy({ action, done, total: items.length });
       }
@@ -314,6 +418,7 @@ export function RunActions({
         `Marked ${done} of ${items.length} ${items.length === 1 ? "book" : "books"}, then stopped: ${errorMessage(err)}`,
       );
     } finally {
+      setRunClaims(claimFor(action, items), false);
       if (suggestions.size > 0) prompt([...suggestions.values()]);
       setBusy(null);
     }
@@ -322,16 +427,27 @@ export function RunActions({
   const run = (state: EntryState) =>
     void inBatches(
       state,
-      pendingFor(state).flatMap((book) => book.targetReleaseId ?? []),
-      async (releaseIds) => (await setMany({ releaseIds, state })).suggestFollow,
+      pendingFor(state),
+      async (batch) =>
+        (
+          await setMany({
+            releaseIds: batch.flatMap((book) => book.targetReleaseId ?? []),
+            state,
+          })
+        ).suggestFollow,
       (follow) => onPrompt({ follow }),
     );
   const readAll = () =>
     void inBatches(
       "read",
-      unread.map((book) => book.editionPublicId),
-      async (editionPublicIds) =>
-        (await setRead({ editionPublicIds, read: true })).suggestCompleted,
+      unread,
+      async (batch) =>
+        (
+          await setRead({
+            editionPublicIds: batch.map((book) => book.editionPublicId),
+            read: true,
+          })
+        ).suggestCompleted,
       (completed) => onPrompt({ completed }),
     );
   // "Marking…", with the running count once the run spans several batches.
@@ -348,14 +464,17 @@ export function RunActions({
         {total === 1 ? "This book:" : `All ${total} books:`}
       </span>
       {ENTRY_STATES.map((state) => {
-        const pending = pendingFor(state).length;
+        const targets = pendingFor(state);
+        const pending = targets.length;
         return (
           <button
             key={state}
             type="button"
             className="run-btn"
             aria-pressed={pending === 0}
-            disabled={pending === 0 || busy !== null}
+            disabled={
+              pending === 0 || busy !== null || isClaimed(claims, claimFor(state, targets))
+            }
             title={
               pending === 0
                 ? `Every book here is ${ENTRY_LABELS[state].toLowerCase()}`
@@ -371,7 +490,9 @@ export function RunActions({
         type="button"
         className="run-btn"
         aria-pressed={unread.length === 0}
-        disabled={unread.length === 0 || busy !== null}
+        disabled={
+          unread.length === 0 || busy !== null || isClaimed(claims, claimFor("read", unread))
+        }
         title={
           unread.length === 0
             ? "Every book here is read"

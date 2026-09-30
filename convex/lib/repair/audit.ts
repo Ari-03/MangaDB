@@ -19,6 +19,16 @@ type StoredOp = Doc<"proposalVersions">["ops"][number];
 type Evidence = Infer<typeof evidence>;
 export type Change = { field: string; before?: unknown; after?: unknown };
 
+/**
+ * One change to a personal row: a field re-pointed, or (field "(inserted)" /
+ * "(removed)") a whole row added or folded into another (`into`). No row
+ * names its User.
+ */
+export type TrailRow = Doc<"repairTrails">["rows"][number];
+
+/** Personal-trail rows per repairTrails record, keeping each document small. */
+export const TRAIL_CHUNK = 100;
+
 /** Throw mid-entry: the entry's sub-transaction rolls back and it reports as skipped. */
 export const skip = (reason: string): never => {
   throw new ConvexError({ skip: reason });
@@ -81,6 +91,20 @@ export function createAudit(
     },
     note(text: string) {
       notes.push(text);
+    },
+    /**
+     * Record the personal rows this entry moved for one record. Personal
+     * rows are no catalog fact, so they stay off the public Revisions: they
+     * go to bounded repairTrails records, and the Proposal names their count
+     * as a "personalTracking" pseudo-field on the record they followed.
+     */
+    async trail(ref: Ref, rows: TrailRow[]) {
+      if (rows.length === 0) return;
+      const { proposalId } = await this.meta();
+      for (let i = 0; i < rows.length; i += TRAIL_CHUNK) {
+        await ctx.db.insert("repairTrails", { proposalId, ref, rows: rows.slice(i, i + TRAIL_CHUNK) });
+      }
+      ops.push({ kind: "update", ref, changes: [{ field: "personalTracking", after: rows.length }] });
     },
     /** Append the next Revision to one record's public history. */
     async revise(ref: Ref, changes: Change[]) {

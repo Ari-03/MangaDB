@@ -1913,6 +1913,230 @@ describe("kodansha.backlistSync — per-binding identity survives page order (B0
   });
 });
 
+/** Blue Lock volume 1 as an ISBN-less Release another source made, in this Binding and language. */
+async function insertIsbnLessVolume1(t: TestT, binding: string, language = "en") {
+  return await t.run(async (ctx) => {
+    const publisher = await ctx.db
+      .query("publishers")
+      .withIndex("by_slug", (q) => q.eq("slug", "kodansha"))
+      .unique();
+    const seriesId = await ctx.db.insert("series", {
+      status: "active",
+      publicId: 101,
+      title: "Blue Lock",
+      altTitles: [],
+      searchText: "Blue Lock",
+    });
+    const volumeId = await ctx.db.insert("volumes", {
+      status: "active",
+      publicId: 102,
+      seriesId,
+      label: "1",
+      position: 1,
+    });
+    const editionId = await ctx.db.insert("editions", {
+      status: "active",
+      publicId: 103,
+      publisherId: publisher!._id,
+    });
+    await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+    return await ctx.db.insert("releases", {
+      status: "active",
+      editionId,
+      publisherId: publisher!._id,
+      seriesIds: [seriesId],
+      format: "physical",
+      binding,
+      language,
+    });
+  });
+}
+
+describe("kodansha.backlistSync — Binding and language reach the matching ladder (B14)", () => {
+  it("a hardcover never links an ISBN-less paperback; it becomes its sibling", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    const paperbackId = await insertIsbnLessVolume1(t, "paperback");
+    stubBacklist([BLUE_LOCK], blueLockPages([HARDCOVER]));
+    await backlist(t);
+
+    await t.run(async (ctx) => {
+      const paperback = (await ctx.db.get(paperbackId))!;
+      expect(paperback.isbn13).toBeUndefined();
+      expect(paperback.binding).toBe("paperback");
+      const hardcover = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === HARDCOVER.isbn,
+      );
+      expect(hardcover).toMatchObject({ binding: "hardcover", editionId: paperback.editionId });
+      expect(hardcover!._id).not.toBe(paperbackId);
+    });
+  });
+
+  it("a paperback still fills the ISBN-less paperback it is", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    const paperbackId = await insertIsbnLessVolume1(t, "paperback");
+    stubBacklist([BLUE_LOCK], blueLockPages([PAPERBACK]));
+    await backlist(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(paperbackId)).toMatchObject({ isbn13: PAPERBACK.isbn });
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+  });
+
+  it("a hardcover never fills the ISBN-less paperback the calendar linked", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubSite([
+      {
+        series: "Blue Lock",
+        seriesSlug: "blue-lock",
+        volume: 1,
+        date: "2022-06-21",
+        formats: ["print"],
+      },
+    ]);
+    await sync(t);
+    vi.unstubAllGlobals();
+    // An Editor recorded the calendar's print Release as the paperback.
+    const paperbackId = (await observationAt(t, BASE_ID))!.recordRef!.id as Id<"releases">;
+    await t.run((ctx) => ctx.db.patch(paperbackId, { binding: "paperback" }));
+
+    stubBacklist([BLUE_LOCK], blueLockPages([HARDCOVER]));
+    await backlist(t);
+
+    await t.run(async (ctx) => {
+      const paperback = (await ctx.db.get(paperbackId))!;
+      expect(paperback).toMatchObject({ binding: "paperback", pubDate: { sort: 20220621 } });
+      expect(paperback.isbn13).toBeUndefined();
+      const hardcover = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === HARDCOVER.isbn,
+      );
+      expect(hardcover).toMatchObject({ binding: "hardcover", editionId: paperback.editionId });
+    });
+  });
+
+  it("an English book never takes over an ISBN-less Release in another language", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    const frenchId = await insertIsbnLessVolume1(t, "paperback", "fr");
+    stubBacklist([BLUE_LOCK], blueLockPages([PAPERBACK]));
+    await backlist(t);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(frenchId))!.isbn13).toBeUndefined();
+      const english = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === PAPERBACK.isbn,
+      );
+      expect(english).toMatchObject({ language: "en", binding: "paperback" });
+    });
+  });
+});
+
+describe("kodansha — a legacy snapshot never owns an ISBN another Release holds (B08)", () => {
+  /**
+   * The calendar's ISBN-less print Release (bound as paperback), the hardcover
+   * Release holding HARDCOVER's ISBN, and the base observation an old
+   * order-keyed crawl rewrote with the hardcover's facts.
+   */
+  async function legacySetup(t: TestT) {
+    stubSite([
+      {
+        series: "Blue Lock",
+        seriesSlug: "blue-lock",
+        volume: 1,
+        date: "2022-06-21",
+        formats: ["print"],
+      },
+    ]);
+    await sync(t);
+    vi.unstubAllGlobals();
+    return await t.run(async (ctx) => {
+      const base = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === BASE_ID,
+      )!;
+      const paperbackId = base.recordRef!.id as Id<"releases">;
+      const paperback = (await ctx.db.get(paperbackId))!;
+      await ctx.db.patch(paperbackId, { binding: "paperback" });
+      const { _id, _creationTime, ...fields } = paperback;
+      const hardcoverId = await ctx.db.insert("releases", {
+        ...fields,
+        binding: "hardcover",
+        isbn13: HARDCOVER.isbn,
+        pubDate: { year: 2023, month: 1, day: 10, sort: 20230110 },
+      });
+      await ctx.db.patch(base._id, {
+        snapshot: {
+          ...(base.snapshot as object),
+          // The volume page's shape: its own title, no credits.
+          title: "Blue Lock Volume 1",
+          creators: [],
+          isbn13: HARDCOVER.isbn,
+          binding: "hardcover",
+          releaseDate: { year: 2023, month: 1, day: 10 },
+        },
+      });
+      return { paperbackId, hardcoverId };
+    });
+  }
+
+  const untouchedPaperback = {
+    binding: "paperback",
+    pubDate: { sort: 20220621 },
+  };
+
+  it("the crawl's new hardcover date goes to the hardcover's record, never the ISBN-less paperback", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    const { paperbackId, hardcoverId } = await legacySetup(t);
+
+    stubBacklist(
+      [BLUE_LOCK],
+      blueLockPages([{ ...HARDCOVER, datePublished: "2024-01-09" }]),
+    );
+    await backlist(t);
+
+    await t.run(async (ctx) => {
+      const paperback = (await ctx.db.get(paperbackId))!;
+      expect(paperback).toMatchObject(untouchedPaperback);
+      expect(paperback.isbn13).toBeUndefined();
+      expect(await ctx.db.query("releases").collect()).toHaveLength(2);
+    });
+    expect((await observationAt(t, HARDCOVER_ID))!.recordRef).toEqual({
+      type: "release",
+      id: hardcoverId,
+    });
+  });
+
+  it("the calendar re-reading the legacy page facts is a conflict, not a field update", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    const { paperbackId, hardcoverId } = await legacySetup(t);
+
+    stubSite([
+      {
+        series: "Blue Lock",
+        seriesSlug: "blue-lock",
+        volume: 1,
+        date: "2022-06-21",
+        formats: ["print"],
+      },
+    ]);
+    const result = await sync(t);
+
+    await t.run(async (ctx) => {
+      const paperback = (await ctx.db.get(paperbackId))!;
+      expect(paperback).toMatchObject(untouchedPaperback);
+      expect(paperback.isbn13).toBeUndefined();
+    });
+    expect(result).toMatchObject({ errorCount: 1 });
+    const conflicts = (await observationAt(t, BASE_ID))!.conflicts ?? [];
+    expect(conflicts).toEqual([
+      expect.objectContaining({ field: "isbn13", offered: HARDCOVER.isbn }),
+    ]);
+    expect(conflicts[0]!.reason).toContain(hardcoverId);
+  });
+});
+
 /** A Cloudflare interstitial served with HTTP 200, as kodansha.us does. */
 const CHALLENGE =
   '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><div id="challenge-running"></div></body></html>';

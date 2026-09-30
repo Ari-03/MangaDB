@@ -5,10 +5,11 @@
 // equal-authority disagreement queueing, creation boundaries, and the
 // unconfigured/graceful-skip behavior.
 
+import rateLimiterTest from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import * as catalogTitle from "./lib/catalogTitle";
 
@@ -1055,5 +1056,363 @@ describe("prh.sync — continuation links", () => {
       expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519828"]);
       expect(await ctx.db.query("importRuns").collect()).toHaveLength(1);
     });
+  });
+});
+
+const WITCH_HAT_15: FixtureTitle = {
+  isbn: "9781646094356",
+  title: "Witch Hat Atelier 15",
+  seriesNumber: 15,
+  onsale: "2026-12-08",
+  imprint: "Kodansha Comics",
+  priceUsd: 12.99,
+};
+
+describe("prh.sync — Binding reaches the matching ladder (B14)", () => {
+  it("a paperback never links an ISBN-less hardcover of its Volume; it becomes its sibling", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const hardcoverId = await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Kodansha",
+        slug: "kodansha",
+      });
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "Witch Hat Atelier",
+        altTitles: [],
+        searchText: "Witch Hat Atelier",
+      });
+      const volumeId = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 1,
+        seriesId,
+        position: 15,
+        label: "15",
+      });
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 1, publisherId });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        binding: "hardcover",
+        language: "en",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+    });
+    stubApi([WITCH_HAT_15]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      const hardcover = (await ctx.db.get(hardcoverId))!;
+      expect(hardcover.isbn13).toBeUndefined();
+      const paperback = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === WITCH_HAT_15.isbn,
+      );
+      expect(paperback).toMatchObject({ binding: "paperback", editionId: hardcover.editionId });
+    });
+  });
+});
+
+describe("prh.sync — a linked title never gives its ISBN to a second Release (B08)", () => {
+  it("while another Release holds the ISBN, none of the title's facts reach its ISBN-less link", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([WITCH_HAT_15]);
+    await sync(t);
+    // An Editor moved the ISBN from the linked Release onto another one.
+    const { linkedId, holderId } = await t.run(async (ctx) => {
+      const linked = (await ctx.db.query("releases").collect())[0]!;
+      const { _id, _creationTime, ...fields } = linked;
+      await ctx.db.patch(_id, { isbn13: undefined });
+      const holderId = await ctx.db.insert("releases", { ...fields, binding: "hardcover" });
+      return { linkedId: _id, holderId };
+    });
+
+    vi.unstubAllGlobals();
+    stubApi([{ ...WITCH_HAT_15, priceUsd: 14.99 }]);
+    const result = await sync(t);
+
+    await t.run(async (ctx) => {
+      const linked = (await ctx.db.get(linkedId))!;
+      expect(linked.isbn13).toBeUndefined();
+      expect(linked.price).toEqual({ amountCents: 1299, currency: "USD" });
+      const holders = (await ctx.db.query("releases").collect()).filter(
+        (r) => r.isbn13 === WITCH_HAT_15.isbn,
+      );
+      expect(holders.map((r) => r._id)).toEqual([holderId]);
+      const observation = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "prh").eq("sourceRecordId", WITCH_HAT_15.isbn),
+        )
+        .unique();
+      expect(observation!.conflicts).toEqual([
+        expect.objectContaining({ field: "isbn13", offered: WITCH_HAT_15.isbn }),
+      ]);
+    });
+    expect(result).toMatchObject({ errorCount: 1 });
+  });
+});
+
+/** An active Series with the given Volumes, as a backbone source leaves it. */
+async function insertSeries(t: TestT, title: string, labels: string[]) {
+  return await t.run(async (ctx) => {
+    const seriesId = await ctx.db.insert("series", {
+      status: "active",
+      publicId: 1,
+      title,
+      altTitles: [],
+      searchText: title,
+    });
+    for (const label of labels) {
+      await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: Number(label),
+        seriesId,
+        position: Number(label),
+        label,
+      });
+    }
+    return seriesId;
+  });
+}
+
+// R08: the shared catalog-title queue carries a packaged guess's Edition
+// Line, so approving the reviewed proposal files the Edition under it.
+describe("prh.sync — queued packaging keeps its Edition Line (B16)", () => {
+  it("approving a steady-state omnibus creates its Edition Line and files the Edition under it", async () => {
+    const t = makeT();
+    rateLimiterTest.register(t, "rateLimiter");
+    const admin = t.withIdentity({ subject: "catalogmod_subject" });
+    await admin.mutation(api.users.claimUsername, { username: "catalogmod" });
+    await t.mutation(internal.roles.bootstrapAdministrator, { username: "catalogmod" });
+    await seedRegistry(t, false);
+    const seriesId = await insertSeries(t, "Noragami", ["19", "20"]);
+    stubApi([{ isbn: "9781646519026", title: "Noragami Omnibus 7 (Vol. 19-21)", seriesNumber: 7 }]);
+    await sync(t);
+    const [proposal] = await t.run((ctx) => ctx.db.query("proposals").collect());
+    expect(proposal).toMatchObject({ state: "inReview" });
+    expect(
+      await admin.mutation(api.proposals.approveProposal, { proposalId: proposal!._id }),
+    ).toMatchObject({ status: "approved" });
+    await t.run(async (ctx) => {
+      const lines = await ctx.db.query("editionLines").collect();
+      expect(lines).toMatchObject([{ seriesId, name: "Omnibus" }]);
+      const [edition] = await ctx.db.query("editions").collect();
+      expect(edition).toMatchObject({ editionLineId: lines[0]!._id, linePosition: "7" });
+      const coverage = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", edition!._id))
+        .collect();
+      expect(coverage).toHaveLength(3);
+    });
+  });
+});
+
+// R09: a box set imported before its books picks them up when a later
+// sweep applies it again, unchanged, in steady state too.
+describe("prh.sync — a box set gains members that arrive after it (B15)", () => {
+  it("an unchanged box re-applied after its books arrive links them", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Fire Force", []);
+    const box = { isbn: "9798888772584", title: "Fire Force Manga Box Set 1 (Vol. 1-2)", seriesNumber: 1 };
+    stubApi([box]);
+    await sync(t);
+    const members = () =>
+      t.run(async (ctx) => {
+        const [bundle, ...more] = await ctx.db.query("releaseBundles").collect();
+        expect(more).toHaveLength(0);
+        const rows = await ctx.db
+          .query("bundleMemberships")
+          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
+          .collect();
+        return await Promise.all(rows.map(async (row) => (await ctx.db.get(row.releaseId))!.isbn13));
+      });
+    expect(await members()).toEqual([]);
+
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    stubApi([
+      { isbn: "9781632364425", title: "Fire Force 1", seriesNumber: 1 },
+      { isbn: "9781632364432", title: "Fire Force 2", seriesNumber: 2 },
+      box,
+    ]);
+    await sync(t);
+    expect(await members()).toEqual(["9781632364425", "9781632364432"]);
+    await t.run(async (ctx) => {
+      const revisions = (await ctx.db.query("revisions").collect()).filter(
+        (r) => r.ref.type === "releaseBundle",
+      );
+      expect(revisions).toHaveLength(2);
+      expect(revisions[1]!.changes.map((c) => c.field)).toEqual(["members"]);
+    });
+  });
+});
+
+// R12: a statement that lists Volumes with a gap ("Vol. 1 & 3", "Collects
+// volumes 1 and 3") is evidence, not silence. No range can hold it, so the
+// book stays Unmapped Packaging; the line's declared size (3-in-1 → 1–3)
+// never stands in and invents the Volume it skips.
+describe("prh.sync — a gapped coverage statement is never widened (R12)", () => {
+  /** The Volume labels, and each Edition's covered labels, after a sync. */
+  async function placed(t: TestT) {
+    return await t.run(async (ctx) => {
+      const labels = new Map(
+        (await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]),
+      );
+      const editions = await ctx.db.query("editions").collect();
+      return {
+        volumes: [...labels.values()].sort(),
+        covered: (await ctx.db.query("volumeCoverages").collect()).map((c) => labels.get(c.volumeId)),
+        unmapped: editions.map((e) => e.coverageUnmapped ?? false),
+        releases: (await ctx.db.query("releases").collect()).length,
+      };
+    });
+  }
+
+  it("a title listing Volumes 1 & 3 never falls back to the 3-in-1 size", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1 (Vol. 1 & 3)" }]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
+    expect(await placed(t)).toEqual({ volumes: ["1", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  it("a blurb collecting Volumes 1 and 3 never falls back to the 3-in-1 size", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "3"]);
+    stubApi([
+      { isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy: "<p>Collects volumes 1 and 3.</p>" },
+    ]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  it("a later hint's gapped list blocks the size too, while silence before it does not decide", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "3"]);
+    stubApi([
+      {
+        isbn: "9781646519828",
+        title: "Alpha 3-in-1 Edition 1",
+        flapcopy: "<p>The saga begins in a giant edition.</p>",
+        keynote: "<p>Collects <i>Alpha</i> Volumes 1, 3, and a bonus story.</p>",
+      },
+    ]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // A gapped list with no collect-verb in front of it is still a statement.
+  it.each([
+    "<p>Volumes 1 and 3 in one book!</p>",
+    "<p>This edition brings together volumes 1 and 3.</p>",
+    "<p>Collects volumes #1 and #3.</p>",
+    "<p>Collects volumes one and three.</p>",
+  ])("a bare gapped list (%s) never falls back to the 3-in-1 size", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // A title may repeat the marker or number each listed Volume with "#".
+  it.each([
+    "Alpha 3-in-1 Edition 1 (Vol. 1 and Vol. 3)",
+    "Alpha 3-in-1 Edition 1 (Vol. 1 & Vol. 3)",
+    "Alpha 3-in-1 Edition 1 (Vol. #1 & #3)",
+    "Alpha 3-in-1 Edition 1 (Includes Vols. 1 and 3)",
+  ])("a title listing Volumes with a gap (%s) never falls back to the 3-in-1 size", async (title) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "3"]);
+    stubApi([{ isbn: "9781646519828", title }]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
+    expect(await placed(t)).toEqual({ volumes: ["1", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // An unusable bare range earlier in the blurb does not hide the gapped list.
+  it("a gapped list after an unusable bare range still blocks the size", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "3"]);
+    stubApi([
+      {
+        isbn: "9781646519828",
+        title: "Alpha 3-in-1 Edition 1",
+        flapcopy: "<p>Volumes 1-80 of the saga are out. Volumes 1 and 3 in one book!</p>",
+      },
+    ]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // A number that counts something else ("4 bonus stories") is no Volume:
+  // the stated range stays 1–3 and no Volume 4 is created.
+  it.each([
+    "<p>Collects volumes 1–3 and 4 bonus stories.</p>",
+    "<p>Collects volumes 1-3 and 16 pages of color art.</p>",
+    "<p>Collects volumes 1-3, and 2 new short stories.</p>",
+    "<p>Collects volumes 1-3 and volume 4&#8217;s bonus chapter.</p>",
+  ])("a counted noun after the list (%s) never widens the stated range", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3"]);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+    expect(result.unmapped).toEqual([false]);
+  });
+
+  it("a counted number word after a Volume is never read as a Volume", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([
+      {
+        isbn: "9781646519828",
+        title: "Alpha 3-in-1 Edition 1",
+        flapcopy: "<p>Includes volume one and two bonus stories.</p>",
+      },
+    ]);
+    await sync(t);
+    // The blurb states Volume 1 alone; "two bonus stories" adds no Volume 2.
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: ["1"], unmapped: [false], releases: 1 });
+  });
+
+  it("a stated range no book can hold blocks the size as well", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([
+      { isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy: "<p>Collects volumes 3-1.</p>" },
+    ]);
+    await sync(t);
+    expect(await placed(t)).toMatchObject({ covered: [], unmapped: [true] });
+  });
+
+  it("a stated contiguous list still places the book", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([
+      { isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy: "<p>Collects volumes 1, 2, and 3.</p>" },
+    ]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+    expect(result.unmapped).toEqual([false]);
   });
 });

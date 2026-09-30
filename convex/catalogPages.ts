@@ -5,7 +5,8 @@
 //
 // Every query resolves merged records to their survivor (merged docs keep
 // their public ID and point at the winner, spec §8) so the routes can 301,
-// and reads hidden records as absent.
+// and reads hidden records as absent. Maturity is the exception: it is the
+// content's, so hidden parts of a book or box set still count toward it.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -29,17 +30,17 @@ type MergeableTable =
   | "publishers"
   | "series"
   | "volumes"
+  | "editionLines"
   | "editions"
   | "releases"
   | "releaseBundles";
 
 /**
- * Follow a merged record to its surviving record (spec §4/§8), cycle-guarded;
- * hidden records read as absent. Mirrors catalog.ts's resolveActiveSeries.
- * Exported for moderation.ts (revision history resolves the same way) and
- * reading.ts (tracking mutations follow merges before touching state).
+ * The record a merge chain ends at, whatever its status (spec §4/§8),
+ * cycle-guarded. Maturity reads content through this rather than
+ * `followMerges`, so hiding a record never makes what it holds general.
  */
-export async function followMerges<T extends MergeableTable>(
+async function mergeSurvivor<T extends MergeableTable>(
   ctx: QueryCtx,
   // The table name anchors T's inference — `Doc<T>` alone is an indexed
   // access type TypeScript cannot infer backward from.
@@ -53,7 +54,22 @@ export async function followMerges<T extends MergeableTable>(
     visited.add(current._id);
     current = (await ctx.db.get(current.mergedIntoId as Id<T>)) as Doc<T> | null;
   }
-  return current && current.status === "active" ? current : null;
+  return current;
+}
+
+/**
+ * Follow a merged record to its surviving record (spec §4/§8), cycle-guarded;
+ * hidden records read as absent. Mirrors catalog.ts's resolveActiveSeries.
+ * Exported for moderation.ts (revision history resolves the same way) and
+ * reading.ts (tracking mutations follow merges before touching state).
+ */
+export async function followMerges<T extends MergeableTable>(
+  ctx: QueryCtx,
+  table: T,
+  doc: Doc<T> | null,
+): Promise<Doc<T> | null> {
+  const survivor = await mergeSurvivor(ctx, table, doc);
+  return survivor && survivor.status === "active" ? survivor : null;
 }
 
 /** An Edition's Volume Coverage rows in `order` (the index sorts them). */
@@ -95,23 +111,31 @@ export async function primaryVolumeSeries(
  * An Edition's ordered Volume Coverage joined with each covered Volume and
  * its Series, plus the composed Edition title (lib/titles.ts). Hidden
  * Volumes/Series drop out of the coverage listing; `volumeCount` and
- * `mature` still count them. Exported for moderation.ts (edit-form display titles).
+ * `mature` still count them, and `mature` also counts a hidden Edition Line
+ * or line Series. Exported for moderation.ts (edit-form display titles).
  */
 export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
-  const line = edition.editionLineId
+  const storedLine = edition.editionLineId
     ? await ctx.db.get(edition.editionLineId)
     : null;
-  const lineName = line && line.status === "active" ? line.name : null;
+  const line = storedLine && storedLine.status === "active" ? storedLine : null;
+  const lineName = line?.name ?? null;
+
+  // Maturity is the content's (B34, R15), judged through merges and before
+  // any hiding: the Edition Line's Series and every covered Volume's Series
+  // count though hidden Volumes, Series and lines drop out of the listing.
+  const contentLine = await mergeSurvivor(ctx, "editionLines", storedLine);
+  const storedLineSeries = contentLine ? await ctx.db.get(contentLine.seriesId) : null;
+  let collectsMature = (await mergeSurvivor(ctx, "series", storedLineSeries))?.mature === true;
 
   const rows = await coverageRows(ctx, edition._id);
   const coverage = [];
-  // Maturity is the content's (B34): a hidden Volume or Series still counts,
-  // though it drops out of the listing.
-  let collectsMature = false;
   for (const row of rows) {
     const volume = await ctx.db.get(row.volumeId);
-    const series = volume ? await ctx.db.get(volume.seriesId) : null;
-    if (series?.mature === true) collectsMature = true;
+    const survivor = await mergeSurvivor(ctx, "volumes", volume);
+    const series = survivor ? await ctx.db.get(survivor.seriesId) : null;
+    if ((await mergeSurvivor(ctx, "series", series))?.mature === true) collectsMature = true;
+    // Listed only while the Volume itself (its own survivor) and its Series are active.
     if (!volume || volume.status !== "active" || !series || series.status !== "active") continue;
     coverage.push({
       volumePublicId: volume.publicId,
@@ -126,11 +150,9 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   }
 
   // The first listed Volume's Series is primaryVolumeSeries; Unmapped
-  // Packaging covers nothing yet, so its Series is its line's.
-  const lineSeries =
-    coverage.length === 0 && line && line.status === "active"
-      ? await ctx.db.get(line.seriesId)
-      : null;
+  // Packaging covers nothing yet, so its Series is its line's (an active
+  // line is its own survivor, so storedLineSeries is its Series as stored).
+  const lineSeries = coverage.length === 0 && line ? storedLineSeries : null;
   const series =
     coverage[0]?.series ??
     (lineSeries && lineSeries.status === "active"
@@ -154,10 +176,11 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
      */
     volumeCount: new Set(rows.map((row) => row.volumeId)).size,
     /**
-     * It collects any Mature Series (lib/mature.ts), judged before hiding:
-     * hiding a covered Volume or Series does not make the book general.
+     * It collects any Mature Series or sits in one's Edition Line
+     * (lib/mature.ts), judged through merges and before hiding: hiding a
+     * covered Volume, a Series or the line does not make the book general.
      */
-    mature: collectsMature || series?.mature === true,
+    mature: collectsMature,
     coverageUnmapped: edition.coverageUnmapped === true,
   };
 }
@@ -401,8 +424,10 @@ export const editionPage = query({
  * A Bundle's listed members, each with its Release and Edition (merges
  * followed; hidden ones dropped) and the Edition's composed title, and
  * whether the box set is mature: an adult-only publisher's, or holding a
- * Mature Series' book. Shared by `bundlePage` and the sitemap (seo.ts) so
- * both judge a box set alike.
+ * Mature Series' book. Maturity is judged through merges before hidden
+ * members drop out (B35, R14), so hiding a member's Release or Edition never
+ * makes the box set general. Shared by `bundlePage` and the sitemap (seo.ts)
+ * so both judge a box set alike.
  */
 export async function bundleMembers(ctx: QueryCtx, bundle: Doc<"releaseBundles">) {
   const publisher = await ctx.db.get(bundle.publisherId);
@@ -411,14 +436,15 @@ export async function bundleMembers(ctx: QueryCtx, bundle: Doc<"releaseBundles">
     .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
     .collect();
   const members = [];
-  let mature = publisher?.contentRating === "mature";
+  let mature = (await mergeSurvivor(ctx, "publishers", publisher))?.contentRating === "mature";
   for (const membership of memberships) {
-    const release = await followMerges(ctx, "releases", await ctx.db.get(membership.releaseId));
+    const release = await mergeSurvivor(ctx, "releases", await ctx.db.get(membership.releaseId));
     if (!release) continue;
-    const edition = await followMerges(ctx, "editions", await ctx.db.get(release.editionId));
+    const edition = await mergeSurvivor(ctx, "editions", await ctx.db.get(release.editionId));
     if (!edition) continue;
     const coverage = await editionCoverage(ctx, edition);
     if (coverage.mature) mature = true;
+    if (release.status !== "active" || edition.status !== "active") continue;
     members.push({ membership, release, edition, title: coverage.title });
   }
   return { publisher, mature, members };

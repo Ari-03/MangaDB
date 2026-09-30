@@ -28,6 +28,7 @@ import {
   ENTRY_LABELS,
   NO_PROMPTS,
   ShelfPrompts,
+  useRunLock,
   type EntryState,
   type ShelfPromptState,
 } from "~/lib/quickActions";
@@ -50,14 +51,16 @@ const STATE_ORDER: CollectionState[] = ["wanted", "ordered", "owned"];
  * clicking the active state removes the entry (state -> null), clicking
  * another replaces it — the exactly-one-state invariant rendered as
  * controls. Styling keys off `aria-pressed`, so the pressed look and the
- * announced state can never drift apart.
+ * announced state can never drift apart. `disabled` locks all three.
  */
 function StateButtons({
   current,
   onPick,
+  disabled = false,
 }: {
   current: CollectionState | null;
   onPick: (state: CollectionState | null) => void;
+  disabled?: boolean;
 }) {
   return (
     <span
@@ -71,6 +74,7 @@ function StateButtons({
           type="button"
           aria-pressed={current === state}
           className={current === state ? "state-active" : undefined}
+          disabled={disabled}
           title={
             current === state
               ? "Remove this from your collection"
@@ -91,7 +95,9 @@ function StateButtons({
  * Collection controls on a Release row: the state toggles, the owned-Variant
  * picker when the Release has Variants, and Derived Ownership badges from
  * Owned Bundles. Mounts anywhere a Release row renders — Series, Volume, and
- * Edition pages; renders nothing signed out.
+ * Edition pages; renders nothing signed out. Locked while a whole run still
+ * has this Release to write (useRunLock), so its later batch cannot
+ * overwrite a choice made here meanwhile.
  */
 export function ReleaseCollectionControls({
   releaseId,
@@ -110,6 +116,9 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
   // The post-first-entry follow suggestion (#29) the last mutation returned;
   // ephemeral — following and permanent dismissal go through FollowPrompt.
   const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
+  const lock = useRunLock(
+    (claims) => claims.entries.has(releaseId) || (!!data && claims.entries.has(data.releaseId)),
+  );
   if (!data) return null; // loading, signed out, or username pending
   const entry = data.entry;
 
@@ -117,7 +126,9 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
     <div className="collection-controls">
       <StateButtons
         current={entry?.state ?? null}
-        onPick={(state) =>
+        disabled={lock.locked}
+        onPick={(state) => {
+          if (lock.held()) return;
           void setEntry({
             releaseId: data.releaseId,
             state: state ?? undefined,
@@ -127,8 +138,8 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
           }).then((result) => {
             track("collection_entry_set", { target: "release", state });
             setSuggestFollow(result.suggestFollow);
-          })
-        }
+          });
+        }}
       />
       <FollowPrompt
         suggestions={suggestFollow}
@@ -140,7 +151,9 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
           <select
             className="select"
             value={entry.variantId ?? ""}
+            disabled={lock.locked}
             onChange={(event) => {
+              if (lock.held()) return;
               const value = event.currentTarget.value;
               void setEntry({
                 releaseId: data.releaseId,
@@ -523,6 +536,9 @@ function LibraryBookItem({
     state: book.direct ? book.state : null,
     derivedOwned: book.via !== null,
     read: book.read,
+    completeVolumes: book.coverage.flatMap((cov) =>
+      cov.extent === "complete" ? [cov.volumePublicId] : [],
+    ),
   };
   return (
     <div className="shelf-item">

@@ -37,7 +37,8 @@ export type UpsertResult = {
  * (imports.ts queueWithdrawalReview). Withdrawal was the only evidence, so
  * the review is withdrawn instead of staying approvable against a book the
  * source lists again. Any other queued item is left alone. Call after a
- * relist clears `withdrawn`; returns whether a review was retired.
+ * relist clears `withdrawn` (`markSeen` does); returns whether a review was
+ * retired.
  */
 export async function retireLapsedCancellation(
   ctx: MutationCtx,
@@ -66,6 +67,24 @@ export async function retireLapsedCancellation(
   if (op?.kind !== "hide" || op.ref.type !== "release" || op.ref.id !== linked.id) return false;
   await ctx.db.patch(proposal._id, { state: "withdrawn", decidedAt: now });
   return true;
+}
+
+/**
+ * Note a record present at its source (a listing hit, an unchanged fetch):
+ * bump last-seen, clear a withdrawn mark, and retire the possible-
+ * cancellation review that withdrawal queued. Every presence path goes
+ * through here, so no adapter clears withdrawal while leaving its review
+ * approvable. Returns the observation as now stored.
+ */
+export async function markSeen(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  now: number,
+): Promise<Doc<"sourceObservations">> {
+  await ctx.db.patch(observation._id, { lastSeenAt: now, withdrawn: false });
+  const seen = { ...observation, lastSeenAt: now, withdrawn: false };
+  if (observation.withdrawn) await retireLapsedCancellation(ctx, seen, now);
+  return seen;
 }
 
 /**
@@ -98,9 +117,7 @@ export async function upsertObservation(
   }
 
   if (sameValue(existing.snapshot, args.snapshot)) {
-    await ctx.db.patch(existing._id, { lastSeenAt: args.now, withdrawn: false });
-    const observation = { ...existing, lastSeenAt: args.now, withdrawn: false };
-    if (existing.withdrawn) await retireLapsedCancellation(ctx, observation, args.now);
+    const observation = await markSeen(ctx, existing, args.now);
     return { observation, changed: false, isNew: false };
   }
 

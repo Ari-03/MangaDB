@@ -15,7 +15,20 @@ import {
   canonicalPublisherFor,
 } from "../publishers";
 import { seriesSearchText } from "../searchMatch";
-import { applyHide, applyMerge, applyRestore } from "../sensitiveOps";
+import {
+  OWNERSHIP,
+  READING,
+  applyHide,
+  applyMerge,
+  applyRestore,
+  bundleOwners,
+  bundleSeries,
+  carryEditionTracking,
+  carryVisibility,
+  editionGovernance,
+  type EditionGovernance,
+  type OverrideSink,
+} from "../sensitiveOps";
 import { sameValue } from "../values";
 import {
   activeEditionsCovering,
@@ -34,6 +47,7 @@ import {
   updateRecord,
   type Audit,
   type Ref,
+  type TrailRow,
 } from "./audit";
 import type { EntryOf, Outcome, RepairEntry } from "./entries";
 
@@ -545,6 +559,7 @@ async function mergeSeries(
   ]);
   const orphans = await orphanVolumes(ctx, loserVolumes, planned);
 
+  const moves = newMoves(entry.key);
   for (const placement of entry.placements) {
     const volume = await ctx.db.get(placement.volumeId);
     if (!volume) skip(`volume ${placement.volumeId} missing`);
@@ -556,8 +571,9 @@ async function mergeSeries(
     if (volume!.status !== "active") continue; // hidden since planning: nothing to place
     if (volume!.seriesId === survivor._id) continue;
     if (volume!.seriesId !== loser._id) skip(`volume ${volume!.publicId} left the loser`);
-    await placeVolume(ctx, audit, volume!, survivor._id, placement);
+    await placeVolume(ctx, audit, moves, volume!, survivor._id, placement);
   }
+  await closeMoves(ctx, audit, { type: "series", id: loser._id }, moves);
   for (const orphan of orphans) {
     await hide(ctx, audit, { type: "volume", id: orphan._id }, orphan);
     audit.note(`hid orphan volume ${orphan.publicId} (no active edition)`);
@@ -584,11 +600,14 @@ async function mergeSeries(
 /**
  * Place one loser Volume in the survivor: merge it into the survivor's
  * Volume the plan names (or the one with the same label), else move it
- * across with its label, at position = its number.
+ * across with its label, at position = its number, carrying its trackers'
+ * Tracking Visibility (carryingTracking; the Series merge that follows may
+ * wait for stage 4).
  */
 async function placeVolume(
   ctx: MutationCtx,
   audit: Audit,
+  moves: Moves,
   volume: Doc<"volumes">,
   survivorId: Id<"series">,
   placement: { label: string | null; intoVolumeId: Id<"volumes"> | null },
@@ -608,17 +627,19 @@ async function placeVolume(
   }
   const label = canonicalLabel(placement.label);
   const maxPosition = survivorVolumes.reduce((max, v) => Math.max(max, v.position), 0);
-  await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {
-    seriesId: survivorId,
-    label: label ?? undefined,
-    position: labelNumber(label) ?? maxPosition + 1,
-  });
-  for (const row of await ctx.db
+  const coverage = await ctx.db
     .query("volumeCoverages")
     .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-    .collect()) {
-    await refreshReleaseDenorms(ctx, row.editionId);
-  }
+    .collect();
+  const editionIds = new Set(coverage.map((row) => row.editionId));
+  await carryingTracking(ctx, audit, moves, { volumeIds: [volume._id], editionIds }, async () => {
+    await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {
+      seriesId: survivorId,
+      label: label ?? undefined,
+      position: labelNumber(label) ?? maxPosition + 1,
+    });
+    for (const editionId of editionIds) await refreshReleaseDenorms(ctx, editionId);
+  });
 }
 
 // ---------- stage 4: packaging ----------
@@ -726,41 +747,46 @@ async function remodelEdition(
   // Group 0 stays on this Edition; each further group's Releases move to a
   // new Edition of the same publisher with its own coverage. A group without
   // coverage keeps what it has (releases the research could not place).
-  for (const [i, group] of entry.groups.entries()) {
-    let editionId = edition._id;
-    if (i > 0) {
-      const releases = [];
-      for (const id of group.releaseIds ?? []) {
-        const release = await ctx.db.get(id);
-        if (!release || release.status !== "active") skip(`release ${id} not active`);
-        releases.push(release!);
-      }
-      const moved = releases.find((r) => r.editionId !== edition._id);
-      if (moved) {
-        editionId = moved.editionId; // created by an earlier run
-      } else if (releases.length > 0) {
-        editionId = await createEdition(ctx, audit, {
-          status: "active",
-          publisherId: edition.publisherId,
-          bootstrapUnreviewed: true,
-        });
-        for (const release of releases) {
-          await updateRecord(ctx, audit, { type: "release", id: release._id }, release, { editionId });
+  // Their trackers keep their Tracking Visibility (carryingTracking).
+  const moves = newMoves(entry.key);
+  await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
+    for (const [i, group] of entry.groups.entries()) {
+      let editionId = edition._id;
+      if (i > 0) {
+        const releases = [];
+        for (const id of group.releaseIds ?? []) {
+          const release = await ctx.db.get(id);
+          if (!release || release.status !== "active") skip(`release ${id} not active`);
+          releases.push(release!);
         }
-      } else continue;
+        const moved = releases.find((r) => r.editionId !== edition._id);
+        if (moved) {
+          editionId = moved.editionId; // created by an earlier run
+        } else if (releases.length > 0) {
+          editionId = await createEdition(ctx, audit, {
+            status: "active",
+            publisherId: edition.publisherId,
+            bootstrapUnreviewed: true,
+          });
+          for (const release of releases) {
+            await updateRecord(ctx, audit, { type: "release", id: release._id }, release, { editionId });
+          }
+        } else continue;
+      }
+      const rows = [];
+      for (const cover of group.coverage) {
+        rows.push({ volumeId: (await coveredVolume(ctx, audit, target._id, cover))._id, extent: cover.extent });
+      }
+      if (rows.length > 0) await replaceCoverage(ctx, audit, editionId, rows);
+      await placeInLine(editionId, group.linePosition);
+      await refreshReleaseDenorms(ctx, editionId);
     }
-    const rows = [];
-    for (const cover of group.coverage) {
-      rows.push({ volumeId: (await coveredVolume(ctx, audit, target._id, cover))._id, extent: cover.extent });
+    if (entry.groups.length === 0) {
+      await placeInLine(edition._id, null);
+      audit.note("coverage left for review");
     }
-    if (rows.length > 0) await replaceCoverage(ctx, audit, editionId, rows);
-    await placeInLine(editionId, group.linePosition);
-    await refreshReleaseDenorms(ctx, editionId);
-  }
-  if (entry.groups.length === 0) {
-    await placeInLine(edition._id, null);
-    audit.note("coverage left for review");
-  }
+  });
+  await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
 
   const first = entry.groups.find((g) => g.coverage.length > 0)?.coverage[0];
   const firstVolume = first ? await coveredVolume(ctx, audit, target._id, first) : null;
@@ -817,29 +843,68 @@ async function retireVolumes(
 const STATE_RANK = { wanted: 0, ordered: 1, owned: 2 } as const;
 
 /**
+ * Members joined a Bundle whose ownership answered to the `before` Series
+ * (bundleSeries; none for a memberless one, which followed each owner's
+ * default alone): every owner keeps it as private as it was. A later leg
+ * that adds no member reads no owner.
+ */
+async function carryBundleOwners(
+  ctx: MutationCtx,
+  sink: OverrideSink,
+  bundleId: Id<"releaseBundles">,
+  before: Array<Id<"series">>,
+) {
+  const after = await bundleSeries(ctx, bundleId);
+  if (sameValue([...after].sort(), [...before].sort())) return;
+  for (const userId of await bundleOwners(ctx, bundleId)) {
+    await carryVisibility(ctx, sink, userId, OWNERSHIP, before, after);
+  }
+}
+
+/**
  * A box-set Release turned Release Bundle hands its Collection Entries to
  * the bundle, so an Owned box set stays in its owner's library (and its
  * members with it, by Derived Ownership). A User already holding an entry
  * on the bundle keeps that one, raised to the stronger state (Owned over
  * Ordered over Wanted), and the box-set entry folds into it. A pinned
- * Release Variant was the box-set Release's own and is dropped.
+ * Release Variant was the box-set Release's own and is dropped. Ownership
+ * the box set's Series kept private stays private on the bundle's member
+ * Series (carryVisibility); a bundle with no member Series would fall back
+ * to the owner's default, so it cannot take an Owned box set that had one.
+ * Hands over at most the leg's budget; true once the box set holds none.
  */
 async function entriesToBundle(
   ctx: MutationCtx,
   audit: Audit,
   moves: Moves,
-  boxId: Id<"releases">,
+  box: Doc<"releases">,
   bundleId: Id<"releaseBundles">,
-) {
+): Promise<boolean> {
+  // Each handed-over entry leaves the box set's range, so a leg takes the
+  // next ones up to its budget and the box set keeps the rest meanwhile.
   const entries = await ctx.db
     .query("collectionEntries")
-    .withIndex("by_release", (q) => q.eq("releaseId", boxId))
-    .collect();
+    .withIndex("by_release", (q) => q.eq("releaseId", box._id))
+    .take(moves.left + 1);
+  const more = entries.length > moves.left;
+  if (more) {
+    moves.unfinished = true;
+    entries.pop();
+  }
+  moves.left -= entries.length;
+  const bundleSeriesIds = await bundleSeries(ctx, bundleId);
+  const sink = trailSink(ctx, audit, moves);
   for (const entry of entries) {
     const kept = await ctx.db
       .query("collectionEntries")
       .withIndex("by_user_bundle", (q) => q.eq("userId", entry.userId).eq("bundleId", bundleId))
       .unique();
+    if (entry.state === "owned" && kept?.state !== "owned") {
+      if (bundleSeriesIds.length === 0 && box.seriesIds.length > 0) {
+        skip("the bundle has no member Series to keep its owners' Tracking Visibility");
+      }
+      await carryVisibility(ctx, sink, entry.userId, OWNERSHIP, box.seriesIds, bundleSeriesIds);
+    }
     if (!kept) {
       await refile(ctx, audit, moves, "collectionEntries", entry, { releaseId: undefined, bundleId, variantId: undefined });
       continue;
@@ -852,6 +917,7 @@ async function entriesToBundle(
     const { releaseId, state, variantId } = entry;
     moves.trail.push({ table: "collectionEntries", docId: entry._id, field: "(removed)", before: { releaseId, state, variantId }, into: kept._id });
   }
+  return !more;
 }
 
 /** An existing bundle for this box-set Release: same ISBN, else same name/publisher/format. */
@@ -889,7 +955,7 @@ async function toBundle(
   const labels = (entry.groups[0]?.coverage ?? []).flatMap((c) => (c.label === null ? [] : [c.label]));
   const company = await companyRows(ctx, edition.publisherId);
   let firstMemberVolume: Id<"volumes"> | null = null;
-  const moves = newMoves();
+  const moves = newMoves(entry.key);
 
   for (const box of boxes) {
     let bundle = await existingBundle(ctx, box, name, edition.publisherId);
@@ -921,6 +987,7 @@ async function toBundle(
     }
     if (!bundle) return skip("bundle vanished");
     const bundleId = bundle._id;
+    const seriesBefore = await bundleSeries(ctx, bundleId);
     const members = await ctx.db
       .query("bundleMemberships")
       .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
@@ -943,14 +1010,17 @@ async function toBundle(
       ]);
     }
     if (missing.length > 0) audit.note(`bundle ${bundle.publicId}: no member release for vol ${missing.join(", ")}`);
-    await entriesToBundle(ctx, audit, moves, box._id, bundleId);
+    await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundleId, seriesBefore);
+    if (!(await entriesToBundle(ctx, audit, moves, box, bundleId))) continue;
     if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
       await audit.revise({ type: "release", id: box._id }, [
         { field: "convertedToBundle", after: `#${bundle.publicId} ${name}` },
       ]);
     }
   }
-  recordMoves(audit, { type: "edition", id: edition._id }, moves);
+  await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
+  // Box sets still holding entries stay up until a later leg empties them.
+  if (moves.unfinished) return partial;
   await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
   await retireVolumes(ctx, audit, entry.retireVolumeIds, firstMemberVolume);
   return audit.wrote ? applied : already;
@@ -1135,16 +1205,32 @@ async function normalizeVolumes(
 // ---------- personal tracking that follows a move ----------
 
 /**
- * One change to a personal row: a field re-pointed, or (field "(inserted)" /
- * "(removed)") a whole row added or folded into another (`into`). No row
- * names its User.
+ * Personal rows one leg of an entry may examine. A split's sweeps and a box
+ * set's Collection Entries stop there: the entry reports "partial", and the
+ * runner (scripts/repair.ts) calls it again to go on where it stopped.
  */
-type TrailRow = { table: string; docId: string; field: string; before?: unknown; after?: unknown; into?: string };
+export const SWEEP_BUDGET = 250;
 
-/** The personal rows one entry moved, and the Users whose tracking moved with them. */
-type Moves = { trail: TrailRow[]; trackers: Set<Id<"users">> };
+/** How far one sweep got this leg: past the row created at `after`, or `done`. */
+type SweepState = { after: number; done: boolean };
 
-const newMoves = (): Moves => ({ trail: [], trackers: new Set() });
+/**
+ * One entry's personal work this leg: the trail of rows it moved and the
+ * overrides that keep them private, the rows it may still examine, whether
+ * any was left for the next leg, and where its sweeps stand.
+ */
+type Moves = {
+  key: string;
+  trail: TrailRow[];
+  left: number;
+  unfinished: boolean;
+  sweeps: Map<string, SweepState>;
+};
+
+const newMoves = (key: string): Moves => ({ key, trail: [], left: SWEEP_BUDGET, unfinished: false, sweeps: new Map() });
+
+/** The status of an entry that left personal work for its next leg. */
+const partial: Result = { status: "partial", reason: "personal tracking continues on the next call" };
 
 type PersonalTable = "volumeProgress" | "releaseProgress" | "favorites" | "comments" | "userSeriesStates" | "collectionEntries";
 
@@ -1168,19 +1254,141 @@ async function refile<T extends PersonalTable>(
 }
 
 /**
- * Personal rows are no catalog fact, so they stay off the public Revisions;
- * the entry's Proposal records them as a "personalTracking" pseudo-field on
- * the record they followed, enough to read the move back or reverse it.
+ * Visit, in creation order, the rows `page` returns after a creation time,
+ * resuming where this entry's earlier leg left the sweep `name` and
+ * spending the leg's budget. A sweep the budget cuts short marks the entry
+ * unfinished. Rows a visit re-files stay in their range, hence the cursor.
  */
-function recordMoves(audit: Audit, ref: Ref, moves: Moves) {
-  if (moves.trail.length > 0) audit.op({ kind: "update", ref, changes: [{ field: "personalTracking", after: moves.trail }] });
+async function sweep<D extends { _creationTime: number }>(
+  ctx: MutationCtx,
+  moves: Moves,
+  name: string,
+  page: (after: number, count: number) => Promise<D[]>,
+  visit: (row: D) => Promise<void>,
+) {
+  let state = moves.sweeps.get(name);
+  if (!state) {
+    const saved = await ctx.db
+      .query("repairSweeps")
+      .withIndex("by_entry_sweep", (q) => q.eq("entryKey", moves.key).eq("sweep", name))
+      .unique();
+    state = { after: saved?.after ?? -1, done: saved?.done ?? false };
+    moves.sweeps.set(name, state);
+  }
+  while (!state.done) {
+    if (moves.left <= 0) {
+      moves.unfinished = true;
+      return;
+    }
+    const count = moves.left;
+    const rows = await page(state.after, count);
+    for (const row of rows) {
+      await visit(row);
+      state.after = row._creationTime;
+    }
+    moves.left -= rows.length;
+    state.done = rows.length < count;
+  }
+}
+
+/**
+ * Close one entry's leg: its trail goes to bounded records on the Proposal
+ * (audit.trail) under `ref`, and its sweeps are saved for the next leg, or,
+ * all finished, cleared so a later re-run starts afresh.
+ */
+async function closeMoves(ctx: MutationCtx, audit: Audit, ref: Ref, moves: Moves) {
+  await audit.trail(ref, moves.trail);
+  // One row per sweep of this entry, so as many as the plan entry has
+  // Volumes, Releases and Editions.
+  const saved = await ctx.db
+    .query("repairSweeps")
+    .withIndex("by_entry_sweep", (q) => q.eq("entryKey", moves.key))
+    .collect();
+  const unsaved = new Map(moves.sweeps);
+  for (const row of saved) {
+    const state = unsaved.get(row.sweep);
+    unsaved.delete(row.sweep);
+    if (!moves.unfinished) await ctx.db.delete(row._id);
+    else if (state && (state.after !== row.after || state.done !== row.done)) await ctx.db.patch(row._id, state);
+  }
+  if (!moves.unfinished) return;
+  for (const [name, state] of unsaved) {
+    await ctx.db.insert("repairSweeps", { entryKey: moves.key, sweep: name, ...state });
+  }
+}
+
+/**
+ * Where the repair writes the Tracking Visibility overrides the shared rule
+ * (sensitiveOps carryVisibility) narrows: on the entry's trail, a new state
+ * row as "(inserted)" without its User. The repair is never reversed, so
+ * tracking may gain its first Series.
+ */
+function trailSink(ctx: MutationCtx, audit: Audit, moves: Moves): OverrideSink {
+  return {
+    reversible: false,
+    write: async (userId, seriesId, state, patch) => {
+      if (state) return await refile(ctx, audit, moves, "userSeriesStates", state, patch);
+      await audit.meta();
+      const fields = { seriesId, following: false, followPromptDismissed: false, ...patch };
+      const docId = await ctx.db.insert("userSeriesStates", { userId, ...fields });
+      moves.trail.push({ table: "userSeriesStates", docId, field: "(inserted)", after: fields });
+    },
+  };
+}
+
+/**
+ * Run `change`, which may move these Volumes to another Series or re-derive
+ * these Editions' Series (re-parenting, new coverage, a moved line), then
+ * keep every User's tracking of them as private as it was: Volume read
+ * counts, Owned Releases, Owned Bundles holding them, passes, and omnibus
+ * Ratings (carryEditionTracking, the rule merges apply) now answer to
+ * Series that absorb the overrides of those they left. Only what `change`
+ * actually moves is carried, so a re-run that moves nothing leaves every
+ * override as the User has since set it.
+ *
+ * Unlike the re-filing sweeps, this carry is not bounded: the profile reads
+ * these surfaces through the catalog (a read count through its Volume's
+ * Series, ownership through its Release's), so it must commit with
+ * `change`, and it reads every tracker (carryBundleOwners likewise). The
+ * staged form needs sharing.ts to treat Series under a move as private for
+ * everyone: freeze both sides, move the catalog, carry each tracker in
+ * sweeps, then unfreeze. Carrying ahead of the move instead would race a
+ * User's own later override change.
+ */
+async function carryingTracking<R>(
+  ctx: MutationCtx,
+  audit: Audit,
+  moves: Moves,
+  scope: { volumeIds?: Array<Id<"volumes">>; editionIds: Iterable<Id<"editions">> },
+  change: () => Promise<R>,
+): Promise<R> {
+  const volumesBefore = new Map<Id<"volumes">, Id<"series"> | undefined>();
+  for (const id of scope.volumeIds ?? []) volumesBefore.set(id, (await ctx.db.get(id))?.seriesId);
+  const editionsBefore = new Map<Id<"editions">, EditionGovernance>();
+  for (const id of scope.editionIds) editionsBefore.set(id, await editionGovernance(ctx, id));
+
+  const result = await change();
+
+  const sink = trailSink(ctx, audit, moves);
+  for (const [volumeId, from] of volumesBefore) {
+    const to = (await ctx.db.get(volumeId))?.seriesId;
+    if (!from || !to || from === to) continue;
+    const readers = await ctx.db
+      .query("volumeProgress")
+      .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
+      .collect();
+    for (const row of readers) await carryVisibility(ctx, sink, row.userId, READING, [from], [to]);
+  }
+  for (const [editionId, before] of editionsBefore) await carryEditionTracking(ctx, sink, editionId, before);
+  return result;
 }
 
 /**
  * A split re-parented this Volume: re-file what carries its Series (Volume
  * Progress, Volume Favorites, Comments) and each covering Edition's rows
  * (followEdition) under the Series it now sits in. Rows key on the Volume,
- * so nothing collides; only rows still filed under the source move.
+ * so nothing collides; only rows still filed under the source move. Each
+ * table is a sweep (bounded legs).
  */
 async function followVolume(
   ctx: MutationCtx,
@@ -1189,17 +1397,47 @@ async function followVolume(
   volume: Doc<"volumes">,
   sourceId: Id<"series">,
 ) {
-  for (const table of ["volumeProgress", "favorites", "comments"] as const) {
-    const rows = await ctx.db
-      .query(table)
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
-    for (const row of rows) {
-      if (row.seriesId !== sourceId) continue;
-      if (table === "volumeProgress") moves.trackers.add(row.userId);
-      await refile(ctx, audit, moves, table, row, { seriesId: volume.seriesId });
-    }
-  }
+  const onSource = (row: { seriesId: Id<"series"> }) => row.seriesId === sourceId;
+  const to = { seriesId: volume.seriesId };
+  await sweep(
+    ctx,
+    moves,
+    `volumeProgress:${volume._id}`,
+    (after, count) =>
+      ctx.db
+        .query("volumeProgress")
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
+        .take(count),
+    async (row) => {
+      if (onSource(row)) await refile(ctx, audit, moves, "volumeProgress", row, to);
+    },
+  );
+  await sweep(
+    ctx,
+    moves,
+    `favorites:${volume._id}`,
+    (after, count) =>
+      ctx.db
+        .query("favorites")
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
+        .take(count),
+    async (row) => {
+      if (onSource(row)) await refile(ctx, audit, moves, "favorites", row, to);
+    },
+  );
+  await sweep(
+    ctx,
+    moves,
+    `comments:${volume._id}`,
+    (after, count) =>
+      ctx.db
+        .query("comments")
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
+        .take(count),
+    async (row) => {
+      if (onSource(row)) await refile(ctx, audit, moves, "comments", row, to);
+    },
+  );
   for (const edition of await activeEditionsCovering(ctx, volume._id)) {
     await followEdition(ctx, audit, moves, edition._id, sourceId);
   }
@@ -1209,9 +1447,10 @@ async function followVolume(
  * A split moved this Edition's coverage (and refreshed its Releases'
  * Series): each Release Progress row takes its Release's first covered
  * Series (reading.ts passSeriesId) and an omnibus Favorite its first
- * covered Volume's. The Users holding passes, Collection Entries, or
- * omnibus Ratings on it become trackers, whose visibility keepVisibility
- * guards.
+ * covered Volume's. The profile shows a pass only where its own Series is
+ * public too, so re-filing one still under the source (also a stale row a
+ * re-run heals) carries its reader's Reading visibility. Each Release's
+ * passes and the Edition's Favorites are sweeps (bounded legs).
  */
 async function followEdition(
   ctx: MutationCtx,
@@ -1220,82 +1459,50 @@ async function followEdition(
   editionId: Id<"editions">,
   sourceId: Id<"series">,
 ) {
+  const sink = trailSink(ctx, audit, moves);
   for (const release of await releasesOf(ctx, editionId)) {
     const passSeriesId = release.seriesIds[0];
-    const passes = await ctx.db
-      .query("releaseProgress")
-      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
-      .collect();
-    for (const pass of passes) {
-      moves.trackers.add(pass.userId);
-      if (passSeriesId && pass.seriesId === sourceId) {
+    if (!passSeriesId) continue;
+    await sweep(
+      ctx,
+      moves,
+      `releaseProgress:${release._id}`,
+      (after, count) =>
+        ctx.db
+          .query("releaseProgress")
+          .withIndex("by_release", (q) => q.eq("releaseId", release._id).gt("_creationTime", after))
+          .take(count),
+      async (pass) => {
+        if (pass.seriesId !== sourceId) return;
         await refile(ctx, audit, moves, "releaseProgress", pass, { seriesId: passSeriesId });
-      }
-    }
-    const entries = await ctx.db
-      .query("collectionEntries")
-      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
-      .collect();
-    for (const entry of entries) moves.trackers.add(entry.userId);
+        await carryVisibility(
+          ctx,
+          sink,
+          pass.userId,
+          READING,
+          [...release.seriesIds, pass.seriesId],
+          [...release.seriesIds, passSeriesId],
+        );
+      },
+    );
   }
-  const ratings = await ctx.db
-    .query("ratings")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-  for (const rating of ratings) moves.trackers.add(rating.userId);
 
   const first = (await coverageOf(ctx, editionId)).sort((a, b) => a.order - b.order)[0];
   const firstSeriesId = first ? (await ctx.db.get(first.volumeId))?.seriesId : undefined;
   if (!firstSeriesId) return;
-  const favorites = await ctx.db
-    .query("favorites")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-  for (const row of favorites) {
-    if (row.seriesId === sourceId) await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });
-  }
-}
-
-const VISIBILITY_FIELDS = ["ownershipVisibility", "readingVisibility"] as const;
-
-/**
- * A split never widens Tracking Visibility: where a tracker's Ownership or
- * Reading was private on the source Series but would show on the split-off
- * one (its own override, else the User's default), the split-off Series
- * gets an explicit private override, on a new state row if need be. The
- * same rule a Series merge applies (sensitiveOps.ts stricterVisibility).
- */
-async function keepVisibility(
-  ctx: MutationCtx,
-  audit: Audit,
-  moves: Moves,
-  sourceId: Id<"series">,
-  targetId: Id<"series">,
-) {
-  for (const userId of moves.trackers) {
-    const stateOn = (seriesId: Id<"series">) =>
+  await sweep(
+    ctx,
+    moves,
+    `favorites@edition:${editionId}`,
+    (after, count) =>
       ctx.db
-        .query("userSeriesStates")
-        .withIndex("by_user_series", (q) => q.eq("userId", userId).eq("seriesId", seriesId))
-        .unique();
-    const user = await ctx.db.get(userId);
-    const from = await stateOn(sourceId);
-    const to = await stateOn(targetId);
-    const patch: Partial<Pick<Doc<"userSeriesStates">, (typeof VISIBILITY_FIELDS)[number]>> = {};
-    for (const field of VISIBILITY_FIELDS) {
-      const fallback = user?.[field] ?? "private";
-      if ((to?.[field] ?? fallback) === "public" && (from?.[field] ?? fallback) === "private") patch[field] = "private";
-    }
-    if (Object.keys(patch).length === 0) continue;
-    if (to) {
-      await refile(ctx, audit, moves, "userSeriesStates", to, patch);
-      continue;
-    }
-    await audit.meta();
-    const fields = { seriesId: targetId, following: false, followPromptDismissed: false, ...patch };
-    const docId = await ctx.db.insert("userSeriesStates", { userId, ...fields });
-    moves.trail.push({ table: "userSeriesStates", docId, field: "(inserted)", after: fields });
-  }
+        .query("favorites")
+        .withIndex("by_edition", (q) => q.eq("editionId", editionId).gt("_creationTime", after))
+        .take(count),
+    async (row) => {
+      if (row.seriesId === sourceId) await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });
+    },
+  );
 }
 
 // ---------- stage 12: series splits ----------
@@ -1435,8 +1642,12 @@ async function splitSeries(
   ]);
 
   // Personal tracking follows the moved work (followVolume, followEdition),
-  // also on a re-run, which heals a split made before it did.
-  const moves = newMoves();
+  // also on a re-run, which heals a split made before it did. Its Tracking
+  // Visibility moves with it (carryingTracking): the split-off Series
+  // absorbs the source's overrides for each User whose tracking it takes.
+  // The re-filing runs in bounded legs (sweep): the catalog moves in the
+  // first, and later calls find it done and go on re-filing.
+  const moves = newMoves(entry.key);
 
   // Whole Volumes: re-parented with the moved work's own label. Anything
   // the importers attached since planning (another Edition) is drift.
@@ -1461,15 +1672,18 @@ async function splitSeries(
     }
     const label = canonicalLabel(row.newLabel);
     const last = targetVolumes.reduce((max, v) => Math.max(max, v.position), 0);
-    await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {
-      seriesId: targetId,
-      label: label ?? undefined,
-      position: labelNumber(label) ?? last + 1,
+    const scope = { volumeIds: [volume._id], editionIds: editions.map((e) => e._id) };
+    await carryingTracking(ctx, audit, moves, scope, async () => {
+      await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {
+        seriesId: targetId,
+        label: label ?? undefined,
+        position: labelNumber(label) ?? last + 1,
+      });
+      for (const edition of editions) {
+        await followLine(ctx, audit, edition, source._id, targetId, moving);
+        await refreshReleaseDenorms(ctx, edition._id);
+      }
     });
-    for (const edition of editions) {
-      await followLine(ctx, audit, edition, source._id, targetId, moving);
-      await refreshReleaseDenorms(ctx, edition._id);
-    }
     const moved = await ctx.db.get(volume._id);
     if (moved) await followVolume(ctx, audit, moves, moved, source._id);
   }
@@ -1496,12 +1710,14 @@ async function splitSeries(
       skip(`edition ${edition.publicId} releases drifted: now ${releases.map((r) => r.isbn13 ?? r._id).join(", ")}`);
     }
     if (edition.locked) skip(`edition ${edition.publicId} is locked`);
-    const rows = [];
+    const rows: Parameters<typeof replaceCoverage>[3] = [];
     for (const [i, label] of row.labels.entries()) {
       rows.push({ volumeId: (await ensureVolume(ctx, audit, targetId, label))._id, extent: coverage[i]!.extent });
     }
-    await followLine(ctx, audit, edition, source._id, targetId, moving);
-    await replaceCoverage(ctx, audit, edition._id, rows);
+    await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
+      await followLine(ctx, audit, edition, source._id, targetId, moving);
+      await replaceCoverage(ctx, audit, edition._id, rows);
+    });
     await followEdition(ctx, audit, moves, edition._id, source._id);
   }
 
@@ -1529,12 +1745,12 @@ async function splitSeries(
     await audit.revise(to, [{ field: "sourceObservation", after: record }]);
   }
 
-  await keepVisibility(ctx, audit, moves, source._id, targetId);
-  recordMoves(audit, { type: "series", id: source._id }, moves);
+  await closeMoves(ctx, audit, { type: "series", id: source._id }, moves);
 
   await settlePositions(ctx, audit, source._id);
   await settlePositions(ctx, audit, targetId);
   await lockTitleIfContested(ctx, audit, targetId);
+  if (moves.unfinished) return partial;
   return audit.wrote ? applied : already;
 }
 
@@ -1713,6 +1929,8 @@ async function releaseBundle(
   }
   if (!bundle || bundle.status !== "active") return skip("bundle not active");
   const bundleRef = { type: "releaseBundle" as const, id: bundle._id };
+  const moves = newMoves(entry.key);
+  const seriesBefore = await bundleSeries(ctx, bundle._id);
 
   const memberships = await ctx.db
     .query("bundleMemberships")
@@ -1745,10 +1963,8 @@ async function releaseBundle(
     await audit.revise(bundleRef, [change]);
   }
 
-  if (box) {
-    const moves = newMoves();
-    await entriesToBundle(ctx, audit, moves, box._id, bundle._id);
-    recordMoves(audit, { type: "release", id: box._id }, moves);
+  await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundle._id, seriesBefore);
+  if (box && (await entriesToBundle(ctx, audit, moves, box, bundle._id))) {
     if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
       await audit.revise({ type: "release", id: box._id }, [
         { field: "convertedToBundle", after: `#${bundle.publicId} ${bundle.name}` },
@@ -1758,6 +1974,9 @@ async function releaseBundle(
     const live = (await releasesOf(ctx, box.editionId)).filter((r) => r.status === "active");
     if (edition && live.length === 0) await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
   }
+  await closeMoves(ctx, audit, box ? { type: "release", id: box._id } : bundleRef, moves);
+  // A box set still holding entries stays up until a later leg empties it.
+  if (moves.unfinished) return partial;
   await retireVolumes(ctx, audit, entry.retireVolumeIds, firstVolume);
   return audit.wrote ? applied : already;
 }
@@ -1793,21 +2012,27 @@ async function setCoverage(
   if (!done && !sameValue(current.map((c) => c.volumeId), entry.before)) {
     skip(`edition ${edition.publicId} coverage drifted`);
   }
-  await replaceCoverage(ctx, audit, edition._id, rows);
+  // The Edition's trackers keep their Tracking Visibility wherever its
+  // coverage (or line) takes its Releases' Series (carryingTracking).
+  const moves = newMoves(entry.key);
+  await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
+    await replaceCoverage(ctx, audit, edition._id, rows);
 
-  if (entry.line) {
-    const { seriesId, name, position } = entry.line;
-    let covers = false;
-    for (const row of rows) covers ||= (await ctx.db.get(row.volumeId))?.seriesId === seriesId;
-    if (!covers) skip("plan error: the line's series is not covered");
-    const lineId = await findOrCreateLine(ctx, audit, seriesId, edition.publisherId, name);
-    const fresh = await ctx.db.get(edition._id);
-    if (!fresh) return skip("edition vanished");
-    await updateRecord(ctx, audit, { type: "edition", id: fresh._id }, fresh, {
-      editionLineId: lineId,
-      linePosition: position ?? undefined,
-    });
-  }
+    if (entry.line) {
+      const { seriesId, name, position } = entry.line;
+      let covers = false;
+      for (const row of rows) covers ||= (await ctx.db.get(row.volumeId))?.seriesId === seriesId;
+      if (!covers) skip("plan error: the line's series is not covered");
+      const lineId = await findOrCreateLine(ctx, audit, seriesId, edition.publisherId, name);
+      const fresh = await ctx.db.get(edition._id);
+      if (!fresh) return skip("edition vanished");
+      await updateRecord(ctx, audit, { type: "edition", id: fresh._id }, fresh, {
+        editionLineId: lineId,
+        linePosition: position ?? undefined,
+      });
+    }
+  });
+  await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
   await retireVolumes(ctx, audit, entry.retireVolumeIds, rows[0]!.volumeId);
   return audit.wrote ? applied : already;
 }

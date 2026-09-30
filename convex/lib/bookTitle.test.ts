@@ -545,31 +545,71 @@ describe("parseBookTitle — packaging", () => {
   });
 
   // B18: a list with a gap names exactly its Volumes; a from–to range over
-  // it would claim the ones it skips. It stays packaging, with no coverage.
+  // it would claim the ones it skips. It stays packaging, with no coverage,
+  // marked gapped (R12) so no weaker signal fills the coverage in.
   it("never widens a gapped volume list into a range", () => {
     expect(packaging("Alpha Vol. 1 & 3")).toEqual({
       seriesTitle: "Alpha",
       volumeLabel: null,
-      packaging: { lineName: null, linePosition: null, coverRange: null },
+      packaging: { lineName: null, linePosition: null, coverRange: null, coverageGapped: true },
       isBox: false,
     });
     expect(packaging("Alpha Omnibus (Vol. 1, 3)").packaging).toEqual({
       lineName: "Omnibus",
       linePosition: null,
       coverRange: null,
+      coverageGapped: true,
     });
     expect(packaging("Alpha Omnibus 1, 3").packaging).toEqual({
       lineName: "Omnibus",
       linePosition: null,
       coverRange: null,
+      coverageGapped: true,
+    });
+    expect(packaging("Alpha 3-in-1 Edition 1 (Vol. 1 & 3)").packaging).toEqual({
+      lineName: "3-in-1 Edition",
+      linePosition: "1",
+      coverRange: null,
+      coverageGapped: true,
     });
     expect(
       packaging("Battle Angel Alita Deluxe 5 (Contains Vol. 9 & 11)").packaging,
-    ).toMatchObject({ linePosition: "5", coverRange: null });
-    expect(packaging("Alpha Vol. 1-3, 5").packaging?.coverRange).toBeNull();
+    ).toMatchObject({ linePosition: "5", coverRange: null, coverageGapped: true });
+    expect(packaging("Alpha Vol. 1-3, 5").packaging).toMatchObject({
+      coverRange: null,
+      coverageGapped: true,
+    });
     // Contiguous lists and chained ranges still span first to last.
-    expect(packaging("Alpha Vol. 1, 2, 3").packaging?.coverRange).toEqual({ from: "1", to: "3" });
+    expect(packaging("Alpha Vol. 1, 2, 3").packaging).toEqual({
+      lineName: null,
+      linePosition: null,
+      coverRange: { from: "1", to: "3" },
+    });
     expect(packaging("Alpha Vol. 1-3, 4-6").packaging?.coverRange).toEqual({ from: "1", to: "6" });
+    // Packaging that lists nothing is unknown, not gapped.
+    expect(packaging("Negima! Omnibus 4").packaging?.coverageGapped).toBeUndefined();
+  });
+
+  // R12: a listed item may repeat the marker or carry "#"; the gap still shows.
+  it("marks a gapped list whose items repeat the marker or carry '#'", () => {
+    for (const title of [
+      "Alpha 3-in-1 Edition 1 (Vol. 1 and Vol. 3)",
+      "Alpha 3-in-1 Edition 1 (Vol. 1 & Vol. 3)",
+      "Alpha 3-in-1 Edition 1 (Vol. #1 & #3)",
+      "Alpha 3-in-1 Edition 1 (Includes Vols. 1 and 3)",
+    ]) {
+      expect(packaging(title), title).toEqual({
+        seriesTitle: "Alpha",
+        volumeLabel: null,
+        packaging: { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null, coverageGapped: true },
+        isBox: false,
+      });
+    }
+    expect(packaging("Alpha Vol. 1 & Vol. 3").packaging).toMatchObject({ coverRange: null, coverageGapped: true });
+    expect(packaging("Alpha 3-in-1 Edition 1 (Vol. 1, Vol. 2 and Vol. 3)").packaging?.coverRange).toEqual({
+      from: "1",
+      to: "3",
+    });
   });
 });
 

@@ -5,11 +5,13 @@
 // append-only history, last-seen-only bumps, Bootstrap Mode tagging, the
 // steady-state review queue, covers in file storage, and withdrawal.
 
-import { convexTest } from "convex-test";
+import rateLimiterTest from "@convex-dev/rate-limiter/test";
+import { convexTest, type TestConvex } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { MIN_COVER_BYTES } from "./lib/covers";
+import { normalizeBook, parseBookListing, parseBookPage } from "./lib/sevenSeas";
 import schema from "./schema";
 
 const BASE = "https://sevenseasentertainment.com";
@@ -51,9 +53,9 @@ function bookPageHtml(b: FixtureBook): string {
 /** Cover-image URLs the stubbed site served, cleared after each test. */
 const imageRequests: string[] = [];
 
-/** Stub global fetch with a fixture site serving the live wire shapes. */
-function stubSite(books: FixtureBook[]) {
-  const listing = books.map((b) => ({
+/** One book's item in the listing (`wp-json/wp/v2/books`) wire shape. */
+function listingItem(b: FixtureBook) {
+  return {
     id: b.id,
     status: "publish",
     slug: b.slug,
@@ -61,7 +63,12 @@ function stubSite(books: FixtureBook[]) {
     title: { rendered: b.title },
     modified_gmt: b.modified ?? "2026-08-01T00:00:00",
     content: { rendered: b.blurb ?? "" },
-  }));
+  };
+}
+
+/** Stub global fetch with a fixture site serving the live wire shapes. */
+function stubSite(books: FixtureBook[]) {
+  const listing = books.map(listingItem);
   const pages = new Map(books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]));
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
     const url = typeof input === "object" && "url" in input ? input.url : String(input);
@@ -686,50 +693,55 @@ describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
   });
 });
 
-describe("sevenSeas.sync — ISBN matching rung", () => {
-  const insertCatalogRelease = async (t: ReturnType<typeof convexTest>, seriesTitle: string) =>
-    await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Seven Seas Entertainment",
-        slug: "seven-seas",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: seriesTitle,
-        altTitles: [],
-        searchText: seriesTitle,
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 1,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 1,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId,
-        order: 1,
-        extent: "complete",
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13: "9781999000103",
-        publisherId,
-        seriesIds: [seriesId],
-      });
+/** A Seven Seas Series with Volume 1 and one whole-Volume Release of it (by default ALPHA_1's ISBN). */
+const insertCatalogRelease = async (
+  t: ReturnType<typeof convexTest>,
+  seriesTitle: string,
+  release: { isbn13?: string; binding?: string } = { isbn13: "9781999000103" },
+) =>
+  await t.run(async (ctx) => {
+    const publisherId = await ctx.db.insert("publishers", {
+      status: "active",
+      name: "Seven Seas Entertainment",
+      slug: "seven-seas",
     });
+    const seriesId = await ctx.db.insert("series", {
+      status: "active",
+      publicId: 1,
+      title: seriesTitle,
+      altTitles: [],
+      searchText: seriesTitle,
+    });
+    const volumeId = await ctx.db.insert("volumes", {
+      status: "active",
+      publicId: 1,
+      seriesId,
+      position: 1,
+      label: "1",
+    });
+    const editionId = await ctx.db.insert("editions", {
+      status: "active",
+      publicId: 1,
+      publisherId,
+    });
+    await ctx.db.insert("volumeCoverages", {
+      editionId,
+      volumeId,
+      order: 1,
+      extent: "complete",
+    });
+    return await ctx.db.insert("releases", {
+      status: "active",
+      editionId,
+      format: "physical",
+      language: "en",
+      ...release,
+      publisherId,
+      seriesIds: [seriesId],
+    });
+  });
 
+describe("sevenSeas.sync — ISBN matching rung", () => {
   it("links to an existing release by ISBN when titles agree", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);
@@ -760,6 +772,73 @@ describe("sevenSeas.sync — ISBN matching rung", () => {
       expect(obs.recordRef).toBeUndefined();
       const run = (await ctx.db.query("importRuns").collect())[0]!;
       expect(run.errors[0]).toContain("review");
+    });
+  });
+});
+
+describe("sevenSeas.sync — Binding reaches the matching ladder (B14)", () => {
+  it("a hardcover never links an ISBN-less paperback of its Volume; it becomes its sibling", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    const paperbackId = await insertCatalogRelease(t, "Alpha Adventures", {
+      binding: "paperback",
+    });
+    stubSite([{ ...ALPHA_1, category: "Manga Hardcover" }]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      const paperback = (await ctx.db.get(paperbackId))!;
+      expect(paperback.isbn13).toBeUndefined();
+      expect(paperback.binding).toBe("paperback");
+      const hardcover = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === "9781999000103",
+      );
+      expect(hardcover).toMatchObject({ binding: "hardcover", editionId: paperback.editionId });
+    });
+  });
+});
+
+describe("sevenSeas.sync — a linked book never takes another Release's ISBN (B08)", () => {
+  it("a changed ISBN another Release holds is a conflict, and none of the book's facts apply", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    const heldIsbn = "9781999000110";
+    const { linkedId, holderId } = await t.run(async (ctx) => {
+      const linked = (await ctx.db.query("releases").collect())[0]!;
+      const { _id, _creationTime, ...fields } = linked;
+      const holderId = await ctx.db.insert("releases", {
+        ...fields,
+        binding: "hardcover",
+        isbn13: heldIsbn,
+      });
+      return { linkedId: _id, holderId };
+    });
+
+    stubSite([
+      { ...ALPHA_1, modified: "2026-08-05T00:00:00", isbn: heldIsbn, price: "$24.99" },
+    ]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(linkedId)).toMatchObject({
+        isbn13: "9781999000103",
+        price: { amountCents: 1499 },
+      });
+      const holders = (await ctx.db.query("releases").collect()).filter(
+        (r) => r.isbn13 === heldIsbn,
+      );
+      expect(holders.map((r) => r._id)).toEqual([holderId]);
+      const observation = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "101"),
+        )
+        .unique();
+      expect(observation!.conflicts).toEqual([
+        expect.objectContaining({ field: "isbn13", offered: heldIsbn }),
+      ]);
     });
   });
 });
@@ -974,5 +1053,640 @@ describe("sevenSeas.sync — failure handling", () => {
     await t.run(async (ctx) => {
       expect(await ctx.db.query("importRuns").collect()).toHaveLength(0);
     });
+  });
+});
+
+/** An Administrator (username "catalogmod") who can approve queued proposals. */
+async function withAdmin(t: ReturnType<typeof convexTest>) {
+  rateLimiterTest.register(t, "rateLimiter");
+  const admin = t.withIdentity({ subject: "admin_subject" });
+  await admin.mutation(api.users.claimUsername, { username: "catalogmod" });
+  await t.mutation(internal.roles.bootstrapAdministrator, { username: "catalogmod" });
+  return admin;
+}
+
+/** Approve the one In-Review proposal the importer queued. */
+async function approveQueued(t: ReturnType<typeof convexTest>, admin: Awaited<ReturnType<typeof withAdmin>>) {
+  const queued = await t.run(async (ctx) =>
+    (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview"),
+  );
+  expect(queued).toHaveLength(1);
+  expect(
+    await admin.mutation(api.proposals.approveProposal, { proposalId: queued[0]!._id }),
+  ).toMatchObject({ status: "approved" });
+}
+
+const OMNIBUS_1: FixtureBook = {
+  id: 401,
+  slug: "alpha-manga-omnibus-1",
+  title: "Alpha Adventures (Manga) Omnibus 1 (Vol. 1-2)",
+  seriesSlug: "alpha-manga",
+  seriesTitle: "Alpha Adventures (Manga)",
+  date: "March 3, 2026",
+  isbn: "978-1-9990005-1-6",
+};
+
+const OMNIBUS_2: FixtureBook = {
+  ...OMNIBUS_1,
+  id: 402,
+  slug: "alpha-manga-omnibus-2",
+  title: "Alpha Adventures (Manga) Omnibus 2 (Vol. 3-4)",
+  isbn: "978-1-9990005-2-3",
+};
+
+// R08: a steady-state packaging guess carries its Edition Line, so the
+// reviewed proposal files the Edition under that line when approved.
+describe("sevenSeas.sync — queued packaging keeps its Edition Line (B16)", () => {
+  it("approving a steady-state omnibus creates its Edition Line and files the Edition under it", async () => {
+    const t = convexTest(schema);
+    const admin = await withAdmin(t);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t); // links the Series
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    stubSite([OMNIBUS_1, ALPHA_1]);
+    await sync(t);
+    await approveQueued(t, admin);
+    await t.run(async (ctx) => {
+      const [series] = await ctx.db.query("series").collect();
+      const lines = await ctx.db.query("editionLines").collect();
+      expect(lines).toMatchObject([{ seriesId: series!._id, name: "Omnibus" }]);
+      const omnibus = (await ctx.db.query("editions").collect()).find(
+        (edition) => edition.editionLineId !== undefined,
+      );
+      expect(omnibus).toMatchObject({ editionLineId: lines[0]!._id, linePosition: "1" });
+    });
+  });
+
+  it("a later steady-state member joins the line an earlier import created", async () => {
+    const t = convexTest(schema);
+    const admin = await withAdmin(t);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, OMNIBUS_1]);
+    await sync(t); // Bootstrap Mode creates Omnibus 1 and its line
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    stubSite([OMNIBUS_2, ALPHA_1, OMNIBUS_1]);
+    await sync(t);
+    const [version] = await t.run((ctx) => ctx.db.query("proposalVersions").collect());
+    expect(version!.ops.some((op) => op.kind === "create" && op.table === "editionLines")).toBe(
+      false,
+    );
+    await approveQueued(t, admin);
+    await t.run(async (ctx) => {
+      const lines = await ctx.db.query("editionLines").collect();
+      expect(lines).toHaveLength(1);
+      const members = (await ctx.db.query("editions").collect()).filter(
+        (edition) => edition.editionLineId === lines[0]!._id,
+      );
+      expect(members.map((edition) => edition.linePosition).sort()).toEqual(["1", "2"]);
+    });
+  });
+
+  it("a flagged packaging guess (ambiguous Series) also carries its line", async () => {
+    const t = convexTest(schema);
+    const admin = await withAdmin(t);
+    await seedRegistry(t, true);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Seven Seas Entertainment",
+        slug: "seven-seas",
+      });
+      for (const publicId of [1, 2]) {
+        await ctx.db.insert("series", {
+          status: "active",
+          publicId,
+          title: "Alpha Adventures",
+          altTitles: [],
+          searchText: "Alpha Adventures",
+        });
+      }
+    });
+    stubSite([OMNIBUS_1]);
+    expect(await sync(t)).toMatchObject({ errorCount: 1 });
+    await approveQueued(t, admin);
+    await t.run(async (ctx) => {
+      const lines = await ctx.db.query("editionLines").collect();
+      expect(lines).toMatchObject([{ name: "Omnibus" }]);
+      const [edition] = await ctx.db.query("editions").collect();
+      expect(edition).toMatchObject({ editionLineId: lines[0]!._id, linePosition: "1" });
+    });
+  });
+
+  it("two members of a new line queued together both approve into that one line", async () => {
+    const t = convexTest(schema);
+    const admin = await withAdmin(t);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t); // links the Series
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    stubSite([OMNIBUS_2, OMNIBUS_1, ALPHA_1]);
+    await sync(t);
+    const queued = await t.run(async (ctx) =>
+      (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview"),
+    );
+    expect(queued).toHaveLength(2);
+    for (const proposal of queued) {
+      expect(
+        await admin.mutation(api.proposals.approveProposal, { proposalId: proposal._id }),
+      ).toMatchObject({ status: "approved" });
+    }
+    await t.run(async (ctx) => {
+      const lines = await ctx.db.query("editionLines").collect();
+      expect(lines).toHaveLength(1);
+      const members = (await ctx.db.query("editions").collect()).filter(
+        (edition) => edition.editionLineId === lines[0]!._id,
+      );
+      expect(members.map((edition) => edition.linePosition).sort()).toEqual(["1", "2"]);
+      // The line has one creation Revision, from the proposal that created it.
+      const lineRevisions = await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) => q.eq("ref.type", "editionLine").eq("ref.id", lines[0]!._id))
+        .collect();
+      expect(lineRevisions).toHaveLength(1);
+    });
+  });
+});
+
+const BOX_1: FixtureBook = {
+  id: 501,
+  slug: "alpha-manga-box-set-1",
+  title: "Alpha Adventures (Manga) Box Set 1 (Vol. 1-2)",
+  seriesSlug: "alpha-manga",
+  seriesTitle: "Alpha Adventures (Manga)",
+  date: "June 2, 2026",
+  isbn: "978-1-9990005-3-0",
+};
+
+/** The box's members, by their Releases' ISBNs in bundle order. */
+const boxMembers = (t: ReturnType<typeof convexTest>) =>
+  t.run(async (ctx) => {
+    const [bundle, ...more] = await ctx.db.query("releaseBundles").collect();
+    expect(more).toHaveLength(0);
+    const rows = (await ctx.db.query("bundleMemberships").collect())
+      .filter((row) => row.bundleId === bundle!._id)
+      .sort((a, b) => a.order - b.order);
+    return await Promise.all(rows.map(async (row) => (await ctx.db.get(row.releaseId))!.isbn13));
+  });
+
+// R09: a box imported before some of its books picks those books up once
+// they exist, whether its listing is unchanged (no detail fetch) or its
+// page is re-read.
+describe("sevenSeas.sync — a box set gains members that arrive after it (B15)", () => {
+  it("an unchanged box listing reconciles its members without a detail fetch, in steady state", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, BOX_1]);
+    await sync(t);
+    expect(await boxMembers(t)).toEqual(["9781999000103"]);
+
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    stubSite([ALPHA_2, ALPHA_1, BOX_1]);
+    await sync(t);
+    expect(await boxMembers(t)).toEqual(["9781999000103", "9781999000110"]);
+    await t.run(async (ctx) => {
+      const [bundle] = await ctx.db.query("releaseBundles").collect();
+      const revisions = await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) => q.eq("ref.type", "releaseBundle").eq("ref.id", bundle!._id))
+        .collect();
+      // Its creation, then the late member.
+      expect(revisions).toHaveLength(2);
+      expect(revisions[1]!.changes.map((c) => c.field)).toEqual(["members"]);
+      expect(revisions[1]!.citation?.url).toBe(`${BASE}/books/${BOX_1.slug}/`);
+    });
+
+    // Nothing left to add: a further run writes no Revision.
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(
+        (await ctx.db.query("revisions").collect()).filter((r) => r.ref.type === "releaseBundle"),
+      ).toHaveLength(2);
+    });
+  });
+
+  it("a re-read box page (changed or forced) reconciles its members too", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, BOX_1]);
+    await sync(t);
+    // Volume 2 arrives after the box's listing was noted this run.
+    stubSite([BOX_1, ALPHA_1, ALPHA_2]);
+    await sync(t);
+    expect(await boxMembers(t)).toEqual(["9781999000103"]);
+
+    const box = { sourceRecordId: String(BOX_1.id) };
+    const snapshot = await t.run(
+      async (ctx) =>
+        (await ctx.db
+          .query("sourceObservations")
+          .withIndex("by_source_record", (q) =>
+            q.eq("sourceKey", "sevenseas").eq("sourceRecordId", box.sourceRecordId),
+          )
+          .unique())!.snapshot,
+    );
+    // The unchanged snapshot, as a forced re-read applies it.
+    expect(await t.mutation(internal.sevenSeas.applyBook, { ...box, snapshot })).toMatchObject({
+      status: "updated",
+      changed: true,
+    });
+    expect(await boxMembers(t)).toEqual(["9781999000103", "9781999000110"]);
+    expect(await t.mutation(internal.sevenSeas.applyBook, { ...box, snapshot })).toMatchObject({
+      status: "unchanged",
+      changed: false,
+    });
+  });
+});
+
+/** Count the book-page fetches the stubbed site serves from here on. */
+function countBookPages(): { count: number } {
+  const counter = { count: 0 };
+  const site = globalThis.fetch;
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(`${BASE}/books/`)) counter.count++;
+    return site(input, init);
+  });
+  return counter;
+}
+
+/** The one observation of a fixture book. */
+const observationOf = (t: TestConvex<typeof schema>, b: FixtureBook) =>
+  t.run(
+    async (ctx) =>
+      (await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", String(b.id)),
+        )
+        .unique())!,
+  );
+
+const FUTURE_3: FixtureBook = {
+  id: 103,
+  slug: "alpha-manga-vol-3",
+  title: "Alpha Adventures (Manga) Vol. 3",
+  seriesSlug: "alpha-manga",
+  seriesTitle: "Alpha Adventures (Manga)",
+  date: "January 6, 2100",
+};
+
+// R10: a future Release the listing drops queues a possible-cancellation
+// review; the listing naming it again retires that review, whether the book
+// is unchanged (no page fetch) or re-read.
+describe("sevenSeas.sync — a relisted book retires its cancellation review (B17)", () => {
+  async function withdrawnFuture(t: ReturnType<typeof convexTest>) {
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, FUTURE_3]);
+    await sync(t);
+    await new Promise((r) => setTimeout(r, 5));
+    stubSite([ALPHA_1]);
+    await sync(t);
+    const observation = await observationOf(t, FUTURE_3);
+    expect(observation.withdrawn).toBe(true);
+    const review = await t.run(async (ctx) => ctx.db.get(observation.queuedProposalId!));
+    expect(review?.state).toBe("inReview");
+    return review!._id;
+  }
+
+  it("an unchanged relisting withdraws the review without a page fetch", async () => {
+    const t = convexTest(schema);
+    const reviewId = await withdrawnFuture(t);
+
+    stubSite([ALPHA_1, FUTURE_3]);
+    const pages = countBookPages();
+    await sync(t);
+    expect(pages.count).toBe(0);
+    expect((await observationOf(t, FUTURE_3)).withdrawn).toBe(false);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(reviewId)).toMatchObject({ state: "withdrawn" });
+      // The Release stays exactly as it was.
+      expect((await ctx.db.query("releases").collect()).every((r) => r.status === "active")).toBe(
+        true,
+      );
+    });
+  });
+
+  it("a changed relisting withdraws the review too", async () => {
+    const t = convexTest(schema);
+    const reviewId = await withdrawnFuture(t);
+
+    stubSite([ALPHA_1, { ...FUTURE_3, modified: "2026-09-01T00:00:00" }]);
+    await sync(t);
+    expect((await observationOf(t, FUTURE_3)).withdrawn).toBe(false);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(reviewId)).toMatchObject({ state: "withdrawn" });
+    });
+  });
+});
+
+/**
+ * Store a book's observation as an older planner left it: unplaced, under
+ * that planner's verdict, the snapshot parsed from the same wire shapes the
+ * stubbed site serves (so the listing reads it as unchanged).
+ */
+async function seedLegacyUnplaced(
+  t: ReturnType<typeof convexTest>,
+  b: FixtureBook,
+  verdict: string,
+) {
+  const snapshot = normalizeBook(parseBookListing(listingItem(b))!, parseBookPage(bookPageHtml(b)));
+  const at = Date.now() - 86_400_000;
+  await t.run(async (ctx) => {
+    await ctx.db.insert("sourceObservations", {
+      sourceKey: "sevenseas",
+      sourceRecordId: String(b.id),
+      snapshot,
+      lastSeenAt: at,
+      withdrawn: false,
+      conflicts: [{ field: "placement", offered: null, at, reason: verdict }],
+    });
+  });
+}
+
+/** An Editor hid the base Series a book's snapshot names. */
+async function hideSeriesOf(t: ReturnType<typeof convexTest>, b: FixtureBook) {
+  const { seriesTitle } = normalizeBook(
+    parseBookListing(listingItem(b))!,
+    parseBookPage(bookPageHtml(b)),
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("series", {
+      status: "hidden",
+      publicId: 99,
+      title: seriesTitle,
+      altTitles: [],
+      searchText: seriesTitle,
+    }),
+  );
+}
+
+const LEGACY_PACKAGING = (b: FixtureBook) =>
+  `"${b.title}" is packaging whose covered Volumes the title does not state — an Editor maps it.`;
+
+const DELUXE_1: FixtureBook = {
+  id: 701,
+  slug: "beta-deluxe-edition-1",
+  title: "Beta Deluxe Edition 1",
+  seriesSlug: "beta-deluxe",
+  seriesTitle: "Beta Deluxe Edition",
+  date: "March 3, 2026",
+  blurb: "<p>Collects volumes 1-3 in hardcover.</p>",
+};
+
+const DELUXE_2: FixtureBook = {
+  ...DELUXE_1,
+  id: 702,
+  slug: "beta-deluxe-edition-2",
+  title: "Beta Deluxe Edition 2",
+  blurb: "<p>Collects volumes 4-6 in hardcover.</p>",
+};
+
+// R13: packaging an older planner left unplaced (before the blurb and line
+// signals placed it) is replayed from its stored snapshot on an unchanged
+// listing: no page fetch, one detail-budget unit each, and never twice.
+describe("sevenSeas.sync — replays packaging an older planner left unplaced (B19)", () => {
+  it("places a blurb-covered Deluxe book in Bootstrap Mode, once", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
+    stubSite([DELUXE_1]);
+    const pages = countBookPages();
+
+    expect(await sync(t)).toMatchObject({ recordsChanged: 1, errorCount: 0 });
+    expect(pages.count).toBe(0);
+    await t.run(async (ctx) => {
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes.map((v) => v.label).sort()).toEqual(["1", "2", "3"]);
+      expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(3);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+    expect((await observationOf(t, DELUXE_1)).recordRef?.type).toBe("release");
+
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    expect(pages.count).toBe(0);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+  });
+
+  it("queues its pre-filled guess once in steady state", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, false);
+    await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
+    stubSite([DELUXE_1]);
+    await sync(t);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const proposals = await ctx.db.query("proposals").collect();
+      expect(proposals.map((p) => p.state)).toEqual(["inReview"]);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+    });
+    expect((await observationOf(t, DELUXE_1)).queuedProposalId).toBeDefined();
+  });
+
+  it("spends the detail budget, leaving the rest for the next run", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
+    await seedLegacyUnplaced(t, DELUXE_2, LEGACY_PACKAGING(DELUXE_2));
+    stubSite([DELUXE_2, DELUXE_1]);
+
+    expect(await sync(t, { maxDetailFetches: 1 })).toMatchObject({
+      recordsChanged: 1,
+      completeSweep: false,
+    });
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(1);
+    expect(await sync(t, { maxDetailFetches: 1 })).toMatchObject({ recordsChanged: 1 });
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(2);
+  });
+
+  it("records the current verdict when the snapshot still places nothing, then leaves it", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, false);
+    const bare = { ...DELUXE_1, blurb: undefined };
+    await seedLegacyUnplaced(t, bare, LEGACY_PACKAGING(bare));
+    stubSite([bare]);
+
+    await sync(t);
+    const first = (await observationOf(t, bare)).conflicts!.find((c) => c.field === "placement")!;
+    expect(first.reason).not.toBe(LEGACY_PACKAGING(bare));
+    await new Promise((r) => setTimeout(r, 5));
+    await sync(t);
+    const second = (await observationOf(t, bare)).conflicts!.find((c) => c.field === "placement")!;
+    expect(second).toEqual(first);
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(0);
+  });
+
+  it("under a Series an Editor hid, notes the block once and stays a complete sweep", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    await hideSeriesOf(t, DELUXE_1);
+    await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
+    stubSite([DELUXE_1]);
+    const pages = countBookPages();
+
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0, completeSweep: true });
+    const first = (await observationOf(t, DELUXE_1)).conflicts!.find((c) => c.field === "placement")!;
+    expect(first.reason).toContain("which an Editor hid");
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await sync(t, { maxDetailFetches: 0 })).toMatchObject({
+      recordsChanged: 0,
+      completeSweep: true,
+    });
+    const second = (await observationOf(t, DELUXE_1)).conflicts!.find((c) => c.field === "placement")!;
+    expect(second).toEqual(first);
+    expect(pages.count).toBe(0);
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(0);
+  });
+
+  it("a new packaging book under a hidden Series is never replayed", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    await hideSeriesOf(t, DELUXE_1);
+    stubSite([DELUXE_1]);
+    const pages = countBookPages();
+
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0, completeSweep: true });
+    expect(pages.count).toBe(1);
+    const first = (await observationOf(t, DELUXE_1)).conflicts!.find((c) => c.field === "placement")!;
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    expect(await sync(t, { maxDetailFetches: 0 })).toMatchObject({ completeSweep: true });
+    expect(pages.count).toBe(1);
+    const second = (await observationOf(t, DELUXE_1)).conflicts!.find((c) => c.field === "placement")!;
+    expect(second).toEqual(first);
+  });
+
+  it("leaves an unplaced book with no verdict (an Editor's unlink) until its page changes", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
+      await ctx.db.patch(obs._id, { conflicts: [] });
+    });
+    stubSite([DELUXE_1]);
+    const pages = countBookPages();
+
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    expect(pages.count).toBe(0);
+    expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(0);
+  });
+
+  it("bundles a box set whose blurb states its coverage", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, ALPHA_2]);
+    await sync(t);
+    const box: FixtureBook = {
+      ...BOX_1,
+      title: "Alpha Adventures (Manga) Box Set 1",
+      blurb: "<p>Collects volumes 1-2.</p>",
+    };
+    await seedLegacyUnplaced(
+      t,
+      box,
+      `Box set "${box.title}" needs a unique base Series and stated coverage, and outside Bootstrap Mode a review.`,
+    );
+    stubSite([box, ALPHA_1, ALPHA_2]);
+    const pages = countBookPages();
+    await sync(t);
+    expect(pages.count).toBe(0);
+    expect(await boxMembers(t)).toEqual(["9781999000103", "9781999000110"]);
+  });
+});
+
+// R12: a gapped list of Volumes, in the title or the listing blurb, is
+// evidence no range can hold. The line's declared size (3-in-1 → 1–3) never
+// stands in for it, so no skipped Volume is created or covered.
+describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)", () => {
+  const THREE_IN_1: FixtureBook = {
+    id: 311,
+    slug: "alpha-3-in-1-edition-1",
+    title: "Alpha 3-in-1 Edition 1",
+    seriesSlug: "alpha-3-in-1",
+    seriesTitle: "Alpha 3-in-1 Edition",
+    date: "March 3, 2026",
+    isbn: "978-1-9990004-2-4",
+  };
+
+  async function placed(t: ReturnType<typeof convexTest>) {
+    return await t.run(async (ctx) => ({
+      volumes: (await ctx.db.query("volumes").collect()).map((v) => v.label).sort(),
+      coverages: (await ctx.db.query("volumeCoverages").collect()).length,
+      unmapped: (await ctx.db.query("editions").collect()).map((e) => e.coverageUnmapped ?? false),
+    }));
+  }
+
+  it("a blurb collecting Volumes 1 and 3 never falls back to the 3-in-1 size", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, blurb: "<p>Collects volumes 1 and 3.</p>" }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
+  });
+
+  // A gapped list with no collect-verb in front of it is still a statement.
+  it.each([
+    "<p>Volumes 1 &amp; 3 in one book!</p>",
+    "<p>Features volumes 1 and 3.</p>",
+    "<p>Collects volumes #1 and #3.</p>",
+  ])("a bare gapped list (%s) never falls back to the 3-in-1 size", async (blurb) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, blurb }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
+  });
+
+  it.each([
+    "Alpha 3-in-1 Edition 1 (Vol. 1 & 3)",
+    "Alpha 3-in-1 Edition 1 (Vol. 1 and Vol. 3)",
+    "Alpha 3-in-1 Edition 1 (Vol. 1 & Vol. 3)",
+    "Alpha 3-in-1 Edition 1 (Vol. #1 & #3)",
+  ])("a title listing Volumes with a gap (%s) never falls back to the 3-in-1 size", async (title) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, title }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
+  });
+
+  // "4 bonus stories" counts something else: the stated 1–3 stands.
+  it("a counted noun after the listed range never widens it", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, blurb: "<p>Collects volumes 1–3 and 4 bonus stories.</p>" }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+  });
+
+  // An observation stored before the parser marked gapped lists, left
+  // unplaced by an older planner, replays (R13) from its stored snapshot:
+  // the replay reads its packaging from today's parse, never the stale one.
+  it("a replayed snapshot stored before the gap was marked still never widens", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    const gapped = { ...THREE_IN_1, title: "Alpha 3-in-1 Edition 1 (Vol. 1 & 3)" };
+    await seedLegacyUnplaced(t, gapped, LEGACY_PACKAGING(gapped));
+    await t.run(async (ctx) => {
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      const { coverageGapped, ...packaging } = obs!.snapshot.packaging;
+      expect(coverageGapped).toBe(true);
+      await ctx.db.patch(obs!._id, { snapshot: { ...obs!.snapshot, packaging } });
+    });
+    stubSite([gapped]);
+    const pages = countBookPages();
+    await sync(t);
+    expect(pages.count).toBe(0);
+    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
+  });
+
+  it("without any statement the declared size still places it", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([THREE_IN_1]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
   });
 });

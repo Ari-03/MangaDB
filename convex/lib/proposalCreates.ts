@@ -10,12 +10,15 @@
 // (sevenSeas.ts queueCreationProposal): references accept either a stored
 // document ID or the temp-ID of an earlier create op; an edition names its
 // publisher by ID or slug; coverage rows use `volume`/`volumeId`; an
-// edition joins an Edition Line through `editionLineId`.
+// edition joins an Edition Line through `editionLineId`. An Edition Line
+// create the importer queues carries `joinExisting: true`: sibling guesses
+// queued before either is approved each create the same line, so at
+// approval such an op resolves to the line when it exists by then.
 //
-// Hard invariants checked with every plan: a new Release never takes an
-// ISBN an active Release (or another op of the same proposal) holds, and an
-// Edition joins only a line of its own publisher under the base Series of
-// the Volumes it covers.
+// Hard invariants checked with every plan: no ISBN the proposal assigns — to
+// a new Release or, through an update op, an existing one — ends up on two
+// active Releases, and an Edition joins only a line of its own publisher
+// under the base Series of the Volumes it covers.
 //
 // Validation (`planCreateOps`) runs at draft save, submission, and approval;
 // application (`applyCreatePlan`) runs only inside the approval mutation.
@@ -82,6 +85,8 @@ export type CreatePlan =
       series: RefTo<"series">;
       publisherId: Id<"publishers">;
       fields: { name: string };
+      /** Set when a `joinExisting` op resolved to this stored line: nothing is created. */
+      existingId?: Id<"editionLines">;
     }
   | {
       table: "editions";
@@ -185,18 +190,21 @@ async function storedRef<Table extends ReferencedTable>(
  * Throws ConvexError (code "invalidCreate") on any structural problem: an
  * unknown table, duplicate or forward temp-ID references, missing required
  * fields, a reference to a record that no longer exists, a Release ISBN
- * already taken, or an Edition Line that does not fit its Edition. Runs at
- * draft save, submission, and approval (inside the approval transaction) —
- * hard invariants are never overridable.
+ * already taken, or an Edition Line that does not fit its Edition.
+ * `isbnUpdates` are the ISBNs the same proposal's update ops write on
+ * existing Releases; the ISBN check covers creates and updates together
+ * (see `checkIsbnAssignments`). Runs at draft save, submission, and approval
+ * (inside the approval transaction) — hard invariants are never overridable.
  */
 export async function planCreateOps(
   ctx: QueryCtx | MutationCtx,
   ops: CreateOpInput[],
+  isbnUpdates: IsbnUpdate[] = [],
 ): Promise<CreatePlan[]> {
   const plans: CreatePlan[] = [];
   const tempIds = new Map<string, CreatableTable>();
   const planByTemp = new Map<string, CreatePlan>();
-  const isbnsClaimed = new Set<string>();
+  const isbnClaims: IsbnClaim[] = [];
   for (const op of ops) {
     if (!(op.table in CREATABLE_TABLES)) {
       bad(`Proposals cannot create "${op.table}" records.`);
@@ -277,14 +285,28 @@ export async function planCreateOps(
                   .query("editionLines")
                   .withIndex("by_series", (q) => q.eq("seriesId", series.id))
                   .collect()
-              ).some(
+              ).find(
                 (line) =>
                   line.status === "active" &&
                   line.publisherId === publisherId &&
                   line.name.toLowerCase() === wanted,
               )
-            : false;
-        if (twin || stored) {
+            : undefined;
+        // An op flagged `joinExisting` (the importer's queued guesses) names
+        // its line by identity: when a sibling proposal's approval created
+        // that line meanwhile, the op resolves to it instead of a twin.
+        if (stored !== undefined && !twin && fields.joinExisting === true) {
+          plans.push({
+            table,
+            tempId: op.tempId,
+            series,
+            publisherId,
+            fields: { name: stored.name },
+            existingId: stored._id,
+          });
+          break;
+        }
+        if (twin || stored !== undefined) {
           bad(
             `The edition line "${name}" already exists for this series and publisher — reference it instead.`,
           );
@@ -346,8 +368,8 @@ export async function planCreateOps(
         const language = viaRegistry("release", "language", fields.language);
         const isbn13 = viaRegistry("release", "isbn13", fields.isbn13) as string | undefined;
         const isbn10 = viaRegistry("release", "isbn10", fields.isbn10) as string | undefined;
-        await claimIsbn(ctx, "isbn13", isbn13, isbnsClaimed);
-        await claimIsbn(ctx, "isbn10", isbn10, isbnsClaimed);
+        if (isbn13 !== undefined) isbnClaims.push({ field: "isbn13", isbn: isbn13, by: "create" });
+        if (isbn10 !== undefined) isbnClaims.push({ field: "isbn10", isbn: isbn10, by: "create" });
         plans.push({
           table,
           tempId: op.tempId,
@@ -377,39 +399,83 @@ export async function planCreateOps(
     tempIds.set(op.tempId, table);
     planByTemp.set(op.tempId, plans[plans.length - 1]!);
   }
+  await checkIsbnAssignments(ctx, isbnClaims, isbnUpdates);
   return plans;
 }
 
+/** A Release ISBN column. */
+type IsbnField = "isbn13" | "isbn10";
+
 /**
- * Release identity (CONTEXT.md): an ISBN names one Release. Refuse one that
- * an active Release already holds or an earlier op of this proposal claimed
- * — exact-ISBN matching would turn ambiguous. A real duplicate is resolved
- * by merging or correcting the holder, never by creating a second Release.
+ * An ISBN an update op of the same proposal writes on an existing Release;
+ * `isbn` undefined clears the field, freeing its old value.
  */
-async function claimIsbn(
+export type IsbnUpdate = {
+  releaseId: Id<"releases">;
+  field: IsbnField;
+  isbn: string | undefined;
+};
+
+/** One ISBN a proposal's final state assigns, and the kind of op assigning it. */
+type IsbnClaim = { field: IsbnField; isbn: string; by: "create" | "update" };
+
+/**
+ * Release identity (CONTEXT.md): an ISBN names one Release. Checks the
+ * proposal's final ISBN assignments — new Releases and updated ones alike —
+ * against each other and against every active Release. A holder whose same
+ * ISBN field this proposal rewrites no longer counts, so moving an ISBN off a
+ * mis-keyed Release and onto the right one is allowed. A real duplicate is
+ * resolved by merging or correcting the holder, never by a second holder.
+ * Codes follow the op kinds involved: "invalidCreate" when a create is,
+ * else "invalidField" (the update validation code).
+ */
+async function checkIsbnAssignments(
   ctx: QueryCtx | MutationCtx,
-  field: "isbn13" | "isbn10",
-  isbn: string | undefined,
-  claimed: Set<string>,
+  creates: IsbnClaim[],
+  updates: IsbnUpdate[],
 ): Promise<void> {
-  if (isbn === undefined) return;
-  const key = `${field}:${isbn}`;
-  if (claimed.has(key)) bad(`Two new releases in this proposal share the ISBN ${isbn}.`);
-  claimed.add(key);
-  const holders =
-    field === "isbn13"
-      ? await ctx.db
-          .query("releases")
-          .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn))
-          .collect()
-      : await ctx.db
-          .query("releases")
-          .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn))
-          .collect();
-  if (holders.some((release) => release.status === "active")) {
-    bad(
-      `ISBN ${isbn} already belongs to an active Release — correct or merge that Release instead of creating another.`,
+  const refuse = (involvesCreate: boolean, message: string): never => {
+    throw new ConvexError({ code: involvesCreate ? "invalidCreate" : "invalidField", message });
+  };
+  const rewritten = new Set(updates.map((update) => `${update.field}:${update.releaseId}`));
+  const claims = [
+    ...updates.flatMap(({ field, isbn }): IsbnClaim[] =>
+      isbn === undefined ? [] : [{ field, isbn, by: "update" }],
+    ),
+    ...creates,
+  ];
+  const claimed = new Map<string, IsbnClaim>();
+  for (const claim of claims) {
+    const { field, isbn } = claim;
+    const twin = claimed.get(`${field}:${isbn}`);
+    if (twin) {
+      refuse(
+        twin.by === "create" || claim.by === "create",
+        `Two releases in this proposal would share the ISBN ${isbn}.`,
+      );
+    }
+    claimed.set(`${field}:${isbn}`, claim);
+    const holders =
+      field === "isbn13"
+        ? await ctx.db
+            .query("releases")
+            .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn))
+            .collect()
+        : await ctx.db
+            .query("releases")
+            .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn))
+            .collect();
+    const held = holders.some(
+      (release) => release.status === "active" && !rewritten.has(`${field}:${release._id}`),
     );
+    if (held) {
+      refuse(
+        claim.by === "create",
+        claim.by === "create"
+          ? `ISBN ${isbn} already belongs to an active Release — correct or merge that Release instead of creating another.`
+          : `ISBN ${isbn} already belongs to another active Release — correct or merge that Release first.`,
+      );
+    }
   }
 }
 
@@ -615,6 +681,11 @@ export type CreatedRecord = {
   publicId: number | null;
   /** Field values for the creation Revision (creations list every field). */
   revisionFields: Record<string, unknown>;
+  /**
+   * The op resolved to a record that already existed (a `joinExisting`
+   * Edition Line): nothing was inserted, so it gets no creation Revision.
+   */
+  existing?: true;
 };
 
 function resolved<Table extends TableNames>(
@@ -693,6 +764,16 @@ export async function applyCreatePlan(
       };
     }
     case "editionLines": {
+      if (plan.existingId !== undefined) {
+        temp.set(plan.tempId, plan.existingId);
+        return {
+          tempId: plan.tempId,
+          ref: { type: "editionLine", id: plan.existingId },
+          publicId: null,
+          revisionFields: {},
+          existing: true,
+        };
+      }
       const id = await ctx.db.insert("editionLines", {
         status: "active",
         seriesId: resolved(plan.series, temp),

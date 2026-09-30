@@ -135,7 +135,8 @@ export const sitemapPage = query({
         const result = await ctx.db.query("releaseBundles").paginate(paginationOpts);
         for (const doc of result.page) {
           if (doc.status !== "active") continue;
-          // Judged as its page judges it: publisher or member content.
+          // Judged as its page judges it: publisher or member content,
+          // hidden members included.
           if ((await bundleMembers(ctx, doc)).mature) continue;
           entries.push({
             publicId: doc.publicId,

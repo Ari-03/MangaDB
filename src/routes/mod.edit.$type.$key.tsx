@@ -31,6 +31,8 @@ import { convexClient } from "~/providers";
  * refused as stale, not silently rebased. Until the first keystroke the form
  * follows the live record; after it, values and base are pinned together,
  * and a newer Revision arriving asks the Moderator to reload before saving.
+ * The inputs lock while a save is in flight, since its success resets the
+ * form to the live record.
  *
  * Auth-gated client-side for UX; the Convex functions re-check the role on
  * every call. Never indexed.
@@ -127,7 +129,11 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
   }
 
   const current = draft ?? freshDraft(form);
-  const setValue = (key: string, value: string) => setDraft(editDraft(current, key, value));
+  // While a save is in flight the form is locked: success resets the draft
+  // to the live record, which would silently drop anything typed meanwhile.
+  const setValue = (key: string, value: string) => {
+    if (!busy) setDraft(editDraft(current, key, value));
+  };
   // Someone else saved this record after the draft's values were loaded.
   const stale = draftIsStale(current, form.baseRevisionId);
 
@@ -214,6 +220,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
               <button
                 type="button"
                 className="btn"
+                disabled={busy}
                 onClick={() => {
                   setDraft(null);
                   setError(null);
@@ -229,13 +236,17 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
               field={field}
               values={current.values}
               setValue={setValue}
+              disabled={busy}
             />
           ))}
           <label>
             Change comment (required)
             <textarea
               value={comment}
-              onChange={(event) => setComment(event.target.value)}
+              onChange={(event) => {
+                if (!busy) setComment(event.target.value);
+              }}
+              disabled={busy}
               rows={2}
               placeholder="Why is this change correct?"
               required

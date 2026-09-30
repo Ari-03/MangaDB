@@ -726,6 +726,37 @@ export default defineSchema({
     reversedAt: v.optional(v.number()),
   }).index("by_loser", ["loserRef.type", "loserRef.id"]),
 
+  // The one-time data repair's personal-tracking trail (lib/repair/ops.ts):
+  // the personal rows one repair Proposal re-filed, inserted, or folded
+  // into another, in bounded chunks (the Proposal's version records only
+  // their count). Rows name documents, never their User, and stay off the
+  // public Revisions. The repair is never reversed; this is its record.
+  repairTrails: defineTable({
+    proposalId: v.id("proposals"),
+    ref: recordRef,
+    rows: v.array(
+      v.object({
+        table: v.string(),
+        docId: v.string(),
+        field: v.string(),
+        before: v.optional(v.any()),
+        after: v.optional(v.any()),
+        into: v.optional(v.string()),
+      }),
+    ),
+  }).index("by_proposal", ["proposalId"]),
+
+  // Where a data-repair entry's sweep of personal rows stands between its
+  // bounded legs (lib/repair/ops.ts sweep): one row per sweep, keyed by the
+  // plan entry, resuming after the `_creationTime` it reached. All of an
+  // entry's rows are deleted once its sweeps finish in one pass.
+  repairSweeps: defineTable({
+    entryKey: v.string(),
+    sweep: v.string(),
+    after: v.number(),
+    done: v.boolean(),
+  }).index("by_entry_sweep", ["entryKey", "sweep"]),
+
   importRuns: defineTable({
     sourceKey: v.string(),
     // "stopped": an automatic run closed early because its source was disabled.

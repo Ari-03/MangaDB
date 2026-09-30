@@ -33,6 +33,13 @@ vi.mock("convex/react", async () => {
       },
   };
 });
+// The run lock (quickActions' useRunLock) reads its store straight from the
+// current snapshot, outside React.
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  const useSyncExternalStore = <T,>(_subscribe: unknown, snapshot: () => T) => snapshot();
+  return { ...actual, useSyncExternalStore };
+});
 vi.mock("~/providers", () => ({ convexClient: {} }));
 vi.mock("~/lib/analytics", () => ({ track: () => undefined }));
 vi.mock("~/lib/mature", () => ({ useArtConcealed: () => false }));

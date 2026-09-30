@@ -1,9 +1,12 @@
 // Personal tracking follows the catalog repair's moves (lib/repair/ops.ts):
 // a Series split re-files the moved work's Volume and Release Progress,
-// Favorites and Comments under the split-off Series without widening the
-// reader's Tracking Visibility (B10), and a box-set Release converted to a
-// Release Bundle hands its Collection Entries to the bundle (B11). Neither
-// lands in a public Revision; the Proposal's ops keep the trail.
+// Favorites and Comments under the split-off Series (B10), and a box-set
+// Release converted to a Release Bundle hands its Collection Entries to the
+// bundle (B11). No repair that moves tracking between Series widens what a
+// User's public profile shows, whoever tracks it and however (R03, R05),
+// and a re-run leaves overrides the User set since alone (R16). Neither
+// lands in a public Revision; bounded repairTrails records on the Proposal
+// keep the trail, and large populations move in bounded legs (Standards 1).
 
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
@@ -12,7 +15,9 @@ import rateLimiterTest from "@convex-dev/rate-limiter/test";
 import { api, internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
 import schema from "../../schema";
+import { TRAIL_CHUNK } from "./audit";
 import type { RepairEntry } from "./entries";
+import { SWEEP_BUDGET } from "./ops";
 
 function makeT() {
   const t = convexTest(schema);
@@ -192,6 +197,116 @@ describe("series split (B10)", () => {
       comments: [target._id],
     });
   });
+
+  it("keeps an explicit private source override when the reader's defaults later go public", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    // Private default as well as the explicit private override on the source.
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "private" });
+    const profile = () => t.query(api.sharing.publicProfile, { username: "dave" });
+    expect((await profile())?.reading).toEqual([]);
+
+    expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
+    expect((await profile())?.reading).toEqual([]);
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+    expect((await profile())?.reading).toEqual([]);
+    expect((await run(t, [s.entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
+  const asOther = (t: T) => t.withIdentity({ subject: OTHER });
+
+  /**
+   * The other reader tracks nothing of "Doubt!!" but one of the moved books,
+   * owned only through a Bundle holding it, and shares Ownership by default
+   * while keeping "Doubt!!" private (R03).
+   */
+  async function seedBundleOwner(t: T, member: "b1" | "b2") {
+    const s = await seed(t);
+    await asOther(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+    await asOther(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
+    await t.run(async (ctx) => {
+      const bundleId = await ctx.db.insert("releaseBundles", {
+        status: "active",
+        publicId: 950,
+        name: "Doubt Box",
+        publisherId: s.publisherId,
+        format: "physical",
+      });
+      await ctx.db.insert("bundleMemberships", { bundleId, releaseId: s[member].releaseId, order: 1 });
+      await ctx.db.insert("collectionEntries", { userId: s.other, bundleId, state: "owned" });
+    });
+    return s;
+  }
+  const ownedBundles = async (t: T) =>
+    (await t.query(api.sharing.publicProfile, { username: "erin" }))?.ownership.bundles.map((b) => b.name);
+
+  for (const member of ["b1", "b2"] as const) {
+    it(`keeps a Bundle owned privately through a moved book (${member === "b1" ? "whole Volume" : "shared label"}) off the profile`, async () => {
+      const t = makeT();
+      const s = await seedBundleOwner(t, member);
+      expect(await ownedBundles(t)).toEqual([]);
+
+      expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
+      expect(await ownedBundles(t)).toEqual([]);
+      // The private choice is explicit on the split-off Series, so it survives
+      // a later change of the owner's defaults.
+      const target = await splitOff(t);
+      const visibility = await asOther(t).query(api.sharing.seriesVisibility, { seriesPublicId: target.publicId });
+      expect(visibility?.overrides.ownership).toBe("private");
+      // The Proposal's trail records the new override row, naming no User.
+      const trail = await t.run(async (ctx) => (await ctx.db.query("repairTrails").collect()).flatMap((record) => record.rows));
+      expect(trail).toContainEqual(
+        expect.objectContaining({ table: "userSeriesStates", field: "(inserted)", after: expect.objectContaining({ seriesId: target._id, ownershipVisibility: "private" }) }),
+      );
+      expect(JSON.stringify(trail)).not.toContain(s.other);
+      await asOther(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "private" });
+      await asOther(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+      expect(await ownedBundles(t)).toEqual([]);
+      expect((await run(t, [s.entry]))[0]?.status).toBe("alreadyApplied");
+      expect(await ownedBundles(t)).toEqual([]);
+    });
+  }
+
+  it("leaves a public choice made on the split-off Series alone on a re-run (R16)", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
+    const target = await splitOff(t);
+    const overrides = async () =>
+      (await asReader(t).query(api.sharing.seriesVisibility, { seriesPublicId: target.publicId }))?.overrides;
+    expect((await overrides())?.reading).toBe("private");
+
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: target._id, kind: "reading", visibility: "public" });
+    expect((await run(t, [s.entry]))[0]?.status).toBe("alreadyApplied");
+    expect((await overrides())?.reading).toBe("public");
+    const reading = (await t.query(api.sharing.publicProfile, { username: "dave" }))?.reading;
+    expect(reading?.map((row) => [row.title, row.passes.length])).toEqual([["Doubt", 2]]);
+  });
+
+  it("still narrows the split-off Series for stale rows a re-run heals (R16)", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
+    const target = await splitOff(t);
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: target._id, kind: "reading", visibility: "public" });
+    // A pass the old split left filed under the private source: the profile
+    // hides it, as it answers to "Doubt!!" as well.
+    await t.run(async (ctx) => {
+      const pass = await ctx.db
+        .query("releaseProgress")
+        .withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId))
+        .unique();
+      await ctx.db.patch(pass!._id, { seriesId: s.source });
+    });
+    const passes = async () =>
+      (await t.query(api.sharing.publicProfile, { username: "dave" }))?.reading.flatMap((row) => row.passes);
+    expect(await passes()).toHaveLength(1);
+
+    expect((await run(t, [s.entry]))[0]?.status).toBe("applied");
+    const visibility = await asReader(t).query(api.sharing.seriesVisibility, { seriesPublicId: target.publicId });
+    expect(visibility?.overrides.reading).toBe("private");
+    expect(await passes()).toHaveLength(0);
+  });
 });
 
 describe("box set to bundle (B11)", () => {
@@ -318,5 +433,382 @@ describe("box set to bundle (B11)", () => {
       { userId: s.other, releaseId: undefined, bundleId: bundle._id, state: "owned", variantId: undefined },
     ]);
     expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
+  /**
+   * R05: the box set sits on "Doubt!!", whose Ownership the reader keeps
+   * private while sharing it by default; its members sit on "Noragami",
+   * which follows that public default.
+   */
+  async function seedPrivateBox(t: T) {
+    const s = await seedBox(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(s.boxVol, { seriesId: s.source });
+      await ctx.db.patch(s.box.releaseId, { seriesIds: [s.source] });
+    });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
+    return s;
+  }
+  const shown = async (t: T) => {
+    const profile = await t.query(api.sharing.publicProfile, { username: "dave" });
+    return [...(profile?.ownership.releases.map((r) => r.editionTitle) ?? []), ...(profile?.ownership.bundles.map((b) => b.name) ?? [])];
+  };
+  /** The profile stays as private after the conversion, a change of defaults, and a re-run. */
+  async function expectStaysPrivate(t: T, entry: RepairEntry) {
+    expect(await shown(t)).toEqual([]);
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    expect(await shown(t)).toEqual([]);
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "private" });
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+    expect(await shown(t)).toEqual([]);
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+    expect(await shown(t)).toEqual([]);
+  }
+
+  it("keeps a privately owned box set private as a Bundle of public-Series members (releaseBundle)", async () => {
+    const t = makeT();
+    const s = await seedPrivateBox(t);
+    await expectStaysPrivate(t, {
+      kind: "releaseBundle",
+      key: "b",
+      reason: "box set",
+      bundleId: null,
+      box: { releaseId: s.box.releaseId, name: "Noragami Box Set" },
+      members: [
+        { isbn13: "9780000000011", order: 1 },
+        { isbn13: "9780000000028", order: 2 },
+      ],
+      retireVolumeIds: [],
+    });
+  });
+
+  it("keeps a privately owned box set private as a Bundle of public-Series members (remodelEdition)", async () => {
+    const t = makeT();
+    const s = await seedPrivateBox(t);
+    await expectStaysPrivate(t, {
+      kind: "remodelEdition",
+      key: "b",
+      reason: "box set",
+      editionId: s.box.editionId,
+      volumeId: s.boxVol,
+      targetSeriesId: s.series,
+      line: null,
+      bundle: { name: "Noragami Box Set 1" },
+      groups: [
+        { releaseIds: null, coverage: ["1", "2"].map((label) => ({ label, volumeId: null, extent: "complete" as const })), linePosition: null },
+      ],
+      retireVolumeIds: [],
+    });
+  });
+
+  it("keeps an existing memberless Bundle's owner private when members join it", async () => {
+    const t = makeT();
+    const s = await seedBox(t);
+    // The reader owns a Bundle with no members yet, so only their (private)
+    // Ownership default governs it; "Noragami" is explicitly public.
+    const bundleId = await t.run(async (ctx) => {
+      const boxEntry = await ctx.db
+        .query("collectionEntries")
+        .withIndex("by_user_release", (q) => q.eq("userId", s.reader).eq("releaseId", s.box.releaseId))
+        .unique();
+      await ctx.db.delete(boxEntry!._id);
+      const id = await ctx.db.insert("releaseBundles", { status: "active", publicId: 901, name: "Empty Box", publisherId: s.publisherId, format: "physical" });
+      await ctx.db.insert("collectionEntries", { userId: s.reader, bundleId: id, state: "owned" });
+      return id;
+    });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.series, kind: "ownership", visibility: "public" });
+    const entry: RepairEntry = {
+      kind: "releaseBundle",
+      key: "fill",
+      reason: "box contents",
+      bundleId,
+      box: null,
+      members: [{ isbn13: "9780000000011", order: 1 }],
+      retireVolumeIds: [],
+    };
+    expect(await shown(t)).toEqual([]);
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    expect(await shown(t)).toEqual([]);
+  });
+});
+
+/**
+ * Standards 1: a repair entry's personal work runs in bounded legs. Each
+ * call examines at most SWEEP_BUDGET personal rows, reports "partial" while
+ * more remain (the runner calls it again), and keeps its trail in bounded
+ * repairTrails records rather than one Proposal document. No leg widens a
+ * public profile.
+ */
+describe("bounded personal repair work (Standards 1)", () => {
+  /** Run one entry the way scripts/repair.ts does: again while it reports "partial", checking after every leg. */
+  async function runLegs(t: T, entry: RepairEntry, afterLeg: () => Promise<void>) {
+    const statuses: string[] = [];
+    for (let leg = 0; leg < 20; leg++) {
+      const status = (await run(t, [entry]))[0]!.status;
+      statuses.push(status);
+      await afterLeg();
+      if (status !== "partial") break;
+    }
+    return statuses;
+  }
+
+  /** `count` more readers, each with private Reading of the source, a read Volume and a pass on the moved book. */
+  const addReaders = (t: T, s: Awaited<ReturnType<typeof seed>>, count: number) =>
+    t.run(async (ctx) => {
+      for (let i = 0; i < count; i++) {
+        const userId = await ctx.db.insert("users", {
+          clerkSubject: `bulk${i}`,
+          username: `bulk${i}`,
+          usernameNormalized: `bulk${i}`,
+          formatPreference: "both",
+          ownershipVisibility: "public",
+          readingVisibility: "public",
+        });
+        await ctx.db.insert("userSeriesStates", {
+          userId,
+          seriesId: s.source,
+          following: false,
+          followPromptDismissed: false,
+          readingVisibility: "private",
+        });
+        await ctx.db.insert("volumeProgress", { userId, volumeId: s.unlabeled, seriesId: s.source, readCount: 1 });
+        await ctx.db.insert("releaseProgress", { userId, releaseId: s.b1.releaseId, seriesId: s.source, percent: 5 });
+      }
+    });
+
+  const trailOf = (t: T) =>
+    t.run(async (ctx) => ({
+      changes: (await ctx.db.query("proposalVersions").collect())
+        .flatMap((v) => v.ops)
+        .flatMap((op) => (op.kind === "update" ? op.changes : []))
+        .filter((c) => c.field === "personalTracking"),
+      records: await ctx.db.query("repairTrails").collect(),
+      sweeps: await ctx.db.query("repairSweeps").collect(),
+    }));
+
+  it("re-files a large split's personal rows over several legs, never widening a profile", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    await addReaders(t, s, SWEEP_BUDGET + 10);
+    const privateReading = async () => {
+      for (const username of ["dave", "bulk0", `bulk${SWEEP_BUDGET + 9}`]) {
+        expect((await t.query(api.sharing.publicProfile, { username }))?.reading).toEqual([]);
+      }
+    };
+    await privateReading();
+    const onSource = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query("volumeProgress").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).length +
+          (await ctx.db.query("releaseProgress").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).length,
+      );
+    const before = await onSource();
+    const remaining: number[] = [];
+    const statuses = await runLegs(t, s.entry, async () => {
+      await privateReading();
+      remaining.push(await onSource());
+    });
+
+    // Several legs, each moving at most one budget's worth of rows.
+    expect(statuses[0]).toBe("partial");
+    expect(statuses.at(-1)).not.toBe("partial");
+    expect(statuses.length).toBeGreaterThan(2);
+    for (const [i, left] of remaining.entries()) {
+      expect((i === 0 ? before : remaining[i - 1]!) - left).toBeLessThanOrEqual(SWEEP_BUDGET);
+    }
+    expect(remaining.at(-1)).toBe(0);
+    const target = await splitOff(t);
+    const passes = await t.run(async (ctx) => (await ctx.db.query("releaseProgress").collect()).map((row) => row.seriesId));
+    expect(new Set(passes)).toEqual(new Set([target._id]));
+
+    // The trail sits in bounded records, the Proposals name only its size,
+    // and no sweep cursor outlives the finished entry.
+    const trail = await trailOf(t);
+    for (const change of trail.changes) expect(typeof change.after).toBe("number");
+    const rows = trail.records.flatMap((record) => record.rows);
+    expect(rows.length).toBe(trail.changes.reduce((sum, change) => sum + Number(change.after), 0));
+    expect(rows.filter((row) => row.table === "releaseProgress" && row.field === "seriesId")).toHaveLength(SWEEP_BUDGET + 12);
+    for (const record of trail.records) expect(record.rows.length).toBeLessThanOrEqual(TRAIL_CHUNK);
+    expect(JSON.stringify(trail.records)).not.toContain(s.reader);
+    expect(trail.sweeps).toEqual([]);
+
+    // A re-run examines the same rows in bounded legs, changes nothing, and
+    // still never widens anything.
+    const rerun = await runLegs(t, s.entry, privateReading);
+    expect(rerun.at(-1)).toBe("alreadyApplied");
+    expect((await trailOf(t)).records).toHaveLength(trail.records.length);
+  });
+
+  for (const kind of ["releaseBundle", "remodelEdition"] as const) {
+    it(`hands a large box set's Collection Entries to its Bundle over several legs, keeping private owners private (${kind})`, async () => {
+      const t = makeT();
+      const s = await seed(t);
+      const box = await t.run(async (ctx) => {
+        const series = await ctx.db.insert("series", { status: "active", publicId: 700, title: "Noragami", altTitles: [], searchText: "Noragami" });
+        const release = async (seriesId: Id<"series">, label: string, publicId: number, isbn13: string) => {
+          const volumeId = await ctx.db.insert("volumes", { status: "active", publicId, seriesId, label, position: 1 });
+          const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId: s.publisherId });
+          await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+          const releaseId = await ctx.db.insert("releases", {
+            status: "active",
+            editionId,
+            format: "physical",
+            language: "en",
+            isbn13,
+            publisherId: s.publisherId,
+            seriesIds: [seriesId],
+          });
+          return { series, volumeId, editionId, releaseId };
+        };
+        await release(series, "1", 701, "9780000000011");
+        // The box set sits on "Doubt!!", which every owner keeps private.
+        const made = await release(s.source, "Box", 713, "9780000000059");
+        for (let i = 0; i < SWEEP_BUDGET + 10; i++) {
+          const userId = await ctx.db.insert("users", {
+            clerkSubject: `owner${i}`,
+            username: `owner${i}`,
+            usernameNormalized: `owner${i}`,
+            formatPreference: "both",
+            ownershipVisibility: "public",
+            readingVisibility: "private",
+          });
+          await ctx.db.insert("userSeriesStates", {
+            userId,
+            seriesId: s.source,
+            following: false,
+            followPromptDismissed: false,
+            ownershipVisibility: "private",
+          });
+          await ctx.db.insert("collectionEntries", { userId, releaseId: made.releaseId, state: "owned" });
+        }
+        return made;
+      });
+      const privateOwnership = async () => {
+        for (const username of ["owner0", `owner${SWEEP_BUDGET + 9}`]) {
+          const profile = await t.query(api.sharing.publicProfile, { username });
+          expect([...(profile?.ownership.releases ?? []), ...(profile?.ownership.bundles ?? [])]).toEqual([]);
+        }
+      };
+      await privateOwnership();
+      const entry: RepairEntry =
+        kind === "releaseBundle"
+          ? {
+              kind,
+              key: "big-box",
+              reason: "box set",
+              bundleId: null,
+              box: { releaseId: box.releaseId, name: "Noragami Box Set" },
+              members: [{ isbn13: "9780000000011", order: 1 }],
+              retireVolumeIds: [],
+            }
+          : {
+              kind,
+              key: "big-box",
+              reason: "box set",
+              editionId: box.editionId,
+              volumeId: box.volumeId,
+              targetSeriesId: box.series,
+              line: null,
+              bundle: { name: "Noragami Box Set" },
+              groups: [{ releaseIds: null, coverage: [{ label: "1", volumeId: null, extent: "complete" }], linePosition: null }],
+              retireVolumeIds: [],
+            };
+      const boxState = () =>
+        t.run(async (ctx) => ({
+          release: (await ctx.db.get(box.releaseId))?.status,
+          edition: (await ctx.db.get(box.editionId))?.status,
+          onBox: (await ctx.db.query("collectionEntries").withIndex("by_release", (q) => q.eq("releaseId", box.releaseId)).collect()).length,
+        }));
+      const legs: Array<Awaited<ReturnType<typeof boxState>>> = [];
+      const statuses = await runLegs(t, entry, async () => {
+        await privateOwnership();
+        legs.push(await boxState());
+      });
+
+      expect(statuses[0]).toBe("partial");
+      expect(statuses.at(-1)).toBe("applied");
+      // The box set stays up, holding its remaining owners, until the last leg.
+      expect(legs[0]).toEqual({ release: "active", edition: "active", onBox: 10 });
+      expect(legs.at(-1)).toEqual({ release: "hidden", edition: "hidden", onBox: 0 });
+      const moved = await t.run(async (ctx) => (await ctx.db.query("collectionEntries").collect()).filter((e) => e.bundleId));
+      expect(moved).toHaveLength(SWEEP_BUDGET + 10);
+      const trail = await trailOf(t);
+      for (const record of trail.records) expect(record.rows.length).toBeLessThanOrEqual(TRAIL_CHUNK);
+      expect(trail.records.flatMap((record) => record.rows).filter((row) => row.field === "bundleId")).toHaveLength(SWEEP_BUDGET + 10);
+      expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+    });
+  }
+});
+
+describe("other repairs that move tracking between Series", () => {
+  /**
+   * The other reader owns the second work's vol 1 book outright and shares
+   * Ownership by default, keeping "Doubt!!" private; the reader's Reading of
+   * "Doubt!!" is private too. A second Series, "Else", follows the defaults.
+   */
+  async function seedMover(t: T) {
+    const s = await seed(t);
+    const asOther = t.withIdentity({ subject: OTHER });
+    await asOther.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+    await asOther.mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
+    await asOther.mutation(api.collection.setReleaseEntry, { releaseId: s.b1.releaseId, state: "owned" });
+    const other = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("series", { status: "active", publicId: 600, title: "Else", altTitles: [], searchText: "Else" });
+      await ctx.db.insert("volumes", { status: "active", publicId: 601, seriesId: id, label: "1", position: 1 });
+      return id;
+    });
+    return { ...s, else: other, asOther };
+  }
+  const profileOf = async (t: T, username: string) => {
+    const profile = await t.query(api.sharing.publicProfile, { username });
+    return {
+      owned: profile?.ownership.releases.length,
+      reading: profile?.reading.map((row) => row.title),
+    };
+  };
+
+  it("keeps an Edition's owners private when setCoverage moves it to another Series", async () => {
+    const t = makeT();
+    const s = await seedMover(t);
+    const entry: RepairEntry = {
+      kind: "setCoverage",
+      key: "cover",
+      reason: "belongs to Else",
+      editionId: s.b1.editionId,
+      before: [s.unlabeled],
+      coverage: [{ seriesId: s.else, label: "1", extent: "complete" }],
+      line: null,
+      retireVolumeIds: [],
+    };
+    expect((await profileOf(t, "erin")).owned).toBe(0);
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    expect((await profileOf(t, "erin")).owned).toBe(0);
+    await s.asOther.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "private" });
+    await s.asOther.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
+    expect((await profileOf(t, "erin")).owned).toBe(0);
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
+  it("keeps placed Volumes' readers and owners private while a Series merge waits", async () => {
+    const t = makeT();
+    const s = await seedMover(t);
+    const volumes = await t.run(async (ctx) =>
+      (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).map((v) => v._id),
+    );
+    const entry: RepairEntry = {
+      kind: "mergeSeries",
+      key: "merge",
+      reason: "same work",
+      loserId: s.source,
+      survivorId: s.else,
+      placements: [{ volumeId: s.unlabeled, label: "2", intoVolumeId: null }],
+      packagingVolumeIds: volumes.filter((id) => id !== s.unlabeled),
+      retitle: null,
+    };
+    expect(await profileOf(t, "erin")).toEqual({ owned: 0, reading: [] });
+    expect(await profileOf(t, "dave")).toEqual({ owned: 0, reading: [] });
+    expect((await run(t, [entry]))[0]?.status).toBe("deferred");
+    expect(await profileOf(t, "erin")).toEqual({ owned: 0, reading: [] });
+    expect(await profileOf(t, "dave")).toEqual({ owned: 0, reading: [] });
   });
 });

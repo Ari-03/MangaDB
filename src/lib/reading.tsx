@@ -19,6 +19,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { track } from "~/lib/analytics";
 import { Cover } from "~/lib/cover";
+import { useRunLock } from "~/lib/quickActions";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
@@ -206,6 +207,8 @@ function SeriesReadingProgressInner({
  * controls (CONTEXT.md: Volume Progress "may be updated directly or by
  * confirmed completion of a Release"). The buttons send ±1 deltas rather
  * than a new total, so clicks made before the count refreshes all land.
+ * Locked while a whole "Read all" run still has this Volume to mark
+ * (useRunLock), so its later batch cannot undo a change made here.
  * Renders nothing signed out.
  */
 export function VolumeReadCount({
@@ -233,9 +236,13 @@ function VolumeReadCountInner({
 }) {
   const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
   const adjustCount = useMutation(api.reading.adjustVolumeReadCount);
+  const lock = useRunLock((claims) => claims.reads.has(volumePublicId));
   if (!tracking) return null;
   const row = tracking.volumes.find((v) => v.volumePublicId === volumePublicId);
   if (!row) return null;
+  const adjust = (delta: number) => {
+    if (!lock.held()) void adjustCount({ volumeId: row.volumeId, delta });
+  };
   return (
     <span className="volume-read">
       {row.readCount > 0 ? (
@@ -246,9 +253,8 @@ function VolumeReadCountInner({
       <button
         type="button"
         className="read-adjust"
-        onClick={() =>
-          void adjustCount({ volumeId: row.volumeId, delta: 1 })
-        }
+        disabled={lock.locked}
+        onClick={() => adjust(1)}
       >
         {row.readCount > 0 ? "+1 read" : "Mark read"}
       </button>
@@ -257,9 +263,8 @@ function VolumeReadCountInner({
           type="button"
           className="read-adjust"
           aria-label="Remove one completed read"
-          onClick={() =>
-            void adjustCount({ volumeId: row.volumeId, delta: -1 })
-          }
+          disabled={lock.locked}
+          onClick={() => adjust(-1)}
         >
           −1
         </button>
@@ -274,7 +279,10 @@ function VolumeReadCountInner({
  * The pass controls on a Release row: start a pass, move the optional
  * 0–100% slider, confirm completion (with undo), abandon the pass. Mounts
  * anywhere a Release row renders — Series, Volume, and Edition pages.
- * `releaseId` is the row's document id from the page queries.
+ * `releaseId` is the row's document id from the page queries. Completing
+ * and undoing write the covered Volumes' Progress, which the client does
+ * not know here, so both wait while any "Read all" run is still marking
+ * (useRunLock): its later batch could otherwise re-mark an undone Volume.
  */
 export function ReleasePassControls({ releaseId }: { releaseId: string }) {
   if (!convexClient) return null;
@@ -291,6 +299,7 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
   const cancelPass = useMutation(api.reading.cancelPass);
   const undoCompletion = useMutation(api.reading.undoCompletion);
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
+  const lock = useRunLock((claims) => claims.reads.size > 0);
 
   // Local slider value while dragging, ahead of the reactive round-trip.
   const [draft, setDraft] = useState<number | null>(null);
@@ -317,6 +326,7 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
   };
 
   const confirmComplete = async () => {
+    if (lock.held()) return;
     setConfirming(false);
     const result = await completePass({ releaseId });
     setDraft(null);
@@ -367,7 +377,11 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
             <span className="prompt" role="status">
               Mark this pass complete? Every volume this release covers
               completely gets +1 read.{" "}
-              <button type="button" onClick={() => void confirmComplete()}>
+              <button
+                type="button"
+                disabled={lock.locked}
+                onClick={() => void confirmComplete()}
+              >
                 Complete pass
               </button>{" "}
               <button type="button" onClick={() => setConfirming(false)}>
@@ -381,7 +395,9 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
           Pass completed — read counts updated.{" "}
           <button
             type="button"
+            disabled={lock.locked}
             onClick={() => {
+              if (lock.held()) return;
               void undoCompletion({
                 releaseId,
                 completedAt: completion.completedAt,

@@ -83,4 +83,80 @@ describe("inferCoverage — precedence", () => {
     const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "3", coverRange: null };
     expect(inferCoverage(threeIn1, [])).toEqual({ from: "7", to: "9" });
   });
+
+  // R12: a statement no range can hold is evidence, not silence.
+  it("never lets the line size override a gapped or impossible statement", () => {
+    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
+    expect(inferCoverage({ ...threeIn1, coverageGapped: true }, [])).toBeNull();
+    expect(inferCoverage({ ...threeIn1, coverageGapped: true }, ["Collects volumes 1-3."])).toBeNull();
+    expect(inferCoverage(threeIn1, ["Collects volumes 1 and 3."])).toBeNull();
+    expect(inferCoverage(threeIn1, [undefined, "A giant edition.", "Collects volumes 1 & 3."])).toBeNull();
+    expect(inferCoverage(threeIn1, ["collects volumes 9-3"])).toBeNull();
+    // The first blurb that states a usable range still decides.
+    expect(inferCoverage(threeIn1, ["Collects volumes 4-6.", "Collects volumes 1 and 3."])).toEqual({
+      from: "4",
+      to: "6",
+    });
+    // An unusable bare range states nothing, so the size still applies.
+    expect(inferCoverage(threeIn1, ["Volumes 1-80 of the saga."])).toEqual({ from: "1", to: "3" });
+  });
+
+  // R12: a gapped list needs no collect-verb to count. Without one it was
+  // read as silence and the 3-in-1 size invented Volume 2.
+  it("reads a bare, numbered-word, or ranged gapped list as a gap", () => {
+    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
+    for (const blurb of [
+      "Volumes 1 and 3 in one book!",
+      "Features volumes 1 and 3.",
+      "This edition brings together volumes 1 and 3.",
+      "Collects volumes #1 and #3.",
+      "Collects volumes one and three.",
+      "Collecting volume 1 and volume 3.",
+      "Collects volumes 1-2 and 4.",
+    ]) {
+      expect(inferCoverage(threeIn1, [blurb]), blurb).toBeNull();
+    }
+    // Contiguous lists, bare or in words, still state a range.
+    expect(coverageFromText("Volumes 1, 2, and 3 together at last.")).toEqual({ from: "1", to: "3" });
+    expect(coverageFromText("Collects volumes one through three.")).toEqual({ from: "1", to: "3" });
+    expect(coverageFromText("Collects volumes #4, #5 and #6.")).toEqual({ from: "4", to: "6" });
+    // A single bare Volume still says nothing about the book.
+    expect(inferCoverage(threeIn1, ["Volume One of the hit series."])).toEqual({ from: "1", to: "3" });
+    // An unusable bare range does not hide a later gapped list.
+    expect(
+      inferCoverage(threeIn1, ["Volumes 1-80 of the saga are out. Volumes 1 and 3 in one book!"]),
+    ).toBeNull();
+    // "+", "plus", and encoded ampersands separate listed Volumes too.
+    for (const blurb of [
+      "Collects volumes 1 + 3.",
+      "Collects volumes 1 plus 3.",
+      "Collects volumes 1 &amp;amp; 3.",
+      "Collects volumes 1 &#38; 3.",
+    ]) {
+      expect(inferCoverage(threeIn1, [blurb]), blurb).toBeNull();
+    }
+  });
+
+  // R12: a number that counts something else never extends the list.
+  it("never reads a counted noun after the list as a Volume", () => {
+    for (const blurb of [
+      "Collects volumes 1–3 and 4 bonus stories.",
+      "Collects volumes 1-3 and 16 pages of color art.",
+      "Collects volumes 1-3, and 2 new short stories.",
+      "Collects volumes 1-3 and volume 4's bonus chapter.",
+      "Collects volumes 1-3 and volume 4&#8217;s bonus chapter.",
+      "Collects volumes 1-3 and 4-6 new stories.",
+      "Collects volumes 1-3 plus 16 pages of color art.",
+    ]) {
+      expect(coverageFromText(blurb), blurb).toEqual({ from: "1", to: "3" });
+    }
+    // "two bonus stories" is no Volume 2.
+    expect(coverageFromText("Includes volume one and two bonus stories.")).toEqual({ from: "1", to: "1" });
+    // Lists that end in punctuation or a function word keep every item.
+    expect(coverageFromText("Collects volumes 1, 2, and 3—the complete arc.")).toEqual({ from: "1", to: "3" });
+    expect(coverageFromText("Collects volumes 1, 2, and 3 of the hit.")).toEqual({ from: "1", to: "3" });
+    expect(coverageFromText("Collects volumes 1-3 and 4 in one book.")).toEqual({ from: "1", to: "4" });
+    // "1and" is no separator.
+    expect(coverageFromText("Collects vols 1and 3")).toEqual({ from: "1", to: "1" });
+  });
 });

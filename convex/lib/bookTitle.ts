@@ -34,8 +34,17 @@ export const packagingValidator = v.object({
   lineName: v.union(v.string(), v.null()),
   /** Edition Line Position label ("7", "IV", "Season 3 Part 2"). */
   linePosition: v.union(v.string(), v.null()),
-  /** The source Volumes the book collects, inclusive; null when the title never says. */
+  /**
+   * The source Volumes the book collects, inclusive; null when the title
+   * never says, or lists them with a gap (`coverageGapped`).
+   */
   coverRange: v.union(coverRangeValidator, v.null()),
+  /**
+   * The title lists its Volumes with a gap ("Vol. 1 & 3"): stated coverage
+   * no range can hold, so neither a blurb nor the line's declared size may
+   * stand in for it (lib/coverage.ts inferCoverage).
+   */
+  coverageGapped: v.optional(v.literal(true)),
 });
 
 export type CoverRange = Infer<typeof coverRangeValidator>;
@@ -115,8 +124,11 @@ const NUM = "\\d+(?:\\.\\d+)?";
 const PLUS_EXTRA = `${NUM}\\+\\d+`;
 const PLUS_EXTRA_RE = new RegExp(`^${PLUS_EXTRA}$`);
 const LABEL = `(?:${PLUS_EXTRA}|${NUM}|[A-Z]\\d{1,2}|${WORD_NUMBER}|${ROMAN})`;
-/** A list or range of numbers: "1-3", "1 & 2", "1, 2, 3", "10-11+EX". */
-const RANGE = `${NUM}(?:\\s*(?:-|–|—|&|,|and)\\s*${NUM})+(?:\\s*\\+\\s*\\w+)?`;
+/**
+ * A list or range of numbers: "1-3", "1 & 2", "1, 2, 3", "10-11+EX". A
+ * listed item may repeat the marker or carry "#": "1 and Vol. 3", "#1 & #3".
+ */
+const RANGE = `#?${NUM}(?:\\s*(?:-|–|—|&|,|and)\\s*(?:vol(?:ume)?s?\\.?\\s*)?#?${NUM})+(?:\\s*\\+\\s*\\w+)?`;
 
 const ROMAN_VALUES: Record<string, number> = { I: 1, V: 5, X: 10 };
 
@@ -310,8 +322,10 @@ function absorbGroup(inner: string, peel: Peeled): boolean {
     peel.formatTags.push(text);
     return true;
   }
-  // "(Contains Vol. 9 & Ashen Victor)": whatever Volumes it lists are the coverage.
-  const contains = /^contains\s+vol(?:ume)?s?\.?\s*(\d+(?:\.\d+)?)(.*)$/i.exec(text);
+  // "(Contains Vol. 9 & Ashen Victor)", "(Includes Vols. 1 and 3)": whatever
+  // Volumes it lists are the coverage.
+  const contains =
+    /^(?:contains|includes|collects)\s+vol(?:ume)?s?\.?\s*#?(\d+(?:\.\d+)?)(.*)$/i.exec(text);
   if (contains) {
     const listed = parseVolumeList(contains[1]! + contains[2]!);
     const only = canonicalLabel(contains[1]!);
@@ -616,6 +630,8 @@ export function parseBookTitle(
       // A single number next to packaging is its line position, never a Volume.
       linePosition: linePosition ?? volumeLabel,
       coverRange,
+      // Several Volumes listed, yet no range: the list skips one.
+      ...(coverRange === null && (multiVolume || peel.multiVolume) ? { coverageGapped: true } : {}),
     };
     volumeLabel = null;
   }

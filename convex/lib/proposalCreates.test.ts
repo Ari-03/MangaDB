@@ -1,9 +1,11 @@
 // The proposal creation registry (lib/proposalCreates.ts) at its edges:
-// Release ISBN identity at draft, submission, and approval (B12), and
+// Release ISBN identity at draft, submission, and approval (B12), across a
+// proposal's create and update ops together (R11), and
 // Edition Line membership carried from a queued packaging guess through
 // approval (B16).
 
 import { convexTest } from "convex-test";
+import type { FunctionArgs } from "convex/server";
 import { describe, expect, it } from "vitest";
 import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
@@ -168,6 +170,146 @@ describe("planCreateOps — Release ISBN identity (B12)", () => {
     );
     expect(holders).toHaveLength(1);
     expect((await t.run((ctx) => ctx.db.get(proposalId)))!.state).toBe("inReview");
+  });
+});
+
+describe("proposal ISBN identity across create and update ops (R11)", () => {
+  const X = "9781646519026";
+  const Y = "9781999000714";
+  const EVIDENCE = [{ kind: "url" as const, url: "https://publisher.example/book" }];
+
+  /** Roles plus the Noragami catalog with one ISBN-less physical Release. */
+  async function world() {
+    const t = makeT();
+    await setupRoles(t);
+    const ids = await t.run(async (ctx) => {
+      const base = await catalog(ctx);
+      const physicalId = await ctx.db.insert("releases", {
+        status: "active",
+        editionId: base.editionId,
+        format: "physical",
+        binding: "paperback",
+        language: "en",
+        publisherId: base.publisherId,
+        seriesIds: [base.seriesId],
+      });
+      return { ...base, physicalId };
+    });
+    return { t, ...ids, asEditor: t.withIdentity({ subject: EDITOR }), asAdmin: t.withIdentity({ subject: ADMIN }) };
+  }
+
+  type World = Awaited<ReturnType<typeof world>>;
+
+  const setIsbn = (id: Id<"releases">, value: string | null, field: "isbn13" | "isbn10" = "isbn13") => ({
+    kind: "update" as const,
+    ref: { type: "release" as const, id },
+    changes: [{ field, value }],
+  });
+
+  const activeHolders = (w: World, isbn: string) =>
+    w.t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("releases")
+          .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn))
+          .collect()
+      ).filter((release) => release.status === "active"),
+    );
+
+  /** Save and submit a proposal as the Editor. */
+  async function submit(w: World, ops: FunctionArgs<typeof api.proposals.saveDraft>["ops"]) {
+    const { proposalId } = await w.asEditor.mutation(api.proposals.saveDraft, {
+      ops,
+      evidence: EVIDENCE,
+      comment: "Correct the books.",
+    });
+    await w.asEditor.mutation(api.proposals.submitProposal, { proposalId });
+    return proposalId;
+  }
+
+  it("refuses a create and an update assigning one ISBN, at save", async () => {
+    const w = await world();
+    await expect(
+      w.asEditor.mutation(api.proposals.saveDraft, {
+        ops: [releaseOp("digital", w.editionId, X), setIsbn(w.physicalId, X)],
+        evidence: EVIDENCE,
+        comment: "Digital release plus the paperback's ISBN.",
+      }),
+    ).rejects.toMatchObject({ data: { code: "invalidCreate" } });
+    // Update first, create second: still one final ISBN, two holders.
+    await expect(
+      w.asEditor.mutation(api.proposals.saveDraft, {
+        ops: [setIsbn(w.physicalId, X), releaseOp("digital", w.editionId, X)],
+        evidence: EVIDENCE,
+        comment: "Same pair, other order.",
+      }),
+    ).rejects.toMatchObject({ data: { code: "invalidCreate" } });
+  });
+
+  it("refuses an update taking an ISBN another active Release holds", async () => {
+    const w = await world();
+    await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, X));
+    await expect(
+      w.asEditor.mutation(api.proposals.saveDraft, {
+        ops: [setIsbn(w.physicalId, "978-1-64651-902-6")],
+        evidence: EVIDENCE,
+        comment: "Paperback ISBN.",
+      }),
+    ).rejects.toMatchObject({ data: { code: "invalidField" } });
+  });
+
+  it("refuses two updates assigning one ISBN, including ISBN-10", async () => {
+    const w = await world();
+    const otherId = await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, Y));
+    await expect(
+      w.asEditor.mutation(api.proposals.saveDraft, {
+        ops: [setIsbn(w.physicalId, "1646519020", "isbn10"), setIsbn(otherId, "1646519020", "isbn10")],
+        evidence: EVIDENCE,
+        comment: "Both get the ISBN-10.",
+      }),
+    ).rejects.toMatchObject({ data: { code: "invalidField" } });
+  });
+
+  it("submission re-checks: a holder that appeared after saving blocks the update", async () => {
+    const w = await world();
+    const { proposalId } = await w.asEditor.mutation(api.proposals.saveDraft, {
+      ops: [setIsbn(w.physicalId, X)],
+      evidence: EVIDENCE,
+      comment: "Paperback ISBN.",
+    });
+    await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, X));
+    await expect(
+      w.asEditor.mutation(api.proposals.submitProposal, { proposalId }),
+    ).rejects.toMatchObject({ data: { code: "invalidField" } });
+  });
+
+  it("approval re-checks inside its transaction: nothing is written", async () => {
+    const w = await world();
+    const proposalId = await submit(w, [setIsbn(w.physicalId, X)]);
+    // An import lands the same book while the proposal waits in review.
+    await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, X));
+    await expect(
+      w.asAdmin.mutation(api.proposals.approveProposal, { proposalId }),
+    ).rejects.toMatchObject({ data: { code: "invalidField" } });
+    expect(await activeHolders(w, X)).toHaveLength(1);
+    expect((await w.t.run((ctx) => ctx.db.get(w.physicalId)))!.isbn13).toBeUndefined();
+    expect((await w.t.run((ctx) => ctx.db.get(proposalId)))!.state).toBe("inReview");
+  });
+
+  it("allows moving an ISBN: the holder is corrected in the same proposal", async () => {
+    const w = await world();
+    const holderId = await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, X));
+    // The holder gets its real ISBN; the new digital Release takes X.
+    const moved = await submit(w, [setIsbn(holderId, Y), releaseOp("digital", w.editionId, X)]);
+    const result = await w.asAdmin.mutation(api.proposals.approveProposal, { proposalId: moved });
+    expect(result.status).toBe("approved");
+    const holders = await activeHolders(w, X);
+    expect(holders).toHaveLength(1);
+    expect(holders[0]!.format).toBe("digital");
+    // Clearing the holder's ISBN frees it for another update too.
+    const cleared = await submit(w, [setIsbn(holders[0]!._id, null), setIsbn(w.physicalId, X)]);
+    await w.asAdmin.mutation(api.proposals.approveProposal, { proposalId: cleared });
+    expect((await activeHolders(w, X)).map((release) => release._id)).toEqual([w.physicalId]);
   });
 });
 

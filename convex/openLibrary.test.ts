@@ -485,3 +485,55 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     });
   });
 });
+
+describe("openLibrary.sync — Binding reaches the matching ladder (B14)", () => {
+  it("a paperback record never fills an ISBN-less hardcover", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    await t.run((ctx) => ctx.db.patch(releaseId!, { binding: "hardcover" }));
+    stubDump([CHAINSAW_22]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.isbn13).toBeUndefined();
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.recordRef).toBeUndefined();
+    });
+  });
+});
+
+describe("openLibrary.sync — a linked record never gives its Release another's ISBN (B08)", () => {
+  it("a changed ISBN another Release holds leaves the linked Release as it was", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    stubDump([CHAINSAW_22]);
+    await sync(t);
+    const heldIsbn = "9781974766529";
+    const holderId = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...fields } = (await ctx.db.get(releaseId!))!;
+      return await ctx.db.insert("releases", { ...fields, isbn13: heldIsbn, binding: "hardcover" });
+    });
+
+    vi.unstubAllGlobals();
+    stubDump([{ ...CHAINSAW_22, isbn_13: [heldIsbn], publish_date: "Oct 20, 2026" }]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(releaseId!)).toMatchObject({
+        isbn13: "9781974766512",
+        pubDate: { sort: 20261013 },
+      });
+      const holders = (await ctx.db.query("releases").collect()).filter(
+        (r) => r.isbn13 === heldIsbn,
+      );
+      expect(holders.map((r) => r._id)).toEqual([holderId]);
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.conflicts).toEqual([
+        expect.objectContaining({ field: "isbn13", offered: heldIsbn }),
+      ]);
+    });
+  });
+});

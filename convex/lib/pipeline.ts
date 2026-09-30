@@ -7,6 +7,8 @@
 // - partial-date normalization with the yyyymmdd sort key (spec §8)
 // - the series half of matching rung ① (source-keyed series observations,
 //   rename-as-field-conflict reconciliation)
+// - rung ①'s ISBN ownership check: a linked Release never takes the facts
+//   a snapshot offers under another Release's ISBN
 // - queue dedup: one open queue item per observation; a rejected one never
 //   re-queues until the snapshot changes
 // - publisher resolution: canonical names and duplicate aliases, imprints
@@ -16,6 +18,8 @@
 //   immediately approved Proposal and one public importer-authored Revision
 //   per created record, citing the source. Volume Position is the volume
 //   number; packaging covers the base Series' real Volumes, never its own
+// - rung ① for box sets: a linked Release Bundle picks up the members whose
+//   Releases arrived after it, on unchanged snapshots too
 // - the steady-state review queue: an In-Review Proposal pre-filled with
 //   the parsed guess (temp-ID create ops the approval registry applies)
 // - repairs stand: series links and same-label Volumes follow merges to
@@ -272,6 +276,22 @@ export async function linkSeriesObservation(
 }
 
 /**
+ * The active Series a source's series link (`series:{key}`) names, a
+ * merged one answered by its survivor; null without one. The read-only
+ * half of `reconcileLinkedSeries`, for callers that only place a record.
+ */
+export async function linkedSeriesId(
+  ctx: MutationCtx,
+  sourceKey: string,
+  seriesKey: string,
+): Promise<Id<"series"> | null> {
+  const seriesObs = await getObservation(ctx, sourceKey, `series:${seriesKey}`);
+  if (seriesObs?.recordRef?.type !== "series") return null;
+  const series = await survivorOf<"series">(ctx, await ctx.db.get(seriesObs.recordRef.id));
+  return series?.status === "active" ? series._id : null;
+}
+
+/**
  * Reconcile the linked Series' title — and its synopsis, when the source
  * offers one — with the source's current values: a series rename at the
  * source is a field conflict routed through the same authority rules as any
@@ -446,7 +466,84 @@ export async function removedSeriesFor(
   return null;
 }
 
+// ---------- ISBN ownership at rung ① ----------
+
+// Holders read per ISBN; a healthy catalog has one, a duplicate awaiting a
+// merge two.
+const ISBN_HOLDERS_SCAN = 10;
+
+/**
+ * The canonical Release other than `release` that holds `isbn13`: active or
+ * hidden, a merged holder answered by its survivor. Null when `release`
+ * holds it itself or nobody does.
+ */
+export async function isbnHolderBesides(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+  isbn13: string,
+): Promise<Doc<"releases"> | null> {
+  if (release.isbn13 === isbn13) return null;
+  const holders = await ctx.db
+    .query("releases")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+    .take(ISBN_HOLDERS_SCAN);
+  for (const holder of holders) {
+    const owner = await survivorOf<"releases">(ctx, holder);
+    if (owner !== null && owner._id !== release._id) return owner;
+  }
+  return null;
+}
+
+/** Record (or replace) the observation's ISBN conflict for an Editor. */
+export async function recordIsbnConflict(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  isbn13: string,
+  reason: string,
+  now: number,
+): Promise<void> {
+  const kept = (observation.conflicts ?? []).filter((c) => c.field !== "isbn13");
+  await ctx.db.patch(observation._id, {
+    conflicts: [...kept, { field: "isbn13", offered: isbn13, at: now, reason }],
+  });
+}
+
+/**
+ * Rung ①'s ownership check, before any field is reconciled: an ISBN-13
+ * names one Release (CONTEXT.md), so a snapshot offering an ISBN another
+ * Release holds is that book's facts, not the linked Release's (a calendar
+ * duplicate awaiting a merge, or a record an old crawl rewrote with another
+ * Binding). The pair is recorded on the observation for an Editor and the
+ * caller applies nothing; returns whether it did.
+ */
+export async function isbnHeldElsewhere(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  release: Doc<"releases">,
+  isbn13: string | undefined,
+  now: number,
+): Promise<boolean> {
+  if (isbn13 === undefined) return false;
+  const holder = await isbnHolderBesides(ctx, release, isbn13);
+  if (holder === null) return false;
+  await recordIsbnConflict(
+    ctx,
+    observation,
+    isbn13,
+    `ISBN ${isbn13} is already on Release ${holder._id}, not on the Release this record links (${release._id}); none of its facts are applied until an Editor resolves which book it is (a duplicate to merge, or another book).`,
+    now,
+  );
+  return true;
+}
+
 // ---------- the creation path ----------
+
+/**
+ * The one language every import adapter covers (English-only scope, spec
+ * §1): the language of the Releases they create, and the known language
+ * they offer the matching ladder.
+ */
+export const IMPORT_LANGUAGE = "en";
 
 /** The Release-level facts a source offers at creation. */
 export type ReleasePayload = {
@@ -937,7 +1034,7 @@ export async function createCanonicalRecords(
     const releaseFields = {
       format: args.release.format,
       binding: args.release.binding,
-      language: args.release.language ?? "en",
+      language: args.release.language ?? IMPORT_LANGUAGE,
       isbn13: args.release.isbn13,
       isbn10: args.release.isbn10,
       pubDate: args.release.pubDate,
@@ -1028,11 +1125,11 @@ export async function createReleaseBundle(
     await ctx.db.patch(args.observation._id, {
       recordRef: { type: "releaseBundle", id: existing._id },
     });
-    const members =
-      existing.status === "active" && !existing.locked
-        ? await addLateBundleMembers(ctx, existing, args)
-        : 0;
-    return { bundleId: existing._id, members, created: false };
+    const { expected } = await addLateBundleMembers(ctx, existing, {
+      ...args,
+      format: args.release.format,
+    });
+    return { bundleId: existing._id, members: expected, created: false };
   }
 
   const created: CreatedRecord[] = [];
@@ -1046,7 +1143,11 @@ export async function createReleaseBundle(
     });
   }
 
-  const members = await expectedBundleMembers(ctx, args, publisher.id);
+  const members = await expectedBundleMembers(
+    ctx,
+    { ...args, format: args.release.format },
+    publisher.id,
+  );
   const memberIds = members.map((member) => member.releaseId);
 
   const publicId = await allocatePublicId(ctx, "bundle");
@@ -1099,7 +1200,7 @@ export async function createReleaseBundle(
  */
 async function expectedBundleMembers(
   ctx: MutationCtx,
-  args: Pick<BundleArgs, "seriesId" | "labels" | "release">,
+  args: Pick<BundleMembersArgs, "seriesId" | "labels" | "format">,
   publisherId: Id<"publishers">,
 ): Promise<Array<{ releaseId: Id<"releases">; order: number }>> {
   const volumes = await ctx.db
@@ -1130,7 +1231,7 @@ async function expectedBundleMembers(
           .query("releases")
           .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
           .collect()
-      ).find((release) => release.status === "active" && release.format === args.release.format);
+      ).find((release) => release.status === "active" && release.format === args.format);
       if (member) {
         if (!members.some((m) => m.releaseId === member._id)) {
           members.push({ releaseId: member._id, order: i + 1 });
@@ -1142,18 +1243,33 @@ async function expectedBundleMembers(
   return members;
 }
 
+/** What reconciling a box's members needs: its covered Volumes, Format and citation. */
+export type BundleMembersArgs = Pick<
+  BundleArgs,
+  "sourceKey" | "observation" | "citation" | "importComment" | "seriesId" | "labels" | "now"
+> & { format: ReleasePayload["format"] };
+
 /**
  * Reconcile an existing bundle with the members its Volumes have now: add
  * the missing ones at their Volume's place and record the change as one
  * system-approved Proposal with a public Revision citing the source. Members
  * already present stay as they are (an Editor may have ordered or added
- * them); nothing is ever removed. Returns the expected members now linked.
+ * them); nothing is ever removed. A hidden, merged or locked bundle, or one
+ * whose members a human overrode, is left alone. `expected` counts the
+ * expected members linked afterwards, `added` the ones this call linked.
  */
 async function addLateBundleMembers(
   ctx: MutationCtx,
   bundle: Doc<"releaseBundles">,
-  args: BundleArgs,
-): Promise<number> {
+  args: BundleMembersArgs,
+): Promise<{ expected: number; added: number }> {
+  if (
+    bundle.status !== "active" ||
+    bundle.locked ||
+    bundle.overriddenFields?.includes("members")
+  ) {
+    return { expected: 0, added: 0 };
+  }
   const expected = await expectedBundleMembers(ctx, args, bundle.publisherId);
   const current = await ctx.db
     .query("bundleMemberships")
@@ -1161,7 +1277,7 @@ async function addLateBundleMembers(
     .collect();
   const linked = new Set<Id<"releases">>(current.map((row) => row.releaseId));
   const missing = expected.filter((member) => !linked.has(member.releaseId));
-  if (missing.length === 0) return expected.length;
+  if (missing.length === 0) return { expected: expected.length, added: 0 };
 
   for (const member of missing) {
     await ctx.db.insert("bundleMemberships", { bundleId: bundle._id, ...member });
@@ -1204,7 +1320,24 @@ async function addLateBundleMembers(
     comment: args.importComment,
     citation: args.citation,
   });
-  return expected.length;
+  return { expected: expected.length, added: missing.length };
+}
+
+/**
+ * Rung ① for a box set already placed as a Release Bundle: the bundle picks
+ * up members whose Releases arrived after it (`addLateBundleMembers`).
+ * Adapters call it for every linked box they see, unchanged snapshots and
+ * listings included, since members arrive through other records and never
+ * change the box's own. Returns how many members it added.
+ */
+export async function reconcileLinkedBundle(
+  ctx: MutationCtx,
+  bundleId: Id<"releaseBundles">,
+  args: BundleMembersArgs,
+): Promise<number> {
+  const bundle = await ctx.db.get(bundleId);
+  if (!bundle) return 0;
+  return (await addLateBundleMembers(ctx, bundle, args)).added;
 }
 
 /**
@@ -1253,7 +1386,9 @@ export type QueueArgs = {
  * The Edition Line reference for a queued packaging guess: the base Series'
  * active line of that name from this publisher when one exists (the
  * importer's ensureEditionLine rule), else a create op for it appended to
- * `ops`, whose temp-ID is returned.
+ * `ops`, whose temp-ID is returned. The op is `joinExisting`: two members of
+ * one new line queued before either is approved both carry it, and the one
+ * approved second joins the line the first created (lib/proposalCreates.ts).
  */
 async function queueEditionLine(
   ctx: MutationCtx,
@@ -1292,6 +1427,7 @@ async function queueEditionLine(
       seriesId: args.seriesId ?? "series",
       publisherSlug: args.publisherSlug,
       name: args.name,
+      joinExisting: true,
     },
   });
   return "edition-line";
@@ -1400,7 +1536,7 @@ export async function queueCreationProposal(
         editionId: "edition",
         format: args.release.format,
         binding: args.release.binding,
-        language: args.release.language ?? "en",
+        language: args.release.language ?? IMPORT_LANGUAGE,
         isbn13: args.release.isbn13,
         isbn10: args.release.isbn10,
         pubDate: args.release.pubDate,

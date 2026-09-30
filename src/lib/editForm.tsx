@@ -170,14 +170,20 @@ export function draftChanges<Base>(
   return { ok: true, changes };
 }
 
+/**
+ * The input(s) for one field. `disabled` locks them, e.g. while a save is in
+ * flight, so nothing typed then can be discarded when the save resets the form.
+ */
 export function FieldInput({
   field,
   values,
   setValue,
+  disabled = false,
 }: {
   field: FieldDescriptor & { value: unknown };
   values: FormState;
   setValue: (key: string, value: string) => void;
+  disabled?: boolean;
 }) {
   switch (field.kind) {
     case "textarea":
@@ -187,6 +193,7 @@ export function FieldInput({
           {field.label}
           <textarea
             value={values[field.name] ?? ""}
+            disabled={disabled}
             onChange={(event) => setValue(field.name, event.target.value)}
             rows={field.kind === "stringList" ? 3 : 4}
           />
@@ -199,6 +206,7 @@ export function FieldInput({
           {field.label}
           <select
             value={values[field.name] ?? ""}
+            disabled={disabled}
             onChange={(event) => setValue(field.name, event.target.value)}
           >
             {field.required ? null : <option value="">(not set)</option>}
@@ -220,6 +228,7 @@ export function FieldInput({
             <input
               inputMode="numeric"
               value={values[`${field.name}.year`] ?? ""}
+              disabled={disabled}
               onChange={(event) => setValue(`${field.name}.year`, event.target.value)}
             />
           </label>
@@ -228,6 +237,7 @@ export function FieldInput({
             <input
               inputMode="numeric"
               value={values[`${field.name}.month`] ?? ""}
+              disabled={disabled}
               onChange={(event) => setValue(`${field.name}.month`, event.target.value)}
             />
           </label>
@@ -236,6 +246,7 @@ export function FieldInput({
             <input
               inputMode="numeric"
               value={values[`${field.name}.day`] ?? ""}
+              disabled={disabled}
               onChange={(event) => setValue(`${field.name}.day`, event.target.value)}
             />
           </label>
@@ -254,6 +265,7 @@ export function FieldInput({
             <input
               inputMode="decimal"
               value={values[`${field.name}.amount`] ?? ""}
+              disabled={disabled}
               onChange={(event) => setValue(`${field.name}.amount`, event.target.value)}
             />
           </label>
@@ -261,6 +273,7 @@ export function FieldInput({
             Currency
             <input
               value={values[`${field.name}.currency`] ?? "USD"}
+              disabled={disabled}
               onChange={(event) =>
                 setValue(`${field.name}.currency`, event.target.value)
               }
@@ -274,6 +287,7 @@ export function FieldInput({
           {field.label}
           <input
             value={values[field.name] ?? ""}
+            disabled={disabled}
             onChange={(event) => setValue(field.name, event.target.value)}
           />
           {field.help ? <span className="field-help">{field.help}</span> : null}

@@ -42,6 +42,8 @@ import { getObservation, upsertObservation } from "./lib/observations";
 import {
   createCanonicalRecords,
   findPublisherByName,
+  IMPORT_LANGUAGE,
+  isbnHeldElsewhere,
   needsEditionLine,
   recordUnplaced,
   toPartialDate,
@@ -333,6 +335,11 @@ export const applyEdition = internalMutation({
         return { status: "recordOnly", changed: false };
       }
       if (!changed) return { status: "unchanged", changed: false };
+      // An ISBN another Release holds is that book's: none of the record's
+      // facts are filled onto this link; the pair stays on the observation.
+      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+        return { status: "recordOnly", changed: false, releaseId: release._id };
+      }
       const result = await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
         ref: { type: "release", id: release._id },
@@ -375,6 +382,8 @@ export const applyEdition = internalMutation({
       volumeLabel: packaged ? null : volumeLabel,
       multiVolume: packaged,
       format: snapshot.format,
+      binding: snapshot.binding,
+      language: IMPORT_LANGUAGE,
       isbn13: snapshot.isbn13,
       publisherId: publisher?._id ?? null,
     };
@@ -433,10 +442,10 @@ export const applyEdition = internalMutation({
     if (!volume) return { status: "recordOnly", changed: false };
 
     // One OpenLibrary leaf per (Volume, publisher, format): the ladder
-    // already linked a same-format sibling without an ISBN, so one found
-    // here carries ANOTHER ISBN — a reprint, a library binding, or an OL
-    // duplicate. Never a second Release; the record stays on its
-    // observation.
+    // already linked a same-format sibling without an ISBN unless its known
+    // Binding differs, so one found here carries ANOTHER ISBN or Binding — a
+    // reprint, a library binding, a hardcover, or an OL duplicate. Never a
+    // second Release; the record stays on its observation.
     const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
     if (sibling) {
       await recordUnplaced(
