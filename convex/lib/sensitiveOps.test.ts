@@ -571,6 +571,79 @@ describe("merge — cross-Series moves keep Tracking Visibility", () => {
     });
   });
 
+  /** The Series dave's pass on a Release is filed under. */
+  const passSeries = (t: T, releaseId: Id<"releases">) =>
+    t.run(async (ctx) =>
+      (await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", releaseId)).unique())?.seriesId,
+    );
+
+  it("moves an active pass to the survivor's Series on a cross-Series Volume merge, and Split takes it back", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await privateLoser(t, f, "reading");
+    await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
+    expect(await shared(t)).toEqual(NOTHING);
+
+    await volumeMerge(t, f);
+    expect(await passSeries(t, f.loser.releaseId)).toBe(f.survivor.seriesId);
+    expect(await shared(t)).toEqual(NOTHING);
+
+    await splitAs(t, { type: "volume", id: f.loser.volumeId });
+    expect(await passSeries(t, f.loser.releaseId)).toBe(f.loser.seriesId);
+    expect(await shared(t)).toEqual(NOTHING);
+    expect(await stateOf(t, f, f.survivor.seriesId)).toMatchObject({ readingVisibility: "private" });
+  });
+
+  it("files a pass started after a cross-Series Volume merge under the loser on Split", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await privateLoser(t, f, "reading");
+    await volumeMerge(t, f);
+    await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
+    expect(await passSeries(t, f.loser.releaseId)).toBe(f.survivor.seriesId);
+    // Started under the public survivor, the pass shows; Split takes it back
+    // to the loser's private Reading.
+    expect((await shared(t)).reading.map((row) => row.title)).toEqual(["Alpha"]);
+
+    await splitAs(t, { type: "volume", id: f.loser.volumeId });
+    expect(await passSeries(t, f.loser.releaseId)).toBe(f.loser.seriesId);
+    expect(await shared(t)).toEqual(NOTHING);
+  });
+
+  it("moves an active pass with its Release's Series on a cross-Series Edition merge, and Split takes it back", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await privateLoser(t, f, "reading");
+    await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
+    const loserEdition = await editionOf(t, f.loser.releaseId);
+
+    await mergeAs(t, { type: "edition", id: await editionOf(t, f.survivor.releaseId) }, { type: "edition", id: loserEdition });
+    expect(await passSeries(t, f.loser.releaseId)).toBe(f.survivor.seriesId);
+    expect(await shared(t)).toEqual(NOTHING);
+
+    await splitAs(t, { type: "edition", id: loserEdition });
+    expect(await passSeries(t, f.loser.releaseId)).toBe(f.loser.seriesId);
+    expect(await shared(t)).toEqual(NOTHING);
+  });
+
+  it("moves an Unmapped Packaging pass with its Edition Line across Series, and Split takes it back", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await privateLoser(t, f, "reading");
+    const packaging = await bareEdition(t, 54, f.loser.seriesId);
+    const target = await bareEdition(t, 55, f.survivor.seriesId);
+    await asReader(t).mutation(api.reading.startPass, { releaseId: packaging.releaseId });
+    expect(await passSeries(t, packaging.releaseId)).toBe(f.loser.seriesId);
+
+    await mergeAs(t, { type: "editionLine", id: target.editionLineId! }, { type: "editionLine", id: packaging.editionLineId! });
+    expect(await passSeries(t, packaging.releaseId)).toBe(f.survivor.seriesId);
+    expect(await shared(t)).toEqual(NOTHING);
+
+    await splitAs(t, { type: "editionLine", id: packaging.editionLineId! });
+    expect(await passSeries(t, packaging.releaseId)).toBe(f.loser.seriesId);
+    expect(await shared(t)).toEqual(NOTHING);
+  });
+
   it("keeps a moved omnibus Rating private on an Edition merge across Series", async () => {
     const t = makeT();
     const f = await setup(t);

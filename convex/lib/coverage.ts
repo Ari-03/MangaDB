@@ -40,7 +40,8 @@
 // Plain "Omnibus" / "Deluxe" with no stated size and no blurb range stays
 // unknown too: guessing a size would map books onto the wrong Volumes.
 
-import { canonicalLabel, type CoverRange, type Packaging } from "./bookTitle";
+// Type-only: bookTitle.ts reads its title statements through coverageFromText.
+import type { CoverRange, Packaging } from "./bookTitle";
 import { decodeEntities } from "./text";
 
 /** Largest sensible volume number in a coverage statement. */
@@ -102,7 +103,7 @@ const WEAK_JOIN = /[/;]/;
 // The join before an item that carries its own marker: "and volume 4", "& #4".
 const MARKED = new RegExp(String.raw`(?:\b${VOL}|#)\s*#?$`, "i");
 // "volume 4's bonus chapter": the item names what the Volume holds.
-const POSSESSIVE = /^['’]s\b/;
+const POSSESSIVE = /^['’]s\b/i;
 // A Volume the sentence names past the list with its own marker.
 const NAMED = new RegExp(String.raw`\b${VOL}\s*#?(\d{1,3})`, "gi");
 
@@ -138,7 +139,7 @@ type Listed = { kind: "stated" | "opening" | "mention"; found: Readings; broken:
 function range(from: number, to: number): CoverRange | null {
   const whole = Number.isInteger(from) && Number.isInteger(to);
   if (!(whole && from >= 1 && to >= from && to <= MAX_VOLUME && to - from < 50)) return null;
-  return { from: canonicalLabel(String(from)), to: canonicalLabel(String(to)) };
+  return { from: String(from), to: String(to) };
 }
 
 /**
@@ -267,7 +268,12 @@ function blurbCoverage(text: string | undefined, size: CoverRange | null): Cover
   return undefined;
 }
 
-/** The Volumes a blurb says the book collects, read with no line size to settle it. */
+/**
+ * The Volumes a blurb says the book collects, read with no line size to
+ * settle it. It also reads a title's own statement ("Collects Vols. 1-3
+ * plus 4-6 and 7-9 in one book", lib/bookTitle.ts) so a title and a blurb
+ * never read one sentence two ways.
+ */
 export function coverageFromText(text: string | undefined): CoverRange | null {
   return blurbCoverage(text, null) ?? null;
 }

@@ -303,8 +303,25 @@ async function editionSeriesIds(
 }
 
 /**
+ * The Series a pass on a Release with these `seriesIds` is filed under: the
+ * first, merge-followed (reading.ts passSeriesId); none without coverage.
+ */
+async function passSeriesOf(
+  ctx: MutationCtx,
+  seriesIds: Id<"series">[],
+): Promise<Id<"series"> | undefined> {
+  const first = seriesIds[0];
+  if (!first) return undefined;
+  return (await followMerges(ctx, "series", await ctx.db.get(first)))?._id ?? first;
+}
+
+/**
  * Recompute the release denorms (`seriesIds`, `publisherId` — spec §8) for
- * every release of one Edition from its current coverage, logging changes.
+ * every release of one Edition from its current coverage, and file each
+ * Release's passes under its first Series (passSeriesOf), logging changes.
+ * Every operation that re-derives a Release's Series runs through here (a
+ * merge logging to its manifest, Split to a scratch log), so a pass is
+ * never left under the Series its Release left, and Split takes it back.
  */
 async function recomputeReleaseDenorms(
   ctx: MutationCtx,
@@ -314,6 +331,7 @@ async function recomputeReleaseDenorms(
   const edition = await ctx.db.get(editionId);
   if (!edition) return;
   const seriesIds = await editionSeriesIds(ctx, edition);
+  const passSeriesId = await passSeriesOf(ctx, seriesIds);
   const releases = await ctx.db
     .query("releases")
     .withIndex("by_edition", (q) => q.eq("editionId", editionId))
@@ -323,6 +341,14 @@ async function recomputeReleaseDenorms(
       seriesIds,
       publisherId: edition.publisherId,
     });
+    if (!passSeriesId) continue;
+    const passes = await ctx.db
+      .query("releaseProgress")
+      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+      .collect();
+    for (const pass of passes) {
+      await repoint(ctx, log, "releaseProgress", pass, { seriesId: passSeriesId });
+    }
   }
 }
 
@@ -1607,13 +1633,10 @@ async function transferReferences(
       }
 
       // A moved pass takes the survivor's Series denorm the way startPass
-      // derives it (reading.ts passSeriesId: the first covered Series,
-      // merge-resolved), so a cross-Series merge files it under the right
-      // work. A survivor without coverage leaves the pass's Series alone.
-      const firstSeriesId = (survivorDoc as Doc<"releases">).seriesIds[0];
-      const passSeriesId = firstSeriesId
-        ? ((await followMerges(ctx, "series", await ctx.db.get(firstSeriesId)))?._id ?? firstSeriesId)
-        : undefined;
+      // derives it (passSeriesOf: the first covered Series, merge-resolved),
+      // so a cross-Series merge files it under the right work. A survivor
+      // without coverage leaves the pass's Series alone.
+      const passSeriesId = await passSeriesOf(ctx, (survivorDoc as Doc<"releases">).seriesIds);
       const passSeries = passSeriesId ? { seriesId: passSeriesId } : {};
       const progress = await ctx.db
         .query("releaseProgress")
@@ -2111,8 +2134,9 @@ async function keepSplitVisibility(
  * and reactivate the loser. References the world re-aimed since the merge
  * are left alone, and personal rows of a deleted User are never reinserted.
  * The touched Editions' Release Series are then derived afresh from the
- * coverage and lines the replay left (recomputeReleaseDenorms), so a
- * replayed value never outlives the links it was derived from.
+ * coverage and lines the replay left, and their passes filed under them
+ * (recomputeReleaseDenorms), so a replayed value never outlives the links
+ * it was derived from.
  * No profile shows anything after a Split that it did not show just before
  * (keepSplitVisibility), for every User tracking what the Split touches
  * (splitScope: the loser, what the manifests moved, and everything under
@@ -2185,8 +2209,9 @@ export async function applySplit(
   }
 
   await ctx.db.patch(ref.id, { status: "active", mergedIntoId: undefined } as never);
-  // Release Series are derived from the links just restored; like every
-  // write a Split makes, the re-derivation is final (a scratch log).
+  // Release Series, and the Series their passes are filed under, are derived
+  // from the links just restored; like every write a Split makes, the
+  // re-derivation is final (a scratch log).
   const derived: TransferLog = { repointed: [], removed: [], inserted: [] };
   for (const editionId of governed.records.editions) await recomputeReleaseDenorms(ctx, derived, editionId);
   await keepSplitVisibility(ctx, governed);

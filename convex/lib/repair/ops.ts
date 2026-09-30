@@ -608,7 +608,8 @@ async function mergeSeries(
 /**
  * Place one loser Volume in the survivor: merge it into the survivor's
  * Volume the plan names (or the one with the same label; the Volume merge
- * leaves the passes on its Editions to followVolume), else move it across
+ * files the passes on its Editions itself, in the manifest Split reverses,
+ * and followVolume only heals rows an earlier run left), else move it across
  * with its label, at position = its number, carrying its trackers'
  * Tracking Visibility and re-filing their rows (carryingTracking; the
  * Series merge that follows may wait for stage 4).

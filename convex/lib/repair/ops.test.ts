@@ -990,6 +990,92 @@ describe("other repairs that move tracking between Series", () => {
     expect(await profileOf(t, "dave")).toEqual({ owned: 0, reading: [] });
   });
 
+  // A public Split of the Volume merge a placement made reverses the pass it
+  // moved: the Volume merge files the pass in its own manifest, never on the
+  // repair's trail, and Split re-files passes from the coverage it restores.
+  describe("Split of a placement's Volume merge", () => {
+    const asAdmin = (t: T) => t.withIdentity({ subject: "admin" });
+    const splitPlacement = (t: T, s: Awaited<ReturnType<typeof seedMover>>) =>
+      asAdmin(t).mutation(api.sensitiveOps.splitRecord, {
+        ref: { type: "volume", id: s.unlabeled },
+        reason: "wrong placement",
+        confirmImpact: true,
+      });
+    const placeIntoElse = async (t: T, s: Awaited<ReturnType<typeof seedMover>>) =>
+      expect((await run(t, [await waitingMerge(t, s, { label: "1", intoVolumeId: s.elseVol })]))[0]?.status).toBe("deferred");
+    const b1Pass = (t: T, s: Awaited<ReturnType<typeof seedMover>>) =>
+      t.run(async (ctx) => await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId)).unique());
+
+    it("Split reverses a waiting merge's placement into an existing Volume, passes included", async () => {
+      const t = makeT();
+      const s = await seedMover(t);
+      await placeIntoElse(t, s);
+      await splitPlacement(t, s);
+      const { volume, release, trails, manifest } = await t.run(async (ctx) => ({
+        volume: await ctx.db.get(s.unlabeled),
+        release: await ctx.db.get(s.b1.releaseId),
+        trails: (await ctx.db.query("repairTrails").collect()).flatMap((trail) => trail.rows),
+        manifest: await ctx.db
+          .query("mergeManifests")
+          .withIndex("by_loser", (q) => q.eq("loserRef.type", "volume").eq("loserRef.id", s.unlabeled))
+          .unique(),
+      }));
+      expect(volume?.status).toBe("active");
+      expect(release?.seriesIds).toEqual([s.source]);
+      expect((await personalSeries(t, s)).b1Pass).toBe(s.source);
+      expect((await passTitles(t))[s.b1.releaseId]).toBe("Doubt!!");
+      expect((await profileOf(t, "dave")).reading).toEqual([]);
+      expect(trails.filter((row) => row.table === "releaseProgress")).toEqual([]);
+      expect(manifest?.repointed).toContainEqual(
+        expect.objectContaining({ table: "releaseProgress", field: "seriesId", before: s.source, after: s.else }),
+      );
+    });
+
+    it("a pass edit after the placement survives the Split", async () => {
+      const t = makeT();
+      const s = await seedMover(t);
+      await placeIntoElse(t, s);
+      await asReader(t).mutation(api.reading.setPassPercent, { releaseId: s.b1.releaseId, percent: 55 });
+      await splitPlacement(t, s);
+      expect(await b1Pass(t, s)).toMatchObject({ seriesId: s.source, percent: 55 });
+      const reading = await asReader(t).query(api.reading.myReading, {});
+      const row = reading?.series.find((series) => series.passes.some((pass) => pass.releaseId === s.b1.releaseId));
+      expect(row?.title).toBe("Doubt!!");
+      expect(row?.passes.find((pass) => pass.releaseId === s.b1.releaseId)).toMatchObject({ percent: 55 });
+    });
+
+    it("a later setCoverage is not undone by the Split of the placement", async () => {
+      const t = makeT();
+      const s = await seedMover(t);
+      await placeIntoElse(t, s);
+      const gamma = await t.run(async (ctx) => {
+        const id = await ctx.db.insert("series", { status: "active", publicId: 700, title: "Gamma", altTitles: [], searchText: "Gamma" });
+        await ctx.db.insert("volumes", { status: "active", publicId: 701, seriesId: id, label: "1", position: 1 });
+        return id;
+      });
+      const cover: RepairEntry = {
+        kind: "setCoverage",
+        key: "cover-gamma",
+        reason: "belongs to Gamma",
+        editionId: s.b1.editionId,
+        before: [s.elseVol],
+        coverage: [{ seriesId: gamma, label: "1", extent: "complete" }],
+        line: null,
+        retireVolumeIds: [],
+      };
+      expect((await run(t, [cover]))[0]?.status).toBe("applied");
+      expect((await personalSeries(t, s)).b1Pass).toBe(gamma);
+      await splitPlacement(t, s);
+      const { volume, release } = await t.run(async (ctx) => ({
+        volume: await ctx.db.get(s.unlabeled),
+        release: await ctx.db.get(s.b1.releaseId),
+      }));
+      expect(volume?.status).toBe("active");
+      expect(release?.seriesIds).toEqual([gamma]);
+      expect((await personalSeries(t, s)).b1Pass).toBe(gamma);
+    });
+  });
+
   it("files every group's passes under the Series remodelEdition moves an Edition to (B10)", async () => {
     const t = makeT();
     const s = await seedMover(t);

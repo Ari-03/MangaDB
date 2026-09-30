@@ -711,11 +711,15 @@ describe("parseBookTitle — packaging", () => {
       "Alpha Deluxe Edition 1 (Collecting Vol. 1 and 2 bonus stories)",
       "Alpha Deluxe Edition 1 (Collecting Vols. 1-3 and 4 bonus stories)",
       "Alpha Deluxe Edition 1 (Collecting Vols. 1-3, 4 bonus stories)",
-      "Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 4)",
       "Alpha 3-in-1 Edition 1 (Includes Vol. 1 + 3)",
     ]) {
       expect(packaging(title).packaging, title).toMatchObject({ coverRange: null, coverageGapped: true });
     }
+    // A bare number after a join is read when the statement ends after it,
+    // as in a blurb ("Collects volumes 1-3 plus 4").
+    const plus4 = packaging("Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 4)").packaging;
+    expect(plus4?.coverRange).toEqual({ from: "1", to: "4" });
+    expect(plus4?.coverageGapped).toBeUndefined();
   });
 
   // W02: a marked item or a range joined past the designation ("plus Vol. 2",
@@ -729,7 +733,6 @@ describe("parseBookTitle — packaging", () => {
       ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vols. 4-6)", { from: "1", to: "6" }],
       ["Alpha Deluxe Edition 1 (Collects Vol. 1 as well as Vol. 2)", { from: "1", to: "2" }],
       ["Alpha Deluxe Edition 1 (Collects Vol. 1 along with Vol. 2 and a bonus chapter)", { from: "1", to: "2" }],
-      ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)", { from: "1", to: "3" }],
       ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus #4)", { from: "1", to: "4" }],
       ["Alpha Deluxe Edition 1 (Collects Vols. 1-3, plus 4-6 in one book)", { from: "1", to: "6" }],
       ["Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2 plus Vol. 3)", { from: "1", to: "3" }],
@@ -749,7 +752,43 @@ describe("parseBookTitle — packaging", () => {
       "Alpha Deluxe Edition 1 (Collects Vol. 1 along with Vol. 2 and 16 pages of art)",
       // A half Volume is read whole, never cut to Volume 4: no range holds it.
       "Alpha Deluxe Edition 1 (Collects Vol. 3 plus Vol. 4.5)",
+      // A possessive names what Volume 4 holds: it may or may not be
+      // collected, and a title has no size to settle it. Never shortened.
+      "Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)",
     ]) {
+      expect(packaging(title).packaging, title).toMatchObject({ coverRange: null, coverageGapped: true });
+    }
+  });
+
+  // N01: a title statement is read by the blurb grammar, so ordinary list
+  // continuations after a joined range ("plus 4-6 and 7-9") are read, a gap
+  // blocks, and a list that reads two ways stays unknown, never shortened.
+  it("reads ordinary list continuations after a joined range as the blurb grammar does", () => {
+    const read: Array<[string, { from: string; to: string }]> = [
+      ["plus 4-6 and 7-9 in one book", { from: "1", to: "9" }],
+      ["plus 4-6, 7-9 in one book", { from: "1", to: "9" }],
+      ["plus 4-6 & 7-9 in one book", { from: "1", to: "9" }],
+      ["plus 4-6 and Vol. 7-9 in one book", { from: "1", to: "9" }],
+      ["plus 4-6 and 7-9", { from: "1", to: "9" }],
+      ["plus 4-6 and 7", { from: "1", to: "7" }],
+    ];
+    for (const [tail, coverRange] of read) {
+      const title = `Alpha Deluxe Edition 1 (Collects Vols. 1-3 ${tail})`;
+      const found = packaging(title).packaging;
+      expect(found?.coverRange, title).toEqual(coverRange);
+      expect(found?.coverageGapped, title).toBeUndefined();
+    }
+    for (const tail of [
+      "plus 4-6 and 8-9 in one book",
+      "plus 4-6 and 8-9",
+      "plus 4-6 and 7 in one book",
+      "plus Vol. 4 and 5 bonus stories",
+      "plus Vol. 4, 5 and 6 in one book",
+      "plus Vol. 4's bonus chapter",
+      "plus Vol. 4’s bonus chapter",
+      "plus Vol. 4'S bonus chapter",
+    ]) {
+      const title = `Alpha Deluxe Edition 1 (Collects Vols. 1-3 ${tail})`;
       expect(packaging(title).packaging, title).toMatchObject({ coverRange: null, coverageGapped: true });
     }
   });

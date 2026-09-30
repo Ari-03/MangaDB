@@ -1978,6 +1978,31 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     expect(await syncFresh(title, flapcopy)).toEqual(expected);
   });
 
+  // N01: a title statement reads its list as a blurb does. Every item after
+  // a joined range is read and beats the size; a gap or a possessive blocks.
+  const ONE_TO_NINE = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+  it.each([
+    ["Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 4-6 and 7-9 in one book)", onlyCovering(ONE_TO_NINE)],
+    ["Alpha 3-in-1 Edition 1 (Collecting Vols. 1-3 plus 4-6 and 7-9 in one book)", onlyCovering(ONE_TO_NINE)],
+    ["Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 4-6 and 8-9 in one book)", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition 1 (Collecting Vols. 1-3 plus 4-6 and 8-9 in one book)", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 4)", onlyCovering(["1", "2", "3", "4"])],
+  ])("a title statement continuing past a joined range (%s) is read whole or not at all", async (title, expected) => {
+    expect(await syncFresh(title)).toEqual(expected);
+  });
+
+  // N02: an uppercase possessive still reads two ways: the 3-in-1 size
+  // settles it to 1–3, and a Deluxe with no size stays Unmapped.
+  it.each([
+    ["Alpha Deluxe Edition 1", "<p>COLLECTS VOLUMES 1-3 AND VOLUME 4'S BONUS CHAPTER.</p>", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition 1", "<p>COLLECTS VOLUMES 1-3 AND VOLUME 4’S BONUS CHAPTER.</p>", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition 1", "<p>COLLECTS VOLUMES 1-3 AND VOLUME 4'S BONUS CHAPTER.</p>", onlyCovering(["1", "2", "3"])],
+    ["Alpha 3-in-1 Edition 1", "<p>COLLECTS VOLUMES 1-3 AND VOLUME 4’S BONUS CHAPTER.</p>", onlyCovering(["1", "2", "3"])],
+  ])("an uppercase possessive places %s by the size or not at all (%s)", async (title, flapcopy, expected) => {
+    expect(await syncFresh(title, flapcopy)).toEqual(expected);
+  });
+
   // W05: "Negima!" is the Series' name, not a sentence end. The verb governs
   // 37–38, which the 3-in-1 size at position 13 (37–39) contradicts: no
   // Volume 39 is invented. With no size the statement places the book.

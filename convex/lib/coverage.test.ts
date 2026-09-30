@@ -510,6 +510,24 @@ describe("coverage — marked items, joined ranges, and a Series title's own pun
     }
   });
 
+  // N02: the possessive reads two ways in any case. Uppercase copy ("VOLUME
+  // 4'S") keeps the ambiguity, with a straight, curly, or encoded apostrophe.
+  it("reads a possessive after the last item two ways in any letter case", () => {
+    for (const blurb of [
+      "COLLECTS VOLUMES 1-3 AND VOLUME 4'S BONUS CHAPTER.",
+      "COLLECTS VOLUMES 1-3 AND VOLUME 4’S BONUS CHAPTER.",
+      "COLLECTS VOLUMES 1-3 AND VOLUME 4&#8217;S BONUS CHAPTER.",
+      "COLLECTS VOLUMES 1-3 PLUS VOLUME 4'S BONUS CHAPTER.",
+      "COLLECTS VOLUMES 1-3 AND #4'S BONUS CHAPTER.",
+      "COLLECTS VOLUMES 1-3 AND 4'S BONUS CHAPTER.",
+      "Collects volumes 1-3 and volume 4'S bonus chapter.",
+    ]) {
+      expect(coverageFromText(blurb), blurb).toBeNull();
+      expect(inferCoverage(threeIn1, [blurb]), blurb).toEqual({ from: "1", to: "3" });
+      expect(inferCoverage(deluxe, [blurb]), blurb).toBeNull();
+    }
+  });
+
   // W04: a range joined by "plus", "+", "as well as", or "along with" is
   // read whatever copy follows it: a gap blocks, a contiguous one widens.
   it("reads a joined range before the copy that follows it", () => {
