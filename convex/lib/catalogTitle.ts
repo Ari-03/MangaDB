@@ -19,6 +19,7 @@ import { candidateSeries, matchRelease, type ReleaseFact } from "./matching";
 import { upsertObservation } from "./observations";
 import {
   alreadyHandled,
+  type BundleReconcile,
   createCanonicalRecords,
   createReleaseBundle,
   creationGates,
@@ -187,7 +188,8 @@ function coveredLabels(snapshot: CatalogTitle, volumeLabel: string | null): stri
  * reconcileLinkedBundle), from the box's snapshot alone — so a planner that
  * skips re-reading a fresh box can still pass its stored snapshot. The base
  * Series is the one active Series the title names. Returns how many members
- * it added; 0 when the observation links no bundle.
+ * it added (none when the observation links no bundle), or the `conflict`
+ * when the box now names another Series or Format than its bundle's.
  */
 export async function reconcileCatalogBox(
   ctx: MutationCtx,
@@ -199,12 +201,12 @@ export async function reconcileCatalogBox(
     snapshot: CatalogTitle;
     now: number;
   },
-): Promise<number> {
+): Promise<BundleReconcile> {
   const { observation, snapshot } = args;
-  if (observation.recordRef?.type !== "releaseBundle" || !snapshot.packaging) return 0;
+  if (observation.recordRef?.type !== "releaseBundle" || !snapshot.packaging) return { added: 0 };
   const { volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
   const labels = coveredLabels(snapshot, volumeLabel);
-  if (candidates.length !== 1 || labels.length === 0) return 0;
+  if (candidates.length !== 1 || labels.length === 0) return { added: 0 };
   return await reconcileLinkedBundle(ctx, observation.recordRef.id, {
     sourceKey: args.sourceKey,
     observation,
@@ -287,9 +289,10 @@ export async function applyCatalogTitle(
 
   // A box set already placed as a Release Bundle: its only reconcile is the
   // members that arrived after it, changed record or not (they arrive
-  // through other records, never through the box's own).
+  // through other records, never through the box's own). A box now naming
+  // another Series or Format goes to review instead.
   if (observation.recordRef?.type === "releaseBundle") {
-    const added = await reconcileCatalogBox(ctx, {
+    const { added, conflict } = await reconcileCatalogBox(ctx, {
       sourceKey: opts.sourceKey,
       importComment: opts.importComment,
       citation,
@@ -297,6 +300,7 @@ export async function applyCatalogTitle(
       snapshot,
       now,
     });
+    if (conflict !== undefined) return { status: "needsReview", changed: false, reason: conflict };
     if (added > 0) return { status: "updated", changed: true };
     return { status: changed ? "recordOnly" : "unchanged", changed: false };
   }
@@ -358,6 +362,9 @@ export async function applyCatalogTitle(
       tagBootstrapUnreviewed: true,
       now,
     });
+    if (bundle.conflict !== undefined) {
+      return { status: "needsReview", changed: true, reason: bundle.conflict };
+    }
     return { status: bundle.created ? "created" : "linked", changed: true };
   }
 

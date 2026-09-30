@@ -65,6 +65,7 @@ import {
   recordUnplaced,
   toPartialDate,
   linkSeriesObservation,
+  type BundleReconcile,
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
 import {
@@ -202,6 +203,7 @@ export const sync = internalAction({
             if (!isMangaBook({ title: listing.title })) continue;
             seen++;
             if (!note.needsDetail && note.replay === undefined) {
+              if (note.review !== undefined) errors.push(`review ${listing.slug}: ${note.review}`);
               // An unchanged book whose art never landed (a failed download
               // after its apply committed): retry just the art, paced by its
               // own budget so it never starves book-page fetches.
@@ -333,7 +335,8 @@ export const sync = internalAction({
  * the linked Release still lacks from the snapshot's cover URL (a download
  * that failed after the book applied), for the action to retry without the
  * page, and `replay` is a stored snapshot for the action to apply again
- * without the page (an unplaced book an older planner judged).
+ * without the page (an unplaced book an older planner judged). `review` is
+ * why a linked box its stored snapshot could not fill went to review.
  */
 export const noteListing = internalMutation({
   args: {
@@ -346,7 +349,12 @@ export const noteListing = internalMutation({
   handler: async (
     ctx,
     { sourceRecordId, modifiedGmt, force, offersBlurb },
-  ): Promise<{ needsDetail: boolean; cover?: CoverRequest; replay?: BookSnapshot }> => {
+  ): Promise<{
+    needsDetail: boolean;
+    cover?: CoverRequest;
+    replay?: BookSnapshot;
+    review?: string;
+  }> => {
     const found = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
     if (!found) return { needsDetail: true };
     const obs = await markSeen(ctx, found, Date.now());
@@ -358,8 +366,15 @@ export const noteListing = internalMutation({
     // A linked box's members arrive through other books, never through its
     // own page: the stored snapshot places them without a detail fetch.
     if (obs.recordRef?.type === "releaseBundle") {
-      await reconcileBoxMembers(ctx, obs, obs.snapshot as BookSnapshot, Date.now());
-      return { needsDetail: false };
+      const { conflict } = await reconcileBoxMembers(
+        ctx,
+        obs,
+        obs.snapshot as BookSnapshot,
+        Date.now(),
+      );
+      return conflict === undefined
+        ? { needsDetail: false }
+        : { needsDetail: false, review: conflict };
     }
     // Packaging an older planner left unplaced (B19) is replayed from its
     // stored snapshot: the page is unchanged, only the verdict is stale. The
@@ -503,21 +518,22 @@ function coveredLabels(snapshot: BookSnapshot): string[] {
  * A linked box set picks up the members whose books arrived after it
  * (lib/pipeline.ts reconcileLinkedBundle), from its snapshot alone: the base
  * Series is the source's series link, else the one Series of that title.
- * Returns how many members it added.
+ * Returns how many members it added, or the `conflict` when that Series is
+ * not the bundle's own (a repointed series link goes to review).
  */
 async function reconcileBoxMembers(
   ctx: MutationCtx,
   observation: Doc<"sourceObservations">,
   snapshot: BookSnapshot,
   now: number,
-): Promise<number> {
-  if (observation.recordRef?.type !== "releaseBundle" || !snapshot.packaging) return 0;
+): Promise<BundleReconcile> {
+  if (observation.recordRef?.type !== "releaseBundle" || !snapshot.packaging) return { added: 0 };
   const labels = coveredLabels(snapshot);
-  if (labels.length === 0) return 0;
+  if (labels.length === 0) return { added: 0 };
   let seriesId = await linkedSeriesId(ctx, SOURCE_KEY, snapshot.seriesSlug);
   if (seriesId === null) {
     const candidates = await candidateSeries(ctx, snapshot.seriesTitle);
-    if (candidates.length !== 1) return 0;
+    if (candidates.length !== 1) return { added: 0 };
     seriesId = candidates[0]!._id;
   }
   const source = await getSourceByKey(ctx, SOURCE_KEY);
@@ -604,11 +620,14 @@ export const applyBook = internalMutation({
     }
 
     // A box set already placed as a Release Bundle: its only reconcile is
-    // the members that arrived after it, changed snapshot or not.
+    // the members that arrived after it, changed snapshot or not. A box now
+    // listed under another Series goes to review instead.
     if (observation.recordRef?.type === "releaseBundle") {
-      if ((await reconcileBoxMembers(ctx, observation, snapshot, now)) > 0) {
-        return { status: "updated", changed: true };
+      const { added, conflict } = await reconcileBoxMembers(ctx, observation, snapshot, now);
+      if (conflict !== undefined) {
+        return { status: "needsReview", changed: false, reason: conflict };
       }
+      if (added > 0) return { status: "updated", changed: true };
       return { status: changed ? "recordOnly" : "unchanged", changed: false };
     }
 
@@ -726,6 +745,9 @@ export const applyBook = internalMutation({
         tagBootstrapUnreviewed: true,
         now,
       });
+      if (bundle.conflict !== undefined) {
+        return { status: "needsReview", changed: true, reason: bundle.conflict };
+      }
       return { status: bundle.created ? "created" : "linked", changed: true };
     }
 

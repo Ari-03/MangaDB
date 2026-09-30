@@ -1103,7 +1103,9 @@ export type BundleArgs = {
  * Format, ordered by the box's own Volume sequence. A box set is never a
  * Release, a Volume, or a Series. Idempotent by ISBN-13: an existing bundle
  * links instead, and picks up members whose Releases arrived after it (a
- * box imported before its books) with one importer-authored Revision.
+ * box imported before its books) with one importer-authored Revision —
+ * unless the box names another Series or Format than the bundle's own
+ * (`conflict`, left on the observation for review; `addLateBundleMembers`).
  * `members` counts the bundle's members from `labels` after the call.
  */
 export async function createReleaseBundle(
@@ -1113,6 +1115,7 @@ export async function createReleaseBundle(
   bundleId: Id<"releaseBundles">;
   members: number;
   created: boolean;
+  conflict?: string;
 }> {
   const existing =
     args.release.isbn13 !== undefined
@@ -1125,11 +1128,11 @@ export async function createReleaseBundle(
     await ctx.db.patch(args.observation._id, {
       recordRef: { type: "releaseBundle", id: existing._id },
     });
-    const { expected } = await addLateBundleMembers(ctx, existing, {
+    const { expected, conflict } = await addLateBundleMembers(ctx, existing, {
       ...args,
       format: args.release.format,
     });
-    return { bundleId: existing._id, members: expected, created: false };
+    return { bundleId: existing._id, members: expected, created: false, conflict };
   }
 
   const created: CreatedRecord[] = [];
@@ -1196,7 +1199,8 @@ export async function createReleaseBundle(
  * The member Releases a box's covered Volumes have today: for each label,
  * the publisher's active single-Volume Release of that Volume in the box's
  * Format, outside any Edition Line. `order` is the label's place in the box
- * (1-based), so members that arrive late still sort by Volume.
+ * (1-based), so members that arrive late still sort by Volume
+ * (`addLateBundleMembers` renumbers generated orders to match).
  */
 async function expectedBundleMembers(
   ctx: MutationCtx,
@@ -1250,19 +1254,62 @@ export type BundleMembersArgs = Pick<
 > & { format: ReleasePayload["format"] };
 
 /**
+ * Why a box cannot fill this bundle, or null when it can: the box must name
+ * the bundle's own Format and the one Series its members already belong to
+ * (merged members answer through their survivor; hidden ones still count).
+ * A bundle with no members yet has no Series to keep (a box imported before
+ * its books); one whose members span two Series never auto-fills.
+ */
+async function bundleIdentityConflict(
+  ctx: MutationCtx,
+  bundle: Doc<"releaseBundles">,
+  current: Array<Doc<"bundleMemberships">>,
+  args: Pick<BundleMembersArgs, "seriesId" | "format">,
+): Promise<string | null> {
+  if (bundle.format !== undefined && bundle.format !== args.format) {
+    return (
+      `Box set "${bundle.name}" is ${bundle.format}; the source now lists it as ` +
+      `${args.format} — Format conflict, an Editor reviews it.`
+    );
+  }
+  const seriesIds = new Set<Id<"series">>();
+  for (const row of current) {
+    const release = await survivorOf<"releases">(ctx, await ctx.db.get(row.releaseId));
+    for (const id of release?.seriesIds ?? []) seriesIds.add(id);
+  }
+  if (seriesIds.size === 0 || (seriesIds.size === 1 && seriesIds.has(args.seriesId))) {
+    return null;
+  }
+  const title = async (id: Id<"series">) => (await ctx.db.get(id))?.title ?? id;
+  const collected = (await Promise.all([...seriesIds].map(title))).join(", ");
+  return (
+    `Box set "${bundle.name}" collects ${collected}; the source now places it in ` +
+    `${await title(args.seriesId)} — Series conflict, an Editor reviews it.`
+  );
+}
+
+/**
  * Reconcile an existing bundle with the members its Volumes have now: add
  * the missing ones at their Volume's place and record the change as one
- * system-approved Proposal with a public Revision citing the source. Members
- * already present stay as they are (an Editor may have ordered or added
- * them); nothing is ever removed. A hidden, merged or locked bundle, or one
- * whose members a human overrode, is left alone. `expected` counts the
- * expected members linked afterwards, `added` the ones this call linked.
+ * system-approved Proposal with a public Revision citing the source.
+ * Nothing is ever removed. Only a box of the bundle's own canonical
+ * identity fills it (`bundleIdentityConflict`): another Series or Format
+ * adds nothing and leaves the conflict on the observation for review.
+ * Existing members keep their places when an Editor ordered them or added
+ * one outside the box's Volumes; when every member is the box's own and
+ * already in Volume order, their orders are the importer's (the original
+ * importer numbered them compactly over the books that existed) and are
+ * renumbered by Volume place, so late members never collide with them.
+ * `order` is a sort key, not part of the recorded `members` change. A
+ * hidden, merged or locked bundle, or one whose members a human overrode,
+ * is left alone. `expected` counts the expected members linked afterwards,
+ * `added` the ones this call linked.
  */
 async function addLateBundleMembers(
   ctx: MutationCtx,
   bundle: Doc<"releaseBundles">,
   args: BundleMembersArgs,
-): Promise<{ expected: number; added: number }> {
+): Promise<{ expected: number; added: number; conflict?: string }> {
   if (
     bundle.status !== "active" ||
     bundle.locked ||
@@ -1270,17 +1317,43 @@ async function addLateBundleMembers(
   ) {
     return { expected: 0, added: 0 };
   }
-  const expected = await expectedBundleMembers(ctx, args, bundle.publisherId);
+  // In page order: by `order`, then creation.
   const current = await ctx.db
     .query("bundleMemberships")
     .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
     .collect();
+  const conflict = await bundleIdentityConflict(ctx, bundle, current, args);
+  if (conflict !== null) {
+    const recorded = args.observation.conflicts?.some(
+      (c) => c.field === "placement" && c.reason === conflict,
+    );
+    if (!recorded) await recordUnplaced(ctx, args.observation, conflict, args.now);
+    return { expected: 0, added: 0, conflict };
+  }
+  const expected = await expectedBundleMembers(ctx, args, bundle.publisherId);
   const linked = new Set<Id<"releases">>(current.map((row) => row.releaseId));
   const missing = expected.filter((member) => !linked.has(member.releaseId));
   if (missing.length === 0) return { expected: expected.length, added: 0 };
 
-  for (const member of missing) {
-    await ctx.db.insert("bundleMemberships", { bundleId: bundle._id, ...member });
+  const place = new Map(expected.map((member) => [member.releaseId, member.order]));
+  const generated = current.every(
+    (row, i) =>
+      place.has(row.releaseId) &&
+      (i === 0 || place.get(current[i - 1]!.releaseId)! < place.get(row.releaseId)!),
+  );
+  if (generated) {
+    for (const row of current) {
+      const order = place.get(row.releaseId)!;
+      if (row.order !== order) await ctx.db.patch(row._id, { order });
+    }
+  }
+  const last = Math.max(0, ...current.map((row) => row.order));
+  for (const [i, member] of missing.entries()) {
+    await ctx.db.insert("bundleMemberships", {
+      bundleId: bundle._id,
+      releaseId: member.releaseId,
+      order: generated ? member.order : last + i + 1,
+    });
   }
   const ref = { type: "releaseBundle" as const, id: bundle._id };
   const latest = await ctx.db
@@ -1289,13 +1362,12 @@ async function addLateBundleMembers(
     .order("desc")
     .first();
   const before = current.map((row) => row.releaseId);
-  const changes = [
-    {
-      field: "members",
-      before,
-      after: [...before, ...missing.map((member) => member.releaseId)],
-    },
-  ];
+  const after = generated
+    ? [...current, ...missing]
+        .map((member) => member.releaseId)
+        .sort((a, b) => place.get(a)! - place.get(b)!)
+    : [...before, ...missing.map((member) => member.releaseId)];
+  const changes = [{ field: "members", before, after }];
   const author = { kind: "source" as const, sourceKey: args.sourceKey };
   const proposalId = await ctx.db.insert("proposals", {
     author,
@@ -1323,21 +1395,26 @@ async function addLateBundleMembers(
   return { expected: expected.length, added: missing.length };
 }
 
+/** What reconciling a linked box did: members added, or why it went to review. */
+export type BundleReconcile = { added: number; conflict?: string };
+
 /**
  * Rung ① for a box set already placed as a Release Bundle: the bundle picks
  * up members whose Releases arrived after it (`addLateBundleMembers`).
  * Adapters call it for every linked box they see, unchanged snapshots and
  * listings included, since members arrive through other records and never
- * change the box's own. Returns how many members it added.
+ * change the box's own. A box that names another Series or Format than the
+ * bundle's adds nothing and returns the `conflict` for the run to report.
  */
 export async function reconcileLinkedBundle(
   ctx: MutationCtx,
   bundleId: Id<"releaseBundles">,
   args: BundleMembersArgs,
-): Promise<number> {
+): Promise<BundleReconcile> {
   const bundle = await ctx.db.get(bundleId);
-  if (!bundle) return 0;
-  return (await addLateBundleMembers(ctx, bundle, args)).added;
+  if (!bundle) return { added: 0 };
+  const { added, conflict } = await addLateBundleMembers(ctx, bundle, args);
+  return conflict === undefined ? { added } : { added, conflict };
 }
 
 /**

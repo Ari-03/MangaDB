@@ -473,4 +473,80 @@ describe("joinBrowseRows cover fallback", () => {
     // with rows, plus one by-Volume scan for the bare Edition's fallback.
     expect(counts.volumeCoverages).toBe(3);
   });
+
+  // Review wave 2, Efficiency P3: the by-Volume scan was repeated per borrowing Edition.
+  it("scans a shared Volume's Coverage once for every Edition borrowing from it", async () => {
+    const t = convexTest(schema);
+    const { counts, rows } = await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "VIZ Media",
+        slug: "viz-media",
+      });
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "Tokyo Ghoul",
+        altTitles: [],
+        searchText: "Tokyo Ghoul",
+      });
+      const volumeId = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 1,
+        seriesId,
+        position: 1,
+        label: "1",
+      });
+      const edition = async (publicId: number, day: number, isbn13?: string) => {
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId,
+          publisherId,
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId,
+          order: 1,
+          extent: "complete",
+        });
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format: "physical",
+          language: "en",
+          isbn13,
+          pubDate: { year: 2026, month: 8, day, sort: 20260800 + day },
+          publisherId,
+          seriesIds: [seriesId],
+        });
+      };
+      // One donor Edition with an ISBN, twelve ISBN-less borrowers of the same Volume.
+      await edition(1, 1, "9780000000001");
+      for (let n = 2; n <= 13; n++) await edition(n, n);
+
+      const counts = new Map<string, number>();
+      const db = new Proxy(ctx.db, {
+        get(target, prop) {
+          if (prop === "query") {
+            return (table: Parameters<typeof target.query>[0]) => {
+              counts.set(table, (counts.get(table) ?? 0) + 1);
+              return target.query(table);
+            };
+          }
+          const value: unknown = Reflect.get(target, prop, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const dated = await ctx.db.query("releases").collect();
+      const rows = await joinBrowseRows({ ...ctx, db }, dated);
+      return { counts: Object.fromEntries(counts), rows };
+    });
+
+    expect(rows).toHaveLength(13);
+    expect(rows.every((r) => r.coverIsbn === "9780000000001")).toBe(true);
+    // One Releases scan per Edition consulted.
+    expect(counts.releases).toBe(13);
+    // Thirteen by-Edition Coverage reads, plus one by-Volume scan shared by all twelve borrowers.
+    expect(counts.volumeCoverages).toBe(14);
+  });
 });

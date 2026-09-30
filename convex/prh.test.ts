@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import * as catalogTitle from "./lib/catalogTitle";
+import { parseTitle } from "./lib/prh";
 
 type FixtureTitle = {
   isbn: string;
@@ -1914,4 +1915,193 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
       expect(await syncOne(title, "<p>Collects volumes 1-2-3.</p>")).toEqual(UNMAPPED);
     },
   );
+
+  /** Syncs one PRH title into an empty catalog: every Volume after it is one the import created. */
+  async function syncFresh(title: string, flapcopy?: string) {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([{ isbn: "9781646519828", title, flapcopy }]);
+    await sync(t);
+    const { volumes, covered, unmapped } = await placed(t);
+    return { volumes, covered: covered.sort(), unmapped };
+  }
+  const FRESH_UNMAPPED = { volumes: [], covered: [], unmapped: [true] };
+  const onlyCovering = (labels: string[]) => ({ volumes: labels, covered: labels, unmapped: [false] });
+
+  // W02: a title statement reads its Volume designation only. "16 pages of
+  // art" is prose: no Volumes 2–16, and the 3-in-1 size never widens it.
+  it.each([
+    "Alpha Deluxe Edition 1 (Collecting Vol. 1 plus 16 pages of art)",
+    "Alpha 3-in-1 Edition 1 (Collecting Vol. 1 plus 16 pages of art)",
+  ])("a page count in a title statement (%s) creates Volume 1 alone", async (title) => {
+    expect(await syncFresh(title)).toEqual(onlyCovering(["1"]));
+  });
+
+  // W02: a bare last number with copy after it may count the copy, and a
+  // title has no size to settle it.
+  it("a title statement whose last number may count its copy leaves the book Unmapped", async () => {
+    expect(await syncFresh("Alpha Deluxe Edition 1 (Collecting Vol. 1 and 2 bonus stories)")).toEqual(
+      FRESH_UNMAPPED,
+    );
+  });
+
+  // W02: a marked Volume joined by "plus" is read, never dropped as prose:
+  // the title covers both Volumes; a gap after the join blocks.
+  it.each([
+    ["Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2)", onlyCovering(["1", "2"])],
+    ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vols. 4-6)", onlyCovering(["1", "2", "3", "4", "5", "6"])],
+    ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 5)", FRESH_UNMAPPED],
+  ])("a title statement joining a marked Volume (%s) is read whole", async (title, expected) => {
+    expect(await syncFresh(title)).toEqual(expected);
+  });
+
+  // W03: "volume 4" carries its own marker, so it is a fourth Volume, never
+  // a count the 3-in-1 size may drop.
+  it.each([
+    ["Alpha 3-in-1 Edition 1", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition 1", onlyCovering(["1", "2", "3", "4"])],
+  ])("a marked last Volume places %s by all four Volumes or not at all", async (title, expected) => {
+    expect(await syncFresh(title, "<p>Collects volumes 1-3 and volume 4 in one book.</p>")).toEqual(expected);
+  });
+
+  // W04: a range joined by "plus" is read before the copy after it: a gap
+  // blocks on every line, a contiguous range widens the statement.
+  it.each([
+    ["Alpha Deluxe Edition 1", "<p>Collects volumes 1-3 plus 5-6 in one book.</p>", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition 1", "<p>Collects volumes 1-3 plus 5-6 in one book.</p>", FRESH_UNMAPPED],
+    [
+      "Alpha Deluxe Edition 1",
+      "<p>Collects volumes 1-3 plus 4-6 in one book.</p>",
+      onlyCovering(["1", "2", "3", "4", "5", "6"]),
+    ],
+  ])("a joined range places %s by the whole list (%s)", async (title, flapcopy, expected) => {
+    expect(await syncFresh(title, flapcopy)).toEqual(expected);
+  });
+
+  // W05: "Negima!" is the Series' name, not a sentence end. The verb governs
+  // 37–38, which the 3-in-1 size at position 13 (37–39) contradicts: no
+  // Volume 39 is invented. With no size the statement places the book.
+  it.each([
+    ["Negima! 3-in-1 Edition Vol. 13", FRESH_UNMAPPED],
+    ["Negima! Deluxe Edition 1", onlyCovering(["37", "38"])],
+  ])("a Series title's own '!' before its Volumes places %s by the statement", async (title, expected) => {
+    expect(await syncFresh(title, "<p>Collects Negima! Volumes 37-38.</p>")).toEqual(expected);
+  });
+});
+
+// W08: a linked box is filled only from its canonical identity — the
+// Bundle's Format and the Series its members already belong to. A source
+// that later names another Series or Format goes to review (a placement
+// conflict on the observation, a `review` run error), never auto-inserted.
+describe("prh.applyTitle — a linked box keeps its canonical identity (W08)", () => {
+  const book = (title: string, isbn: string, format = "Trade Paperback") =>
+    parseTitle({
+      isbn,
+      title,
+      seriesNumber: 1,
+      format: { description: format },
+      imprint: { description: "Kodansha Comics" },
+    })!;
+  const apply = (t: TestT, snapshot: ReturnType<typeof book>) =>
+    t.mutation(internal.prh.applyTitle, { snapshot });
+  const BOX_ISBN = "9798888772584";
+  /** The one bundle's member ISBNs in page order, and the bundle itself. */
+  const bundleState = (t: TestT) =>
+    t.run(async (ctx) => {
+      const [bundle, ...more] = await ctx.db.query("releaseBundles").collect();
+      expect(more).toHaveLength(0);
+      const rows = await ctx.db
+        .query("bundleMemberships")
+        .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
+        .collect();
+      const releases = await Promise.all(rows.map((row) => ctx.db.get(row.releaseId)));
+      const revisions = await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) => q.eq("ref.type", "releaseBundle").eq("ref.id", bundle!._id))
+        .collect();
+      const observation = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "prh").eq("sourceRecordId", BOX_ISBN),
+        )
+        .unique();
+      return {
+        bundle: bundle!,
+        members: releases.map((r) => `${r!.isbn13}:${r!.format}`),
+        orders: rows.map((row) => row.order),
+        revisions: revisions.length,
+        conflicts: observation!.conflicts?.map((c) => c.field) ?? [],
+      };
+    });
+
+  it("a box re-observed under another Series adds nothing and goes to review", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await apply(t, book("Alpha Vol. 1", "9781646519026"));
+    await apply(t, book("Beta Vol. 1", "9781646519033"));
+    await apply(t, book("Alpha Box Set 1 (Vol. 1-2)", BOX_ISBN));
+    const before = await bundleState(t);
+    expect(before.members).toEqual(["9781646519026:physical"]);
+
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    const result = await apply(t, book("Beta Box Set 1 (Vol. 1-2)", BOX_ISBN));
+    expect(result).toMatchObject({ status: "needsReview", changed: false });
+    expect(result.reason).toMatch(/Series/);
+    const after = await bundleState(t);
+    expect(after.members).toEqual(["9781646519026:physical"]);
+    expect(after.bundle.name).toBe("Alpha Box Set 1 (Vol. 1-2)");
+    expect(after.revisions).toBe(before.revisions);
+    expect(after.conflicts).toEqual(["placement"]);
+  });
+
+  it("a physical box re-observed as digital adds no digital member", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await apply(t, book("Alpha Vol. 1", "9781646519026"));
+    await apply(t, book("Alpha Vol. 1", "9781646519033", "E-Book"));
+    const box = book("Alpha Box Set 1 (Vol. 1-2)", BOX_ISBN);
+    await apply(t, box);
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+
+    const result = await apply(t, { ...box, format: "digital", binding: undefined });
+    expect(result).toMatchObject({ status: "needsReview" });
+    expect(result.reason).toMatch(/Format/);
+    const after = await bundleState(t);
+    expect(after.bundle.format).toBe("physical");
+    expect(after.members).toEqual(["9781646519026:physical"]);
+    expect(after.conflicts).toEqual(["placement"]);
+  });
+
+  it("an unchanged box still fills the Volume that arrives later", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await apply(t, book("Alpha Vol. 1", "9781646519026"));
+    const box = book("Alpha Box Set 1 (Vol. 1-2)", BOX_ISBN);
+    await apply(t, box);
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    await apply(t, book("Alpha Vol. 2", "9781646519040"));
+    expect(await apply(t, box)).toMatchObject({ status: "updated", changed: true });
+    const after = await bundleState(t);
+    expect(after.members).toEqual(["9781646519026:physical", "9781646519040:physical"]);
+    expect(after.conflicts).toEqual([]);
+  });
+
+  // W09: a legacy bundle made when only Vol. 2 existed stored it at the
+  // compact order 1; Vol. 1 arriving later must sort first, not collide.
+  it("a legacy compact order is renumbered when the missing Volume arrives", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await apply(t, book("Alpha Vol. 2", "9781646519040"));
+    const box = book("Alpha Box Set 1 (Vol. 1-2)", BOX_ISBN);
+    await apply(t, box);
+    await t.run(async (ctx) => {
+      const [member] = await ctx.db.query("bundleMemberships").collect();
+      await ctx.db.patch(member!._id, { order: 1 });
+    });
+    await apply(t, book("Alpha Vol. 1", "9781646519026"));
+    await apply(t, box);
+    const after = await bundleState(t);
+    expect(after.members).toEqual(["9781646519026:physical", "9781646519040:physical"]);
+    expect(after.orders).toEqual([1, 2]);
+  });
 });

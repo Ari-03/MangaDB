@@ -738,6 +738,84 @@ describe("bounded personal repair work (Standards 1)", () => {
       expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
     });
   }
+
+  /** A Series "Else" with a vol 1, and the rows under the moved book still filed elsewhere. */
+  const addElse = (t: T) =>
+    t.run(async (ctx) => {
+      const id = await ctx.db.insert("series", { status: "active", publicId: 600, title: "Else", altTitles: [], searchText: "Else" });
+      await ctx.db.insert("volumes", { status: "active", publicId: 601, seriesId: id, label: "1", position: 1 });
+      return id;
+    });
+  const staleUnder = (t: T, s: Awaited<ReturnType<typeof seed>>, seriesId: Id<"series">, volumes: boolean) =>
+    t.run(async (ctx) => {
+      const passes = await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId)).collect();
+      const reads = volumes
+        ? await ctx.db.query("volumeProgress").withIndex("by_volume", (q) => q.eq("volumeId", s.unlabeled)).collect()
+        : [];
+      return [...passes, ...reads].filter((row) => row.seriesId !== seriesId).length;
+    });
+  const bulkPrivate = async (t: T) => {
+    for (const username of ["dave", "bulk0", `bulk${SWEEP_BUDGET + 9}`]) {
+      expect((await t.query(api.sharing.publicProfile, { username }))?.reading).toEqual([]);
+    }
+  };
+
+  it("re-files a large Edition's passes after setCoverage over several legs", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    await addReaders(t, s, SWEEP_BUDGET + 10);
+    const elseId = await addElse(t);
+    const entry: RepairEntry = {
+      kind: "setCoverage",
+      key: "big-cover",
+      reason: "belongs to Else",
+      editionId: s.b1.editionId,
+      before: [s.unlabeled],
+      coverage: [{ seriesId: elseId, label: "1", extent: "complete" }],
+      line: null,
+      retireVolumeIds: [],
+    };
+    expect(await runLegs(t, entry, () => bulkPrivate(t))).toEqual(["partial", "applied"]);
+    expect(await staleUnder(t, s, elseId, false)).toBe(0);
+    expect((await trailOf(t)).sweeps).toEqual([]);
+    // A re-run examines the same rows in bounded legs and changes nothing.
+    expect(await runLegs(t, entry, () => bulkPrivate(t))).toEqual(["partial", "alreadyApplied"]);
+  });
+
+  it("re-files a large placed Volume's tracking over several legs while a Series merge waits", async () => {
+    const t = makeT();
+    const s = await seed(t);
+    await addReaders(t, s, SWEEP_BUDGET + 10);
+    const elseId = await addElse(t);
+    const packaging = await t.run(async (ctx) =>
+      (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect())
+        .filter((v) => v._id !== s.unlabeled)
+        .map((v) => v._id),
+    );
+    const entry: RepairEntry = {
+      kind: "mergeSeries",
+      key: "big-merge",
+      reason: "same work",
+      loserId: s.source,
+      survivorId: elseId,
+      placements: [{ volumeId: s.unlabeled, label: "2", intoVolumeId: null }],
+      packagingVolumeIds: packaging,
+      retitle: null,
+    };
+    const legs = await runLegs(t, entry, () => bulkPrivate(t));
+    expect(legs[0]).toBe("partial");
+    expect(legs.at(-1)).toBe("deferred");
+    expect(await staleUnder(t, s, elseId, true)).toBe(0);
+    expect((await t.run(async (ctx) => await ctx.db.get(s.source)))?.status).toBe("active");
+
+    // Stage 4 deals with the packaging Volumes; the merge then completes.
+    await t.run(async (ctx) => {
+      for (const id of packaging) await ctx.db.patch(id, { status: "hidden" });
+    });
+    expect((await runLegs(t, entry, () => bulkPrivate(t))).at(-1)).toBe("applied");
+    expect((await t.run(async (ctx) => await ctx.db.get(s.source)))?.status).toBe("merged");
+    expect(await staleUnder(t, s, elseId, true)).toBe(0);
+  });
 });
 
 describe("other repairs that move tracking between Series", () => {
@@ -754,10 +832,10 @@ describe("other repairs that move tracking between Series", () => {
     await asOther.mutation(api.collection.setReleaseEntry, { releaseId: s.b1.releaseId, state: "owned" });
     const other = await t.run(async (ctx) => {
       const id = await ctx.db.insert("series", { status: "active", publicId: 600, title: "Else", altTitles: [], searchText: "Else" });
-      await ctx.db.insert("volumes", { status: "active", publicId: 601, seriesId: id, label: "1", position: 1 });
-      return id;
+      const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: 601, seriesId: id, label: "1", position: 1 });
+      return { id, volumeId };
     });
-    return { ...s, else: other, asOther };
+    return { ...s, else: other.id, elseVol: other.volumeId, asOther };
   }
   const profileOf = async (t: T, username: string) => {
     const profile = await t.query(api.sharing.publicProfile, { username });
@@ -766,20 +844,46 @@ describe("other repairs that move tracking between Series", () => {
       reading: profile?.reading.map((row) => row.title),
     };
   };
+  /** The title of the Series the reader's own Reading page groups each pass under. */
+  const passTitles = async (t: T) => {
+    const reading = await asReader(t).query(api.reading.myReading, {});
+    return Object.fromEntries((reading?.series ?? []).flatMap((row) => row.passes.map((pass) => [pass.releaseId, row.title])));
+  };
+  const coverElse = (s: Awaited<ReturnType<typeof seedMover>>): RepairEntry => ({
+    kind: "setCoverage",
+    key: "cover",
+    reason: "belongs to Else",
+    editionId: s.b1.editionId,
+    before: [s.unlabeled],
+    coverage: [{ seriesId: s.else, label: "1", extent: "complete" }],
+    line: null,
+    retireVolumeIds: [],
+  });
+  /** A Series merge into "Else" placing the unlabeled Volume and waiting on the other two. */
+  const waitingMerge = async (
+    t: T,
+    s: Awaited<ReturnType<typeof seedMover>>,
+    placement: { label: string; intoVolumeId: Id<"volumes"> | null },
+  ): Promise<RepairEntry> => {
+    const volumes = await t.run(async (ctx) =>
+      (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).map((v) => v._id),
+    );
+    return {
+      kind: "mergeSeries",
+      key: "merge",
+      reason: "same work",
+      loserId: s.source,
+      survivorId: s.else,
+      placements: [{ volumeId: s.unlabeled, ...placement }],
+      packagingVolumeIds: volumes.filter((id) => id !== s.unlabeled),
+      retitle: null,
+    };
+  };
 
   it("keeps an Edition's owners private when setCoverage moves it to another Series", async () => {
     const t = makeT();
     const s = await seedMover(t);
-    const entry: RepairEntry = {
-      kind: "setCoverage",
-      key: "cover",
-      reason: "belongs to Else",
-      editionId: s.b1.editionId,
-      before: [s.unlabeled],
-      coverage: [{ seriesId: s.else, label: "1", extent: "complete" }],
-      line: null,
-      retireVolumeIds: [],
-    };
+    const entry = coverElse(s);
     expect((await profileOf(t, "erin")).owned).toBe(0);
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     expect((await profileOf(t, "erin")).owned).toBe(0);
@@ -792,23 +896,147 @@ describe("other repairs that move tracking between Series", () => {
   it("keeps placed Volumes' readers and owners private while a Series merge waits", async () => {
     const t = makeT();
     const s = await seedMover(t);
-    const volumes = await t.run(async (ctx) =>
-      (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect()).map((v) => v._id),
-    );
-    const entry: RepairEntry = {
-      kind: "mergeSeries",
-      key: "merge",
-      reason: "same work",
-      loserId: s.source,
-      survivorId: s.else,
-      placements: [{ volumeId: s.unlabeled, label: "2", intoVolumeId: null }],
-      packagingVolumeIds: volumes.filter((id) => id !== s.unlabeled),
-      retitle: null,
-    };
+    const entry = await waitingMerge(t, s, { label: "2", intoVolumeId: null });
     expect(await profileOf(t, "erin")).toEqual({ owned: 0, reading: [] });
     expect(await profileOf(t, "dave")).toEqual({ owned: 0, reading: [] });
     expect((await run(t, [entry]))[0]?.status).toBe("deferred");
     expect(await profileOf(t, "erin")).toEqual({ owned: 0, reading: [] });
     expect(await profileOf(t, "dave")).toEqual({ owned: 0, reading: [] });
+  });
+
+  it("files the reader's pass under the Series setCoverage moves its Edition to (B10)", async () => {
+    const t = makeT();
+    const s = await seedMover(t);
+    const entry = coverElse(s);
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    expect(await passTitles(t)).toEqual({ [s.b1.releaseId]: "Else", [s.b2.releaseId]: "Doubt!!" });
+    expect((await personalSeries(t, s)).b1Pass).toBe(s.else);
+    // "Else" absorbed the reader's private "Doubt!!" Reading.
+    expect((await profileOf(t, "dave")).reading).toEqual([]);
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.else, kind: "reading", visibility: "public" });
+    expect((await profileOf(t, "dave")).reading).toEqual(["Else"]);
+    // A re-run leaves the reader's later choice alone (R16).
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+    expect((await profileOf(t, "dave")).reading).toEqual(["Else"]);
+  });
+
+  it("re-files an omnibus Favorite under the first Series setCoverage covers", async () => {
+    const t = makeT();
+    const s = await seedMover(t);
+    const omnibus = await t.run(async (ctx) => {
+      const labelled = (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", s.source)).collect())
+        .filter((v) => v.label !== undefined)
+        .sort((a, b) => a.position - b.position)
+        .map((v) => v._id);
+      await ctx.db.insert("volumes", { status: "active", publicId: 602, seriesId: s.else, label: "2", position: 2 });
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 514, publisherId: s.publisherId });
+      for (const [i, volumeId] of labelled.entries()) {
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: i + 1, extent: "complete" });
+      }
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        isbn13: "9780316335140",
+        publisherId: s.publisherId,
+        seriesIds: [s.source],
+      });
+      const favoriteId = await ctx.db.insert("favorites", { userId: s.reader, seriesId: s.source, editionId });
+      return { editionId, labelled, favoriteId };
+    });
+    const entry: RepairEntry = {
+      kind: "setCoverage",
+      key: "cover-omnibus",
+      reason: "belongs to Else",
+      editionId: omnibus.editionId,
+      before: omnibus.labelled,
+      coverage: ["1", "2"].map((label) => ({ seriesId: s.else, label, extent: "complete" as const })),
+      line: null,
+      retireVolumeIds: [],
+    };
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    expect((await t.run(async (ctx) => await ctx.db.get(omnibus.favoriteId)))?.seriesId).toBe(s.else);
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+  });
+
+  it("files a placed Volume's tracking under the survivor while a Series merge waits (B10)", async () => {
+    const t = makeT();
+    const s = await seedMover(t);
+    expect((await run(t, [await waitingMerge(t, s, { label: "2", intoVolumeId: null })]))[0]?.status).toBe("deferred");
+    expect(await personalSeries(t, s)).toEqual({
+      volumeProgress: [s.else],
+      b1Pass: s.else,
+      b2Pass: s.source,
+      favorites: [s.else],
+      comments: [s.else],
+    });
+    expect(await passTitles(t)).toEqual({ [s.b1.releaseId]: "Else", [s.b2.releaseId]: "Doubt!!" });
+  });
+
+  it("files a pass under the survivor when a waiting Series merge merges its Volume into one there (B10)", async () => {
+    const t = makeT();
+    const s = await seedMover(t);
+    expect((await run(t, [await waitingMerge(t, s, { label: "1", intoVolumeId: s.elseVol })]))[0]?.status).toBe("deferred");
+    expect(await t.run(async (ctx) => (await ctx.db.get(s.unlabeled))?.mergedIntoId)).toBe(s.elseVol);
+    expect(await personalSeries(t, s)).toEqual({
+      volumeProgress: [s.else],
+      b1Pass: s.else,
+      b2Pass: s.source,
+      favorites: [s.else],
+      comments: [s.else],
+    });
+    expect(await passTitles(t)).toEqual({ [s.b1.releaseId]: "Else", [s.b2.releaseId]: "Doubt!!" });
+    expect(await profileOf(t, "dave")).toEqual({ owned: 0, reading: [] });
+  });
+
+  it("files every group's passes under the Series remodelEdition moves an Edition to (B10)", async () => {
+    const t = makeT();
+    const s = await seedMover(t);
+    const second = await t.run(async (ctx) => {
+      const releaseId = await ctx.db.insert("releases", {
+        status: "active",
+        editionId: s.b1.editionId,
+        format: "digital",
+        language: "en",
+        isbn13: "9780316335133",
+        publisherId: s.publisherId,
+        seriesIds: [s.source],
+      });
+      await ctx.db.insert("releaseProgress", { userId: s.reader, releaseId, seriesId: s.source, percent: 70 });
+      return releaseId;
+    });
+    const entry: RepairEntry = {
+      kind: "remodelEdition",
+      key: "remodel",
+      reason: "belongs to Else",
+      editionId: s.b1.editionId,
+      volumeId: s.unlabeled,
+      targetSeriesId: s.else,
+      line: null,
+      bundle: null,
+      groups: [
+        { releaseIds: null, coverage: [{ label: "1", volumeId: null, extent: "complete" }], linePosition: null },
+        { releaseIds: [second], coverage: [{ label: "2", volumeId: null, extent: "complete" }], linePosition: null },
+      ],
+      retireVolumeIds: [],
+    };
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    const moved = await t.run(async (ctx) => (await ctx.db.get(second))?.editionId);
+    expect(moved).not.toBe(s.b1.editionId);
+    const passes = await t.run(async (ctx) => (await ctx.db.query("releaseProgress").collect()).map((row) => [row.releaseId, row.seriesId]));
+    expect(Object.fromEntries(passes)).toEqual({ [s.b1.releaseId]: s.else, [second]: s.else, [s.b2.releaseId]: s.source });
+    expect(await passTitles(t)).toEqual({ [s.b1.releaseId]: "Else", [second]: "Else", [s.b2.releaseId]: "Doubt!!" });
+    expect((await profileOf(t, "dave")).reading).toEqual([]);
+    expect((await run(t, [entry]))[0]?.status).toBe("alreadyApplied");
+
+    // A remodel made before passes followed is healed by a re-run, the new
+    // Edition's Release included.
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("releaseProgress").collect()) await ctx.db.patch(row._id, { seriesId: s.source });
+    });
+    expect((await run(t, [entry]))[0]?.status).toBe("applied");
+    expect(await passTitles(t)).toEqual({ [s.b1.releaseId]: "Else", [second]: "Else", [s.b2.releaseId]: "Doubt!!" });
+    expect((await profileOf(t, "dave")).reading).toEqual([]);
   });
 });

@@ -556,6 +556,9 @@ describe("covers during a whole run", () => {
     if (accepted) expect(states.every((state) => state === "wanted")).toBe(true);
     expect({ disabled: other.disabled, accepted }).toEqual({ disabled: true, accepted: false });
     expect(states.every((state) => state === "owned")).toBe(true);
+    // The refused run left no claim behind: every cover is live again.
+    const settled = await overlayFor(as);
+    expect(books.filter((book) => press(cover(book, settled), "Want").disabled)).toEqual([]);
   });
 
   // Reading is per Volume: another Edition covering a Volume the run has yet
@@ -794,5 +797,164 @@ describe("catalog-page controls during a whole run", () => {
     await settle();
     expect(undo).toEqual({ disabled: true, accepted: false });
     expect(press(controls(), "Undo").disabled).toBe(false);
+  });
+});
+
+/**
+ * Two overlapping runs of `name`, as the calls reach the backend: call 2 is
+ * run A's second batch, held before it runs (and rejected once released if
+ * `fail`); call 3 is run B's first batch, held after it commits. The three
+ * stay first in harness.inflight, so settleBesides(3) leaves B held.
+ */
+function overlap(name: string, fail = false) {
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  let reachA!: () => void;
+  let reachB!: () => void;
+  const gateA = new Promise<void>((resolve) => (releaseA = resolve));
+  const gateB = new Promise<void>((resolve) => (releaseB = resolve));
+  const reachedA = new Promise<void>((resolve) => (reachA = resolve));
+  const reachedB = new Promise<void>((resolve) => (reachB = resolve));
+  let calls = 0;
+  harness.intercept = async (called, run) => {
+    if (called !== name) return await run();
+    const call = ++calls;
+    if (call === 2) {
+      reachA();
+      await gateA;
+      if (fail) throw new Error("offline");
+    }
+    const result = await run();
+    if (call === 3) {
+      reachB();
+      await gateB;
+    }
+    return result;
+  };
+  return { reachedA, releaseA, reachedB, releaseB };
+}
+
+// Review W06: run A frees book 5 once its first batch lands, run B then
+// claims it for B's last batch; A finishing (or failing) must not free it.
+// Two 409-book runs take a few seconds, more under a loaded full-suite run.
+describe("overlapping whole runs", { timeout: 30_000 }, () => {
+  const count = 2 * MANY_ENTRIES_CAP + 9;
+
+  async function stateOf(as: Backend, book: OverlayBook) {
+    const releaseId = book.releases[0]!.id as Id<"releases">;
+    return (await as.query(api.collection.entryForRelease, { releaseId }))?.entry?.state ?? null;
+  }
+
+  /** Own all over books 1–205, then Want all over 206–409 plus book 5 once A's batch 1 lands. */
+  async function ownThenWant(fail: boolean) {
+    const t = convexTest(schema);
+    const { books } = await seed(t, count);
+    const as = await signIn(t);
+    const shared = books[4]!;
+    const runs = overlap("collection:setManyReleaseEntries", fail);
+    const aSlots: unknown[] = [];
+    const overlay = await overlayFor(as);
+    const runA = () =>
+      RunActions({ books: books.slice(0, 205), overlay, onPrompt: () => undefined });
+    click(mountAside(aSlots, runA), "Own all");
+    await runs.reachedA;
+    const fresh = await overlayFor(as);
+    const bBooks = [...books.slice(205), shared];
+    const runB = () => RunActions({ books: bBooks, overlay: fresh, onPrompt: () => undefined });
+    click(mountAside([], runB), "Want all");
+    await runs.reachedB;
+    // B holds book 5 for its last batch.
+    expect(press(cover(shared, await overlayFor(as)), "Order").disabled).toBe(true);
+
+    runs.releaseA();
+    await vi.waitFor(() => expect(aSlots[0]).toBeNull(), { timeout: 10_000 });
+    const order = pressCover(cover(shared, await overlayFor(as)), "Order");
+    await settleBesides(3);
+    const chosen = await stateOf(as, shared);
+    runs.releaseB();
+    await settle();
+
+    expect({ order, chosen }).toEqual({
+      order: { disabled: true, accepted: false },
+      chosen: "owned",
+    });
+    expect(await stateOf(as, shared)).toBe("wanted");
+    const alert = mountAside(aSlots, runA).find((host) => host.props.role === "alert");
+    return { as, books, alert };
+  }
+
+  it("a finishing run frees only the claims it still holds", async () => {
+    const { alert } = await ownThenWant(false);
+    expect(alert).toBeUndefined();
+  });
+
+  it("a run that fails mid-way frees only what it still holds", async () => {
+    const { as, books, alert } = await ownThenWant(true);
+    expect(text(alert?.props.children)).toContain("Marked 200 of 205");
+    // A's unlanded tail, never claimed by B, is free again.
+    const settled = await overlayFor(as);
+    const tail = books.slice(200, 205);
+    expect(tail.map((book) => press(cover(book, settled), "Own").disabled)).toEqual(
+      tail.map(() => false),
+    );
+  });
+
+  it("a finishing Read all frees only the Volumes it still holds", async () => {
+    const t = convexTest(schema);
+    const { books } = await seed(t, count);
+    const as = await signIn(t);
+    const shared = books[4]!;
+    const runs = overlap("reading:setEditionsRead");
+    const aSlots: unknown[] = [];
+    const overlay = await overlayFor(as);
+    click(
+      mountAside(aSlots, () =>
+        RunActions({ books: books.slice(0, 205), overlay, onPrompt: () => undefined }),
+      ),
+      "Read all",
+    );
+    await runs.reachedA;
+    // Book 5's Volume is free again: unmark it so B has it to read.
+    await as.mutation(api.reading.setEditionRead, {
+      editionPublicId: shared.publicId,
+      read: false,
+    });
+    const fresh = await overlayFor(as);
+    const bBooks = [...books.slice(205), shared];
+    const runB = () => RunActions({ books: bBooks, overlay: fresh, onPrompt: () => undefined });
+    click(mountAside([], runB), "Read all");
+    await runs.reachedB;
+    expect(press(cover(shared, await overlayFor(as)), "Mark read").disabled).toBe(true);
+
+    runs.releaseA();
+    await vi.waitFor(() => expect(aSlots[0]).toBeNull(), { timeout: 10_000 });
+    const markRead = pressCover(cover(shared, await overlayFor(as)), "Mark read");
+    await settleBesides(3);
+    runs.releaseB();
+    await settle();
+
+    expect(markRead).toEqual({ disabled: true, accepted: false });
+    expect(quickBookFor(shared, await overlayFor(as)).read).toBe(true);
+  });
+
+  // Two clicks before a re-render: the second run is refused and leaves no claim.
+  it("refuses a repeated click on the same run and frees everything after", async () => {
+    const t = convexTest(schema);
+    const { books } = await seed(t, 3);
+    const as = await signIn(t);
+    const overlay = await overlayFor(as);
+    const tree = mount(() => RunActions({ books, overlay, onPrompt: () => undefined }));
+    click(tree, "Own all");
+    const again = pressCover(tree, "Own all");
+    await settle();
+
+    expect(again.accepted).toBe(false);
+    expect(await Promise.all(books.map((book) => stateOf(as, book)))).toEqual(
+      books.map(() => "owned"),
+    );
+    const settled = await overlayFor(as);
+    expect(books.map((book) => press(cover(book, settled), "Want").disabled)).toEqual(
+      books.map(() => false),
+    );
   });
 });

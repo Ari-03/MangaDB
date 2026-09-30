@@ -1298,6 +1298,83 @@ describe("sevenSeas.sync — a box set gains members that arrive after it (B15)"
   });
 });
 
+const BETA_1: FixtureBook = {
+  id: 201,
+  slug: "beta-manga-vol-1",
+  title: "Beta Adventures (Manga) Vol. 1",
+  seriesSlug: "beta-manga",
+  seriesTitle: "Beta Adventures (Manga)",
+  date: "January 6, 2026",
+  isbn: "978-1-9990002-0-2",
+};
+
+/** The one box's members as `isbn@order`, in page order (by order, then creation). */
+const boxRows = (t: TestConvex<typeof schema>) =>
+  t.run(async (ctx) => {
+    const [bundle] = await ctx.db.query("releaseBundles").collect();
+    const rows = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
+      .collect();
+    return await Promise.all(
+      rows.map(async (row) => `${(await ctx.db.get(row.releaseId))!.isbn13}@${row.order}`),
+    );
+  });
+
+/** The newest Import Run's errors. */
+const lastRunErrors = (t: TestConvex<typeof schema>) =>
+  t.run(async (ctx) => (await ctx.db.query("importRuns").order("desc").first())!.errors);
+
+// W08: a linked box fills only from its canonical identity. Its listing
+// repointed at another series goes to review — on the re-read page and on
+// the unchanged listing after it — and never adds that series' books.
+describe("sevenSeas.sync — a linked box keeps its canonical identity (W08)", () => {
+  it("a box listed under another series adds nothing and reports review", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1, BETA_1, BOX_1]);
+    await sync(t);
+    expect(await boxMembers(t)).toEqual(["9781999000103"]);
+
+    await t.mutation(internal.importSources.setBootstrapModeInternal, { on: false });
+    const moved = {
+      ...BOX_1,
+      title: "Beta Adventures (Manga) Box Set 1 (Vol. 1-2)",
+      seriesSlug: "beta-manga",
+      seriesTitle: "Beta Adventures (Manga)",
+      modified: "2026-08-10T00:00:00",
+    };
+    stubSite([ALPHA_1, BETA_1, moved]);
+    await sync(t);
+    expect(await boxMembers(t)).toEqual(["9781999000103"]);
+    expect((await lastRunErrors(t)).some((e) => e.startsWith(`review ${BOX_1.slug}:`))).toBe(true);
+    expect((await observationOf(t, BOX_1)).conflicts?.map((c) => c.field)).toEqual(["placement"]);
+
+    // The unchanged listing (no page fetch) reports it again.
+    await sync(t);
+    expect(await boxMembers(t)).toEqual(["9781999000103"]);
+    expect((await lastRunErrors(t)).some((e) => e.startsWith(`review ${BOX_1.slug}:`))).toBe(true);
+  });
+});
+
+// W09: a legacy box made when only Vol. 2 existed stored it at compact
+// order 1; the unchanged listing that fills Vol. 1 renumbers by position.
+describe("sevenSeas.sync — a legacy box's compact order is renumbered (W09)", () => {
+  it("an unchanged box listing fills Vol. 1 ahead of a legacy Vol. 2", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_2, BOX_1]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const [member] = await ctx.db.query("bundleMemberships").collect();
+      await ctx.db.patch(member!._id, { order: 1 });
+    });
+    stubSite([ALPHA_1, ALPHA_2, BOX_1]);
+    await sync(t);
+    expect(await boxRows(t)).toEqual(["9781999000103@1", "9781999000110@2"]);
+  });
+});
+
 /** Count the book-page fetches the stubbed site serves from here on. */
 function countBookPages(): { count: number } {
   const counter = { count: 0 };
@@ -1925,5 +2002,96 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     ["a 3-in-1", THREE_IN_1],
   ])("a run-on range leaves %s Unmapped", async (_, book) => {
     expect(await syncOne(book, "<p>Collects volumes 1-2-3.</p>")).toEqual(UNMAPPED);
+  });
+
+  const DELUXE: FixtureBook = {
+    ...THREE_IN_1,
+    id: 314,
+    slug: "alpha-deluxe-edition-1",
+    title: "Alpha Deluxe Edition 1",
+    seriesSlug: "alpha-deluxe",
+    seriesTitle: "Alpha Deluxe Edition",
+  };
+  const onlyCovering = (volumes: string[]) => ({ volumes, coverages: volumes.length, unmapped: [false] });
+
+  // W02: a title statement reads its Volume designation only. "16 pages of
+  // art" is prose: no Volumes 2–16, and the 3-in-1 size never widens it.
+  it.each([
+    ["a Deluxe", DELUXE],
+    ["a 3-in-1", THREE_IN_1],
+  ])("a page count in a title statement on %s creates Volume 1 alone", async (_, book) => {
+    const title = book.title + " (Collecting Vol. 1 plus 16 pages of art)";
+    expect(await syncOne({ ...book, title }, "")).toEqual(onlyCovering(["1"]));
+  });
+
+  // W02: a bare last number with copy after it may count the copy, and a
+  // title has no size to settle it.
+  it("a title statement whose last number may count its copy leaves the book Unmapped", async () => {
+    const title = "Alpha Deluxe Edition 1 (Collecting Vol. 1 and 2 bonus stories)";
+    expect(await syncOne({ ...DELUXE, title }, "")).toEqual(UNMAPPED);
+  });
+
+  // W02: a marked Volume joined by "plus" is read, never dropped as prose:
+  // the title covers both Volumes; a gap after the join blocks.
+  it.each([
+    ["Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2)", onlyCovering(["1", "2"])],
+    ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vols. 4-6)", onlyCovering(["1", "2", "3", "4", "5", "6"])],
+    ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 5)", UNMAPPED],
+  ])("a title statement joining a marked Volume (%s) is read whole", async (title, expected) => {
+    expect(await syncOne({ ...DELUXE, title }, "")).toEqual(expected);
+  });
+
+  // W03: "volume 4" carries its own marker, so it is a fourth Volume, never
+  // a count the 3-in-1 size may drop.
+  it.each([
+    ["a 3-in-1", THREE_IN_1, UNMAPPED],
+    ["a Deluxe", DELUXE, onlyCovering(["1", "2", "3", "4"])],
+  ])("a marked last Volume places %s by all four Volumes or not at all", async (_, book, expected) => {
+    expect(await syncOne(book, "<p>Collects volumes 1-3 and volume 4 in one book.</p>")).toEqual(expected);
+  });
+
+  // W04: a range joined by "plus" is read before the copy after it: a gap
+  // blocks on every line, a contiguous range widens the statement.
+  it.each([
+    ["a Deluxe", "<p>Collects volumes 1-3 plus 5-6 in one book.</p>", DELUXE, UNMAPPED],
+    ["a 3-in-1", "<p>Collects volumes 1-3 plus 5-6 in one book.</p>", THREE_IN_1, UNMAPPED],
+    [
+      "a Deluxe",
+      "<p>Collects volumes 1-3 plus 4-6 in one book.</p>",
+      DELUXE,
+      onlyCovering(["1", "2", "3", "4", "5", "6"]),
+    ],
+  ])("a joined range places %s by the whole list (%s)", async (_, blurb, book, expected) => {
+    expect(await syncOne(book, blurb)).toEqual(expected);
+  });
+
+  // W05: "Negima!" is the Series' name, not a sentence end. The verb governs
+  // 37–38, which the 3-in-1 size at position 13 (37–39) contradicts: no
+  // Volume 39 is invented. With no size the statement places the book.
+  it.each([
+    [
+      "a 3-in-1",
+      {
+        ...THREE_IN_1,
+        slug: "negima-3-in-1-edition-13",
+        title: "Negima! 3-in-1 Edition Vol. 13",
+        seriesSlug: "negima-3-in-1",
+        seriesTitle: "Negima! 3-in-1 Edition",
+      },
+      UNMAPPED,
+    ],
+    [
+      "a Deluxe",
+      {
+        ...DELUXE,
+        slug: "negima-deluxe-edition-1",
+        title: "Negima! Deluxe Edition 1",
+        seriesSlug: "negima-deluxe",
+        seriesTitle: "Negima! Deluxe Edition",
+      },
+      onlyCovering(["37", "38"]),
+    ],
+  ])("a Series title's own '!' before its Volumes places %s by the statement", async (_, book, expected) => {
+    expect(await syncOne(book, "<p>Collects Negima! Volumes 37-38.</p>")).toEqual(expected);
   });
 });

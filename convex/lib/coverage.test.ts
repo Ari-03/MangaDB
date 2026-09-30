@@ -470,3 +470,112 @@ describe("coverage — the nearest collect-verb, the size, and ambiguity (R12)",
     expect(inferCoverage(deluxe, ["Collects volumes 1–2–3."])).toBeNull();
   });
 });
+
+describe("coverage — marked items, joined ranges, and a Series title's own punctuation (wave 2)", () => {
+  const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
+  const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
+  const twoIn1 = { lineName: "2-in-1 Edition", linePosition: "1", coverRange: null };
+
+  // W03: an item with its own marker ("volume 4", "Vol. 4", "#4") names a
+  // Volume, whatever follows it: never a count. Four Volumes against a
+  // three-Volume line leave the book Unmapped; no size shortens them.
+  it("never reads a last item with its own marker two ways", () => {
+    for (const blurb of [
+      "Collects volumes 1-3 and volume 4 in one book.",
+      "Collects volumes 1-3 and Vol. 4 in one book.",
+      "Collects volumes 1-3 and #4 in one book.",
+      "Collects volumes 1-3 plus volume 4 in one book.",
+    ]) {
+      expect(coverageFromText(blurb), blurb).toEqual({ from: "1", to: "4" });
+      expect(inferCoverage(threeIn1, [blurb]), blurb).toBeNull();
+      expect(inferCoverage(deluxe, [blurb]), blurb).toEqual({ from: "1", to: "4" });
+    }
+    const pair = "Collects volume 1 and volume 2 in one book.";
+    expect(coverageFromText(pair)).toEqual({ from: "1", to: "2" });
+    expect(inferCoverage(threeIn1, [pair])).toBeNull();
+    expect(inferCoverage(deluxe, [pair])).toEqual({ from: "1", to: "2" });
+    expect(coverageFromText("Collects volumes 1, 2, and volume 3 in one book.")).toEqual({ from: "1", to: "3" });
+    // A possessive names what the Volume holds: the Volume may or may not
+    // be collected, marker or not, so only the size settles it.
+    for (const blurb of [
+      "Collects volumes 1-3 and volume 4's bonus chapter.",
+      "Collects volumes 1-3 and volume 4&#8217;s bonus chapter.",
+      "Collects volumes 1-3 and 4's bonus chapter.",
+      "Collects volumes 1-3 and #4's bonus chapter.",
+      "Collects volumes 1-3 plus volume 4's bonus chapter.",
+    ]) {
+      expect(coverageFromText(blurb), blurb).toBeNull();
+      expect(inferCoverage(threeIn1, [blurb]), blurb).toEqual({ from: "1", to: "3" });
+      expect(inferCoverage(deluxe, [blurb]), blurb).toBeNull();
+    }
+  });
+
+  // W04: a range joined by "plus", "+", "as well as", or "along with" is
+  // read whatever copy follows it: a gap blocks, a contiguous one widens.
+  it("reads a joined range before the copy that follows it", () => {
+    for (const join of ["plus", "+", "as well as", "along with"]) {
+      for (const suffix of ["in one book.", "of Alpha.", "together."]) {
+        const gapped = `Collects volumes 1-3 ${join} 5-6 ${suffix}`;
+        expect(coverageFromText(gapped), gapped).toBeNull();
+        expect(inferCoverage(threeIn1, [gapped]), gapped).toBeNull();
+        expect(inferCoverage(deluxe, [gapped]), gapped).toBeNull();
+        const whole = `Collects volumes 1-3 ${join} 4-6 ${suffix}`;
+        expect(coverageFromText(whole), whole).toEqual({ from: "1", to: "6" });
+        expect(inferCoverage(threeIn1, [whole]), whole).toBeNull();
+        expect(inferCoverage(deluxe, [whole]), whole).toEqual({ from: "1", to: "6" });
+      }
+    }
+    expect(inferCoverage(twoIn1, ["Collects volumes 1-2 plus 3-4 in one book."])).toBeNull();
+    // A marked range, or a comma before the join, reads the same.
+    expect(coverageFromText("Collects volumes 1-3, plus 4-6 in one book.")).toEqual({ from: "1", to: "6" });
+    expect(coverageFromText("Collects volumes 1-3 plus vols. 4-6 in one book.")).toEqual({ from: "1", to: "6" });
+    // Every joined item is read: a second one too, and a gap in it blocks.
+    expect(coverageFromText("Collects volumes 1-3 plus 4-6 plus 7-9 in one book.")).toEqual({ from: "1", to: "9" });
+    expect(coverageFromText("Collects volumes 1-3 plus 4-6 and 7-9 in one book.")).toEqual({ from: "1", to: "9" });
+    expect(coverageFromText("Collects volumes 1-3 as well as volumes 4-5 in one book.")).toEqual({ from: "1", to: "5" });
+    expect(coverageFromText("Collects volumes 1-3 plus 4-6 plus 8-9 in one book.")).toBeNull();
+    expect(inferCoverage(deluxe, ["Collects volumes 1-3 plus 4-6 plus 8-9 in one book."])).toBeNull();
+    // A bare number after the join still counts something else unless a
+    // statement end follows it.
+    expect(coverageFromText("Collects volumes 1-3 plus 16 pages of color art.")).toEqual({ from: "1", to: "3" });
+    expect(inferCoverage(threeIn1, ["Collects volumes 1-3 plus 4 all-new bonus stories."])).toEqual({
+      from: "1",
+      to: "3",
+    });
+    expect(coverageFromText("Collects volumes 1-3 plus 4")).toEqual({ from: "1", to: "4" });
+  });
+
+  // W05: a name's own "!" or "?" before its Volumes ends no sentence, so the
+  // verb still governs the list, and a size it contradicts never decides.
+  it("never splits a sentence inside a collected Series title", () => {
+    const thirteenth = { ...threeIn1, linePosition: "13" };
+    for (const blurb of [
+      "Collects Negima! Volumes 37-38.",
+      "Collects Negima!? Volumes 37-38.",
+      "Collects Negima! Vol. 37-38.",
+      "Collects Haikyu!! Volumes 37-38.",
+    ]) {
+      expect(inferCoverage(thirteenth, [blurb]), blurb).toBeNull();
+      expect(coverageFromText(blurb), blurb).toEqual({ from: "37", to: "38" });
+      expect(inferCoverage(deluxe, [blurb]), blurb).toEqual({ from: "37", to: "38" });
+    }
+    expect(inferCoverage(threeIn1, ["Collects Negima! Volumes 1-3."])).toEqual({ from: "1", to: "3" });
+    expect(inferCoverage(thirteenth, ["COLLECTS NEGIMA! VOLUMES 37-38."])).toBeNull();
+    // A "!" before other copy, after lowercase copy, or opening the sentence
+    // is a sentence end, not a name.
+    expect(coverageFromText("Collects Negima! Fans rejoice, volumes 4-6 are here.")).toBeNull();
+    expect(coverageFromText("Wow! Volumes 1-3 in one book.")).toEqual({ from: "1", to: "3" });
+    expect(inferCoverage(threeIn1, ["Collects bonus art! Volumes 4 and 5 are out now."])).toEqual({
+      from: "1",
+      to: "3",
+    });
+    expect(inferCoverage(deluxe, ["Collects bonus art! Volumes 4 and 5 are out now."])).toBeNull();
+    // Known limit: capitals throughout read "ART!" as a name, so the verb
+    // governs the list; its bare last item agrees with no size. More
+    // conservative, never a guess.
+    expect(inferCoverage(threeIn1, ["COLLECTS BONUS ART! VOLUMES 4 AND 5 ARE OUT NOW."])).toBeNull();
+    // Known limit: a "." after a name is an ordinary sentence end ("from
+    // Oda. Volumes 4-6 on sale now"), so the size still decides there.
+    expect(inferCoverage(thirteenth, ["Collects Bakuman. Volumes 37-38."])).toEqual({ from: "37", to: "39" });
+  });
+});

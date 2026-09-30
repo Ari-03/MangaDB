@@ -537,3 +537,163 @@ describe("openLibrary.sync — a linked record never gives its Release another's
     });
   });
 });
+
+describe("openLibrary.sync — a volume title split across title + subtitle keeps its identity (W10)", () => {
+  const SEQUEL_ISBN = "9781646516544";
+
+  /** Kodansha with the parent "Kingdom Hearts" (Volume 2) and/or its sequel
+   * "Kingdom Hearts II" (one unlabeled Volume), each with an ISBN-less
+   * physical paperback Release. */
+  async function buildKingdomHearts(t: TestT, opts: { parent: boolean; sequel: boolean }) {
+    return await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Kodansha",
+        slug: "kodansha",
+      });
+      const addSeries = async (publicId: number, title: string, label?: string) => {
+        const seriesId = await ctx.db.insert("series", {
+          status: "active",
+          publicId,
+          title,
+          altTitles: [],
+          searchText: title,
+        });
+        const volumeId = await ctx.db.insert("volumes", {
+          status: "active",
+          publicId,
+          seriesId,
+          position: label !== undefined ? Number(label) : 1,
+          ...(label !== undefined ? { label } : {}),
+        });
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId,
+          publisherId,
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId,
+          order: 1,
+          extent: "complete",
+        });
+        return await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format: "physical",
+          binding: "paperback",
+          language: "en",
+          publisherId,
+          seriesIds: [seriesId],
+        });
+      };
+      return {
+        parentReleaseId: opts.parent ? await addSeries(101, "Kingdom Hearts", "2") : null,
+        sequelReleaseId: opts.sequel ? await addSeries(102, "Kingdom Hearts II") : null,
+      };
+    });
+  }
+
+  const record = {
+    key: "/books/OL999M",
+    isbn_13: [SEQUEL_ISBN],
+    languages: [{ key: "/languages/eng" }],
+    publishers: ["Kodansha"],
+    physical_format: "Paperback",
+  };
+  const splits = [
+    { title: "Kingdom", subtitle: "Hearts II" },
+    { title: "Kingdom Hearts", subtitle: "II" },
+  ];
+
+  it.each(splits)(
+    "$title + $subtitle: the sequel claims the book over the parent's Volume 2",
+    async (split) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const { parentReleaseId, sequelReleaseId } = await buildKingdomHearts(t, {
+        parent: true,
+        sequel: true,
+      });
+      stubDump([{ ...record, ...split }]);
+      await sync(t);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(parentReleaseId!))!.isbn13).toBeUndefined();
+        expect((await ctx.db.get(sequelReleaseId!))!.isbn13).toBe(SEQUEL_ISBN);
+        const observations = await ctx.db.query("sourceObservations").collect();
+        expect(observations).toHaveLength(1);
+        expect(observations[0]!.recordRef).toEqual({
+          type: "release",
+          id: sequelReleaseId,
+        });
+        expect(await ctx.db.query("releases").collect()).toHaveLength(2);
+        expect(await ctx.db.query("series").collect()).toHaveLength(2);
+      });
+    },
+  );
+
+  it.each(splits)(
+    "$title + $subtitle: with only the parent, the roman split stands",
+    async (split) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const { parentReleaseId } = await buildKingdomHearts(t, {
+        parent: true,
+        sequel: false,
+      });
+      stubDump([{ ...record, ...split }]);
+      await sync(t);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(parentReleaseId!))!.isbn13).toBe(SEQUEL_ISBN);
+        const series = await ctx.db.query("series").collect();
+        expect(series.map((s) => s.title)).toEqual(["Kingdom Hearts"]);
+      });
+    },
+  );
+
+  it.each(splits)(
+    "$title + $subtitle: with only the sequel, the sequel claims the book",
+    async (split) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const { sequelReleaseId } = await buildKingdomHearts(t, {
+        parent: false,
+        sequel: true,
+      });
+      stubDump([{ ...record, ...split }]);
+      await sync(t);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(sequelReleaseId!))!.isbn13).toBe(SEQUEL_ISBN);
+        const series = await ctx.db.query("series").collect();
+        expect(series.map((s) => s.title)).toEqual(["Kingdom Hearts II"]);
+        expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      });
+    },
+  );
+
+  it("a bare volume number split across fields fills only an existing Series' Release", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    stubDump([
+      { ...CHAINSAW_22, title: "Chainsaw", subtitle: "Man 22" },
+      {
+        ...CHAINSAW_22,
+        key: "/books/OL51694025M",
+        title: "Omega",
+        subtitle: "Nobody 6",
+        isbn_13: ["9781974700042"],
+      },
+    ]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.isbn13).toBe("9781974766512");
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+  });
+});

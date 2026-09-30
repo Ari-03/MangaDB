@@ -678,6 +678,81 @@ describe("parseBookTitle — packaging", () => {
     expect(packaging("Alpha Vol. 10-11+EX").packaging?.coverRange).toEqual({ from: "10", to: "11" });
     expect(parseBookTitle("Alpha Vol. 18+1")).toMatchObject({ volumeLabel: "18+1", packaging: null });
   });
+
+  // W02: a title statement reads only its Volume designation. Page counts
+  // and other copy after it are prose, never coverage endpoints.
+  it("reads a title statement's designation, never the numbers in the copy after it", () => {
+    const cases: Array<[string, { from: string; to: string }]> = [
+      ["Alpha Deluxe Edition 1 (Collecting Vol. 1 plus 16 pages of art)", { from: "1", to: "1" }],
+      ["Alpha Deluxe Edition 1 (Containing Vol. 1 with 16 pages of art)", { from: "1", to: "1" }],
+      ["Alpha Deluxe Edition 1 (Including Vol. 1 with 16 pages of art)", { from: "1", to: "1" }],
+      ["Alpha Deluxe Edition 1 (Contains Vol. 9 in a 600-page hardcover)", { from: "9", to: "9" }],
+      ["Alpha Deluxe Edition 1 (Collects Vol. 1 of 10)", { from: "1", to: "1" }],
+      ["Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 16 pages of art)", { from: "1", to: "3" }],
+      ["Alpha 3-in-1 Edition 1 (Collecting Vol. 1 plus 16 pages of art)", { from: "1", to: "1" }],
+      ["Alpha Deluxe Edition 1 (Collecting Vol. 1 and Vol. 2 bonus stories)", { from: "1", to: "2" }],
+    ];
+    for (const [title, coverRange] of cases) {
+      const found = packaging(title).packaging;
+      expect(found?.coverRange, title).toEqual(coverRange);
+      expect(found?.coverageGapped, title).toBeUndefined();
+    }
+    expect(
+      packaging("Battle Angel Alita Deluxe 5 (Contains Vol. 9 & Ashen Victor)").packaging?.coverRange,
+    ).toEqual({ from: "9", to: "9" });
+  });
+
+  // W02: a bare last number after "and", "&", or a comma with copy after it
+  // may count something else, and a title has no size to settle it; a join
+  // and a number the designation never read leaves it unfinished. Either
+  // way the coverage is unknown, never a guess.
+  it("leaves a title statement unknown when its last number may count the copy after it", () => {
+    for (const title of [
+      "Alpha Deluxe Edition 1 (Collecting Vol. 1 and 2 bonus stories)",
+      "Alpha Deluxe Edition 1 (Collecting Vols. 1-3 and 4 bonus stories)",
+      "Alpha Deluxe Edition 1 (Collecting Vols. 1-3, 4 bonus stories)",
+      "Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 4)",
+      "Alpha 3-in-1 Edition 1 (Includes Vol. 1 + 3)",
+    ]) {
+      expect(packaging(title).packaging, title).toMatchObject({ coverRange: null, coverageGapped: true });
+    }
+  });
+
+  // W02: a marked item or a range joined past the designation ("plus Vol. 2",
+  // "as well as Vols. 4-6") is a Volume whatever copy follows it. Dropping it
+  // would silently shorten the coverage; each item is judged for contiguity.
+  it("reads a marked item or range a title statement joins with plus, as well as, or along with", () => {
+    const read: Array<[string, { from: string; to: string }]> = [
+      ["Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2)", { from: "1", to: "2" }],
+      ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4)", { from: "1", to: "4" }],
+      ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4 bonus stories)", { from: "1", to: "4" }],
+      ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vols. 4-6)", { from: "1", to: "6" }],
+      ["Alpha Deluxe Edition 1 (Collects Vol. 1 as well as Vol. 2)", { from: "1", to: "2" }],
+      ["Alpha Deluxe Edition 1 (Collects Vol. 1 along with Vol. 2 and a bonus chapter)", { from: "1", to: "2" }],
+      ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)", { from: "1", to: "3" }],
+      ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus #4)", { from: "1", to: "4" }],
+      ["Alpha Deluxe Edition 1 (Collects Vols. 1-3, plus 4-6 in one book)", { from: "1", to: "6" }],
+      ["Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2 plus Vol. 3)", { from: "1", to: "3" }],
+    ];
+    for (const [title, coverRange] of read) {
+      const found = packaging(title).packaging;
+      expect(found?.coverRange, title).toEqual(coverRange);
+      expect(found?.coverageGapped, title).toBeUndefined();
+    }
+    for (const title of [
+      "Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 5)",
+      "Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vols. 5-6 in one book)",
+      "Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2 + 4)",
+      "Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vols. 2 and 3 bonus stories)",
+      "Alpha Deluxe Edition 1 (Collects Vol. 1 as well as 3)",
+      // "and 16" is a bare last item with copy after it: it may count the copy.
+      "Alpha Deluxe Edition 1 (Collects Vol. 1 along with Vol. 2 and 16 pages of art)",
+      // A half Volume is read whole, never cut to Volume 4: no range holds it.
+      "Alpha Deluxe Edition 1 (Collects Vol. 3 plus Vol. 4.5)",
+    ]) {
+      expect(packaging(title).packaging, title).toMatchObject({ coverRange: null, coverageGapped: true });
+    }
+  });
 });
 
 describe("parseBookTitle — novels and text hygiene", () => {

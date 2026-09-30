@@ -16,7 +16,8 @@
 // Incremental: a book whose ISBNs are all observed is re-fetched only when
 // due — weekly while its date is upcoming or recent (dates move), every
 // ~6 months otherwise. A fresh box set is not re-read, but its stored
-// snapshot still links the member books that arrived after it. A run
+// snapshot still links the member books that arrived after it, one box per
+// mutation (each reads one Series' Volumes). A run
 // spends a bounded number of fetches per
 // action invocation and chains itself (cursor = the last slug/ISBN handled).
 // The sitemap has no lastmod and pages are skipped when fresh, so absence
@@ -28,6 +29,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
 import { applyCatalogTitle, reconcileCatalogBox, type ApplyResult } from "./lib/catalogTitle";
+import type { BundleReconcile } from "./lib/pipeline";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { runToContinue } from "./lib/importRuns";
@@ -80,58 +82,62 @@ function isDue(snapshot: YenTitleSnapshot, lastSeenAt: number, now: number): boo
 }
 
 /**
- * Which of these books need a page fetch: a book any of whose ISBNs is
- * unobserved or due. The sync passes one single-ISBN group per sitemap URL
- * (a shared page is deduplicated only after its other ISBN was actually
- * observed this run), so every ISBN gets its own fetch decision.
+ * Plan a chunk of books: `due` are the books needing a page fetch (any of
+ * whose ISBNs is unobserved or due), `boxes` the fresh ones whose
+ * observation links a Release Bundle, for `reconcileLinkedBox`. The sync
+ * passes one single-ISBN group per sitemap URL (a shared page is
+ * deduplicated only after its other ISBN was actually observed this run),
+ * so every ISBN gets its own fetch decision.
  */
 export const booksToFetch = internalQuery({
   args: { books: v.array(v.array(v.string())), now: v.number() },
   handler: async (ctx, { books, now }) => {
     const due: number[] = [];
+    const boxes: number[] = [];
     for (const [i, isbns] of books.entries()) {
+      let box = false;
+      let needsFetch = false;
       for (const isbn of isbns) {
         const obs = await getObservation(ctx, SOURCE_KEY, isbn);
         if (!obs || isDue(obs.snapshot as YenTitleSnapshot, obs.lastSeenAt, now)) {
-          due.push(i);
+          needsFetch = true;
           break;
         }
+        if (obs.recordRef?.type === "releaseBundle") box = true;
       }
+      if (needsFetch) due.push(i);
+      else if (box) boxes.push(i);
     }
-    return due;
+    return { due, boxes };
   },
 });
 
 /**
- * Linked box sets among these fresh (not due) ISBNs pick up the members
- * whose books arrived after them, from their stored snapshots — a box's
- * members arrive through other pages, so waiting for its own page to fall
- * due would leave it incomplete for up to BACKLIST_REFRESH_MS. Observations
- * are left untouched (no last-seen bump: nothing was fetched). Returns how
- * many boxes gained members.
+ * A fresh (not due) linked box set picks up the members whose books arrived
+ * after it, from its stored snapshot — a box's members arrive through other
+ * pages, so waiting for its own page to fall due would leave it incomplete
+ * for up to BACKLIST_REFRESH_MS. One box per mutation (spec §6): each reads
+ * its Series' Volumes, so a chunk of boxes never shares one transaction.
+ * The observation is left untouched (no last-seen bump: nothing was
+ * fetched). Returns the members added, or the `conflict` that sent the box
+ * to review.
  */
-export const reconcileLinkedBoxes = internalMutation({
-  args: { isbns: v.array(v.string()) },
-  handler: async (ctx, { isbns }): Promise<number> => {
+export const reconcileLinkedBox = internalMutation({
+  args: { isbn: v.string() },
+  handler: async (ctx, { isbn }): Promise<BundleReconcile> => {
     const source = await getSourceByKey(ctx, SOURCE_KEY);
-    if (source && !source.enabled) return 0;
-    const now = Date.now();
-    let updated = 0;
-    for (const isbn of isbns) {
-      const observation = await getObservation(ctx, SOURCE_KEY, isbn);
-      if (observation?.recordRef?.type !== "releaseBundle") continue;
-      const snapshot = observation.snapshot as YenTitleSnapshot;
-      const added = await reconcileCatalogBox(ctx, {
-        sourceKey: SOURCE_KEY,
-        importComment: IMPORT_COMMENT,
-        citation: { sourceName: source?.name ?? "Yen Press", url: snapshot.url },
-        observation,
-        snapshot,
-        now,
-      });
-      if (added > 0) updated++;
-    }
-    return updated;
+    if (source && !source.enabled) return { added: 0 };
+    const observation = await getObservation(ctx, SOURCE_KEY, isbn);
+    if (observation?.recordRef?.type !== "releaseBundle") return { added: 0 };
+    const snapshot = observation.snapshot as YenTitleSnapshot;
+    return await reconcileCatalogBox(ctx, {
+      sourceKey: SOURCE_KEY,
+      importComment: IMPORT_COMMENT,
+      citation: { sourceName: source?.name ?? "Yen Press", url: snapshot.url },
+      observation,
+      snapshot,
+      now: Date.now(),
+    });
   },
 });
 
@@ -213,17 +219,20 @@ export const sync = internalAction({
         let budgetSpent = false;
         for (let offset = 0; offset < slugs.length && !budgetSpent; offset += PLAN_CHUNK) {
           const chunk = slugs.slice(offset, offset + PLAN_CHUNK);
-          const due: number[] = await ctx.runQuery(internal.yenPress.booksToFetch, {
-            books: chunk.map((slug) => [books.get(slug)!.isbn13]),
-            now: Date.now(),
-          });
-          const dueSet = new Set(due);
+          const plan: { due: number[]; boxes: number[] } = await ctx.runQuery(
+            internal.yenPress.booksToFetch,
+            { books: chunk.map((slug) => [books.get(slug)!.isbn13]), now: Date.now() },
+          );
+          const dueSet = new Set(plan.due);
           // Fresh boxes are not re-read, but still gain late members.
-          const fresh = chunk.filter((_, i) => !dueSet.has(i)).map((key) => books.get(key)!.isbn13);
-          if (fresh.length > 0) {
-            changed += await ctx.runMutation(internal.yenPress.reconcileLinkedBoxes, {
-              isbns: fresh,
-            });
+          for (const i of plan.boxes) {
+            const isbn = books.get(chunk[i]!)!.isbn13;
+            const box: BundleReconcile = await ctx.runMutation(
+              internal.yenPress.reconcileLinkedBox,
+              { isbn },
+            );
+            if (box.added > 0) changed++;
+            if (box.conflict !== undefined) errors.push(`review ${isbn}: ${box.conflict}`);
           }
           for (const [i, slug] of chunk.entries()) {
             if (!dueSet.has(i) || observedHere.has(books.get(slug)!.isbn13)) {

@@ -167,7 +167,8 @@ export async function storeCover(
  * twice — once from a publisher's own site without an ISBN, once from the
  * distribution catalog with one — and the jacket is the same either way.
  * Pass one `coverIsbnCache` to every call a query makes so a page of
- * ISBN-less Releases reads each Edition's Releases and Coverage once.
+ * ISBN-less Releases reads each Edition's Releases and Coverage once, and
+ * each Volume's covering Editions once however many Editions borrow from it.
  */
 export async function coverIsbnForRelease(
   ctx: QueryCtx,
@@ -180,8 +181,9 @@ export async function coverIsbnForRelease(
 /**
  * Per-query memo for `coverIsbnForRelease`, keyed by Edition: the ISBN an
  * ISBN-less Release borrows depends only on its Edition, so every such
- * Release of one Edition shares a single lookup, and each alternative
- * Edition's preferred ISBN is read once. `coverage` loads an Edition's
+ * Release of one Edition shares a single lookup, each alternative
+ * Edition's preferred ISBN is read once, and the Editions covering a Volume
+ * are scanned once for all its borrowers. `coverage` loads an Edition's
  * Coverage in order; a caller that already memoizes it (`browseCache`)
  * passes its own so the fallback shares those reads.
  */
@@ -195,22 +197,27 @@ export function coverIsbnCache(
       .withIndex("by_edition", (q) => q.eq("editionId", editionId))
       .take(1),
 ) {
-  const once = (
-    memo: Map<Id<"editions">, Promise<string | null>>,
-    editionId: Id<"editions">,
-    load: () => Promise<string | null>,
-  ) => {
-    let hit = memo.get(editionId);
+  // Promises are memoized so concurrent callers share one in-flight read.
+  const once = <K, V>(memo: Map<K, Promise<V>>, key: K, load: () => Promise<V>) => {
+    let hit = memo.get(key);
     if (!hit) {
       hit = load();
-      memo.set(editionId, hit);
+      memo.set(key, hit);
     }
     return hit;
   };
   const preferredMemo = new Map<Id<"editions">, Promise<string | null>>();
   const borrowedMemo = new Map<Id<"editions">, Promise<string | null>>();
+  const coveringMemo = new Map<Id<"volumes">, Promise<Array<Doc<"volumeCoverages">>>>();
   const preferred = (editionId: Id<"editions">) =>
     once(preferredMemo, editionId, () => isbnInEdition(ctx, editionId));
+  const covering = (volumeId: Id<"volumes">) =>
+    once(coveringMemo, volumeId, () =>
+      ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
+        .collect(),
+    );
   return {
     /** The ISBN an ISBN-less Release of this Edition is looked up by. */
     borrowed: (editionId: Id<"editions">) =>
@@ -219,11 +226,7 @@ export function coverIsbnCache(
         if (own) return own;
         const first = (await coverage(editionId))[0];
         if (!first) return null;
-        const covering = await ctx.db
-          .query("volumeCoverages")
-          .withIndex("by_volume", (q) => q.eq("volumeId", first.volumeId))
-          .collect();
-        for (const row of covering) {
+        for (const row of await covering(first.volumeId)) {
           if (row.editionId === editionId) continue;
           const isbn = await preferred(row.editionId);
           if (isbn) return isbn;

@@ -29,7 +29,10 @@
 // stories": 1–4 or 1–3), unless that number closes a serial list ("1, 2,
 // and 3 together"), and when items follow a "/" or ";" ("1–3 / 4–6" may name
 // two books). A range never reads two ways, whatever follows it ("volumes
-// 1–3 plus 16 pages of art"). Only the line size settles two readings.
+// 1–3 plus 16 pages of art", "1–3 plus 4–6 in one book"), and neither does a
+// last item with its own marker ("1–3 and volume 4 in one book") unless a
+// possessive follows it ("and volume 4's bonus chapter"). Only the line size
+// settles two readings.
 // Otherwise the statement is evidence no range can hold, as a gap or a range
 // that runs on ("1-2-3") is: the book stays Unmapped, never on a shortened
 // range and never on a guess.
@@ -52,24 +55,38 @@ const DASH_MARK = "[-‐‑‒–—−~]";
 const DASH = String.raw`\s*(?:${DASH_MARK}|to|through|thru)\s*`;
 const VERB = /\b(?:collect(?:s|ing|ed)?|contain(?:s|ing)?|includ(?:es|ing)|compil(?:es|ing)|gather(?:s|ing))\b/gi;
 
-// One listed item: "5", "#5", "1-3", "volume 3" (as in "volume 1 and volume 3").
-const ITEM = String.raw`(?:${VOL}\s*)?#?${NUM}(?:${DASH}#?${NUM})?`;
+// An item with its own marker: "#5", "volume 3" (as in "volume 1 and volume
+// 3"), "vols. 4-6".
+const MARKED_ITEM = String.raw`(?:${VOL}\s*|#)#?${NUM}(?:${DASH}#?${NUM})?`;
+// One listed item: a marked one, "5", or "1-3".
+const ITEM = String.raw`(?:${MARKED_ITEM}|${NUM}(?:${DASH}#?${NUM})?)`;
+// A joined item read whatever follows it: one with its own marker ("plus
+// volume 4 in one book") or a range ("plus 4-6 in one book").
+const JOINED = String.raw`(?:${MARKED_ITEM}|${NUM}${DASH}#?${NUM})`;
 // Between items: "," "and" "&" ("40, 41, and 42"), or "/" ";", which join
 // only weakly (readings()).
 const SEP = String.raw`\s*(?:[,;/]\s*(?:(?:\band\b|&)\s*)?|(?:\band\b|&)\s*)`;
 // A statement end, or punctuation that closes a phrase ("40, 41, and the
 // Guidebook").
 const END = String.raw`(?:\s*(?:$|[.!?,;:)\]—])|\s+[-–](?:\s|$))`;
-// "1-3 plus 4", "1 + 3", "1 as well as 3": one more item, when a statement
-// end follows it. In "1-3 plus 16 pages" the number counts something else.
+// "1-3 plus 4-6", "1 + vol. 3", "1 as well as 3": one more item. A range or
+// an item with its own marker is always read; a bare number only when a
+// statement end follows it (in "1-3 plus 16 pages" it counts something
+// else). Every joined item is read: "1-3 plus 4-6 plus 7-9".
 const ALSO = String.raw`\s*,?\s*(?:\+|\bplus\b|\bas\s+well\s+as\b|\balong\s+with\b)\s*`;
-const LIST = `${ITEM}(?:${SEP}${ITEM})*(?:${ALSO}${ITEM}(?=${END}))?`;
+const LIST = `${ITEM}(?:${SEP}${ITEM}|${ALSO}(?:${ITEM}(?=${END})|${JOINED}))*`;
 // Every "Volumes 1–3" or "Volume 1 and 3".
 const LISTED = new RegExp(`\\bvol(?:ume)?(?<plural>s)?\\.?\\s*(?<list>${LIST})`, "gi");
 
 // "." "!" or "?" before a capital ends a sentence, unless the "." closes an
-// abbreviation ("Dr. Stone").
-const SENTENCE_END = /(?<=(?<!\b(?:Dr|Mr|Mrs|Ms|St|No|Vols?))\.|[!?])\s+(?=["'“‘]?[A-Z])/;
+// abbreviation ("Dr. Stone"), or the "!" or "?" is a name's own and its
+// Volumes follow ("Collects Negima! Volumes 37-38", "Haikyu!! VOLUMES"). A
+// name is a capitalized word inside a sentence: "Collects bonus art!
+// Volumes 4 and 5 are out now" and "Wow! Volumes 1-3 in one book" still
+// split. A "." after a name is an ordinary sentence end ("from Oda. Volumes
+// 4-6 on sale now"), so "Bakuman. Volumes 1-3" splits too.
+const SENTENCE_END =
+  /(?<=(?<!\b(?:Dr|Mr|Mrs|Ms|St|No|Vols?))\.|[!?])(?!(?<=[^\s.!?]\s+["'“‘]?[A-Z]\S*[!?])\s+["'“‘]?(?:Vol(?:umes?|s)?|VOL(?:UMES?|S)?)\b)\s+(?=["'“‘]?[A-Z])/;
 // An article or preposition that opens the list's own phrase: the verb then
 // collects the phrase's head ("a preview of volumes 4 and 5"), not the list.
 const OPENER = /\b(?:a|an|the|of|in|on|at|to|for|from|with|into|by)$/i;
@@ -82,6 +99,10 @@ const RUN_ON = new RegExp(String.raw`^\s*${DASH_MARK}\s*#?\d`);
 // The join before each middle item of a serial list: a bare comma ("1, 2, and 3").
 const COMMA = new RegExp(String.raw`^\s*,\s*(?:${VOL}\s*)?#?$`, "i");
 const WEAK_JOIN = /[/;]/;
+// The join before an item that carries its own marker: "and volume 4", "& #4".
+const MARKED = new RegExp(String.raw`(?:\b${VOL}|#)\s*#?$`, "i");
+// "volume 4's bonus chapter": the item names what the Volume holds.
+const POSSESSIVE = /^['’]s\b/;
 // A Volume the sentence names past the list with its own marker.
 const NAMED = new RegExp(String.raw`\b${VOL}\s*#?(\d{1,3})`, "gi");
 
@@ -161,15 +182,19 @@ function spanRange(part: Item[]): CoverRange | null {
 
 /**
  * A list's readings, fullest first, given the rest of its sentence (see the
- * header). The first item always stands: the marker names it a Volume. One
- * number under a plural marker ("volumes 1 through the finale") is a list
- * left unread, which no range holds.
+ * header). The first item always stands: the marker names it a Volume, and
+ * so does a later item's own marker ("and volume 4"), so only a bare last
+ * number, or one a possessive follows ("and volume 4's bonus chapter"), may
+ * count something else. One number under a plural marker ("volumes 1
+ * through the finale") is a list left unread, which no range holds.
  */
 function readings(all: Item[], rest: string, plural: boolean): Readings {
   const read = (part: Item[]) => (plural && lone(part) ? null : spanRange(part));
   const weak = all.findIndex((item) => WEAK_JOIN.test(item.join));
   const serial = all.length > 2 && all.slice(1, -1).every((item) => COMMA.test(item.join));
-  const countsMore = all.length > 1 && all.at(-1)!.single && !serial && !ENDS.test(rest);
+  const last = all.at(-1)!;
+  const bare = last.single && (!MARKED.test(last.join) || POSSESSIVE.test(rest));
+  const countsMore = all.length > 1 && bare && !serial && !ENDS.test(rest);
   const certain = weak > 0 ? weak : countsMore ? all.length - 1 : all.length;
   return certain < all.length ? [read(all), read(all.slice(0, certain))] : [read(all)];
 }

@@ -8,6 +8,7 @@
 
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
+import { followMerges } from "../../catalogPages";
 import { allocatePublicId } from "../publicIds";
 import {
   DUPLICATE_SLUGS,
@@ -559,6 +560,8 @@ async function mergeSeries(
   ]);
   const orphans = await orphanVolumes(ctx, loserVolumes, planned);
 
+  // A placement an earlier leg made still re-files what that leg left
+  // (followVolume); the Series merge waits until nothing is left.
   const moves = newMoves(entry.key);
   for (const placement of entry.placements) {
     const volume = await ctx.db.get(placement.volumeId);
@@ -566,14 +569,19 @@ async function mergeSeries(
     if (volume!.status === "merged") {
       const home = await liveVolume(ctx, volume!._id);
       if (home?.seriesId !== survivor._id) skip(`volume ${volume!.publicId} merged outside the survivor`);
+      await followVolume(ctx, audit, moves, home!);
       continue;
     }
     if (volume!.status !== "active") continue; // hidden since planning: nothing to place
-    if (volume!.seriesId === survivor._id) continue;
+    if (volume!.seriesId === survivor._id) {
+      await followVolume(ctx, audit, moves, volume!);
+      continue;
+    }
     if (volume!.seriesId !== loser._id) skip(`volume ${volume!.publicId} left the loser`);
     await placeVolume(ctx, audit, moves, volume!, survivor._id, placement);
   }
   await closeMoves(ctx, audit, { type: "series", id: loser._id }, moves);
+  if (moves.unfinished) return partial;
   for (const orphan of orphans) {
     await hide(ctx, audit, { type: "volume", id: orphan._id }, orphan);
     audit.note(`hid orphan volume ${orphan.publicId} (no active edition)`);
@@ -599,10 +607,11 @@ async function mergeSeries(
 
 /**
  * Place one loser Volume in the survivor: merge it into the survivor's
- * Volume the plan names (or the one with the same label), else move it
- * across with its label, at position = its number, carrying its trackers'
- * Tracking Visibility (carryingTracking; the Series merge that follows may
- * wait for stage 4).
+ * Volume the plan names (or the one with the same label; the Volume merge
+ * leaves the passes on its Editions to followVolume), else move it across
+ * with its label, at position = its number, carrying its trackers'
+ * Tracking Visibility and re-filing their rows (carryingTracking; the
+ * Series merge that follows may wait for stage 4).
  */
 async function placeVolume(
   ctx: MutationCtx,
@@ -623,6 +632,7 @@ async function placeVolume(
   if (target) {
     if (target.locked || volume.locked) skip("volume locked");
     await merge(ctx, audit, { type: "volume", id: target._id }, { type: "volume", id: volume._id });
+    await followVolume(ctx, audit, moves, target);
     return;
   }
   const label = canonicalLabel(placement.label);
@@ -747,9 +757,18 @@ async function remodelEdition(
   // Group 0 stays on this Edition; each further group's Releases move to a
   // new Edition of the same publisher with its own coverage. A group without
   // coverage keeps what it has (releases the research could not place).
-  // Their trackers keep their Tracking Visibility (carryingTracking).
+  // Their trackers keep their Tracking Visibility and their rows follow
+  // (carryingTracking), also on a re-run over an Edition an earlier run
+  // created.
   const moves = newMoves(entry.key);
-  await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
+  const editionIds = new Set([edition._id]);
+  for (const group of entry.groups.slice(1)) {
+    for (const id of group.releaseIds ?? []) {
+      const release = await ctx.db.get(id);
+      if (release) editionIds.add(release.editionId);
+    }
+  }
+  await carryingTracking(ctx, audit, moves, { editionIds }, async () => {
     for (const [i, group] of entry.groups.entries()) {
       let editionId = edition._id;
       if (i > 0) {
@@ -787,6 +806,7 @@ async function remodelEdition(
     }
   });
   await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
+  if (moves.unfinished) return partial;
 
   const first = entry.groups.find((g) => g.coverage.length > 0)?.coverage[0];
   const firstVolume = first ? await coveredVolume(ctx, audit, target._id, first) : null;
@@ -1338,13 +1358,14 @@ function trailSink(ctx: MutationCtx, audit: Audit, moves: Moves): OverrideSink {
 
 /**
  * Run `change`, which may move these Volumes to another Series or re-derive
- * these Editions' Series (re-parenting, new coverage, a moved line), then
- * keep every User's tracking of them as private as it was: Volume read
- * counts, Owned Releases, Owned Bundles holding them, passes, and omnibus
- * Ratings (carryEditionTracking, the rule merges apply) now answer to
- * Series that absorb the overrides of those they left. Only what `change`
- * actually moves is carried, so a re-run that moves nothing leaves every
- * override as the User has since set it.
+ * these Editions' Series (re-parenting, new coverage, a moved line, a
+ * Release moved to another Edition), then keep every User's tracking of
+ * them as private as it was: Volume read counts, Owned Releases, Owned
+ * Bundles holding them, passes, and omnibus Ratings (carryEditionTracking,
+ * the rule merges apply) now answer to Series that absorb the overrides of
+ * those they left. Only what `change` actually moves is carried, so a
+ * re-run that moves nothing leaves every override as the User has since
+ * set it.
  *
  * Unlike the re-filing sweeps, this carry is not bounded: the profile reads
  * these surfaces through the catalog (a read count through its Volume's
@@ -1354,6 +1375,11 @@ function trailSink(ctx: MutationCtx, audit: Audit, moves: Moves): OverrideSink {
  * everyone: freeze both sides, move the catalog, carry each tracker in
  * sweeps, then unfreeze. Carrying ahead of the move instead would race a
  * User's own later override change.
+ *
+ * Then the personal rows that denormalize a Series re-file under the one
+ * they now belong to (followVolume, followEdition, followRelease), in
+ * bounded sweeps. Every repair that moves tracking between Series runs its
+ * move here, so none can carry the visibility and forget the rows.
  */
 async function carryingTracking<R>(
   ctx: MutationCtx,
@@ -1380,24 +1406,36 @@ async function carryingTracking<R>(
     for (const row of readers) await carryVisibility(ctx, sink, row.userId, READING, [from], [to]);
   }
   for (const [editionId, before] of editionsBefore) await carryEditionTracking(ctx, sink, editionId, before);
+
+  for (const volumeId of volumesBefore.keys()) {
+    const volume = await ctx.db.get(volumeId);
+    if (volume) await followVolume(ctx, audit, moves, volume);
+  }
+  for (const [editionId, before] of editionsBefore) {
+    await followEdition(ctx, audit, moves, editionId);
+    // A Release `change` moved to another Edition follows on its own.
+    for (const releaseId of before.releaseSeries.keys()) {
+      const release = await ctx.db.get(releaseId);
+      if (release && release.editionId !== editionId) await followRelease(ctx, audit, moves, release);
+    }
+  }
   return result;
 }
 
 /**
- * A split re-parented this Volume: re-file what carries its Series (Volume
- * Progress, Volume Favorites, Comments) and each covering Edition's rows
- * (followEdition) under the Series it now sits in. Rows key on the Volume,
- * so nothing collides; only rows still filed under the source move. Each
- * table is a sweep (bounded legs).
+ * A repair re-parented this Volume (or merged another into it): re-file
+ * what carries its Series (Volume Progress, Volume Favorites, Comments) and
+ * each covering Edition's rows (followEdition) under the Series it now sits
+ * in. Rows key on the Volume, so nothing collides; only stale rows move, so
+ * a re-run heals any earlier move. Each table is a sweep (bounded legs).
  */
 async function followVolume(
   ctx: MutationCtx,
   audit: Audit,
   moves: Moves,
   volume: Doc<"volumes">,
-  sourceId: Id<"series">,
 ) {
-  const onSource = (row: { seriesId: Id<"series"> }) => row.seriesId === sourceId;
+  const stale = (row: { seriesId: Id<"series"> }) => row.seriesId !== volume.seriesId;
   const to = { seriesId: volume.seriesId };
   await sweep(
     ctx,
@@ -1409,7 +1447,7 @@ async function followVolume(
         .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
         .take(count),
     async (row) => {
-      if (onSource(row)) await refile(ctx, audit, moves, "volumeProgress", row, to);
+      if (stale(row)) await refile(ctx, audit, moves, "volumeProgress", row, to);
     },
   );
   await sweep(
@@ -1422,7 +1460,7 @@ async function followVolume(
         .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
         .take(count),
     async (row) => {
-      if (onSource(row)) await refile(ctx, audit, moves, "favorites", row, to);
+      if (stale(row)) await refile(ctx, audit, moves, "favorites", row, to);
     },
   );
   await sweep(
@@ -1435,57 +1473,70 @@ async function followVolume(
         .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
         .take(count),
     async (row) => {
-      if (onSource(row)) await refile(ctx, audit, moves, "comments", row, to);
+      if (stale(row)) await refile(ctx, audit, moves, "comments", row, to);
     },
   );
   for (const edition of await activeEditionsCovering(ctx, volume._id)) {
-    await followEdition(ctx, audit, moves, edition._id, sourceId);
+    await followEdition(ctx, audit, moves, edition._id);
   }
 }
 
 /**
- * A split moved this Edition's coverage (and refreshed its Releases'
- * Series): each Release Progress row takes its Release's first covered
- * Series (reading.ts passSeriesId) and an omnibus Favorite its first
- * covered Volume's. The profile shows a pass only where its own Series is
- * public too, so re-filing one still under the source (also a stale row a
- * re-run heals) carries its reader's Reading visibility. Each Release's
- * passes and the Edition's Favorites are sweeps (bounded legs).
+ * A repair re-derived this Release's Series: each of its Release Progress
+ * rows takes the Release's first covered Series, merges followed
+ * (reading.ts passSeriesId). The profile shows a pass only where its own
+ * Series is public too, so re-filing one carries its reader's Reading
+ * visibility from the Series it was filed under. Only stale rows move, so a
+ * re-run heals any earlier move without carrying again (R16). A sweep
+ * (bounded legs).
+ */
+async function followRelease(
+  ctx: MutationCtx,
+  audit: Audit,
+  moves: Moves,
+  release: Doc<"releases">,
+) {
+  const first = release.seriesIds[0];
+  if (!first) return;
+  const passSeriesId = (await followMerges(ctx, "series", await ctx.db.get(first)))?._id ?? first;
+  const sink = trailSink(ctx, audit, moves);
+  await sweep(
+    ctx,
+    moves,
+    `releaseProgress:${release._id}`,
+    (after, count) =>
+      ctx.db
+        .query("releaseProgress")
+        .withIndex("by_release", (q) => q.eq("releaseId", release._id).gt("_creationTime", after))
+        .take(count),
+    async (pass) => {
+      if (pass.seriesId === passSeriesId) return;
+      await refile(ctx, audit, moves, "releaseProgress", pass, { seriesId: passSeriesId });
+      await carryVisibility(
+        ctx,
+        sink,
+        pass.userId,
+        READING,
+        [...release.seriesIds, pass.seriesId],
+        [...release.seriesIds, passSeriesId],
+      );
+    },
+  );
+}
+
+/**
+ * A repair moved this Edition's coverage (and refreshed its Releases'
+ * Series): its Releases' passes follow (followRelease), and an omnibus
+ * Favorite takes its first covered Volume's Series. Only stale rows move;
+ * the Favorites are a sweep (bounded legs).
  */
 async function followEdition(
   ctx: MutationCtx,
   audit: Audit,
   moves: Moves,
   editionId: Id<"editions">,
-  sourceId: Id<"series">,
 ) {
-  const sink = trailSink(ctx, audit, moves);
-  for (const release of await releasesOf(ctx, editionId)) {
-    const passSeriesId = release.seriesIds[0];
-    if (!passSeriesId) continue;
-    await sweep(
-      ctx,
-      moves,
-      `releaseProgress:${release._id}`,
-      (after, count) =>
-        ctx.db
-          .query("releaseProgress")
-          .withIndex("by_release", (q) => q.eq("releaseId", release._id).gt("_creationTime", after))
-          .take(count),
-      async (pass) => {
-        if (pass.seriesId !== sourceId) return;
-        await refile(ctx, audit, moves, "releaseProgress", pass, { seriesId: passSeriesId });
-        await carryVisibility(
-          ctx,
-          sink,
-          pass.userId,
-          READING,
-          [...release.seriesIds, pass.seriesId],
-          [...release.seriesIds, passSeriesId],
-        );
-      },
-    );
-  }
+  for (const release of await releasesOf(ctx, editionId)) await followRelease(ctx, audit, moves, release);
 
   const first = (await coverageOf(ctx, editionId)).sort((a, b) => a.order - b.order)[0];
   const firstSeriesId = first ? (await ctx.db.get(first.volumeId))?.seriesId : undefined;
@@ -1500,7 +1551,7 @@ async function followEdition(
         .withIndex("by_edition", (q) => q.eq("editionId", editionId).gt("_creationTime", after))
         .take(count),
     async (row) => {
-      if (row.seriesId === sourceId) await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });
+      if (row.seriesId !== firstSeriesId) await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });
     },
   );
 }
@@ -1655,7 +1706,7 @@ async function splitSeries(
     const volume = await ctx.db.get(row.volumeId);
     if (!volume) return skip(`volume ${row.volumeId} missing`);
     if (volume.seriesId === targetId) {
-      await followVolume(ctx, audit, moves, volume, source._id);
+      await followVolume(ctx, audit, moves, volume);
       continue;
     }
     if (volume.status !== "active") skip(`volume ${volume.publicId} is ${volume.status}`);
@@ -1684,8 +1735,6 @@ async function splitSeries(
         await refreshReleaseDenorms(ctx, edition._id);
       }
     });
-    const moved = await ctx.db.get(volume._id);
-    if (moved) await followVolume(ctx, audit, moves, moved, source._id);
   }
 
   // Editions on a Volume label both works share: the staying work keeps
@@ -1699,7 +1748,7 @@ async function splitSeries(
     for (const cover of coverage) covered.push(await ctx.db.get(cover.volumeId));
     const done = covered.length === row.labels.length && covered.every((vol, i) => vol?.seriesId === targetId && sameLabel(vol.label, row.labels[i]));
     if (done) {
-      await followEdition(ctx, audit, moves, edition._id, source._id);
+      await followEdition(ctx, audit, moves, edition._id);
       continue;
     }
     if (!sameValue(coverage.map((c) => c.volumeId), row.fromVolumeIds)) {
@@ -1718,7 +1767,6 @@ async function splitSeries(
       await followLine(ctx, audit, edition, source._id, targetId, moving);
       await replaceCoverage(ctx, audit, edition._id, rows);
     });
-    await followEdition(ctx, audit, moves, edition._id, source._id);
   }
 
   // The moved work's backbone Volumes that have no Release yet.
@@ -2033,6 +2081,7 @@ async function setCoverage(
     }
   });
   await closeMoves(ctx, audit, { type: "edition", id: edition._id }, moves);
+  if (moves.unfinished) return partial;
   await retireVolumes(ctx, audit, entry.retireVolumeIds, rows[0]!.volumeId);
   return audit.wrote ? applied : already;
 }

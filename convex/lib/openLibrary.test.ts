@@ -255,8 +255,12 @@ describe("title + subtitle split across fields", () => {
         subtitle: "Magic and Muscles, Vol. 3",
       }),
     ).toMatchObject({
+      title: "Mashle: Magic and Muscles, Vol. 3",
       seriesTitle: "Mashle: Magic and Muscles",
       volumeLabel: "3",
+      bareNumber: undefined,
+      bareRoman: undefined,
+      bareSplit: undefined,
     });
     expect(
       parseEditionJson({
@@ -277,14 +281,64 @@ describe("title + subtitle split across fields", () => {
         title: "Chainsaw Man, Vol. 22",
         subtitle: "Something Sinister",
       }),
-    ).toMatchObject({ seriesTitle: "Chainsaw Man", volumeLabel: "22" });
+    ).toMatchObject({
+      title: "Chainsaw Man, Vol. 22",
+      seriesTitle: "Chainsaw Man",
+      volumeLabel: "22",
+    });
     expect(
       parseEditionJson({
         ...EDITION,
         title: "Honey Hunt",
         subtitle: "Shojo Beat edition",
       }),
-    ).toMatchObject({ seriesTitle: "Honey Hunt", volumeLabel: undefined });
+    ).toMatchObject({
+      title: "Honey Hunt",
+      seriesTitle: "Honey Hunt",
+      volumeLabel: undefined,
+    });
+  });
+
+  // W10: the joined text is the book title, so its provisional readings
+  // resolve against the whole name (lib/catalogTitle.ts resolveBaseSeries).
+  it("keeps the joined title and its provisional readings", () => {
+    expect(
+      parseEditionJson({
+        ...EDITION,
+        title: "Kingdom",
+        subtitle: "Hearts II",
+      }),
+    ).toMatchObject({
+      title: "Kingdom: Hearts II",
+      seriesTitle: "Kingdom: Hearts",
+      volumeLabel: "2",
+      bareRoman: true,
+      bareNumber: true,
+    });
+    expect(
+      parseEditionJson({
+        ...EDITION,
+        title: "Chainsaw",
+        subtitle: "Man 22",
+      }),
+    ).toMatchObject({
+      title: "Chainsaw: Man 22",
+      seriesTitle: "Chainsaw: Man 22",
+      volumeLabel: undefined,
+      bareSplit: { seriesTitle: "Chainsaw: Man", volumeLabel: "22" },
+    });
+    expect(
+      parseEditionJson({
+        ...EDITION,
+        title: "Mashle",
+        subtitle: "Magic and Muscles 3 (Manga)",
+      }),
+    ).toMatchObject({
+      title: "Mashle: Magic and Muscles 3 (Manga)",
+      seriesTitle: "Mashle: Magic and Muscles",
+      volumeLabel: "3",
+      bareNumber: true,
+    });
   });
 });
 

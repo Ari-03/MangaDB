@@ -317,23 +317,57 @@ function emptyPeel(): Peeled {
 }
 
 const STATING = "(?:contain(?:s|ing)|includ(?:es|ing)|collect(?:s|ing))\\s+vol(?:ume)?s?\\.?\\s*";
-const STATEMENT = new RegExp(`^${STATING}#?(\\d+(?:\\.\\d+)?)(.*)$`, "i");
+/** A statement's Volume designation (a list, or one number), then its prose. */
+const STATEMENT = new RegExp(`^${STATING}(${RANGE}|#?${NUM})(?:\\s*(.*))?$`, "i");
 /** A packaged book's subtitle that only states its coverage: "…, Vol. 1: Includes Vols. 1 & 3". */
 const STATED_SUBTITLE = new RegExp(`^${STATING}(?:${RANGE}|#?${NUM})$`, "i");
+/** Joins the designation's own grammar has no word for: "plus", "as well as", "along with". */
+const ALSO = "\\s*,?\\s*(?:\\+|\\bplus\\b|\\bas\\s+well\\s+as\\b|\\balong\\s+with\\b)\\s*";
+/**
+ * A marked item or a range joined past the designation, read whatever copy
+ * follows it: "plus Vol. 2", "as well as Vols. 4-6", "+ #4", "plus 4-6". A
+ * bare number there may count the copy ("plus 16 pages"), so it is not read,
+ * nor is a possessive ("plus Vol. 4's bonus chapter"), which names copy.
+ */
+const JOINED = new RegExp(
+  `^${ALSO}((?:vol(?:ume)?s?\\.?\\s*|#)(?:${RANGE}|#?${NUM})|${NUM}\\s*[-–—]\\s*${NUM})(?!\\.?\\d|['’]s\\b)(?:\\s*(.*))?$`,
+  "i",
+);
+/** Prose that continues the list past what the designation reads: "+ 3", "plus 4". */
+const UNREAD = new RegExp(
+  `^(?:[&,]|\\band\\b|${ALSO})\\s*#?${NUM}\\s*(?:$|[,:;)\\]])`,
+  "i",
+);
+/** A list whose last item is a bare number after "and", "&", or a comma: "1-3 and 4". */
+const BARE_LAST = /(?:[,&]|\band)\s*\d+(?:\.\d+)?$/i;
 
 /**
  * "Contains Vol. 9 & Ashen Victor", "Collecting Vols. 1 and 3": whatever
- * Volumes the statement lists are the coverage. A number it lists but
- * cannot read ("Includes Vol. 1 + 3") leaves the coverage unknown, never
- * Volume 1 alone. Returns false for text that states no coverage.
+ * Volumes the designation lists are the coverage, together with any marked
+ * item or range joined after it ("Vols. 1-3 plus Vol. 4"). The prose after
+ * that ("plus 16 pages of art", "& Ashen Victor") states nothing. Coverage stays
+ * unknown, never a guess, when a join and a number follow that the
+ * designation could not read ("Includes Vol. 1 + 3"), or when a bare last
+ * number has prose after it that it may count ("Vol. 1 and 2 bonus
+ * stories"): a title has no line size to settle it. Returns false for text
+ * that states no coverage.
  */
 function absorbStatement(text: string, peel: Peeled): boolean {
   const stated = STATEMENT.exec(text);
   if (!stated) return false;
-  const listed = parseVolumeList(stated[1]! + stated[2]!);
-  const unread = listed === null && /\d/.test(stated[2]!);
-  const only = canonicalLabel(stated[1]!);
-  peel.coverRange = listed || unread ? (listed?.coverRange ?? null) : { from: only, to: only };
+  let designation = stated[1]!;
+  let prose = stated[2] ?? "";
+  // Each joined item joins the list as its own piece, so "1-3 plus Vol. 5"
+  // is judged gapped rather than read as one span.
+  for (let joined = JOINED.exec(prose); joined; joined = JOINED.exec(prose)) {
+    designation += ` & ${joined[1]!}`;
+    prose = joined[2] ?? "";
+  }
+  const listed = parseVolumeList(designation);
+  const unread =
+    UNREAD.test(prose) || (listed !== null && BARE_LAST.test(designation) && /^[^,;:.!?)\]—]/.test(prose));
+  const only = canonicalLabel(designation.replace(/^#/, ""));
+  peel.coverRange = unread ? null : listed ? listed.coverRange : { from: only, to: only };
   peel.multiVolume ||= listed !== null || unread;
   return true;
 }

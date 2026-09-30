@@ -166,20 +166,29 @@ export function ShelfPrompts({
   );
 }
 
+/** A fresh token per run, so a finishing run frees only what it still holds. */
+type RunOwner = symbol;
+
 /**
  * What whole runs have not finished writing, shared by every control in the
  * app (it outlives a shelf the viewer navigates away from mid-run): entry
  * runs claim the Releases they write, read runs the Volumes (public IDs)
  * their books cover completely — reading is per Volume, so another Edition
- * covering the same Volume (an omnibus on another path) is locked too. A
- * run claims everything when it starts and frees each batch once it lands
- * (keeping what a later batch still writes); until then the claimed books'
- * cover controls, and any other run over them, are locked, so a later batch
- * never overwrites a choice made meanwhile. Every other control that writes
- * an entry or Volume Progress (the Release row, the Volume read count, the
- * pass completion) locks on it through useRunLock.
+ * covering the same Volume (an omnibus on another path) is locked too. Each
+ * claim records the run holding it (RunOwner). A run claims everything when
+ * it starts and frees each batch once it lands (keeping what a later batch
+ * still writes); until then the claimed books' cover controls, and any
+ * other run over them, are locked, so a later batch never overwrites a
+ * choice made meanwhile. A run only ever frees what it still holds, so a
+ * book it freed and another run then claimed stays locked for that run.
+ * Every other control that writes an entry or Volume Progress (the Release
+ * row, the Volume read count, the pass completion) locks on it through
+ * useRunLock.
  */
-export type RunClaims = { entries: ReadonlySet<Id<"releases">>; reads: ReadonlySet<number> };
+export type RunClaims = {
+  entries: ReadonlyMap<Id<"releases">, RunOwner>;
+  reads: ReadonlyMap<number, RunOwner>;
+};
 
 /** What a whole run marks: one collection state, or read. */
 type RunAction = EntryState | "read";
@@ -206,7 +215,7 @@ function landedClaim(action: RunAction, batch: QuickBook[], rest: QuickBook[]): 
   };
 }
 
-let runClaims: RunClaims = { entries: new Set(), reads: new Set() };
+let runClaims: RunClaims = { entries: new Map(), reads: new Map() };
 const claimListeners = new Set<() => void>();
 
 const readRunClaims = () => runClaims;
@@ -216,13 +225,16 @@ function subscribeRunClaims(listener: () => void) {
   return () => void claimListeners.delete(listener);
 }
 
-/** Claim (held) or free, then re-render the subscribed controls. */
-function setRunClaims(claim: Claim, held: boolean) {
-  const update = <T,>(current: ReadonlySet<T>, keys: T[] = []) => {
-    const next = new Set(current);
+/**
+ * Claim for `owner` (held) or free what `owner` still holds — freeing skips
+ * keys another run holds now — then re-render the subscribed controls.
+ */
+function setRunClaims(owner: RunOwner, claim: Claim, held: boolean) {
+  const update = <T,>(current: ReadonlyMap<T, RunOwner>, keys: T[] = []) => {
+    const next = new Map(current);
     for (const key of keys) {
-      if (held) next.add(key);
-      else next.delete(key);
+      if (held) next.set(key, owner);
+      else if (next.get(key) === owner) next.delete(key);
     }
     return next;
   };
@@ -387,9 +399,10 @@ export function RunActions({
   if (total === 0) return null;
 
   // Write `items` in RUN_BATCH slices, one after another, claiming them all
-  // up front and freeing each slice once it lands (landedClaim); merges each batch's
-  // prompt suggestions by Series and raises them once at the end — also
-  // after a failure, for the batches that did land.
+  // up front and freeing each slice once it lands (landedClaim), then
+  // whatever this run still holds at the end; merges each batch's prompt
+  // suggestions by Series and raises them once at the end — also after a
+  // failure, for the batches that did land.
   const inBatches = async <S extends SeriesSuggestion>(
     action: RunAction,
     items: QuickBook[],
@@ -398,7 +411,8 @@ export function RunActions({
   ) => {
     // The live claims, not the render's: a run may have started since.
     if (items.length === 0 || busy || isClaimed(readRunClaims(), claimFor(action, items))) return;
-    setRunClaims(claimFor(action, items), true);
+    const owner: RunOwner = Symbol("run");
+    setRunClaims(owner, claimFor(action, items), true);
     setFailure(null);
     const suggestions = new Map<Id<"series">, S>();
     let done = 0;
@@ -409,7 +423,7 @@ export function RunActions({
         for (const suggestion of await write(batch)) {
           suggestions.set(suggestion.seriesId, suggestion);
         }
-        setRunClaims(landedClaim(action, batch, items.slice(start + RUN_BATCH)), false);
+        setRunClaims(owner, landedClaim(action, batch, items.slice(start + RUN_BATCH)), false);
         done += batch.length;
         setBusy({ action, done, total: items.length });
       }
@@ -418,7 +432,7 @@ export function RunActions({
         `Marked ${done} of ${items.length} ${items.length === 1 ? "book" : "books"}, then stopped: ${errorMessage(err)}`,
       );
     } finally {
-      setRunClaims(claimFor(action, items), false);
+      setRunClaims(owner, claimFor(action, items), false);
       if (suggestions.size > 0) prompt([...suggestions.values()]);
       setBusy(null);
     }

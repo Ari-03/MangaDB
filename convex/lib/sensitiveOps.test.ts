@@ -5,9 +5,11 @@
 // a later change of defaults; Split shows nothing the profile did not show
 // just before (not an override a merge narrowed, nor tracking it moves back,
 // whether logged with the merge or since, on either side, whatever other
-// merges, their Splits or the User did in between); merges and Splits
-// between some Series and none are refused for tracked Releases and
-// Bundles; Split must never resurrect personal rows of a User whose account
+// merges, their Splits or the User did in between), while a catalog record
+// the User does not track (an unowned Bundle) narrows nothing; omnibus
+// Ratings keep their governance when their Series or Volumes are hidden;
+// merges and Splits between some Series and none are refused for tracked
+// Releases and Bundles; Split must never resurrect personal rows of a User whose account
 // was deleted; merges carry the denormalized references that follow the
 // moved rows (Unmapped Packaging Series, a pass's Series, imprint parents);
 // and Split reverses every chunk of the data repair's chunked publisher
@@ -1694,5 +1696,167 @@ describe("split — chunked repair merges", () => {
     expect(after.edition?.publisherId).toBe(p.loserId);
     expect(after.release?.publisherId).toBe(p.loserId);
     expect(after.open).toEqual([]);
+  });
+});
+
+/** The Moderator's Hide of a catalog record (not dave's private override: see `hide`). */
+const hideRecord = (t: T, ref: { type: string; id: string }) =>
+  asMod(t).mutation(api.sensitiveOps.hideRecord, {
+    ref: ref as never,
+    reason: "Catalog maintenance.",
+    confirmImpact: true,
+  });
+
+describe("split — a catalog dependency alone narrows nothing", () => {
+  /**
+   * Public defaults, the loser and survivor explicitly public for Ownership,
+   * and Gamma private for `kinds`; a "Mixed Box" holds the loser's Release
+   * and Gamma's, which dave owns only when `ownBox` says so.
+   */
+  async function mixedBox(t: T, f: Fixture, kinds: Array<"ownership" | "reading">, ownBox: boolean) {
+    await publicDefaults(t);
+    for (const seriesId of [f.loser.seriesId, f.survivor.seriesId]) {
+      await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId, kind: "ownership", visibility: "public" });
+    }
+    const gamma = await addSeries(t, 3, "Gamma");
+    await hide(t, gamma.seriesId, kinds);
+    const bundleId = await box(t, 901, "Mixed Box", [f.loser.releaseId, gamma.releaseId]);
+    if (ownBox) await asReader(t).mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
+    return gamma;
+  }
+
+  const volumeMerge = (t: T, f: Fixture) =>
+    mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+  const volumeSplit = (t: T, f: Fixture) => splitAs(t, { type: "volume", id: f.loser.volumeId });
+
+  it.each([
+    ["Volume", volumeMerge, volumeSplit],
+    ["Series", mergeSeries, splitSeries],
+  ] as const)("keeps a directly owned Release public through a %s Split when an unowned Bundle holds a private Series", async (_, merge, split) => {
+    const t = makeT();
+    const f = await setup(t);
+    await mixedBox(t, f, ["ownership"], false);
+    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    expect((await shared(t)).releases).toBe(1);
+
+    await merge(t, f);
+    expect((await shared(t)).releases).toBe(1);
+    await split(t, f);
+    expect((await shared(t)).releases).toBe(1);
+    // Gamma's override reached neither side: the Bundle is nothing dave tracks.
+    for (const seriesId of [f.loser.seriesId, f.survivor.seriesId]) {
+      expect(await stateOf(t, f, seriesId)).toMatchObject({ ownershipVisibility: "public" });
+    }
+  });
+
+  it("keeps an owned Release public and its owned Bundle private through a Split", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await mixedBox(t, f, ["ownership"], true);
+    await asReader(t).mutation(api.collection.setReleaseEntry, { releaseId: f.loser.releaseId, state: "owned" });
+    const owned = { releases: 1, bundles: [] };
+    expect(await shared(t)).toMatchObject(owned);
+
+    await volumeMerge(t, f);
+    expect(await shared(t)).toMatchObject(owned);
+    await volumeSplit(t, f);
+    expect(await shared(t)).toMatchObject(owned);
+  });
+
+  it("does not let an owned Bundle's Ownership narrow a pass's Reading through a Split", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await mixedBox(t, f, ["ownership", "reading"], true);
+    for (const seriesId of [f.loser.seriesId, f.survivor.seriesId]) {
+      await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId, kind: "reading", visibility: "public" });
+    }
+    await asReader(t).mutation(api.reading.startPass, { releaseId: f.loser.releaseId });
+    const passes = async () => (await shared(t)).reading.reduce((sum, row) => sum + row.passes, 0);
+    expect(await passes()).toBe(1);
+
+    await volumeMerge(t, f);
+    expect(await passes()).toBe(1);
+    await volumeSplit(t, f);
+    expect(await passes()).toBe(1);
+    expect((await shared(t)).bundles).toEqual([]);
+  });
+});
+
+describe("merge — omnibus Ratings of hidden records keep Tracking Visibility", () => {
+  /** A second Volume of the survivor Series, after its first. */
+  const secondSurvivorVolume = (t: T, f: Fixture) =>
+    t.run((ctx) =>
+      ctx.db.insert("volumes", { status: "active", publicId: 11, seriesId: f.survivor.seriesId, position: 2, label: "2" }),
+    );
+
+  /** Public Reading default with one Series explicitly private for Reading. */
+  async function privateReading(t: T, seriesId: Id<"series">) {
+    await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId, kind: "reading", visibility: "private" });
+  }
+
+  /** Two omnibuses: the loser's of both loser Volumes, the survivor's of two survivor Volumes. */
+  async function omnibuses(t: T, f: Fixture) {
+    const loserSecond = await secondLoserVolume(t, f);
+    return {
+      loserOmnibus: await omnibus(t, 700, [f.loser.volumeId, loserSecond]),
+      survivorOmnibus: await omnibus(t, 701, [f.survivor.volumeId, await secondSurvivorVolume(t, f)]),
+      loserSecond,
+    };
+  }
+
+  const ratings = async (t: T) => (await profile(t))!.ratings;
+
+  it.each([
+    ["its Series", (f: Fixture) => [{ type: "series", id: f.loser.seriesId }]],
+    ["its covered Volumes", (f: Fixture, loserSecond: Id<"volumes">) => [
+      { type: "volume", id: f.loser.volumeId },
+      { type: "volume", id: loserSecond },
+    ]],
+  ] as const)("keeps a loser omnibus Rating private through an Edition merge and Split when its covered records are hidden (%s)", async (_, hidden) => {
+    const t = makeT();
+    const f = await setup(t);
+    const { loserOmnibus, survivorOmnibus, loserSecond } = await omnibuses(t, f);
+    await privateReading(t, f.loser.seriesId);
+    await asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: loserOmnibus }, score: 37 });
+    expect(await ratings(t)).toEqual([]);
+    for (const ref of hidden(f, loserSecond)) await hideRecord(t, ref);
+    expect(await ratings(t)).toEqual([]);
+
+    await mergeAs(t, { type: "edition", id: survivorOmnibus }, { type: "edition", id: loserOmnibus });
+    expect(await ratings(t)).toEqual([]);
+    await splitAs(t, { type: "edition", id: loserOmnibus });
+    expect(await ratings(t)).toEqual([]);
+  });
+
+  it("keeps a survivor omnibus Rating private through an Edition merge when the survivor Series is hidden", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    const { loserOmnibus, survivorOmnibus } = await omnibuses(t, f);
+    await privateReading(t, f.survivor.seriesId);
+    await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: f.loser.seriesId, kind: "reading", visibility: "public" });
+    await asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: survivorOmnibus }, score: 37 });
+    await hideRecord(t, { type: "series", id: f.survivor.seriesId });
+    expect(await ratings(t)).toEqual([]);
+
+    await mergeAs(t, { type: "edition", id: survivorOmnibus }, { type: "edition", id: loserOmnibus });
+    expect(await ratings(t)).toEqual([]);
+    await splitAs(t, { type: "edition", id: loserOmnibus });
+    expect(await ratings(t)).toEqual([]);
+  });
+
+  it("keeps an omnibus Rating private through a cross-Series Volume merge and Split when its Series is hidden", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    const { loserOmnibus } = await omnibuses(t, f);
+    await privateReading(t, f.loser.seriesId);
+    await asReader(t).mutation(api.ratings.set, { target: { kind: "edition", id: loserOmnibus }, score: 37 });
+    await hideRecord(t, { type: "series", id: f.loser.seriesId });
+    expect(await ratings(t)).toEqual([]);
+
+    await mergeAs(t, { type: "volume", id: f.survivor.volumeId }, { type: "volume", id: f.loser.volumeId });
+    expect(await ratings(t)).toEqual([]);
+    await splitAs(t, { type: "volume", id: f.loser.volumeId });
+    expect(await ratings(t)).toEqual([]);
   });
 });
