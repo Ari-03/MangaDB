@@ -87,6 +87,31 @@ describe("parseBookTitle — volume markers", () => {
     ]);
   });
 
+  // R12: a "Vol." or "#" after "Part N" / "Book N" starts the designation;
+  // it never joins the Part's number into a Volume list (real OpenLibrary
+  // titles among them).
+  it("reads 'Part N, Vol. M' as Volume M of the Part, never packaging", () => {
+    for (const [title, series, label] of [
+      ["Alpha, Part 1, Vol. 2", "Alpha, Part 1", "2"],
+      ["Alpha Book 2, Vol. 3", "Alpha Book 2", "3"],
+      ["JoJo's Bizarre Adventure: Part 5, Vol. 6", "JoJo's Bizarre Adventure: Part 5", "6"],
+      ["Magical Pokemon Journey Part 4, #1", "Magical Pokemon Journey Part 4", "1"],
+      ["Magical Pokemon Journey Part 4, #3", "Magical Pokemon Journey Part 4", "3"],
+      ["Magical Pokémon Journey, Part 4, Vol 1", "Magical Pokémon Journey, Part 4", "1"],
+      ["Magical Pokemon Journey Part 6, Vol. 3", "Magical Pokemon Journey Part 6", "3"],
+      ["Magical Pokemon, Part 2, Vol. 3", "Magical Pokemon, Part 2", "3"],
+    ] as const) {
+      expect(parseBookTitle(title), title).toMatchObject({
+        seriesTitle: series,
+        volumeLabel: label,
+        packaging: null,
+      });
+    }
+    // After a "Vol." marker a listed item may still repeat it.
+    expect(parseBookTitle("Alpha Vol. 3 + Vol. 4").packaging?.coverRange).toEqual({ from: "3", to: "4" });
+    expect(parseBookTitle("Alpha #1 & #3").packaging).toMatchObject({ coverRange: null, coverageGapped: true });
+  });
+
   it("splits at the last marker, not an earlier one inside the name", () => {
     expect(split("Magic Knight Rayearth Part 2 Vol. 3 (Paperback)")).toEqual([
       "Magic Knight Rayearth Part 2",
@@ -610,6 +635,48 @@ describe("parseBookTitle — packaging", () => {
       from: "1",
       to: "3",
     });
+  });
+
+  // R12: every phrasing of a gapped or unreadable list is gapped, never
+  // silence (the 3-in-1 size would fill it in) and never Volume 1 alone.
+  it("marks gapped lists in -ing brackets, '+' lists, ', and' lists, and subtitles", () => {
+    for (const title of [
+      "Alpha 3-in-1 Edition 1 (Collecting Vols. 1 and 3)",
+      "Alpha 3-in-1 Edition 1 (Including Vols. 1 and 3)",
+      "Alpha 3-in-1 Edition 1 (Containing Vols. 1 and 3)",
+      "Alpha 3-in-1 Edition 1 (Vol. 1 + Vol. 3)",
+      "Alpha 3-in-1 Edition 1 (Includes Vol. 1 + 3)",
+      "Alpha 3-in-1 Edition 1 (Vol. 1, 2, and 4)",
+    ]) {
+      expect(packaging(title), title).toEqual({
+        seriesTitle: "Alpha",
+        volumeLabel: null,
+        packaging: { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null, coverageGapped: true },
+        isBox: false,
+      });
+    }
+    expect(packaging("Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1 & 3").packaging).toEqual({
+      lineName: "3-in-1 Edition",
+      linePosition: "1",
+      coverRange: null,
+      coverageGapped: true,
+    });
+    // A numbered extra after a list may be a Volume or a bonus book.
+    expect(packaging("Alpha Omnibus 1 (Vol. 1-2 + 3)").packaging).toMatchObject({
+      coverRange: null,
+      coverageGapped: true,
+    });
+    // Contiguous forms still span first to last; a lettered extra is no Volume.
+    expect(packaging("Alpha 3-in-1 Edition 1 (Vol. 1, 2, and 3)").packaging?.coverRange).toEqual({
+      from: "1",
+      to: "3",
+    });
+    expect(packaging("Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1-3").packaging?.coverRange).toEqual({
+      from: "1",
+      to: "3",
+    });
+    expect(packaging("Alpha Vol. 10-11+EX").packaging?.coverRange).toEqual({ from: "10", to: "11" });
+    expect(parseBookTitle("Alpha Vol. 18+1")).toMatchObject({ volumeLabel: "18+1", packaging: null });
   });
 });
 

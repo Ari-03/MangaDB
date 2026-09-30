@@ -124,11 +124,15 @@ const NUM = "\\d+(?:\\.\\d+)?";
 const PLUS_EXTRA = `${NUM}\\+\\d+`;
 const PLUS_EXTRA_RE = new RegExp(`^${PLUS_EXTRA}$`);
 const LABEL = `(?:${PLUS_EXTRA}|${NUM}|[A-Z]\\d{1,2}|${WORD_NUMBER}|${ROMAN})`;
+/** Between listed numbers: "1-3", "1 & 2", "1, 2, 3", "1, 2, and 4". */
+const JOIN = "\\s*(?:,\\s*(?:and|&)|-|–|—|&|,|and)\\s*";
 /**
- * A list or range of numbers: "1-3", "1 & 2", "1, 2, 3", "10-11+EX". A
- * listed item may repeat the marker or carry "#": "1 and Vol. 3", "#1 & #3".
+ * A list or range of numbers: "1-3", "1 & 2", "1, 2, and 4", "10-11+EX".
+ * Right after a "Vol." or "#" marker a listed item may repeat it: "1 and
+ * Vol. 3", "#1 & #3", "1 + Vol. 3". After "Part" or "Book" it may not: in
+ * "Alpha, Part 1, Vol. 2" the "Vol." starts the designation, Volume 2.
  */
-const RANGE = `#?${NUM}(?:\\s*(?:-|–|—|&|,|and)\\s*(?:vol(?:ume)?s?\\.?\\s*)?#?${NUM})+(?:\\s*\\+\\s*\\w+)?`;
+const RANGE = `(?:(?<=(?:\\bvol(?:ume)?s?\\.?|#)\\s*)#?${NUM}(?:(?:${JOIN}|\\s*\\+(?=\\s*(?:vol|#))\\s*)(?:vol(?:ume)?s?\\.?\\s*)?#?${NUM})+|${NUM}(?:${JOIN}${NUM})+)(?:\\s*\\+\\s*\\w+)?`;
 
 const ROMAN_VALUES: Record<string, number> = { I: 1, V: 5, X: 10 };
 
@@ -160,23 +164,25 @@ export function canonicalLabel(label: string): string {
 /**
  * A designation naming several Volumes ("1-3", "1 & 2", "1, 2, 3", "1-3,
  * 4-6"): the range it spans, or a null `coverRange` when its list skips a
- * Volume ("1 & 3", "1-3, 5"). A from–to range over a gap would claim the
- * Volumes the book leaves out, and a range is all Coverage can hold, so a
- * gapped list stays multi-volume with its coverage unknown. A lone number
- * is no list: null. Parsers and blurb inference (lib/coverage.ts) share it.
+ * Volume ("1 & 3", "1-3, 5") or ends in a numbered extra ("1-2 + 3"). A
+ * from–to range over a gap would claim the Volumes the book leaves out, and
+ * a range is all Coverage can hold, so a gapped list stays multi-volume
+ * with its coverage unknown. A lone number is no list: null.
  */
 export function parseVolumeList(text: string): { coverRange: CoverRange | null } | null {
-  // "10-11+EX": the extra after "+" is not a numbered Volume.
-  const spans = text
-    .replace(/\s*\+\s*\w+$/, "")
-    .split(/\s*(?:&|,|\band\b)\s*/i)
+  // "10-11+EX": the extra after "+" is not a numbered Volume. A numbered
+  // extra ("1-2 + 3") may be the next Volume or a bonus book, so no range
+  // holds it. "+" joins another Volume only with its marker ("1 + Vol. 3").
+  const extra = /\s*\+\s*(?!vol|#)(\w+)$/i.exec(text);
+  const spans = (extra ? text.slice(0, extra.index) : text)
+    .split(/\s*(?:&|,|\band\b|\+)\s*/i)
     .map((item) => item.match(/\d+(?:\.\d+)?/g) ?? [])
     .filter((span) => span.length > 0);
   const numbers = spans.flat();
   if (numbers.length < 2) return null;
-  const contiguous = spans.every(
-    (span, i) => i === 0 || Number(span[0]) === Number(spans[i - 1]!.at(-1)) + 1,
-  );
+  const contiguous =
+    !/^\d/.test(extra?.[1] ?? "") &&
+    spans.every((span, i) => i === 0 || Number(span[0]) === Number(spans[i - 1]!.at(-1)) + 1);
   return {
     coverRange: contiguous
       ? { from: canonicalLabel(numbers[0]!), to: canonicalLabel(numbers.at(-1)!) }
@@ -310,6 +316,28 @@ function emptyPeel(): Peeled {
   };
 }
 
+const STATING = "(?:contain(?:s|ing)|includ(?:es|ing)|collect(?:s|ing))\\s+vol(?:ume)?s?\\.?\\s*";
+const STATEMENT = new RegExp(`^${STATING}#?(\\d+(?:\\.\\d+)?)(.*)$`, "i");
+/** A packaged book's subtitle that only states its coverage: "…, Vol. 1: Includes Vols. 1 & 3". */
+const STATED_SUBTITLE = new RegExp(`^${STATING}(?:${RANGE}|#?${NUM})$`, "i");
+
+/**
+ * "Contains Vol. 9 & Ashen Victor", "Collecting Vols. 1 and 3": whatever
+ * Volumes the statement lists are the coverage. A number it lists but
+ * cannot read ("Includes Vol. 1 + 3") leaves the coverage unknown, never
+ * Volume 1 alone. Returns false for text that states no coverage.
+ */
+function absorbStatement(text: string, peel: Peeled): boolean {
+  const stated = STATEMENT.exec(text);
+  if (!stated) return false;
+  const listed = parseVolumeList(stated[1]! + stated[2]!);
+  const unread = listed === null && /\d/.test(stated[2]!);
+  const only = canonicalLabel(stated[1]!);
+  peel.coverRange = listed || unread ? (listed?.coverRange ?? null) : { from: only, to: only };
+  peel.multiVolume ||= listed !== null || unread;
+  return true;
+}
+
 /**
  * Classify one bracket group's inner text, updating the peel. Returns false
  * for a group that belongs to the name ("(For Her Money)", "(Lupin the 3rd)").
@@ -322,17 +350,7 @@ function absorbGroup(inner: string, peel: Peeled): boolean {
     peel.formatTags.push(text);
     return true;
   }
-  // "(Contains Vol. 9 & Ashen Victor)", "(Includes Vols. 1 and 3)": whatever
-  // Volumes it lists are the coverage.
-  const contains =
-    /^(?:contains|includes|collects)\s+vol(?:ume)?s?\.?\s*#?(\d+(?:\.\d+)?)(.*)$/i.exec(text);
-  if (contains) {
-    const listed = parseVolumeList(contains[1]! + contains[2]!);
-    const only = canonicalLabel(contains[1]!);
-    peel.coverRange = listed ? listed.coverRange : { from: only, to: only };
-    peel.multiVolume ||= listed !== null;
-    return true;
-  }
+  if (absorbStatement(text, peel)) return true;
   const coverage = new RegExp(
     `^vol(?:ume)?s?\\.?\\s*(${RANGE})(?:\\s+(.*))?$`,
     "i",
@@ -622,6 +640,12 @@ export function parseBookTitle(
 
   // Bracket packaging names apply when no trailing phrase named the line.
   const lineName = packagingName ?? peel.lineNames[0] ?? null;
+  // "Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1 & 3": a packaged
+  // book's subtitle may state the coverage its title left out.
+  const unstated = !multiVolume && !peel.multiVolume && peel.coverRange === null;
+  if (lineName !== null && unstated && volumeSubtitle !== null && STATED_SUBTITLE.test(volumeSubtitle)) {
+    absorbStatement(volumeSubtitle, peel);
+  }
   const coverRange = peel.coverRange ?? range;
   let packaging: Packaging | null = null;
   if (lineName !== null || coverRange !== null || multiVolume || peel.multiVolume || peel.isBox) {

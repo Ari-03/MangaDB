@@ -1388,8 +1388,141 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
       },
     ]);
     await sync(t);
-    // The blurb states Volume 1 alone; "two bonus stories" adds no Volume 2.
-    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: ["1"], unmapped: [false], releases: 1 });
+    // Volume 1 alone, or 1–2: neither agrees with the 3-in-1 size (1–3),
+    // so the book waits for a Moderator rather than taking either guess.
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // A last listed number followed by anything but a statement end may count
+  // something else, so the blurb reads two ways: with it and without it. The
+  // 3-in-1 size (1–3) agrees with exactly one reading, so that one places
+  // the book. No Volume 4 is ever invented.
+  it.each([
+    "<p>Collects volumes 1-3 and 4 all-new bonus stories.</p>",
+    "<p>Collects volumes 1-3 plus 4 all-new bonus stories.</p>",
+    "<p>Collects volumes 1-3 and 4-page bonus comic.</p>",
+    "<p>Collects volumes 1-3 and 4 of the author's short stories.</p>",
+    "<p>Collects volumes 1-3 and 4 “bonus” stories.</p>",
+    "<p>Collects volumes 1-3 and 4 as-yet-unpublished stories.</p>",
+    "<p>Collects volumes 1-3 and 4 for the first time.</p>",
+    "<p>Collects volumes 1-3 and 4 to 6 new pages.</p>",
+    "<p>Collects volumes 1-3 and 4 on-model sketches.</p>",
+    "<p>Collects volumes 1-3 and 4 (four!) bonus stories.</p>",
+    "<p>Collects volumes 1-3 and 4.5 bonus pages.</p>",
+    "<p>Volumes 1-3 and 4 all-new stories in one book.</p>",
+  ])("a count after the list (%s) places the 3-in-1 at 1–3, never 1–4", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3"]);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+    expect(result.unmapped).toEqual([false]);
+  });
+
+  // The last Volume of a contiguous list is never quietly dropped: a block
+  // end closes the list, and a following word leaves two readings, of which
+  // the 3-in-1 size agrees with the full one.
+  it.each([
+    "<ul><li>Collects volumes 1, 2, and 3</li><li>Hardcover</li></ul>",
+    "<p>Collects volumes 1, 2, and 3 featuring new cover art.</p>",
+    "<p>Collects volumes 1, 2, and 3 remastered.</p>",
+  ])("a contiguous list before other copy (%s) places the 3-in-1 at 1–3", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+    expect(result.unmapped).toEqual([false]);
+  });
+
+  // A gapped list stays gapped whatever follows it: neither reading ("1 and
+  // 3", or "1" alone) agrees with the 3-in-1 size, so nothing is placed.
+  it.each([
+    "<p>Collects volumes 1 and 3</p><p>Remastered</p>",
+    "<p>Collects volumes 1 and 3 remastered.</p>",
+    "<p>Collects volumes 1-3 and 4.5.</p>",
+  ])("a gapped list before other copy (%s) leaves the 3-in-1 Unmapped", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // A list the reader cannot finish ("volumes 1 as well as 3", "1-2; 4")
+  // is never cut short to the part it could read.
+  it.each([
+    "<p>Collects volumes 1 as well as 3.</p>",
+    "<p>Collects volumes 1 along with 3.</p>",
+    "<p>Collects volumes 1; 3.</p>",
+    "<p>Collects volumes 1/3.</p>",
+    "<p>Collects volumes 1-2; 4.</p>",
+    "<p>Collects vols. 1and 3.</p>",
+    "<p>Volumes 1 as well as 3 in one book!</p>",
+    "<p>Collects volume 1 as well as volume 3.</p>",
+  ])("an unfinished list (%s) leaves the 3-in-1 Unmapped", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // With no line size to agree with, two readings stay unresolved.
+  it.each([
+    "<p>Collects volumes 1-3 and 4 all-new bonus stories.</p>",
+    "<p>Collects volumes 1, 2, and 3 featuring new cover art.</p>",
+    "<p>Collects volumes 1-3 as well as 5.</p>",
+  ])("an ambiguous list (%s) leaves a Deluxe book Unmapped", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  it("the line size at the book's position picks the reading that agrees with it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3", "4"]);
+    stubApi([
+      {
+        isbn: "9781646519828",
+        title: "Alpha 2-in-1 Edition 2",
+        flapcopy: "<p>Collects volumes 3 and 4 featuring new cover art.</p>",
+      },
+    ]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.covered.sort()).toEqual(["3", "4"]);
+    expect(result.unmapped).toEqual([false]);
+  });
+
+  // The title path: a bracket or subtitle that lists Volumes with a gap, in
+  // any of its phrasings, blocks the 3-in-1 size as "(Vol. 1 & 3)" does.
+  it.each([
+    "Alpha 3-in-1 Edition 1 (Collecting Vols. 1 and 3)",
+    "Alpha 3-in-1 Edition 1 (Including Vols. 1 and 3)",
+    "Alpha 3-in-1 Edition 1 (Containing Vols. 1 and 3)",
+    "Alpha 3-in-1 Edition 1 (Vol. 1 + Vol. 3)",
+    "Alpha 3-in-1 Edition 1 (Includes Vol. 1 + 3)",
+    "Alpha 3-in-1 Edition 1 (Vol. 1, 2, and 4)",
+    "Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1 & 3",
+  ])("a title stating a gapped list (%s) leaves the 3-in-1 Unmapped", async (title) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "3"]);
+    stubApi([{ isbn: "9781646519828", title }]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
+    expect(await placed(t)).toEqual({ volumes: ["1", "3"], covered: [], unmapped: [true], releases: 1 });
   });
 
   it("a stated range no book can hold blocks the size as well", async () => {
@@ -1414,5 +1547,273 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     const result = await placed(t);
     expect(result.covered.sort()).toEqual(["1", "2", "3"]);
     expect(result.unmapped).toEqual([false]);
+  });
+
+  // A later number the list never joined counts something else: the one
+  // stated range places a Deluxe book (no declared size) at 1–3.
+  it.each([
+    "<p>Collects volumes 1–3 (chapters 1–27).</p>",
+    "<p>Collects volumes 1-3 (chapters 1-27).</p>",
+    "<p>Collects volumes 1-3 of Mob Psycho 100.</p>",
+    "<p>Collects volumes 1-3 of Eyeshield 21!</p>",
+    "<p>Collects volumes 1-3 of Kaiju No. 8.</p>",
+    "<p>Collects volumes 1-3 of 10.</p>",
+    "<p>Collects volumes 1-3, chapters 1 to 27.</p>",
+    "<p>Collects volumes 1-3, rated 16.</p>",
+    "<p>Collects <i>Negima!</i> Volumes 1-3.</p>",
+  ])("a stated range before other numbers (%s) places a Deluxe book at 1–3", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3"]);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+    expect(result.unmapped).toEqual([false]);
+  });
+
+  // A list with no collect-verb in front of it names Volumes without saying
+  // the book holds them. It never overrides the 3-in-1 size (1–3) and never
+  // creates a Volume.
+  it.each([
+    "<p>The story continues in volumes 4 and 5.</p>",
+    "<p>Catch up before volumes 4 and 5, coming soon.</p>",
+    "<p>Don't miss volumes 2 and 3!</p>",
+    "<p>Volumes 5 and 6 pick up where volume 4 left off.</p>",
+    "<p>The story continues in volumes 4–6.</p>",
+    "<p>Collects bonus art. The story continues in volumes 4 and 5.</p>",
+  ])("a bare narrative list (%s) places the 3-in-1 at 1–3 from its size", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3", "4", "5"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3", "4", "5"]);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+    expect(result.unmapped).toEqual([false]);
+  });
+
+  // With no declared size to agree with, a bare list places nothing.
+  it.each([
+    "<p>The story continues in volumes 4 and 5.</p>",
+    "<p>The story continues in volumes 4–6.</p>",
+  ])("a bare narrative list (%s) leaves a Deluxe book Unmapped", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // "/" and ";" join only weakly: "1-3 / 4-6" may name two books. The
+  // 3-in-1 size agrees with 1–3 alone; no Volume 4–6 is created.
+  it.each(["<p>Collects volumes 1-3 / 4-6.</p>", "<p>Collects volumes 1-3; 4-6.</p>"])(
+    "a slash- or semicolon-joined range (%s) places the 3-in-1 at 1–3",
+    async (flapcopy) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      await insertSeries(t, "Alpha", ["1", "2", "3"]);
+      stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+      await sync(t);
+      const result = await placed(t);
+      expect(result.volumes).toEqual(["1", "2", "3"]);
+      expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+      expect(result.unmapped).toEqual([false]);
+    },
+  );
+
+  it("a slash-joined range leaves a Deluxe book Unmapped", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy: "<p>Collects volumes 1-3 / 4-6.</p>" }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // "Part N, Vol. M" is Volume M of the Part's Series: no packaging, and no
+  // Volume N is created.
+  it.each([
+    ["Alpha, Part 1, Vol. 2", "Alpha, Part 1", "2"],
+    ["Alpha Book 2, Vol. 3", "Alpha Book 2", "3"],
+    ["Alpha: Part 5, Vol. 6", "Alpha: Part 5", "6"],
+  ])("a title %s is one Volume of its Part, never packaging", async (title, seriesTitle, label) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([{ isbn: "9781646519828", title }]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("series").collect()).map((s) => s.title)).toEqual([seriesTitle]);
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label)).toEqual([label]);
+      expect(await ctx.db.query("editionLines").collect()).toHaveLength(0);
+      const editions = await ctx.db.query("editions").collect();
+      expect(editions.map((e) => e.coverageUnmapped ?? false)).toEqual([false]);
+    });
+  });
+
+  // A collect-verb speaks for the book only when nothing but a name stands
+  // between it and the list ("Collects Berserk Volumes 40, 41"). A list it
+  // reaches through other words is a bare mention: "a preview of volumes 4
+  // and 5", or the next block, which cleanBlurb joins on with a space
+  // ("Collects bonus art</p><p>The story continues in volumes 4 and 5").
+  const UNGOVERNED = [
+    "<p>Collects bonus art</p><p>The story continues in volumes 4 and 5</p>",
+    "<h3>Collects the hit series</h3><p>Volumes 4-6 on sale now.</p>",
+    "<p>Includes a preview of volumes 4 and 5.</p>",
+    "<p>Includes a preview of volume 4.</p>",
+    "<p>Includes a letter from Oda. Volumes 4 and 5 are out now.</p>",
+    "<p>Collects chapters 1-27 and a preview of volumes 4-6.</p>",
+  ];
+
+  it.each(UNGOVERNED)("a list the verb does not govern (%s) places the 3-in-1 at 1–3 from its size", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha 3-in-1 Edition 1", flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3"]);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+    expect(result.unmapped).toEqual([false]);
+  });
+
+  it.each(UNGOVERNED)("a list the verb does not govern (%s) leaves a Deluxe book Unmapped", async (flapcopy) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // Other words between verb and list leave it unsure whether the book holds
+  // the list. It places the book only by agreeing with the line size; a size
+  // it contradicts leaves the book Unmapped rather than letting either win.
+  it.each([
+    ["Alpha 3-in-1 Edition 1", "<p>Collects the hit series volumes 1-3.</p>", ["1", "2", "3"]],
+    ["Alpha 3-in-1 Edition 2", "<p>Collects the hit series volumes 1-3.</p>", []],
+    ["Alpha 3-in-1 Edition 1", "<p>Collects both volumes 1 and 2.</p>", []],
+    ["Alpha Deluxe Edition 1", "<p>Collects the hit series volumes 1-3.</p>", []],
+    ["Alpha Deluxe Edition 1", "<p>Collects Attack on Titan volumes 1-3.</p>", ["1", "2", "3"]],
+  ])("%s with %s covers %j", async (title, flapcopy, covered) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title, flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3"]);
+    expect(result.covered.sort()).toEqual(covered);
+    expect(result.unmapped).toEqual([covered.length === 0]);
+  });
+
+  // The first statement the verb governs decides; a bare mention before it
+  // is silence, a gap before it blocks.
+  it("a narrative flap copy leaves the keynote to place a Deluxe book", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([
+      {
+        isbn: "9781646519828",
+        title: "Alpha Deluxe Edition 1",
+        flapcopy: "<p>The story continues in volumes 4 and 5.</p>",
+        keynote: "<p>Collects volumes 1-3.</p>",
+      },
+    ]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3"]);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+  });
+
+  it("a gapped flap copy blocks a later keynote's range", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([
+      {
+        isbn: "9781646519828",
+        title: "Alpha 3-in-1 Edition 1",
+        flapcopy: "<p>Volumes 1 and 3 in one book!</p>",
+        keynote: "<p>Collects volumes 1-3.</p>",
+      },
+    ]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // The title's own statement outranks every blurb, a range or a gap.
+  it.each([
+    ["Alpha Omnibus 1 (Vol. 1-3)", "<p>Collects volumes 1 and 3.</p>", ["1", "2", "3"]],
+    ["Alpha Omnibus 1 (Vol. 1 & 3)", "<p>Collects volumes 1-3.</p>", []],
+  ])("the title %s decides over the blurb %s", async (title, flapcopy, covered) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title, flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3"]);
+    expect(result.covered.sort()).toEqual(covered);
+    expect(result.unmapped).toEqual([covered.length === 0]);
+  });
+
+  it.each([
+    ["Alpha 3-in-1 Edition 2", "<p>Catch up with volumes 1-3 first!</p>", ["4", "5", "6"]],
+    ["Alpha VIZBIG Edition 1", "<p>Contains volumes 1, 2 and 3 of Alpha!</p>", ["1", "2", "3"]],
+  ])("%s with %s is placed by its size", async (title, flapcopy, covered) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3", "4", "5", "6"]);
+    stubApi([{ isbn: "9781646519828", title, flapcopy }]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.volumes).toEqual(["1", "2", "3", "4", "5", "6"]);
+    expect(result.covered.sort()).toEqual(covered);
+    expect(result.unmapped).toEqual([false]);
+  });
+
+  it.each(["<p>Collects volumes 1-3 and 4 bonus stories.</p>", "<p>Collects volumes one and three.</p>"])(
+    "a Deluxe book with %s stays Unmapped",
+    async (flapcopy) => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      await insertSeries(t, "Alpha", ["1", "2", "3"]);
+      stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy }]);
+      await sync(t);
+      expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+    },
+  );
+
+  it("a minus-sign range places a Deluxe book", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy: "<p>Collects volumes 1−3.</p>" }]);
+    await sync(t);
+    expect((await placed(t)).covered.sort()).toEqual(["1", "2", "3"]);
+  });
+
+  // Re-syncing a placed book with each kind of blurb never invents a Volume
+  // or drops a covered one.
+  it("re-applying a placed Deluxe book's changing blurb keeps its Volumes", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    for (const flapcopy of [
+      "<p>Collects volumes 1-3.</p>",
+      "<p>Collects volumes 1-3 and 4 bonus stories.</p>",
+      "<p>Collects volumes 1 and 3.</p>",
+      "<p>Collects volumes 1-3.</p>",
+    ]) {
+      stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy }]);
+      await sync(t);
+      expect((await placed(t)).volumes, flapcopy).toEqual(["1", "2", "3"]);
+    }
+    expect((await placed(t)).covered.sort()).toEqual(["1", "2", "3"]);
   });
 });

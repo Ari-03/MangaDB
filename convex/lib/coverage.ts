@@ -10,125 +10,270 @@
 //   2. A line name that declares its size: "3-in-1" and VIZBIG (always three
 //      volumes) at position p cover volumes 3p-2 … 3p.
 //
+// A blurb's statement has one of three outcomes, and nothing here guesses
+// past it:
+//
+//   - a contiguous range ("collects volumes 1–3"): the book's coverage;
+//   - evidence no range can hold: a gap ("Collects volumes 1 and 3"), or a
+//     statement that reads more than one way ("volumes 1–3 and 4 bonus
+//     stories": 1–4 or 1–3) when the line size agrees with none of its
+//     readings. The book stays Unmapped Packaging, and no weaker signal
+//     fills in a Volume;
+//   - silence: the next blurb, then the line size, decides.
+//
+// What a list of Volumes says depends on what stands before it (reach()):
+//
+//   - a collect-verb that governs it, with nothing but a name between them
+//     ("Collects Berserk Volumes 40, 41"): a statement about the book;
+//   - no verb ("The story continues in volumes 4 and 5"), or a verb whose
+//     phrase or sentence ends first: at an article or a preposition
+//     ("Includes a preview of volumes 4 and 5"), at sentence punctuation,
+//     or at a capital "Volumes" after ordinary words ("Collects the hit
+//     series Volumes 4–6 on sale now", two blocks cleanBlurb joined with a
+//     space): a mention, which names Volumes without saying the book holds
+//     them. A gap in it still blocks, a reading that agrees with the line
+//     size is the size's own, and anything else is silence;
+//   - a verb with other words between ("Collects the hit series volumes
+//     1–3", "Collects both volumes 1 and 2"): either of the two. Like a
+//     mention it never places the book past the line size, but a size it
+//     contradicts blocks rather than deciding.
+//
 // Plain "Omnibus" / "Deluxe" with no stated size and no blurb range stays
-// unknown: guessing a size would map books onto the wrong Volumes. So does a
-// title or blurb that lists Volumes with a gap ("Volumes 1 and 3 in one
-// book!"): the line size never fills in the Volume it skips.
+// unknown too: guessing a size would map books onto the wrong Volumes.
 
-import { canonicalLabel, parseVolumeList, type CoverRange, type Packaging } from "./bookTitle";
+import { canonicalLabel, type CoverRange, type Packaging } from "./bookTitle";
+import { decodeEntities } from "./text";
 
 /** Largest sensible volume number in a coverage statement. */
 const MAX_VOLUME = 500;
 
 const VOL = String.raw`vol(?:ume)?s?\.?`;
-const NUM = String.raw`\d{1,3}`;
-const DASH = String.raw`\s*(?:[-–—]|to|through|thru)\s*`;
-// Up to six words between the verb and "volumes": "collects Berserk volumes 1–3",
-// "collecting the first three New York Times bestselling volumes" is not matched.
-const LEAD = String.raw`(?:collect(?:s|ing|ed)?|contain(?:s|ing)?|includ(?:es|ing)|compil(?:es|ing)|gather(?:s|ing))\s+(?:the\s+)?(?:(?:original\s+)?[\w'’:!?,.-]+\s+){0,6}?`;
+// A Volume number, read whole: "16" is never "1", nor "4.5" "4".
+const NUM = String.raw`\d{1,3}(?:\.\d+)?(?!\.?\d)`;
+// "1-3", "1–3", "1‑3" (non-breaking hyphen), "1−3" (minus), "1 through 3".
+const DASH = String.raw`\s*(?:[-‐‑−–—]|to|through|thru)\s*`;
+const VERB = String.raw`\b(?:collect(?:s|ing|ed)?|contain(?:s|ing)?|includ(?:es|ing)|compil(?:es|ing)|gather(?:s|ing))`;
+// Up to seven words between the verb and "volumes": reach() reads them.
+const LEAD_IN = String.raw`(?:[\p{L}\p{N}_'’:!?,.-]+\s+){0,7}?`;
 
 // One listed item: "5", "#5", "1-3", "volume 3" (as in "volume 1 and volume 3").
 const ITEM = String.raw`(?:${VOL}\s*)?#?${NUM}(?:${DASH}#?${NUM})?`;
-// Between items: "1, 2", "1 and 3", "1 & 3", "40, 41, and 42".
-const SEP = String.raw`(?:\s*,\s*(?:(?:\band\b|&)\s*)?|\s*(?:\band\b|&)\s*)`;
-// A later item must end the list or lead on to a function word. In "volumes
-// 1–3 and 4 bonus stories" or "1-3, and 16 pages of art" the number counts
-// something else (and "16" is never read as "1", nor "4-6 new" as "4"); a
-// possessive ("and volume 4's bonus chapter") names only part of a Volume.
-// Unknown words end the list before the item, so a miss can drop a listed
-// Volume but never invent one.
-const FOLLOWS = String.raw`(?:of|in|into|and|or|plus|with|from|together|for|as|at|on|by|to|are|is|was|were|now|all|alongside|along|including|which|that|but|so|while|the|a|an)`;
-const LISTED = String.raw`(?![\d’']|\s*[-–—]\s*#?\d|\s+(?!${FOLLOWS}\b)[a-z])`;
-const LIST = `${ITEM}(?:${SEP}${ITEM}${LISTED})*`;
+// What joins the next item: "1 and 3", "1 & 3", "1 + 3", "1-3 plus 4",
+// "1 as well as 3", "1 along with 3".
+const CONJ = String.raw`(?:\band\b|&|\+|\bplus\b|\bas\s+well\s+as\b|\balong\s+with\b)`;
+// Between items: a conjunction, or "," ";" "/" with or without one ("40,
+// 41, and 42"). "/" and ";" join only weakly: see readings().
+const SEP = String.raw`\s*(?:[,;/]\s*(?:${CONJ}\s*)?|${CONJ}\s*)`;
+const LIST = `${ITEM}(?:${SEP}${ITEM})*`;
+const WEAK_JOIN = /[/;]/;
 
-// "Collects volumes 1–3", "Collects volumes 40, 41, and the Guidebook",
-// "Collects volumes 1-2 and 4" (gapped, so no range).
-const STATED = new RegExp(`${LEAD}${VOL}\\s*(${LIST})`, "i");
-// A bare "Volumes 1–3" or "Volumes 1 and 3" anywhere: weaker, so it comes last.
-// Global: an unusable range ("Volumes 1-80 of the saga") must not hide a later list.
-const BARE = new RegExp(
-  `\\b${VOL}\\s*(${ITEM}(?:${SEP}${ITEM}${LISTED})+|#?${NUM}${DASH}#?${NUM})\\b`,
-  "gi",
+// Hard statement ends: sentence punctuation before a capital, unless it
+// closes an abbreviation ("Dr. Stone"), and a block-level tag in raw HTML
+// ("<li>Collects volumes 1, 2, and 3</li><li>Hardcover</li>"; a <br> is
+// only a line break: "volumes 1, 2<br>and 3" lists three). BREAK stands in
+// for both; no list, separator, or lead-in word matches it. Sources hand
+// over blurbs through cleanBlurb (lib/text.ts), which has already turned
+// every tag into a space, so a block boundary reaches here as a space:
+// reach() is what keeps "Collects bonus art</p><p>The story continues in
+// volumes 4 and 5" from reading as one statement.
+const BREAK = "¶";
+const BLOCK_TAG = /<\/?(?:p|li|div|ul|ol|h[1-6]|blockquote|tr|td|th)\b[^>]*>/gi;
+const SENTENCE_END = /(?:(?<!\b(?:Dr|Mr|Mrs|Ms|St|No|Vols?))\.|[!?])(?=\s+["'“‘]?[A-Z])/g;
+
+// A collect-verb and the list after it: "Collects volumes 1–3", "Collects
+// Negima! Volumes 1–3". A sentence end the lead-in crosses is `crossed`.
+const STATED = new RegExp(
+  `(?<verb>${VERB})\\s+(?<lead>${LEAD_IN})(?<crossed>(?<=[!?] )${BREAK} )?` +
+    `(?<marker>vol(?:ume)?)(?<plural>s)?\\.?\\s*(?<list>${LIST})`,
+  "giu",
 );
+// Every "Volumes 1–3" or "Volumes 1 and 3", with a verb before it or not.
+const BARE = new RegExp(`\\bvol(?:ume)?(?<plural>s)?\\.?\\s*(?<list>${LIST})`, "gi");
 
-// "Collects volumes one and three": number words after "volume(s)" read as digits.
+// A name: words that start with a capital or a digit, joined by short
+// lowercase words ("Mob Psycho 100", "Dr. Stone", "Attack on Titan").
+const NAME = /^[\p{Lu}\p{N}]\S*(?:\s+(?:\p{Ll}{1,3}\s+)*[\p{Lu}\p{N}]\S*)*$/u;
+// An article or a preposition opens a phrase of its own; a list right
+// after one is that phrase's ("a preview of volumes 4 and 5").
+const OPENER = /\b(?:a|an|the|of|in|on|at|to|for|from|with|into|by)$/i;
+// The numbers of each item in a matched list.
+const SPAN = new RegExp(`(${NUM})(?:${DASH}#?(${NUM}))?`, "gi");
+
+// What must follow a list's last item for it to be a Volume for certain: a
+// statement end, or punctuation that closes a phrase ("40, 41, and the
+// Guidebook"). A number that counts something else runs on into what it
+// counts: "4 bonus stories", "4-page", "4 “bonus”", "4 (four!)", "3 remastered".
+const END = new RegExp(String.raw`^(?:\s*(?:$|${BREAK}|[.!?,;:)\]—])|\s+[-–](?:\s|$))`);
+// A Volume the sentence names past the list with its own marker.
+const NAMED = new RegExp(String.raw`\b${VOL}\s*#?(\d{1,3})`, "gi");
+
+// "Collects volumes one and three": number words in a Volume list read as digits.
 const NUMBER_WORDS = [
   "one", "two", "three", "four", "five", "six",
   "seven", "eight", "nine", "ten", "eleven", "twelve",
 ];
 const WORD = `(?:${NUMBER_WORDS.join("|")})`;
-const WORD_ITEM = `${WORD}(?:${DASH}${WORD})?`;
+const WORD_ITEM = String.raw`(?:${WORD}|\d{1,3})(?:${DASH}(?:${WORD}|\d{1,3}))?`;
 const WORD_LIST = new RegExp(
-  `\\b${VOL}\\s*${WORD_ITEM}(?:${SEP}(?:${VOL}\\s*)?${WORD_ITEM}\\b${LISTED})*\\b`,
+  String.raw`\b${VOL}\s*${WORD_ITEM}(?:${SEP}(?:${VOL}\s*)?${WORD_ITEM}\b)*\b`,
   "gi",
 );
 const WORD_NUMBER = new RegExp(`\\b${WORD}\\b`, "gi");
 
+/** A listed item's reach: "5" is 5–5, "1-3" is 1–3. */
+type Span = { from: number; to: number };
+
+/**
+ * What one statement says: one reading, or several when it may say more
+ * than its list holds. Non-null readings always differ. A null reading is
+ * one no range can hold.
+ */
+type Readings = [CoverRange | null, ...Array<CoverRange | null>];
+
 function range(from: number, to: number): CoverRange | null {
-  if (!(from >= 1 && to >= from && to <= MAX_VOLUME && to - from < 50)) return null;
+  const whole = Number.isInteger(from) && Number.isInteger(to);
+  if (!(whole && from >= 1 && to >= from && to <= MAX_VOLUME && to - from < 50)) return null;
   return { from: canonicalLabel(String(from)), to: canonicalLabel(String(to)) };
 }
 
 /**
- * Strip markup and entities so patterns see plain prose, read "plus" before a
- * number as a list separator, and read number words in a Volume list as
- * digits ("volumes one and three" → "volumes 1 and 3").
+ * Strip markup and entities so patterns see plain prose, with BREAK at every
+ * statement end, and read number words in a Volume list as digits
+ * ("volumes one and three" → "volumes 1 and 3").
  */
 function plain(text: string): string {
-  return text
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;|&#160;/g, " ")
-    .replace(/&ndash;|&#8211;/g, "–")
-    .replace(/&mdash;|&#8212;/g, "—")
-    .replace(/&rsquo;|&#8217;|&#0*39;|&apos;/g, "’")
-    .replace(/&(?:amp;)+|&#0*38;|&#x0*26;/gi, "&")
+  return decodeEntities(text.replace(BLOCK_TAG, ` ${BREAK} `).replace(/<[^>]+>/g, " "))
     .replace(/\s+/g, " ")
-    // "volumes 1 + 3", "volumes 1-3 plus 4": another listed item.
-    .replace(new RegExp(`\\s*(?:\\+|\\bplus)\\s+(?=(?:${VOL}\\s*)?#?\\d)`, "gi"), " & ")
     .replace(WORD_LIST, (list) =>
       list.replace(WORD_NUMBER, (word) => String(NUMBER_WORDS.indexOf(word.toLowerCase()) + 1)),
-    );
+    )
+    .replace(SENTENCE_END, `$& ${BREAK}`);
 }
 
-/** The range a captured list holds: null when it skips a Volume or is impossible. */
-function listRange(list: string): CoverRange | null {
-  const listed = parseVolumeList(list);
-  if (listed === null) {
-    // A single Volume: "collects volume 5".
-    const only = Number(/\d+/.exec(list)![0]);
-    return range(only, only);
-  }
-  const { coverRange } = listed;
-  return coverRange ? range(Number(coverRange.from), Number(coverRange.to)) : null;
+function spans(list: string): Span[] {
+  return Array.from(list.matchAll(SPAN), ([, from, to]) => ({
+    from: Number(from),
+    to: Number(to ?? from),
+  }));
+}
+
+/** A single number, not a range: "volume 5". */
+function lone(list: Span[]): boolean {
+  return list.length === 1 && list[0]!.from === list[0]!.to;
+}
+
+/** A later item that does not start where the one before it ended: "1 and 3", "1-2, 4". */
+function gapped(list: Span[]): boolean {
+  return list.some((span, i) => i > 0 && span.from !== list[i - 1]!.to + 1);
+}
+
+/** The range the items hold: null for a gap, a backwards item ("9-3"), or no book's size ("1-80"). */
+function spanRange(list: Span[]): CoverRange | null {
+  if (gapped(list) || list.some((span) => span.to < span.from)) return null;
+  return range(list[0]!.from, list.at(-1)!.to);
 }
 
 /**
- * What a blurb says the book collects: null when it says nothing, else the
- * stated range, whose `coverRange` is null when the statement is one no
- * range can hold — a list with a gap ("collects volumes 1 and 3", never
- * 1–3) or an impossible range ("volumes 9-3"). That null is evidence, not
- * silence: inferCoverage lets nothing weaker stand in for it.
+ * A matched list's readings, fullest first, given the prose after it. The
+ * first item always stands: the marker ("volumes") names it a Volume. The
+ * rest are certain only up to the first item joined on by "/" or ";"
+ * ("1-3 / 4-6" may name two books), and the last only when a statement end
+ * follows it ("4 bonus stories" counts something else). Past that point the
+ * list also reads without them, unless that leaves one number under a
+ * plural marker: "volumes" promises several.
  */
-function statedCoverage(text: string | undefined): { coverRange: CoverRange | null } | null {
-  if (!text) return null;
-  const prose = plain(text);
-  const stated = STATED.exec(prose);
-  if (stated) return { coverRange: listRange(stated[1]!) };
-  // A bare statement is weak: a usable range counts, and so does a gapped
-  // list ("Volumes 1 and 3 in one book!"), but an unusable range
-  // ("Volumes 1-80 of the saga") says nothing about this book, so the next
-  // bare statement is read instead.
-  for (const [, list] of prose.matchAll(BARE)) {
-    const found = listRange(list!);
-    if (found) return { coverRange: found };
-    if (parseVolumeList(list!)?.coverRange === null) return { coverRange: null };
-  }
-  return null;
+function readings(list: string, rest: string, plural: boolean): Readings {
+  const items = spans(list);
+  // "Volumes 1 through the finale": the rest of the list went unread.
+  if (plural && lone(items)) return [null];
+  const weak = list.search(WEAK_JOIN);
+  const certain =
+    weak >= 0 ? spans(list.slice(0, weak)).length : END.test(rest) ? items.length : items.length - 1;
+  const kept = items.slice(0, Math.max(1, certain));
+  const found: Readings = [spanRange(items)];
+  if (kept.length < items.length && !(plural && lone(kept))) found.push(spanRange(kept));
+  return found;
 }
 
-/** The Volumes a blurb says the book collects, when it states a usable range. */
+/**
+ * Whether the rest of the sentence names, with its own marker, a Volume
+ * outside the list ("volume 1 of Alpha and volume 2 of Beta"): then the
+ * list may not be all the statement collects.
+ */
+function namesMore(list: string, rest: string): boolean {
+  const items = spans(list);
+  const named = Array.from(rest.split(BREAK)[0]!.matchAll(NAMED), ([, label]) => Number(label));
+  return named.some((label) => label < items[0]!.from || label > items.at(-1)!.to);
+}
+
+/** How a collect-verb stands to the list after it, judged by the words between (see the header). */
+type Reach = "governs" | "unsure" | "mentions";
+
+function reach(verb: string, lead: string, marker: string, crossed: boolean): Reach {
+  const words = lead.trim().replace(/^the\b\s*/i, "");
+  if (words === "") return "governs";
+  if (OPENER.test(words)) return "mentions";
+  // Copy set in capitals marks nothing with them ("COLLECTS THE HIT SERIES").
+  const cased = verb !== verb.toUpperCase();
+  if (cased && NAME.test(words)) return "governs";
+  // A sentence ended before the list ("Collects bonus art! Volumes 4 and 5
+  // are out now"), or a capital "Volumes" after other words starts one
+  // ("Collects the hit series</h3><p>Volumes 4-6 on sale now").
+  return crossed || (cased && marker.startsWith("V")) ? "mentions" : "unsure";
+}
+
+/** The reading that agrees with the line's declared size, if one does. */
+function agreeing(found: Readings, size: CoverRange | null): CoverRange | null {
+  const agrees = (reading: CoverRange | null) => reading?.from === size?.from && reading?.to === size?.to;
+  return size === null ? null : (found.find(agrees) ?? null);
+}
+
+/**
+ * What one blurb says the book collects, given the line's declared size
+ * (null without one): a range; null for a statement no range can hold,
+ * which blocks every weaker signal; undefined for silence. The first
+ * list a collect-verb governs decides; with none, a list only agrees with
+ * the size or blocks: by a gap, or by contradicting the size when a verb
+ * may state it.
+ */
+function blurbCoverage(text: string | undefined, size: CoverRange | null): CoverRange | null | undefined {
+  if (!text) return undefined;
+  const prose = plain(text);
+  const statements = Array.from(prose.matchAll(STATED), (match) => {
+    const { verb, lead, crossed, marker, plural, list } = match.groups!;
+    return {
+      reach: reach(verb!, lead!, marker!, crossed !== undefined),
+      list: list!,
+      plural: plural !== undefined,
+      end: match.index + match[0].length,
+    };
+  });
+  const governed = statements.find((statement) => statement.reach === "governs");
+  if (governed) {
+    const { list, plural, end } = governed;
+    const rest = prose.slice(end);
+    const found = readings(list, rest, plural);
+    if (namesMore(list, rest)) found.unshift(null);
+    return found.length === 1 ? found[0] : agreeing(found, size);
+  }
+  // No statement: each list is a mention, or unsure (known by where it ends).
+  const unsure = new Set(statements.filter((statement) => statement.reach === "unsure").map(({ end }) => end));
+  for (const bare of prose.matchAll(BARE)) {
+    const { list, plural } = bare.groups!;
+    const end = bare.index + bare[0].length;
+    const items = spans(list!);
+    // "Volume 5 continues the saga" says nothing about this book.
+    if (lone(items)) continue;
+    const agreed = agreeing(readings(list!, prose.slice(end), plural !== undefined), size);
+    if (agreed) return agreed;
+    if (gapped(items) || (size !== null && unsure.has(end))) return null;
+  }
+  return undefined;
+}
+
+/** The Volumes a blurb says the book collects, read with no line size to settle it. */
 export function coverageFromText(text: string | undefined): CoverRange | null {
-  return statedCoverage(text)?.coverRange ?? null;
+  return blurbCoverage(text, null) ?? null;
 }
 
 /**
@@ -176,15 +321,24 @@ export function coverageFromLine(
  * `texts` are the source's blurbs in order of trust (PRH: flap copy,
  * positioning, keynote). A statement no range can hold (a gapped list, in
  * the title or the deciding blurb) is null: weaker signals never override it.
+ *
+ * A blurb that reads more than one way is settled only by independent
+ * evidence: the reading that agrees with the line's declared size at the
+ * book's position places it (the title's own range, the other such
+ * evidence, already decided above). With no size, or one that agrees with
+ * none of them, the book stays unmapped. Its range readings all differ, so
+ * at most one can agree. A list whose verb may not govern it is settled the
+ * same way, except that with no size it is silence.
  */
 export function inferCoverage(
   packaging: Packaging,
   texts: Array<string | undefined>,
 ): CoverRange | null {
   if (packaging.coverRange || packaging.coverageGapped) return packaging.coverRange;
+  const size = coverageFromLine(packaging.lineName, packaging.linePosition);
   for (const text of texts) {
-    const stated = statedCoverage(text);
-    if (stated) return stated.coverRange;
+    const found = blurbCoverage(text, size);
+    if (found !== undefined) return found;
   }
-  return coverageFromLine(packaging.lineName, packaging.linePosition);
+  return size;
 }

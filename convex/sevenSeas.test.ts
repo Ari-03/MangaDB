@@ -1652,13 +1652,67 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
   });
 
-  // "4 bonus stories" counts something else: the stated 1–3 stands.
-  it("a counted noun after the listed range never widens it", async () => {
+  // "4 bonus stories" counts something else: the blurb reads 1–4 or 1–3,
+  // and the 3-in-1 size agrees with 1–3 alone. No Volume 4 is invented.
+  it.each([
+    "<p>Collects volumes 1–3 and 4 bonus stories.</p>",
+    "<p>Collects volumes 1-3 and 4 all-new bonus stories.</p>",
+    "<p>Collects volumes 1-3 plus 4 all-new bonus stories.</p>",
+    "<p>Collects volumes 1-3 and 4-page bonus comic.</p>",
+    "<p>Collects volumes 1-3 and 4 of the author's short stories.</p>",
+    "<p>Collects volumes 1-3 and 4 “bonus” stories.</p>",
+    "<p>Collects volumes 1-3 and 4 as-yet-unpublished stories.</p>",
+    "<p>Collects volumes 1-3 and 4 for the first time.</p>",
+    "<p>Collects volumes 1-3 and 4 to 6 new pages.</p>",
+    "<p>Collects volumes 1-3 and 4 on-model sketches.</p>",
+    "<p>Collects volumes 1-3 and 4 (four!) bonus stories.</p>",
+    "<p>Collects volumes 1-3 and 4.5 bonus pages.</p>",
+    "<p>Volumes 1-3 and 4 all-new stories in one book.</p>",
+  ])("a count after the listed range (%s) places the 3-in-1 at 1–3", async (blurb) => {
     const t = convexTest(schema);
     await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb: "<p>Collects volumes 1–3 and 4 bonus stories.</p>" }]);
+    stubSite([{ ...THREE_IN_1, blurb }]);
     await sync(t);
     expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+  });
+
+  // The last Volume of a contiguous list is never quietly dropped.
+  it.each([
+    "<ul><li>Collects volumes 1, 2, and 3</li><li>Hardcover</li></ul>",
+    "<p>Collects volumes 1, 2, and 3 featuring new cover art.</p>",
+  ])("a contiguous list before other copy (%s) places the 3-in-1 at 1–3", async (blurb) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, blurb }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+  });
+
+  // A gapped or unfinished list, whatever follows it, places nothing.
+  it.each([
+    "<p>Collects volumes 1 and 3</p><p>Remastered</p>",
+    "<p>Collects volumes 1 and 3 remastered.</p>",
+    "<p>Collects volumes 1-3 and 4.5.</p>",
+    "<p>Collects volumes 1 as well as 3.</p>",
+    "<p>Collects volumes 1-2; 4.</p>",
+  ])("a gapped or unfinished list (%s) leaves the 3-in-1 Unmapped", async (blurb) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, blurb }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
+  });
+
+  it.each([
+    "Alpha 3-in-1 Edition 1 (Collecting Vols. 1 and 3)",
+    "Alpha 3-in-1 Edition 1 (Vol. 1 + Vol. 3)",
+    "Alpha 3-in-1 Edition 1 (Includes Vol. 1 + 3)",
+  ])("a title stating a gapped list (%s) leaves the 3-in-1 Unmapped", async (title) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, title }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
   });
 
   // An observation stored before the parser marked gapped lists, left
@@ -1688,5 +1742,121 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     stubSite([THREE_IN_1]);
     await sync(t);
     expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+  });
+
+  const OMNIBUS: FixtureBook = {
+    ...THREE_IN_1,
+    id: 312,
+    slug: "alpha-omnibus-1",
+    title: "Alpha Omnibus 1",
+    seriesSlug: "alpha-omnibus",
+    seriesTitle: "Alpha Omnibus",
+  };
+
+  // A later number the list never joined counts something else: the one
+  // stated range places an Omnibus (no declared size) at 1–3.
+  it.each([
+    "<p>Collects volumes 1–3 (chapters 1–27).</p>",
+    "<p>Collects volumes 1-3 of Mob Psycho 100.</p>",
+    "<p>Collects volumes 1-3 of Kaiju No. 8.</p>",
+    "<p>Collects volumes 1-3 of 10.</p>",
+    "<p>Collects volumes 1-3, chapters 1 to 27.</p>",
+  ])("a stated range before other numbers (%s) places an Omnibus at 1–3", async (blurb) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...OMNIBUS, blurb }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+  });
+
+  // A list with no collect-verb in front of it never overrides the 3-in-1
+  // size, and never creates the Volumes it names.
+  it.each([
+    "<p>The story continues in volumes 4 and 5.</p>",
+    "<p>Catch up before volumes 4 and 5, coming soon.</p>",
+    "<p>Don't miss volumes 2 and 3!</p>",
+    "<p>The story continues in volumes 4–6.</p>",
+  ])("a bare narrative list (%s) places the 3-in-1 at 1–3 from its size", async (blurb) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, blurb }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+  });
+
+  // A collect-verb speaks for the book only when nothing but a name stands
+  // between it and the list. A list it reaches through other words, or
+  // across a block boundary cleanBlurb spaced over, is a bare mention.
+  const UNGOVERNED = [
+    "<p>Collects bonus art</p><p>The story continues in volumes 4 and 5</p>",
+    "<h3>Collects the hit series</h3><p>Volumes 4-6 on sale now.</p>",
+    "<p>Includes a preview of volumes 4 and 5.</p>",
+    "<p>Includes a preview of volume 4.</p>",
+    "<p>Includes a letter from Oda. Volumes 4 and 5 are out now.</p>",
+    "<p>Collects chapters 1-27 and a preview of volumes 4-6.</p>",
+  ];
+
+  it.each(UNGOVERNED)("a list the verb does not govern (%s) places the 3-in-1 at 1–3", async (blurb) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, blurb }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+  });
+
+  it.each(UNGOVERNED)("a list the verb does not govern (%s) leaves an Omnibus Unmapped", async (blurb) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...OMNIBUS, blurb }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
+  });
+
+  it.each([
+    ["<p>Collects volumes 1-3 / 4-6.</p>", { volumes: [], coverages: 0, unmapped: [true] }],
+    // The statement the verb governs decides; the bare gap before it is silence.
+    [
+      "<p>Volumes 1 and 3 are here. Collects volumes 1-3.</p>",
+      { volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] },
+    ],
+  ])("an Omnibus with %s", async (blurb, expected) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...OMNIBUS, blurb }]);
+    await sync(t);
+    expect(await placed(t)).toEqual(expected);
+  });
+
+  it("a bare narrative list leaves an Omnibus Unmapped, creating no Volume", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...OMNIBUS, blurb: "<p>The story continues in volumes 4 and 5.</p>" }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
+  });
+
+  // "/" joins only weakly: the 3-in-1 size agrees with 1–3 alone.
+  it("a slash-joined range places the 3-in-1 at 1–3, creating no Volume 4–6", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, blurb: "<p>Collects volumes 1-3 / 4-6.</p>" }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+  });
+
+  // "Part N, Vol. M" is Volume M of the Part: no packaging, no Volume N.
+  it.each([
+    ["Alpha, Part 1, Vol. 2", "2"],
+    ["Alpha Book 2, Vol. 3", "3"],
+    ["Alpha: Part 5, Vol. 6", "6"],
+  ])("a title %s is one Volume of its Part, never packaging", async (title, label) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...THREE_IN_1, slug: "alpha-part", seriesSlug: "alpha-part", seriesTitle: undefined, title }]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: [label], coverages: 1, unmapped: [false] });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("editionLines").collect()).toHaveLength(0);
+    });
   });
 });
