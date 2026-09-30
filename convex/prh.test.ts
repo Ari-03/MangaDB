@@ -1393,10 +1393,10 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
   });
 
-  // A last listed number followed by anything but a statement end may count
-  // something else, so the blurb reads two ways: with it and without it. The
-  // 3-in-1 size (1–3) agrees with exactly one reading, so that one places
-  // the book. No Volume 4 is ever invented.
+  // A bare last number after "and" followed by anything but a statement end
+  // may count something else, so the blurb reads two ways: with it and
+  // without it. The 3-in-1 size (1–3) agrees with exactly one reading, so
+  // that one places the book. No Volume 4 is ever invented.
   it.each([
     "<p>Collects volumes 1-3 and 4 all-new bonus stories.</p>",
     "<p>Collects volumes 1-3 plus 4 all-new bonus stories.</p>",
@@ -1405,7 +1405,6 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     "<p>Collects volumes 1-3 and 4 “bonus” stories.</p>",
     "<p>Collects volumes 1-3 and 4 as-yet-unpublished stories.</p>",
     "<p>Collects volumes 1-3 and 4 for the first time.</p>",
-    "<p>Collects volumes 1-3 and 4 to 6 new pages.</p>",
     "<p>Collects volumes 1-3 and 4 on-model sketches.</p>",
     "<p>Collects volumes 1-3 and 4 (four!) bonus stories.</p>",
     "<p>Collects volumes 1-3 and 4.5 bonus pages.</p>",
@@ -1420,6 +1419,23 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     expect(result.volumes).toEqual(["1", "2", "3"]);
     expect(result.covered.sort()).toEqual(["1", "2", "3"]);
     expect(result.unmapped).toEqual([false]);
+  });
+
+  // A range after "and" is a Volume range: 1–6, which the 3-in-1 size
+  // contradicts. The book waits for a Moderator; no Volume 4–6 is created.
+  it("a range item after the list leaves the 3-in-1 Unmapped", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([
+      {
+        isbn: "9781646519828",
+        title: "Alpha 3-in-1 Edition 1",
+        flapcopy: "<p>Collects volumes 1-3 and 4 to 6 new pages.</p>",
+      },
+    ]);
+    await sync(t);
+    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
   });
 
   // The last Volume of a contiguous list is never quietly dropped: a block
@@ -1478,7 +1494,7 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
   // With no line size to agree with, two readings stay unresolved.
   it.each([
     "<p>Collects volumes 1-3 and 4 all-new bonus stories.</p>",
-    "<p>Collects volumes 1, 2, and 3 featuring new cover art.</p>",
+    "<p>Collects volumes 1 and 2 featuring new cover art.</p>",
     "<p>Collects volumes 1-3 as well as 5.</p>",
   ])("an ambiguous list (%s) leaves a Deluxe book Unmapped", async (flapcopy) => {
     const t = makeT();
@@ -1487,6 +1503,24 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     stubApi([{ isbn: "9781646519828", title: "Alpha Deluxe Edition 1", flapcopy }]);
     await sync(t);
     expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
+  });
+
+  // The last number of a serial list ("1, 2, and 3") is one of the list.
+  it("a serial list before other copy places a Deluxe book at 1–3", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([
+      {
+        isbn: "9781646519828",
+        title: "Alpha Deluxe Edition 1",
+        flapcopy: "<p>Collects volumes 1, 2, and 3 featuring new cover art.</p>",
+      },
+    ]);
+    await sync(t);
+    const result = await placed(t);
+    expect(result.covered.sort()).toEqual(["1", "2", "3"]);
+    expect(result.unmapped).toEqual([false]);
   });
 
   it("the line size at the book's position picks the reading that agrees with it", async () => {
@@ -1654,14 +1688,13 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     });
   });
 
-  // A collect-verb speaks for the book only when nothing but a name stands
-  // between it and the list ("Collects Berserk Volumes 40, 41"). A list it
-  // reaches through other words is a bare mention: "a preview of volumes 4
-  // and 5", or the next block, which cleanBlurb joins on with a space
-  // ("Collects bonus art</p><p>The story continues in volumes 4 and 5").
+  // A collect-verb collects the phrase an article or preposition opens, not
+  // the list inside it ("a preview of volumes 4 and 5", or the next block,
+  // which cleanBlurb joins on with a space: "Collects bonus art</p><p>The
+  // story continues in volumes 4 and 5"), and a verb in another sentence
+  // governs nothing.
   const UNGOVERNED = [
     "<p>Collects bonus art</p><p>The story continues in volumes 4 and 5</p>",
-    "<h3>Collects the hit series</h3><p>Volumes 4-6 on sale now.</p>",
     "<p>Includes a preview of volumes 4 and 5.</p>",
     "<p>Includes a preview of volume 4.</p>",
     "<p>Includes a letter from Oda. Volumes 4 and 5 are out now.</p>",
@@ -1689,15 +1722,18 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 });
   });
 
-  // Other words between verb and list leave it unsure whether the book holds
-  // the list. It places the book only by agreeing with the line size; a size
-  // it contradicts leaves the book Unmapped rather than letting either win.
+  // Any other words between verb and list leave the verb governing it. The
+  // size never overrides the statement: one it contradicts leaves the book
+  // Unmapped rather than letting either win.
   it.each([
     ["Alpha 3-in-1 Edition 1", "<p>Collects the hit series volumes 1-3.</p>", ["1", "2", "3"]],
     ["Alpha 3-in-1 Edition 2", "<p>Collects the hit series volumes 1-3.</p>", []],
     ["Alpha 3-in-1 Edition 1", "<p>Collects both volumes 1 and 2.</p>", []],
-    ["Alpha Deluxe Edition 1", "<p>Collects the hit series volumes 1-3.</p>", []],
+    ["Alpha Deluxe Edition 1", "<p>Collects the hit series volumes 1-3.</p>", ["1", "2", "3"]],
     ["Alpha Deluxe Edition 1", "<p>Collects Attack on Titan volumes 1-3.</p>", ["1", "2", "3"]],
+    // A block boundary cleanBlurb spaced over leaves the verb governing the
+    // next block's list: the 3-in-1 size (1–3) contradicts 4–6.
+    ["Alpha 3-in-1 Edition 1", "<h3>Collects the hit series</h3><p>Volumes 4-6 on sale now.</p>", []],
   ])("%s with %s covers %j", async (title, flapcopy, covered) => {
     const t = makeT();
     await seedRegistry(t, true);
@@ -1816,4 +1852,66 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     }
     expect((await placed(t)).covered.sort()).toEqual(["1", "2", "3"]);
   });
+
+  /** Syncs one PRH title over a Series holding Volumes 1–3. */
+  async function syncOne(title: string, flapcopy: string) {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await insertSeries(t, "Alpha", ["1", "2", "3"]);
+    stubApi([{ isbn: "9781646519828", title, flapcopy }]);
+    await sync(t);
+    return await placed(t);
+  }
+  const PLACED_1_3 = { volumes: ["1", "2", "3"], covered: ["1", "2", "3"], unmapped: [false], releases: 1 };
+  const UNMAPPED = { volumes: ["1", "2", "3"], covered: [], unmapped: [true], releases: 1 };
+  const sorted = (result: Awaited<ReturnType<typeof placed>>) => ({ ...result, covered: result.covered.sort() });
+
+  // The collect-verb nearest the list governs it: an earlier verb in the
+  // same sentence never turns the words between into a lead-in.
+  it.each([
+    "<p>This collected edition includes volumes 1-3.</p>",
+    "<p>Includes a new afterword and collects volumes 1-3.</p>",
+    "<p>Includes all-new bonus material and collects volumes 1-3 of the original series.</p>",
+    "<p>Collecting the acclaimed manga, this omnibus contains volumes 1-3.</p>",
+  ])("the verb nearest the list (%s) places a Deluxe book at 1–3", async (flapcopy) => {
+    expect(sorted(await syncOne("Alpha Deluxe Edition 1", flapcopy))).toEqual(PLACED_1_3);
+  });
+
+  // A capital "Volumes" is no sign of a mention. The governed 1–3
+  // contradicts the size at position 2 (4–6), so neither wins.
+  it("a governed capital-Volumes statement that contradicts the 3-in-1 size leaves it Unmapped", async () => {
+    const flapcopy = "<p>This collected edition contains Volumes 1–3 of the series.</p>";
+    expect(await syncOne("Alpha 3-in-1 Edition 2", flapcopy)).toEqual(UNMAPPED);
+  });
+
+  // A dash range is never ambiguous by what follows it.
+  it.each(["<p>Collects volumes 1-3 plus 16 pages of color art.</p>", "<p>Collects volumes 1-3 of Alpha!</p>"])(
+    "a dash range (%s) places a Deluxe book at 1–3",
+    async (flapcopy) => {
+      expect(sorted(await syncOne("Alpha Deluxe Edition 1", flapcopy))).toEqual(PLACED_1_3);
+    },
+  );
+
+  // A bare last item that agrees with no size is unplaceable: never the
+  // shortened 1–3, never the size's 4–6.
+  it("an ambiguous last item agreeing with no size leaves the 3-in-1 Unmapped", async () => {
+    const flapcopy = "<p>Collects volumes 1-3 and 4 bonus stories.</p>";
+    expect(await syncOne("Alpha 3-in-1 Edition 2", flapcopy)).toEqual(UNMAPPED);
+  });
+
+  // A sentence-initial list with no verb governs on a line with no size.
+  it.each(["<p>Volumes 1–3 of the acclaimed series, in hardcover.</p>", "<p>Volumes 1, 2, and 3 together at last.</p>"])(
+    "a sentence-initial list (%s) places a Deluxe book at 1–3",
+    async (flapcopy) => {
+      expect(sorted(await syncOne("Alpha Deluxe Edition 1", flapcopy))).toEqual(PLACED_1_3);
+    },
+  );
+
+  // "1-2-3" runs on past what was read: no shortened 1–2, no size.
+  it.each(["Alpha Deluxe Edition 1", "Alpha 3-in-1 Edition 1"])(
+    "a run-on range leaves %s Unmapped",
+    async (title) => {
+      expect(await syncOne(title, "<p>Collects volumes 1-2-3.</p>")).toEqual(UNMAPPED);
+    },
+  );
 });

@@ -1663,7 +1663,6 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     "<p>Collects volumes 1-3 and 4 “bonus” stories.</p>",
     "<p>Collects volumes 1-3 and 4 as-yet-unpublished stories.</p>",
     "<p>Collects volumes 1-3 and 4 for the first time.</p>",
-    "<p>Collects volumes 1-3 and 4 to 6 new pages.</p>",
     "<p>Collects volumes 1-3 and 4 on-model sketches.</p>",
     "<p>Collects volumes 1-3 and 4 (four!) bonus stories.</p>",
     "<p>Collects volumes 1-3 and 4.5 bonus pages.</p>",
@@ -1784,12 +1783,10 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
   });
 
-  // A collect-verb speaks for the book only when nothing but a name stands
-  // between it and the list. A list it reaches through other words, or
-  // across a block boundary cleanBlurb spaced over, is a bare mention.
+  // A collect-verb collects the phrase an article or preposition opens, not
+  // the list inside it, and a verb in another sentence governs nothing.
   const UNGOVERNED = [
     "<p>Collects bonus art</p><p>The story continues in volumes 4 and 5</p>",
-    "<h3>Collects the hit series</h3><p>Volumes 4-6 on sale now.</p>",
     "<p>Includes a preview of volumes 4 and 5.</p>",
     "<p>Includes a preview of volume 4.</p>",
     "<p>Includes a letter from Oda. Volumes 4 and 5 are out now.</p>",
@@ -1858,5 +1855,75 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     await t.run(async (ctx) => {
       expect(await ctx.db.query("editionLines").collect()).toHaveLength(0);
     });
+  });
+
+  const THREE_IN_1_2: FixtureBook = {
+    ...THREE_IN_1,
+    id: 313,
+    slug: "alpha-3-in-1-edition-2",
+    title: "Alpha 3-in-1 Edition 2",
+    isbn: "978-1-9990004-3-1",
+  };
+  const PLACED_1_3 = { volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] };
+  const UNMAPPED = { volumes: [], coverages: 0, unmapped: [true] };
+
+  async function syncOne(book: FixtureBook, blurb: string) {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...book, blurb }]);
+    await sync(t);
+    return await placed(t);
+  }
+
+  // The collect-verb nearest the list governs it.
+  it.each([
+    "<p>This collected edition includes volumes 1-3.</p>",
+    "<p>Includes a new afterword and collects volumes 1-3.</p>",
+    "<p>Includes all-new bonus material and collects volumes 1-3 of the original series.</p>",
+    "<p>Collecting the acclaimed manga, this omnibus contains volumes 1-3.</p>",
+  ])("the verb nearest the list (%s) places an Omnibus at 1–3", async (blurb) => {
+    expect(await syncOne(OMNIBUS, blurb)).toEqual(PLACED_1_3);
+  });
+
+  // A governed capital-Volumes 1–3 contradicts the size at position 2
+  // (4–6): the book stays Unmapped and no Volume 4–6 is created.
+  it("a governed statement that contradicts the 3-in-1 size creates no Volume", async () => {
+    const blurb = "<p>This collected edition contains Volumes 1–3 of the series.</p>";
+    expect(await syncOne(THREE_IN_1_2, blurb)).toEqual(UNMAPPED);
+  });
+
+  it.each(["<p>Collects volumes 1-3 plus 16 pages of color art.</p>", "<p>Collects volumes 1-3 of Alpha!</p>"])(
+    "a dash range (%s) places an Omnibus at 1–3",
+    async (blurb) => {
+      expect(await syncOne(OMNIBUS, blurb)).toEqual(PLACED_1_3);
+    },
+  );
+
+  // A range after "and" ("4 to 6") is a Volume range: 1–6, which the 3-in-1
+  // size contradicts. So does a list across a block boundary cleanBlurb
+  // spaced over, which the verb governs. Neither creates a Volume.
+  it.each([
+    "<p>Collects volumes 1-3 and 4 to 6 new pages.</p>",
+    "<h3>Collects the hit series</h3><p>Volumes 4-6 on sale now.</p>",
+  ])("a statement the 3-in-1 size contradicts (%s) leaves it Unmapped", async (blurb) => {
+    expect(await syncOne(THREE_IN_1, blurb)).toEqual(UNMAPPED);
+  });
+
+  it("an ambiguous last item agreeing with no size leaves the 3-in-1 Unmapped", async () => {
+    expect(await syncOne(THREE_IN_1_2, "<p>Collects volumes 1-3 and 4 bonus stories.</p>")).toEqual(UNMAPPED);
+  });
+
+  it.each(["<p>Volumes 1–3 of the acclaimed series, in hardcover.</p>", "<p>Volumes 1, 2, and 3 together at last.</p>"])(
+    "a sentence-initial list (%s) places an Omnibus at 1–3",
+    async (blurb) => {
+      expect(await syncOne(OMNIBUS, blurb)).toEqual(PLACED_1_3);
+    },
+  );
+
+  it.each([
+    ["an Omnibus", OMNIBUS],
+    ["a 3-in-1", THREE_IN_1],
+  ])("a run-on range leaves %s Unmapped", async (_, book) => {
+    expect(await syncOne(book, "<p>Collects volumes 1-2-3.</p>")).toEqual(UNMAPPED);
   });
 });
