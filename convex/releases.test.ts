@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
+import { joinBrowseRows } from "./releases";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -370,5 +371,106 @@ describe("releases.monthBrowse", () => {
       const result = await t.query(api.releases.monthBrowse, args);
       expect(result.releases).toEqual([]);
     }
+  });
+});
+
+// Audit E05: a Release without an ISBN borrows one from a sibling Release or
+// an alternative Edition. The borrowed ISBN depends only on the Edition, so a
+// window of ISBN-less rows must read each Edition's Releases and Coverage once.
+describe("joinBrowseRows cover fallback", () => {
+  it("reads each Edition's Releases and Coverage once per query", async () => {
+    const t = convexTest(schema);
+    const { counts, rows } = await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "VIZ Media",
+        slug: "viz-media",
+      });
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "Tokyo Ghoul",
+        altTitles: [],
+        searchText: "Tokyo Ghoul",
+      });
+      const volume = async (position: number) =>
+        await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: position,
+          seriesId,
+          position,
+          label: String(position),
+        });
+      const edition = async (volumeId: Id<"volumes">, publicId: number) => {
+        const id = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
+        await ctx.db.insert("volumeCoverages", {
+          editionId: id,
+          volumeId,
+          order: 1,
+          extent: "complete",
+        });
+        return id;
+      };
+      const release = async (editionId: Id<"editions">, day: number, isbn13?: string) =>
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format: "physical",
+          language: "en",
+          isbn13,
+          pubDate: { year: 2026, month: 8, day, sort: 20260800 + day },
+          publisherId,
+          seriesIds: [seriesId],
+        });
+
+      // Eleven Releases in one Edition, ten of them without an ISBN.
+      const v1 = await volume(1);
+      const crowded = await edition(v1, 1);
+      await release(crowded, 1, "9780000000001");
+      for (let day = 2; day <= 11; day++) await release(crowded, day);
+      // An Edition with no ISBN at all, whose Volume another Edition covers.
+      const v2 = await volume(2);
+      const bare = await edition(v2, 2);
+      const other = await edition(v2, 3);
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId: other,
+        format: "physical",
+        language: "en",
+        isbn13: "9780000000002",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+      for (let day = 12; day <= 14; day++) await release(bare, day);
+
+      // Count table scans through a db whose `query` tallies each table.
+      const counts = new Map<string, number>();
+      const db = new Proxy(ctx.db, {
+        get(target, prop) {
+          if (prop === "query") {
+            return (table: Parameters<typeof target.query>[0]) => {
+              counts.set(table, (counts.get(table) ?? 0) + 1);
+              return target.query(table);
+            };
+          }
+          const value: unknown = Reflect.get(target, prop, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const docs = await ctx.db.query("releases").collect();
+      const dated = docs.filter((r) => r.pubDate !== undefined);
+      const rows = await joinBrowseRows({ ...ctx, db }, dated);
+      return { counts: Object.fromEntries(counts), rows };
+    });
+
+    expect(rows).toHaveLength(14);
+    expect(rows.filter((r) => r.coverIsbn === "9780000000001")).toHaveLength(11);
+    expect(rows.filter((r) => r.coverIsbn === "9780000000002")).toHaveLength(3);
+    // One Releases scan per Edition consulted: the crowded one, the bare one,
+    // and the alternative Edition the bare one borrows from.
+    expect(counts.releases).toBe(3);
+    // Coverage by Edition (shared with the Volume label) for the two Editions
+    // with rows, plus one by-Volume scan for the bare Edition's fallback.
+    expect(counts.volumeCoverages).toBe(3);
   });
 });

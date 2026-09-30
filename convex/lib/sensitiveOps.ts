@@ -17,7 +17,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { primaryVolumeSeries } from "../catalogPages";
+import { followMerges, primaryVolumeSeries } from "../catalogPages";
 import {
   displayInfo,
   getCanonical,
@@ -298,6 +298,35 @@ async function recomputeReleaseDenorms(
   }
 }
 
+const VISIBILITY_FIELDS = ["ownershipVisibility", "readingVisibility"] as const;
+type VisibilityPatch = Partial<
+  Pick<Doc<"userSeriesStates">, (typeof VISIBILITY_FIELDS)[number]>
+>;
+
+/**
+ * The Tracking Visibility overrides a Series merge must set on the state row
+ * it keeps (`kept`) so that neither surface ends up wider than it was on the
+ * other side (`other`; undefined when that Series had no row, so the user's
+ * default governed it). A surface private on either side stays private: the
+ * kept row gets an explicit "private" override wherever its own effective
+ * visibility was public. Applied through `repoint`, so Split restores the
+ * original overrides. A missing User counts as private by default.
+ */
+function stricterVisibility(
+  user: Doc<"users"> | null,
+  kept: Doc<"userSeriesStates">,
+  other: Doc<"userSeriesStates"> | undefined,
+): VisibilityPatch {
+  const patch: VisibilityPatch = {};
+  for (const field of VISIBILITY_FIELDS) {
+    const fallback = user?.[field] ?? "private";
+    const keptEffective = kept[field] ?? fallback;
+    const otherEffective = other?.[field] ?? fallback;
+    if (keptEffective === "public" && otherEffective === "private") patch[field] = "private";
+  }
+  return patch;
+}
+
 /**
  * Move the loser's Ratings and Reviews to the survivor, one per user × target:
  * where a user already rated or reviewed the survivor, the survivor's row
@@ -475,6 +504,28 @@ async function transferReferences(
     case "publisher": {
       const loser = loserDoc as Doc<"publishers">;
       const survivor = survivorDoc as Doc<"publishers">;
+      // Imprints follow their parent company, one level deep. A survivor that
+      // was the loser's own imprint becomes top-level (it cannot parent
+      // itself); a survivor that is another company's imprint cannot take
+      // the loser's imprints, so the merge is refused until they move.
+      const imprints = (
+        await ctx.db
+          .query("publishers")
+          .withIndex("by_parent", (q) => q.eq("parentPublisherId", loser._id))
+          .collect()
+      ).filter((row) => row.status !== "merged" && row._id !== survivor._id);
+      const survivorParent =
+        survivor.parentPublisherId === loser._id ? undefined : survivor.parentPublisherId;
+      if (imprints.length > 0 && survivorParent !== undefined) {
+        fail(
+          "badMerge",
+          "The survivor is itself an imprint, and imprints nest one level only — give the loser's imprints another parent first.",
+        );
+      }
+      await repoint(ctx, log, "publishers", survivor, { parentPublisherId: survivorParent });
+      for (const imprint of imprints) {
+        await repoint(ctx, log, "publishers", imprint, { parentPublisherId: survivor._id });
+      }
       // editionLines and releaseBundles have no publisher index; both tables
       // are small enough for a rare moderator action to scan.
       for (const line of await ctx.db.query("editionLines").collect()) {
@@ -534,7 +585,9 @@ async function transferReferences(
       const survivorId = survivorDoc._id as Id<"series">;
 
       // Collect the editions whose release denorms mention the loser before
-      // the volumes move (afterwards the coverage no longer leads back).
+      // the volumes move (afterwards the coverage no longer leads back):
+      // those covering its Volumes, and every member of its Edition Lines
+      // (Unmapped Packaging covers nothing; its line names the Series).
       const volumes = await ctx.db
         .query("volumes")
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
@@ -568,6 +621,11 @@ async function transferReferences(
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
         .collect();
       for (const line of lines) {
+        const members = await ctx.db
+          .query("editions")
+          .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+          .collect();
+        for (const edition of members) affectedEditions.add(edition._id);
         await repoint(ctx, log, "editionLines", line, { seriesId: survivorId });
       }
 
@@ -614,7 +672,8 @@ async function transferReferences(
         }
       }
 
-      // User tracking: one row per user × series — the survivor's row wins.
+      // User tracking: one row per user × series — the survivor's row wins,
+      // but never with a wider Tracking Visibility than either side had.
       const states = await ctx.db
         .query("userSeriesStates")
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
@@ -626,8 +685,16 @@ async function transferReferences(
             q.eq("userId", state.userId).eq("seriesId", survivorId),
           )
           .unique();
-        if (existing) await removeRow(ctx, log, "userSeriesStates", state);
-        else await repoint(ctx, log, "userSeriesStates", state, { seriesId: survivorId });
+        const user = await ctx.db.get(state.userId);
+        if (existing) {
+          await removeRow(ctx, log, "userSeriesStates", state);
+          await repoint(ctx, log, "userSeriesStates", existing, stricterVisibility(user, existing, state));
+        } else {
+          await repoint(ctx, log, "userSeriesStates", state, {
+            seriesId: survivorId,
+            ...stricterVisibility(user, state, undefined),
+          });
+        }
       }
       // Progress rows key on user × release / user × volume, which the merge
       // does not change — repoint the series denorm only.
@@ -900,6 +967,15 @@ async function transferReferences(
         else await repoint(ctx, log, "collectionEntries", entry, { releaseId: survivorId });
       }
 
+      // A moved pass takes the survivor's Series denorm the way startPass
+      // derives it (reading.ts passSeriesId: the first covered Series,
+      // merge-resolved), so a cross-Series merge files it under the right
+      // work. A survivor without coverage leaves the pass's Series alone.
+      const firstSeriesId = (survivorDoc as Doc<"releases">).seriesIds[0];
+      const passSeriesId = firstSeriesId
+        ? ((await followMerges(ctx, "series", await ctx.db.get(firstSeriesId)))?._id ?? firstSeriesId)
+        : undefined;
+      const passSeries = passSeriesId ? { seriesId: passSeriesId } : {};
       const progress = await ctx.db
         .query("releaseProgress")
         .withIndex("by_release", (q) => q.eq("releaseId", loserId))
@@ -912,7 +988,12 @@ async function transferReferences(
           )
           .unique();
         if (existing) await removeRow(ctx, log, "releaseProgress", row);
-        else await repoint(ctx, log, "releaseProgress", row, { releaseId: survivorId });
+        else {
+          await repoint(ctx, log, "releaseProgress", row, {
+            releaseId: survivorId,
+            ...passSeries,
+          });
+        }
       }
       return;
     }
@@ -1062,8 +1143,10 @@ export async function reversibleManifestOf(
 /**
  * Every open manifest of the latest merge of this record, newest first. A
  * merge too large for one transaction (the data repair's chunked publisher
- * merge) writes several manifests under one Proposal; Split must replay
- * them all, not just the last.
+ * merge, lib/repair/ops.ts) writes its chunk manifests before the closing
+ * merge's, each under its own repair Proposal, so the operation is not one
+ * Proposal: it is every open manifest into the latest one's survivor written
+ * since this record's previous Split. Split must replay them all.
  */
 async function reversibleManifestsOf(
   ctx: QueryCtx | MutationCtx,
@@ -1075,19 +1158,58 @@ async function reversibleManifestsOf(
       q.eq("loserRef.type", ref.type).eq("loserRef.id", ref.id as never),
     )
     .collect();
+  const lastSplit = Math.max(
+    0,
+    ...manifests.filter((m) => m.reversedAt !== undefined).map((m) => m._creationTime),
+  );
   const open = manifests
-    .filter((m) => m.reversedAt === undefined)
+    .filter((m) => m.reversedAt === undefined && m._creationTime > lastSplit)
     .sort((a, b) => b._creationTime - a._creationTime);
   const latest = open[0];
   if (!latest) return [];
-  return open.filter((m) => m.proposalId === latest.proposalId);
+  return open.filter((m) => sameValue(m.survivorRef, latest.survivorRef));
+}
+
+/**
+ * Whether a manifest snapshot may be reinserted: a personal row (one with a
+ * `userId`) only while its User still exists. Account deletion redacts these
+ * snapshots (redactUserFromManifests), and this guard covers any the
+ * redaction has not reached yet.
+ */
+async function ownerExists(ctx: MutationCtx, doc: unknown): Promise<boolean> {
+  const userId = (doc as { userId?: unknown }).userId;
+  if (typeof userId !== "string") return true;
+  const id = ctx.db.normalizeId("users", userId);
+  return id !== null && (await ctx.db.get(id)) !== null;
+}
+
+/**
+ * Personal snapshots a deleted User left in merge manifests, removed from one
+ * page of manifests at a time. The account purge (users.purgeUser) schedules
+ * internal.users.redactMergeManifests, which calls this per page; Split then
+ * has nothing of theirs to reinsert.
+ */
+export async function redactUserFromManifests(
+  ctx: MutationCtx,
+  manifests: Array<Doc<"mergeManifests">>,
+  userId: Id<"users">,
+): Promise<void> {
+  for (const manifest of manifests) {
+    const removed = manifest.removed.filter(
+      (row) => (row.doc as { userId?: unknown }).userId !== userId,
+    );
+    if (removed.length < manifest.removed.length) {
+      await ctx.db.patch(manifest._id, { removed });
+    }
+  }
 }
 
 /**
  * Split — the only reversal of a mistaken merge: replay the merge's
  * manifest(s) backward (delete what it inserted, reinsert what it removed, repoint back
  * every reference that still points where the merge left it) and reactivate
- * the loser. References the world re-aimed since the merge are left alone.
+ * the loser. References the world re-aimed since the merge are left alone,
+ * and personal rows of a deleted User are never reinserted.
  */
 export async function applySplit(
   ctx: MutationCtx,
@@ -1112,6 +1234,7 @@ export async function applySplit(
       if (id && (await ctx.db.get(id))) await ctx.db.delete(id);
     }
     for (const row of manifest.removed) {
+      if (!(await ownerExists(ctx, row.doc))) continue;
       await ctx.db.insert(row.table as TableNames, row.doc as never);
     }
     for (const entry of [...manifest.repointed].reverse()) {
@@ -1192,6 +1315,15 @@ export async function impactOf(
   switch (ref.type) {
     case "publisher": {
       const id = ref.id as Id<"publishers">;
+      add(
+        "Imprints (follow the survivor on a merge)",
+        (
+          await ctx.db
+            .query("publishers")
+            .withIndex("by_parent", (q) => q.eq("parentPublisherId", id))
+            .collect()
+        ).filter((row) => row.status !== "merged").length,
+      );
       add(
         "Edition lines",
         (await ctx.db.query("editionLines").collect()).filter(

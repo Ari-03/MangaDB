@@ -222,9 +222,9 @@ export const sweepCredits = internalMutation({
 /**
  * Refresh a batch of authors' derived facts: how many visible Series they
  * wrote or drew (`isMaker`), how many more they are only the original
- * creator of, the jacket of their biggest (most Volumes), preferring one
- * they made and one that is not a Mature Series, and whether every Series
- * they are credited on is mature (`matureOnly`, lib/mature.ts).
+ * creator of, the jacket of their biggest (most Volumes), preferring first
+ * one that is not a Mature Series and then one they made, and whether every
+ * Series they are credited on is mature (`matureOnly`, lib/mature.ts).
  */
 export const statsBatch = internalMutation({
   args: { afterPublicId: v.union(v.number(), v.null()) },
@@ -239,7 +239,9 @@ export const statsBatch = internalMutation({
       const shelf = await visibleSeriesOf(ctx, person._id, true);
       const made = shelf.filter((entry) => entry.roles.some(isMaker));
       const general = (entries: typeof shelf) => entries.filter((entry) => !entry.series.mature);
-      const pool = [general(made), made, general(shelf), shelf].find((entries) => entries.length > 0) ?? [];
+      // General before made: the general directory lists a mixed-credit
+      // author, so a Series they only originated beats a mature one they made.
+      const pool = [general(made), general(shelf), made, shelf].find((entries) => entries.length > 0) ?? [];
       const biggest = pool.reduce<(typeof shelf)[number] | null>(
         (best, entry) =>
           (entry.stats?.volumeCount ?? 0) > (best?.stats?.volumeCount ?? -1) ? entry : best,

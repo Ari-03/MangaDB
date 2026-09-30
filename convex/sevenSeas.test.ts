@@ -300,6 +300,64 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
   });
 });
 
+// B19: a title that never states its coverage ("Deluxe Edition 1") is
+// placed by the shared inference: the listing blurb, else the line's
+// declared size, else Unmapped Packaging under its line (Bootstrap Mode).
+describe("sevenSeas.sync — packaging coverage inference", () => {
+  const DELUXE: FixtureBook = {
+    id: 301,
+    slug: "alpha-deluxe-edition-1",
+    title: "Alpha Deluxe Edition 1",
+    seriesSlug: "alpha-deluxe",
+    seriesTitle: "Alpha Deluxe Edition",
+    date: "March 3, 2026",
+    isbn: "978-1-9990004-1-7",
+  };
+
+  it("reads the covered Volumes from the listing blurb", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...DELUXE, blurb: "<p>Collects volumes 1-3 in hardcover.</p>" }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes.map((v) => v.label).sort()).toEqual(["1", "2", "3"]);
+      expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(3);
+      const [edition] = await ctx.db.query("editions").collect();
+      expect(edition).toMatchObject({ linePosition: "1" });
+      expect(edition!.coverageUnmapped).toBeUndefined();
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+  });
+
+  it("creates Unmapped Packaging under its line when no signal states coverage", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([DELUXE]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("volumes").collect()).toHaveLength(0);
+      const [edition, ...more] = await ctx.db.query("editions").collect();
+      expect(more).toHaveLength(0);
+      expect(edition).toMatchObject({ coverageUnmapped: true, linePosition: "1" });
+      const line = await ctx.db.get(edition!.editionLineId!);
+      expect(line).toMatchObject({ name: "Deluxe Edition" });
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+    });
+  });
+
+  it("keeps uncovered packaging on its observation outside Bootstrap Mode", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, false);
+    stubSite([DELUXE]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("editions").collect()).toHaveLength(0);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+    });
+  });
+});
+
 describe("sevenSeas.sync — observations over repeated runs", () => {
   it("bumps last-seen only on an unchanged fetch", async () => {
     const t = convexTest(schema);
@@ -500,6 +558,75 @@ describe("sevenSeas.sync — covers", () => {
     imageRequests.length = 0;
     expect(await sync(t, { force: true })).toMatchObject({ errorCount: 0 });
     expect(imageRequests).toEqual([]);
+  });
+});
+
+// B22: a cover that failed after its book applied is retried by the next
+// ordinary run, straight from the stored snapshot's URL: the unchanged book
+// page is not fetched again.
+describe("sevenSeas.sync — failed cover retries", () => {
+  /** Serve the stubbed site, but fail cover art with a 404 and log every URL asked for. */
+  function withBrokenArt(requests: string[], broken: boolean) {
+    const site = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
+      const url = typeof input === "object" && "url" in input ? input.url : String(input);
+      requests.push(url);
+      if (broken && url.includes("/wp-content/uploads/")) {
+        return new Response("not found", { status: 404 });
+      }
+      return site(input);
+    });
+  }
+
+  it("retries the art next run without refetching the unchanged book page", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    const requests: string[] = [];
+    stubSite([ALPHA_1]);
+    withBrokenArt(requests, true);
+    const first = await sync(t);
+    expect(first).toMatchObject({ recordsChanged: 1, errorCount: 1 });
+    const art = await t.run(async (ctx) => (await ctx.db.query("releases").collect())[0]!);
+    expect(art.coverImage).toBeUndefined();
+
+    // The art is back; the listing has not changed.
+    requests.length = 0;
+    stubSite([ALPHA_1]);
+    withBrokenArt(requests, false);
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0, errorCount: 0 });
+    expect(requests.some((url) => url === `${BASE}/books/${ALPHA_1.slug}/`)).toBe(false);
+    expect(imageRequests).toEqual([`${BASE}/wp-content/uploads/covers/${ALPHA_1.slug}.jpg`]);
+    const stored = await t.run(async (ctx) => (await ctx.db.get(art._id))!.coverImage);
+    expect(stored).toMatchObject({
+      sourceUrl: `${BASE}/wp-content/uploads/covers/${ALPHA_1.slug}.jpg`,
+      storageId: expect.any(String),
+    });
+
+    // Stored art is not asked for again.
+    imageRequests.length = 0;
+    expect(await sync(t)).toMatchObject({ errorCount: 0 });
+    expect(imageRequests).toEqual([]);
+  });
+
+  it("paces retries with maxCoverRetries", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    const requests: string[] = [];
+    stubSite([ALPHA_1, ALPHA_2]);
+    withBrokenArt(requests, true);
+    await sync(t);
+
+    stubSite([ALPHA_1, ALPHA_2]);
+    withBrokenArt(requests, false);
+    await sync(t, { maxCoverRetries: 1 });
+    expect(imageRequests).toHaveLength(1);
+    imageRequests.length = 0;
+    await sync(t, { maxCoverRetries: 1 });
+    expect(imageRequests).toHaveLength(1);
+    const covered = await t.run(async (ctx) =>
+      (await ctx.db.query("releases").collect()).filter((r) => r.coverImage?.storageId),
+    );
+    expect(covered).toHaveLength(2);
   });
 });
 

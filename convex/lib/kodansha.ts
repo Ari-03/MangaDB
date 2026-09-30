@@ -35,7 +35,10 @@
 //
 // One volume yields one snapshot PER FORMAT: print and digital are distinct
 // Releases of one Edition (spec §2), so each gets its own observation
-// identity (`{series}/{volume}#{format}`), shared by both feeds.
+// identity (`{series}/{volume}#{format}`), shared by both feeds. A second
+// ISBN of one format (a paperback and a hardcover) is keyed on its ISBN
+// (`…#physical:{isbn}`); which ISBN owns the base key is settled against
+// what is stored (kodansha.ts `offerRecordId`), never by page order.
 //
 // Scope (spec §1): Kodansha USA also sells novels, children's picture books
 // ("Cells at Work! Picture Book"), and other non-manga. Such a volume keeps
@@ -354,6 +357,16 @@ export function sourceRecordId(
   return `${item.seriesSlug}/${item.volumeSlug}#${format}`;
 }
 
+/** The identity of a format's other ISBN: `{base}:{isbn13}`. */
+export function isbnRecordId(baseId: string, isbn13: string): string {
+  return `${baseId}:${isbn13}`;
+}
+
+/** Any volume identity → its `{series}/{volume}#{format}` base (drops an ISBN key). */
+export function baseRecordId(recordId: string): string {
+  return recordId.replace(/:\d{13}$/, "");
+}
+
 /** One format of an item as a snapshot; `title` defaults to "{series} Volume N". */
 function snapshotFor(
   item: KodanshaItem,
@@ -501,6 +514,16 @@ export function parseSeriesPage(html: string, seriesSlug: string): string[] {
   return [...slugs].sort(volumeOrder);
 }
 
+/**
+ * Is this HTML a series page at all? Every live one carries a JSON-LD
+ * `ComicSeries`, even with no volumes yet; a challenge page served with
+ * HTTP 200 has none (and no volume links), and must not be remembered as an
+ * empty series.
+ */
+export function isSeriesPage(html: string): boolean {
+  return jsonLdObjects(html).some((obj) => obj["@type"] === "ComicSeries");
+}
+
 /** A series page → its JSON-LD `ComicSeries.description` blurb, cleaned. */
 export function parseSeriesSynopsis(html: string): string | undefined {
   const series = jsonLdObjects(html).find((obj) => obj["@type"] === "ComicSeries");
@@ -534,29 +557,9 @@ function formatOf(
   return null;
 }
 
-function namesOf(author: unknown): string[] {
-  const list = Array.isArray(author) ? author : [author];
-  return list
-    .map((a) => (a as { name?: unknown } | null)?.name)
-    .filter((name): name is string => typeof name === "string" && name.trim() !== "")
-    .map((name) => name.trim());
-}
-
-/**
- * A volume page → its book and one offer per format with a valid ISBN, or
- * null when the page has no JSON-LD Book or no ISBN'd format. An
- * out-of-scope book (novel, picture book, merchandise) parses with
- * `item.outOfScope` set, so it is observed but never placed.
- */
-export function parseVolumePage(html: string, pageUrl: string): KodanshaVolumePage | null {
-  const book = jsonLdObjects(html).find(
-    (obj) => obj["@type"] === "Book" && obj.workExample !== undefined,
-  );
-  if (!book || typeof book.name !== "string") return null;
-  const title = book.name.replace(/[\s ]+/g, " ").trim();
-  if (title === "") return null;
-
-  const examples = Array.isArray(book.workExample) ? book.workExample : [book.workExample];
+/** A JSON-LD Book's `workExample` → one offer per format with a valid, unrepeated ISBN. */
+function offersOf(workExample: unknown): VolumeOffer[] {
+  const examples = Array.isArray(workExample) ? workExample : [workExample];
   const offers: VolumeOffer[] = [];
   const isbns = new Set<string>();
   for (const example of examples) {
@@ -581,7 +584,32 @@ export function parseVolumePage(html: string, pageUrl: string): KodanshaVolumePa
           : undefined,
     });
   }
+  return offers;
+}
 
+function namesOf(author: unknown): string[] {
+  const list = Array.isArray(author) ? author : [author];
+  return list
+    .map((a) => (a as { name?: unknown } | null)?.name)
+    .filter((name): name is string => typeof name === "string" && name.trim() !== "")
+    .map((name) => name.trim());
+}
+
+/**
+ * A volume page → its book and one offer per format with a valid ISBN, or
+ * null when the page has no JSON-LD Book or no ISBN'd format. An
+ * out-of-scope book (novel, picture book, merchandise) parses with
+ * `item.outOfScope` set, so it is observed but never placed.
+ */
+export function parseVolumePage(html: string, pageUrl: string): KodanshaVolumePage | null {
+  const book = jsonLdObjects(html).find(
+    (obj) => obj["@type"] === "Book" && obj.workExample !== undefined,
+  );
+  if (!book || typeof book.name !== "string") return null;
+  const title = book.name.replace(/[\s ]+/g, " ").trim();
+  if (title === "") return null;
+
+  const offers = offersOf(book.workExample);
   const url = typeof book.url === "string" ? book.url : pageUrl;
   const item = itemFrom({
     seriesTitle: (book.isPartOf as { name?: unknown } | undefined)?.name,
@@ -595,9 +623,27 @@ export function parseVolumePage(html: string, pageUrl: string): KodanshaVolumePa
 }
 
 /**
+ * Why `parseVolumePage` found nothing: true when the page is a volume page
+ * whose JSON-LD Book lists no ISBN'd format yet (an announced volume, worth a
+ * weekly re-check); false for anything else, such as a challenge page served
+ * with HTTP 200 or changed markup, which the crawl treats as a failure.
+ */
+export function volumePageAwaitsIsbn(html: string): boolean {
+  return jsonLdObjects(html).some(
+    (obj) =>
+      obj["@type"] === "Book" &&
+      typeof obj.name === "string" &&
+      obj.name.trim() !== "" &&
+      offersOf(obj.workExample).length === 0,
+  );
+}
+
+/**
  * A parsed volume page → one (record id, snapshot) per format. A second
  * ISBN of the same format (a paperback and a hardcover) is a Release of its
- * own, keyed by its ISBN. `seriesSynopsis` is the series page's blurb,
+ * own, keyed by its ISBN. The ids follow page order and are only proposals:
+ * the apply step settles which ISBN owns the base key against what is stored
+ * (kodansha.ts `offerRecordId`). `seriesSynopsis` is the series page's blurb,
  * dropped for a packaging line's volumes (it describes the line).
  */
 export function toBacklistSnapshots(
@@ -607,7 +653,7 @@ export function toBacklistSnapshots(
   const taken = new Set<string>();
   return page.offers.map((offer) => {
     const base = sourceRecordId(page.item, offer.format);
-    const id = taken.has(base) ? `${base}:${offer.isbn13}` : base;
+    const id = taken.has(base) ? isbnRecordId(base, offer.isbn13) : base;
     taken.add(base);
     return {
       sourceRecordId: id,
@@ -645,7 +691,7 @@ export const seriesCrawlValidator = v.object({
   url: v.string(),
   lastUpdatedAt: v.string(),
   volumes: v.array(v.string()),
-  /** Upcoming, recent, or undated volumes, and pages whose fetch failed. */
+  /** Upcoming, recent, or undated volumes, and pages whose fetch, parse, or cover failed. */
   recheck: v.array(v.string()),
   /** Last complete crawl, independent of weekly rechecks. Optional for older observations. */
   fullCrawledAt: v.optional(v.number()),

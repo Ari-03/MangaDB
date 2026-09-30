@@ -127,6 +127,37 @@ describe("people.rebuild", () => {
     expect(credits).toHaveLength(1);
   });
 
+  // B32: the general directory shows a mixed-credit author, so their jacket
+  // must be a general Series' even when only their originals are general.
+  it("prefers a general Series he only originated to a mature one he made for the cover", async () => {
+    const { t, ids } = await catalog();
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.aot, { mature: true });
+      const aot = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.aot))
+        .unique();
+      const { _id, _creationTime, ...stats } = aot!;
+      await ctx.db.insert("seriesStats", {
+        ...stats,
+        seriesId: ids.regrets,
+        publicId: 2,
+        title: "Attack on Titan: No Regrets",
+        volumeCount: 2,
+        coverIsbn: "9781612629421",
+      });
+    });
+    await t.mutation(internal.people.statsBatch, { afterPublicId: null });
+    const isayama = await t.run((ctx) =>
+      ctx.db
+        .query("people")
+        .withIndex("by_annId", (q) => q.eq("annId", "97559"))
+        .unique(),
+    );
+    expect(isayama).toMatchObject({ seriesCount: 1, originalCount: 1, coverIsbn: "9781612629421" });
+    expect(isayama?.matureOnly).toBeUndefined();
+  });
+
   it("drops credits no observation gives any more", async () => {
     const { t, ids } = await catalog();
     await t.run(async (ctx) => {

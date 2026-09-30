@@ -13,7 +13,7 @@
 // Plain "Omnibus" / "Deluxe" with no stated size and no blurb range stays
 // unknown: guessing a size would map books onto the wrong Volumes.
 
-import { canonicalLabel, type CoverRange, type Packaging } from "./bookTitle";
+import { canonicalLabel, parseVolumeList, type CoverRange, type Packaging } from "./bookTitle";
 
 /** Largest sensible volume number in a coverage statement. */
 const MAX_VOLUME = 500;
@@ -26,7 +26,8 @@ const DASH = String.raw`\s*(?:[-–—]|to|through|thru)\s*`;
 const LEAD = String.raw`(?:collect(?:s|ing|ed)?|contain(?:s|ing)?|includ(?:es|ing)|compil(?:es|ing)|gather(?:s|ing))\s+(?:the\s+)?(?:(?:original\s+)?[\w'’:!?,.-]+\s+){0,6}?`;
 
 const STATED_RANGE = new RegExp(`${LEAD}${VOL}\\s*(${NUM})${DASH}(${NUM})`, "i");
-// "Collects volumes 40, 41, and the Guidebook" → the listed numbers.
+// "Collects volumes 40, 41, and the Guidebook" → the listed numbers, when
+// they run without a gap ("volumes 1 and 3" states no range).
 const STATED_LIST = new RegExp(
   `${LEAD}${VOL}\\s*(${NUM}(?:\\s*,\\s*${NUM})*(?:\\s*,?\\s*(?:and|&)\\s*${NUM})?)`,
   "i",
@@ -50,7 +51,10 @@ function plain(text: string): string {
     .replace(/\s+/g, " ");
 }
 
-/** The Volumes a blurb says the book collects, when it says. */
+/**
+ * The Volumes a blurb says the book collects, when it says. A stated list
+ * with a gap ("collects volumes 1 and 3") is no range: null, never 1–3.
+ */
 export function coverageFromText(text: string | undefined): CoverRange | null {
   if (!text) return null;
   const prose = plain(text);
@@ -58,8 +62,10 @@ export function coverageFromText(text: string | undefined): CoverRange | null {
   if (stated) return range(Number(stated[1]), Number(stated[2]));
   const list = STATED_LIST.exec(prose);
   if (list) {
-    const numbers = (list[1]!.match(/\d{1,3}/g) ?? []).map(Number);
-    if (numbers.length > 0) return range(Math.min(...numbers), Math.max(...numbers));
+    const listed = parseVolumeList(list[1]!);
+    if (listed === null) return range(Number(list[1]), Number(list[1]));
+    const { coverRange } = listed;
+    return coverRange ? range(Number(coverRange.from), Number(coverRange.to)) : null;
   }
   const bare = BARE_RANGE.exec(prose);
   if (bare) return range(Number(bare[1]), Number(bare[2]));

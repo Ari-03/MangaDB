@@ -543,6 +543,34 @@ describe("parseBookTitle — packaging", () => {
       "Tomo-chan Is a Girl!",
     );
   });
+
+  // B18: a list with a gap names exactly its Volumes; a from–to range over
+  // it would claim the ones it skips. It stays packaging, with no coverage.
+  it("never widens a gapped volume list into a range", () => {
+    expect(packaging("Alpha Vol. 1 & 3")).toEqual({
+      seriesTitle: "Alpha",
+      volumeLabel: null,
+      packaging: { lineName: null, linePosition: null, coverRange: null },
+      isBox: false,
+    });
+    expect(packaging("Alpha Omnibus (Vol. 1, 3)").packaging).toEqual({
+      lineName: "Omnibus",
+      linePosition: null,
+      coverRange: null,
+    });
+    expect(packaging("Alpha Omnibus 1, 3").packaging).toEqual({
+      lineName: "Omnibus",
+      linePosition: null,
+      coverRange: null,
+    });
+    expect(
+      packaging("Battle Angel Alita Deluxe 5 (Contains Vol. 9 & 11)").packaging,
+    ).toMatchObject({ linePosition: "5", coverRange: null });
+    expect(packaging("Alpha Vol. 1-3, 5").packaging?.coverRange).toBeNull();
+    // Contiguous lists and chained ranges still span first to last.
+    expect(packaging("Alpha Vol. 1, 2, 3").packaging?.coverRange).toEqual({ from: "1", to: "3" });
+    expect(packaging("Alpha Vol. 1-3, 4-6").packaging?.coverRange).toEqual({ from: "1", to: "6" });
+  });
 });
 
 describe("parseBookTitle — novels and text hygiene", () => {

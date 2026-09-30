@@ -181,6 +181,38 @@ describe("seo.sitemapPage", () => {
   });
 });
 
+describe("seo.sitemapPage bundle maturity", () => {
+  // B35: a general Publisher's box set of a Mature Series is as mature on the
+  // sitemap as on its page.
+  it("leaves out a box set holding a Mature Series' book", async () => {
+    const t = convexTest(schema);
+    const { seriesId } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seriesId, { mature: true });
+      const edition = await ctx.db
+        .query("editions")
+        .withIndex("by_publicId", (q) => q.eq("publicId", 21))
+        .unique();
+      const bundle = await ctx.db
+        .query("releaseBundles")
+        .withIndex("by_publicId", (q) => q.eq("publicId", 31))
+        .unique();
+      const releaseId = await ctx.db.insert("releases", {
+        status: "active",
+        editionId: edition!._id,
+        publisherId: edition!.publisherId,
+        seriesIds: [seriesId],
+        format: "physical",
+        language: "en",
+      });
+      await ctx.db.insert("bundleMemberships", { bundleId: bundle!._id, releaseId, order: 1 });
+    });
+    expect((await t.query(api.catalogPages.bundlePage, { publicId: 31 }))?.mature).toBe(true);
+    const bundles = await t.query(api.seo.sitemapPage, { entity: "bundle", paginationOpts: PAGE });
+    expect(bundles.entries).toEqual([]);
+  });
+});
+
 describe("seo.sitemapMonthRange", () => {
   async function insertRelease(
     t: ReturnType<typeof convexTest>,

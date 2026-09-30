@@ -1003,8 +1003,11 @@ export type BundleArgs = {
  * A box set as a Release Bundle (spec §2): its own purchasable facts, with
  * memberships to the member Releases that already exist — the same
  * publisher's single-Volume Releases of the covered Volumes in the box's
- * Format. A box set is never a Release, a Volume, or a Series. Idempotent by
- * ISBN-13: an existing bundle links instead.
+ * Format, ordered by the box's own Volume sequence. A box set is never a
+ * Release, a Volume, or a Series. Idempotent by ISBN-13: an existing bundle
+ * links instead, and picks up members whose Releases arrived after it (a
+ * box imported before its books) with one importer-authored Revision.
+ * `members` counts the bundle's members from `labels` after the call.
  */
 export async function createReleaseBundle(
   ctx: MutationCtx,
@@ -1025,7 +1028,11 @@ export async function createReleaseBundle(
     await ctx.db.patch(args.observation._id, {
       recordRef: { type: "releaseBundle", id: existing._id },
     });
-    return { bundleId: existing._id, members: 0, created: false };
+    const members =
+      existing.status === "active" && !existing.locked
+        ? await addLateBundleMembers(ctx, existing, args)
+        : 0;
+    return { bundleId: existing._id, members, created: false };
   }
 
   const created: CreatedRecord[] = [];
@@ -1039,41 +1046,8 @@ export async function createReleaseBundle(
     });
   }
 
-  const volumes = await ctx.db
-    .query("volumes")
-    .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
-    .collect();
-  const memberIds: Id<"releases">[] = [];
-  for (const label of args.labels) {
-    const volume = volumes.find((vol) => vol.status === "active" && labelsEqual(vol.label, label));
-    if (!volume) continue;
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
-    for (const coverage of coverages) {
-      const edition = await ctx.db.get(coverage.editionId);
-      if (!edition || edition.status !== "active") continue;
-      if (edition.publisherId !== publisher.id || edition.editionLineId !== undefined) {
-        continue;
-      }
-      const rows = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
-      if (rows.length !== 1) continue;
-      const member = (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect()
-      ).find((release) => release.status === "active" && release.format === args.release.format);
-      if (member) {
-        memberIds.push(member._id);
-        break;
-      }
-    }
-  }
+  const members = await expectedBundleMembers(ctx, args, publisher.id);
+  const memberIds = members.map((member) => member.releaseId);
 
   const publicId = await allocatePublicId(ctx, "bundle");
   const fields = {
@@ -1092,12 +1066,8 @@ export async function createReleaseBundle(
     publisherId: publisher.id,
     ...fields,
   });
-  for (const [i, releaseId] of memberIds.entries()) {
-    await ctx.db.insert("bundleMemberships", {
-      bundleId,
-      releaseId,
-      order: i + 1,
-    });
+  for (const member of members) {
+    await ctx.db.insert("bundleMemberships", { bundleId, ...member });
   }
   created.push({
     ref: { type: "releaseBundle", id: bundleId },
@@ -1119,6 +1089,122 @@ export async function createReleaseBundle(
     recordRef: { type: "releaseBundle", id: bundleId },
   });
   return { bundleId, members: memberIds.length, created: true };
+}
+
+/**
+ * The member Releases a box's covered Volumes have today: for each label,
+ * the publisher's active single-Volume Release of that Volume in the box's
+ * Format, outside any Edition Line. `order` is the label's place in the box
+ * (1-based), so members that arrive late still sort by Volume.
+ */
+async function expectedBundleMembers(
+  ctx: MutationCtx,
+  args: Pick<BundleArgs, "seriesId" | "labels" | "release">,
+  publisherId: Id<"publishers">,
+): Promise<Array<{ releaseId: Id<"releases">; order: number }>> {
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
+    .collect();
+  const members: Array<{ releaseId: Id<"releases">; order: number }> = [];
+  for (const [i, label] of args.labels.entries()) {
+    const volume = volumes.find((vol) => vol.status === "active" && labelsEqual(vol.label, label));
+    if (!volume) continue;
+    const coverages = await ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
+      .collect();
+    for (const coverage of coverages) {
+      const edition = await ctx.db.get(coverage.editionId);
+      if (!edition || edition.status !== "active") continue;
+      if (edition.publisherId !== publisherId || edition.editionLineId !== undefined) {
+        continue;
+      }
+      const rows = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+        .collect();
+      if (rows.length !== 1) continue;
+      const member = (
+        await ctx.db
+          .query("releases")
+          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+          .collect()
+      ).find((release) => release.status === "active" && release.format === args.release.format);
+      if (member) {
+        if (!members.some((m) => m.releaseId === member._id)) {
+          members.push({ releaseId: member._id, order: i + 1 });
+        }
+        break;
+      }
+    }
+  }
+  return members;
+}
+
+/**
+ * Reconcile an existing bundle with the members its Volumes have now: add
+ * the missing ones at their Volume's place and record the change as one
+ * system-approved Proposal with a public Revision citing the source. Members
+ * already present stay as they are (an Editor may have ordered or added
+ * them); nothing is ever removed. Returns the expected members now linked.
+ */
+async function addLateBundleMembers(
+  ctx: MutationCtx,
+  bundle: Doc<"releaseBundles">,
+  args: BundleArgs,
+): Promise<number> {
+  const expected = await expectedBundleMembers(ctx, args, bundle.publisherId);
+  const current = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+    .collect();
+  const linked = new Set<Id<"releases">>(current.map((row) => row.releaseId));
+  const missing = expected.filter((member) => !linked.has(member.releaseId));
+  if (missing.length === 0) return expected.length;
+
+  for (const member of missing) {
+    await ctx.db.insert("bundleMemberships", { bundleId: bundle._id, ...member });
+  }
+  const ref = { type: "releaseBundle" as const, id: bundle._id };
+  const latest = await ctx.db
+    .query("revisions")
+    .withIndex("by_record", (q) => q.eq("ref.type", ref.type).eq("ref.id", ref.id))
+    .order("desc")
+    .first();
+  const before = current.map((row) => row.releaseId);
+  const changes = [
+    {
+      field: "members",
+      before,
+      after: [...before, ...missing.map((member) => member.releaseId)],
+    },
+  ];
+  const author = { kind: "source" as const, sourceKey: args.sourceKey };
+  const proposalId = await ctx.db.insert("proposals", {
+    author,
+    state: "approved",
+    currentVersionNo: 1,
+    submittedAt: args.now,
+    decidedAt: args.now,
+  });
+  await ctx.db.insert("proposalVersions", {
+    proposalId,
+    versionNo: 1,
+    ops: [{ kind: "update", ref, baseRevisionId: latest?._id, changes }],
+    evidence: [{ kind: "observation", observationId: args.observation._id }],
+    changeComment: args.importComment,
+  });
+  await ctx.db.insert("revisions", {
+    ref,
+    seq: (latest?.seq ?? 0) + 1,
+    proposalId,
+    author,
+    changes,
+    comment: args.importComment,
+    citation: args.citation,
+  });
+  return expected.length;
 }
 
 /**
@@ -1149,7 +1235,13 @@ export type QueueArgs = {
   /** Covered labels; [] = one unlabeled Volume, unless `seriesOnly`. */
   labels: string[];
   seriesOnly?: boolean;
-  /** Edition Line Position of a packaged guess; the line is named in `comment`. */
+  /**
+   * The Edition Line a packaged guess belongs to. The queued ops reference
+   * the base Series' existing line of that name, or create it, so approval
+   * files the Edition under it. Its position wins over `linePosition`.
+   */
+  editionLine?: { name: string; position: string | null };
+  /** Edition Line Position of a packaged guess queued without `editionLine`. */
   linePosition?: string;
   /** The Release guess with the publisher's slug; absent = backbone only. */
   release?: ReleasePayload & { publisherSlug: string };
@@ -1158,9 +1250,58 @@ export type QueueArgs = {
 };
 
 /**
+ * The Edition Line reference for a queued packaging guess: the base Series'
+ * active line of that name from this publisher when one exists (the
+ * importer's ensureEditionLine rule), else a create op for it appended to
+ * `ops`, whose temp-ID is returned.
+ */
+async function queueEditionLine(
+  ctx: MutationCtx,
+  args: {
+    seriesId: Id<"series"> | null;
+    publisherSlug: string;
+    name: string;
+    ops: Array<{ kind: "create"; table: string; tempId: string; fields: unknown }>;
+  },
+): Promise<string> {
+  const publisher = await ctx.db
+    .query("publishers")
+    .withIndex("by_slug", (q) => q.eq("slug", args.publisherSlug))
+    .unique();
+  if (args.seriesId !== null && publisher !== null) {
+    const seriesId = args.seriesId;
+    const wanted = args.name.toLowerCase();
+    const existing = (
+      await ctx.db
+        .query("editionLines")
+        .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+        .collect()
+    ).find(
+      (line) =>
+        line.status === "active" &&
+        line.publisherId === publisher._id &&
+        line.name.toLowerCase() === wanted,
+    );
+    if (existing) return existing._id;
+  }
+  args.ops.push({
+    kind: "create",
+    table: "editionLines",
+    tempId: "edition-line",
+    fields: {
+      seriesId: args.seriesId ?? "series",
+      publisherSlug: args.publisherSlug,
+      name: args.name,
+    },
+  });
+  return "edition-line";
+}
+
+/**
  * Queue an In-Review Proposal pre-filled with the parsed guess (spec §5/§6):
- * temp-ID create ops for whatever does not exist yet, evidence citing the
- * observation, the gate or matching-ladder flag in the change comment.
+ * temp-ID create ops for whatever does not exist yet (Series, Volumes,
+ * Edition Line, Edition, Release), evidence citing the observation, the gate
+ * or matching-ladder flag in the change comment.
  * These land in the shared review queue (proposals.ts, #32); a Moderator's
  * approval applies the ops via the creation registry. The observation
  * remembers the proposal (queuedProposalId) so an unchanged snapshot never
@@ -1226,13 +1367,24 @@ export async function queueCreationProposal(
     });
   }
   if (args.release !== undefined) {
+    const editionLineId =
+      args.editionLine === undefined
+        ? undefined
+        : await queueEditionLine(ctx, {
+            seriesId: args.seriesId,
+            publisherSlug: args.release.publisherSlug,
+            name: args.editionLine.name,
+            ops,
+          });
+    const linePosition = args.editionLine?.position ?? args.linePosition;
     ops.push({
       kind: "create",
       table: "editions",
       tempId: "edition",
       fields: {
         publisherSlug: args.release.publisherSlug,
-        ...(args.linePosition !== undefined ? { linePosition: args.linePosition } : {}),
+        ...(editionLineId !== undefined ? { editionLineId } : {}),
+        ...(linePosition !== undefined ? { linePosition } : {}),
         volumeCoverage: volumeRefs.map((volume, i) => ({
           volume,
           order: i + 1,

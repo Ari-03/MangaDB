@@ -3,22 +3,23 @@
 // render time; Convex file storage holds only publisher-served art
 // (Kodansha, Seven Seas), fetched once per Edition and image URL.
 //
-// Flow: edge cache → R2 bucket → upstream fetch. The first upstream is the
-// distribution CDN Penguin Random House runs for the publishers it carries,
-// which is most English manga; it answers any ISBN-13 it knows with the
-// jacket art and unknown ones with a stand-in. Where it has nothing (older
-// Tokyopop and VIZ backlist, much of Yen Press, many ebook ISBNs) the
-// OpenLibrary Covers API is asked next. No art from either is "no cover",
-// remembered for a day; the app draws its cloth placeholder for those (see
-// ~/lib/cover.tsx). An upstream
-// that is down or refusing us (OpenLibrary answers 403 past ~100 ISBN
-// lookups per 5 minutes per IP) makes it a five-minute miss instead, so a
+// Flow: edge cache → R2 bucket → upstream fetch; R2 and cache writes finish
+// in the background, and a storage failure only costs the copy, never the
+// art. The first upstream is the distribution CDN Penguin Random House runs
+// for the publishers it carries, which is most English manga; it answers any
+// ISBN-13 it knows with the jacket art and unknown ones with a stand-in.
+// Where it has nothing (older Tokyopop and VIZ backlist, much of Yen Press,
+// many ebook ISBNs) the OpenLibrary Covers API is asked next. No art from
+// either is "no cover", remembered for a day; the app draws its cloth
+// placeholder for those (see ~/lib/cover.tsx). An upstream that is down,
+// refusing us (OpenLibrary answers 403 past ~100 ISBN lookups per 5 minutes
+// per IP), or cut off mid-download makes it a five-minute miss instead, so a
 // burst of lookups never hides art for a day. Spec §6: covers are stored under
 // industry-standard tolerance with the takedown contact on /about-the-data.
 //
 // Measured on a stratified sample of the catalog's ISBNs (README "Cover
 // art"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
-import { env } from "cloudflare:workers";
+import { env, waitUntil } from "cloudflare:workers";
 
 const COVER_PATH = /^\/covers\/(97[89]\d{10})\.jpg$/;
 /** Upstreams in order of preference; each maps an ISBN-13 to a jacket URL. */
@@ -64,24 +65,43 @@ export async function coverResponse(request: Request): Promise<Response | null> 
   }
 
   const response = await lookup(isbn13);
-  await cache.put(cacheKey, response.clone());
+  inBackground("edge cache write", cache.put(cacheKey, response.clone()));
   return response;
+}
+
+/**
+ * Let a cache or R2 write finish after the response is sent. A failed write
+ * is logged, never allowed to cost the visitor art we already have.
+ */
+function inBackground(label: string, work: Promise<unknown>): void {
+  waitUntil(work.catch((error: unknown) => console.error(`covers: ${label} failed`, error)));
+}
+
+/** R2's copy of a cover, or null when absent or the bucket can't be read. */
+async function storedCover(
+  bucket: NonNullable<typeof env.COVERS>,
+  key: string,
+): Promise<Response | null> {
+  try {
+    const stored = await bucket.get(key);
+    if (!stored) return null;
+    return coverOk(
+      await stored.arrayBuffer(),
+      stored.httpMetadata?.contentType ?? "image/jpeg",
+      "r2",
+    );
+  } catch (error) {
+    console.error("covers: R2 read failed", error);
+    return null;
+  }
 }
 
 async function lookup(isbn13: string): Promise<Response> {
   const bucket = env.COVERS;
   const key = `${isbn13}.jpg`;
 
-  if (bucket) {
-    const stored = await bucket.get(key);
-    if (stored) {
-      return coverOk(
-        await stored.arrayBuffer(),
-        stored.httpMetadata?.contentType ?? "image/jpeg",
-        "r2",
-      );
-    }
-  }
+  const stored = bucket && (await storedCover(bucket, key));
+  if (stored) return stored;
 
   let unavailable = false;
   for (const source of UPSTREAMS) {
@@ -89,10 +109,13 @@ async function lookup(isbn13: string): Promise<Response> {
     if (found === "unavailable") unavailable = true;
     if (!found || found === "unavailable") continue;
     if (bucket) {
-      await bucket.put(key, found.bytes, {
-        httpMetadata: { contentType: found.contentType },
-        customMetadata: { source: source(isbn13), fetchedAt: new Date().toISOString() },
-      });
+      inBackground(
+        "R2 write",
+        bucket.put(key, found.bytes, {
+          httpMetadata: { contentType: found.contentType },
+          customMetadata: { source: source(isbn13), fetchedAt: new Date().toISOString() },
+        }),
+      );
     }
     return coverOk(found.bytes, found.contentType, "upstream");
   }
@@ -110,7 +133,8 @@ async function lookup(isbn13: string): Promise<Response> {
 /**
  * One upstream's jacket for a URL: the image, null when it has no real art
  * (404, non-image, a tiny or known stand-in), or "unavailable" when it
- * couldn't say (network error, rate limit, server error).
+ * couldn't say (network error or a body cut off mid-read, rate limit,
+ * server error).
  */
 async function fetchJacket(
   url: string,
@@ -128,7 +152,12 @@ async function fetchJacket(
   }
   const contentType = upstream.headers.get("content-type") ?? "";
   if (!upstream.ok || !contentType.startsWith("image/")) return null;
-  const bytes = await upstream.arrayBuffer();
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await upstream.arrayBuffer();
+  } catch {
+    return "unavailable";
+  }
   if (bytes.byteLength < MIN_COVER_BYTES) return null;
   if (PLACEHOLDER_SHA256.has(await sha256Hex(bytes))) return null;
   return { bytes, contentType };

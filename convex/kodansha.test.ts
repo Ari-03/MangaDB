@@ -788,10 +788,14 @@ function seriesPage(slug: string, name: string, volumes: string[], description?:
 
 /**
  * A stubbed kodansha.us for the crawl: the paged search-series listing,
- * series pages, volume pages, and the image CDN; everything else 404s.
- * `pages` maps a path ("series/blue-lock/volume-1/") to its HTML.
+ * series pages, volume pages, and the image CDN (`art`); everything else
+ * 404s. `pages` maps a path ("series/blue-lock/volume-1/") to its HTML.
  */
-function stubBacklist(listed: ListedSeries[], pages: Record<string, string>) {
+function stubBacklist(
+  listed: ListedSeries[],
+  pages: Record<string, string>,
+  art: (url: string) => Response = coverImage,
+) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
     const url = typeof input === "object" && "url" in input ? input.url : String(input);
     requested.push(url);
@@ -816,7 +820,7 @@ function stubBacklist(listed: ListedSeries[], pages: Record<string, string>) {
         total_count: listed.length,
       });
     }
-    if (url.includes("azuki.co")) return coverImage(url);
+    if (url.includes("azuki.co")) return art(url);
     const html = pages[url.slice(`${BASE}/`.length)];
     return html !== undefined
       ? new Response(html, { headers: { "content-type": "text/html" } })
@@ -1666,5 +1670,364 @@ describe("kodansha.backlistSync — onlySeries (operator-targeted recovery)", ()
     const series = requested.filter((u) => u.includes("/series/")).map((u) => new URL(u).pathname);
     expect(series.every((p) => p.startsWith("/series/7-billion-needles/"))).toBe(true);
     expect(series).toContain("/series/7-billion-needles/volume-1/");
+  });
+});
+
+// ---------- audit 2026-09-30: B08, B21, B22 ----------
+
+type WorkExample = {
+  "@type": "Book";
+  bookFormat: string;
+  isbn: string;
+  datePublished: string;
+  offers: { price: number; priceCurrency: "USD" };
+};
+const PAPERBACK: WorkExample = {
+  "@type": "Book",
+  bookFormat: "https://schema.org/Paperback",
+  isbn: "9781646516544",
+  datePublished: "2022-06-21",
+  offers: { price: 12.99, priceCurrency: "USD" },
+};
+const HARDCOVER: WorkExample = {
+  "@type": "Book",
+  bookFormat: "https://schema.org/Hardcover",
+  isbn: "9780316473996",
+  datePublished: "2023-01-10",
+  offers: { price: 24.99, priceCurrency: "USD" },
+};
+const EBOOK: WorkExample = {
+  "@type": "Book",
+  bookFormat: "https://schema.org/EBook",
+  isbn: "9781636990033",
+  datePublished: "2021-03-16",
+  offers: { price: 3.99, priceCurrency: "USD" },
+};
+
+/** Blue Lock volume 1's page in the live JSON-LD shape, with these formats in page order. */
+function blueLockVolume1(examples: WorkExample[], image?: string): string {
+  return `<html><head><script type="application/ld+json">${JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "Book",
+    name: "Blue Lock Volume 1",
+    url: `${BASE}/series/blue-lock/volume-1/`,
+    image,
+    isPartOf: { "@type": "ComicSeries", name: "Blue Lock" },
+    workExample: examples,
+  })}</script></head><body></body></html>`;
+}
+
+/** The Blue Lock series page listing only volume 1, plus that volume's page. */
+const blueLockPages = (examples: WorkExample[], image?: string) => ({
+  "series/blue-lock/": seriesPage("blue-lock", "Blue Lock", ["volume-1"]),
+  "series/blue-lock/volume-1/": blueLockVolume1(examples, image),
+});
+
+/** A later listing stamp: the next run re-crawls Blue Lock in full. */
+const RESTAMPED: ListedSeries = {
+  ...BLUE_LOCK,
+  stamp: "2026-09-29T00:00:00+00:00",
+};
+
+const BASE_ID = "blue-lock/volume-1#physical";
+const HARDCOVER_ID = `${BASE_ID}:${HARDCOVER.isbn}`;
+
+async function observationAt(t: TestT, sourceRecordId: string) {
+  return (await t.run((ctx) => ctx.db.query("sourceObservations").collect())).find(
+    (o) => o.sourceKey === "kodansha" && o.sourceRecordId === sourceRecordId,
+  );
+}
+
+async function releaseByIsbn(t: TestT, isbn13: string) {
+  return (await t.run((ctx) => ctx.db.query("releases").collect())).find(
+    (r) => r.isbn13 === isbn13,
+  );
+}
+
+describe("kodansha.backlistSync — per-binding identity survives page order (B08)", () => {
+  it("keeps each binding on its own observation when the page reverses them", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], blueLockPages([PAPERBACK, HARDCOVER, EBOOK]));
+    await backlist(t);
+    const paperbackId = (await releaseByIsbn(t, PAPERBACK.isbn))!._id;
+    const hardcoverId = (await releaseByIsbn(t, HARDCOVER.isbn))!._id;
+
+    vi.unstubAllGlobals();
+    stubBacklist([RESTAMPED], blueLockPages([HARDCOVER, PAPERBACK, EBOOK]));
+    expect(await backlist(t)).toMatchObject({
+      seriesCrawled: 1,
+      errorCount: 0,
+    });
+
+    expect((await observationAt(t, BASE_ID))!.snapshot).toMatchObject({
+      isbn13: PAPERBACK.isbn,
+      binding: "paperback",
+    });
+    expect((await observationAt(t, HARDCOVER_ID))!.snapshot).toMatchObject({
+      isbn13: HARDCOVER.isbn,
+      binding: "hardcover",
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(3);
+      expect(await ctx.db.get(paperbackId)).toMatchObject({
+        isbn13: PAPERBACK.isbn,
+        binding: "paperback",
+        pubDate: { sort: 20220621 },
+        price: { amountCents: 1299 },
+      });
+      expect(await ctx.db.get(hardcoverId)).toMatchObject({
+        isbn13: HARDCOVER.isbn,
+        binding: "hardcover",
+        pubDate: { sort: 20230110 },
+      });
+    });
+  });
+
+  it("a binding newly listed first never takes over the stored paperback's Release", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], blueLockPages([PAPERBACK, EBOOK]));
+    await backlist(t);
+    const paperbackId = (await releaseByIsbn(t, PAPERBACK.isbn))!._id;
+
+    vi.unstubAllGlobals();
+    stubBacklist([RESTAMPED], blueLockPages([HARDCOVER, PAPERBACK, EBOOK]));
+    await backlist(t);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(paperbackId)).toMatchObject({
+        isbn13: PAPERBACK.isbn,
+        binding: "paperback",
+        pubDate: { sort: 20220621 },
+      });
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases).toHaveLength(3);
+      const hardcover = releases.find((r) => r.isbn13 === HARDCOVER.isbn);
+      expect(hardcover).toMatchObject({
+        binding: "hardcover",
+        pubDate: { sort: 20230110 },
+      });
+      expect(hardcover!._id).not.toBe(paperbackId);
+    });
+    expect((await observationAt(t, BASE_ID))!.snapshot).toMatchObject({
+      isbn13: PAPERBACK.isbn,
+    });
+    expect((await observationAt(t, HARDCOVER_ID))!.recordRef).toMatchObject({
+      type: "release",
+    });
+  });
+
+  it("recognizes a legacy record whose binding moved under the old order-based key", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], blueLockPages([PAPERBACK, HARDCOVER, EBOOK]));
+    await backlist(t);
+    const paperbackId = (await releaseByIsbn(t, PAPERBACK.isbn))!._id;
+    const hardcoverId = (await releaseByIsbn(t, HARDCOVER.isbn))!._id;
+    // What a reversed page did before stable identities: the base key's
+    // observation took the hardcover's facts while still linking the paperback.
+    const base = (await observationAt(t, BASE_ID))!;
+    await t.run((ctx) =>
+      ctx.db.patch(base._id, {
+        snapshot: {
+          ...(base.snapshot as object),
+          isbn13: HARDCOVER.isbn,
+          binding: "hardcover",
+          releaseDate: { year: 2023, month: 1, day: 10 },
+        },
+      }),
+    );
+
+    vi.unstubAllGlobals();
+    stubBacklist([RESTAMPED], blueLockPages([HARDCOVER, PAPERBACK, EBOOK]));
+    await backlist(t);
+
+    // The base key belongs to the Release it links (the paperback), and is repaired.
+    expect((await observationAt(t, BASE_ID))!.snapshot).toMatchObject({
+      isbn13: PAPERBACK.isbn,
+      binding: "paperback",
+    });
+    expect((await observationAt(t, HARDCOVER_ID))!.recordRef).toEqual({
+      type: "release",
+      id: hardcoverId,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(3);
+      expect(await ctx.db.get(paperbackId)).toMatchObject({
+        isbn13: PAPERBACK.isbn,
+        binding: "paperback",
+        pubDate: { sort: 20220621 },
+      });
+    });
+  });
+
+  it("a record offering another ISBN than its linked Release's is a conflict, not a field update", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], blueLockPages([PAPERBACK, EBOOK]));
+    await backlist(t);
+    const paperbackId = (await releaseByIsbn(t, PAPERBACK.isbn))!._id;
+    // A legacy base observation carrying another binding's page facts.
+    const base = (await observationAt(t, BASE_ID))!;
+    await t.run((ctx) =>
+      ctx.db.patch(base._id, {
+        snapshot: {
+          ...(base.snapshot as object),
+          isbn13: HARDCOVER.isbn,
+          binding: "hardcover",
+          priceCents: 2499,
+          releaseDate: { year: 2023, month: 1, day: 10 },
+        },
+      }),
+    );
+
+    // The calendar re-reads the stored page facts for the print format.
+    vi.unstubAllGlobals();
+    stubSite([
+      {
+        series: "Blue Lock",
+        seriesSlug: "blue-lock",
+        volume: 1,
+        date: "2022-06-21",
+        formats: ["print"],
+      },
+    ]);
+    const result = await sync(t);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(paperbackId)).toMatchObject({
+        isbn13: PAPERBACK.isbn,
+        binding: "paperback",
+        pubDate: { sort: 20220621 },
+        price: { amountCents: 1299 },
+      });
+    });
+    // Reported for review, not a failed run.
+    expect(result).toMatchObject({ errorCount: 1 });
+    expect(result).not.toHaveProperty("failed");
+    const conflicts = (await observationAt(t, BASE_ID))!.conflicts ?? [];
+    expect(conflicts).toEqual([
+      expect.objectContaining({ field: "isbn13", offered: HARDCOVER.isbn }),
+    ]);
+  });
+});
+
+/** A Cloudflare interstitial served with HTTP 200, as kodansha.us does. */
+const CHALLENGE =
+  '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><div id="challenge-running"></div></body></html>';
+
+describe("kodansha.backlistSync — unrecognized pages are failures, not empty crawls (B21)", () => {
+  it("a challenged series page fails the run and leaves the series due", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], { "series/blue-lock/": CHALLENGE });
+    expect(await backlist(t)).toMatchObject({ failed: true, seriesCrawled: 0 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("failed");
+      expect(run?.errors).toEqual([expect.stringMatching(/^series blue-lock: .*unrecognized/)]);
+      const crawl = (await ctx.db.query("sourceObservations").collect()).filter(
+        (o) => o.sourceKey === "kodansha-backlist",
+      );
+      expect(crawl).toHaveLength(0);
+    });
+
+    // Unrecorded, so the very next run tries the series again.
+    vi.unstubAllGlobals();
+    stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
+    requested.length = 0;
+    expect(await backlist(t)).toMatchObject({ seriesCrawled: 1 });
+    expect(requested).toContain(`${BASE}/series/blue-lock/volume-1/`);
+  });
+
+  it("a series page with no volumes yet is a valid empty crawl", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], {
+      "series/blue-lock/": seriesPage("blue-lock", "Blue Lock", []),
+    });
+    expect(await backlist(t)).toMatchObject({
+      seriesCrawled: 1,
+      errorCount: 0,
+    });
+    expect(await backlist(t)).not.toHaveProperty("failed");
+  });
+
+  it("a challenged volume page fails the run and is re-checked; a Book awaiting ISBNs is not a failure", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    const noIsbnYet = blueLockVolume1([]);
+    stubBacklist([BLUE_LOCK], {
+      "series/blue-lock/": seriesPage("blue-lock", "Blue Lock", ["volume-1", "volume-2"]),
+      "series/blue-lock/volume-1/": CHALLENGE,
+      "series/blue-lock/volume-2/": noIsbnYet.replace("Volume 1", "Volume 2"),
+    });
+    expect(await backlist(t)).toMatchObject({ failed: true, seriesCrawled: 1 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run?.status).toBe("failed");
+      expect(run?.errors).toEqual([
+        expect.stringMatching(
+          /^page https:\/\/kodansha\.us\/series\/blue-lock\/volume-1\/: .*unrecognized/,
+        ),
+      ]);
+      const crawl = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceKey === "kodansha-backlist",
+      );
+      expect(crawl?.snapshot).toMatchObject({
+        recheck: ["volume-1", "volume-2"],
+      });
+    });
+  });
+});
+
+describe("kodansha.backlistSync — failed covers are retried (B22)", () => {
+  it("a backlist volume whose cover failed is re-checked next week and gets its art", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    const image = "https://production.image.azuki.co/blue-lock-1/800.webp";
+    const pages = blueLockPages([PAPERBACK, EBOOK], image);
+    // The CDN answers with a challenge page instead of the image.
+    stubBacklist(
+      [BLUE_LOCK],
+      pages,
+      () => new Response(CHALLENGE, { headers: { "content-type": "text/html" } }),
+    );
+    const first = await backlist(t);
+    expect(first).toMatchObject({ seriesCrawled: 1 });
+    expect((await releaseByIsbn(t, PAPERBACK.isbn))!.coverImage).toBeUndefined();
+
+    // A week on, the CDN has recovered: the ordinary weekly run fetches the art.
+    await t.run(async (ctx) => {
+      for (const obs of await ctx.db.query("sourceObservations").collect()) {
+        if (obs.sourceKey === "kodansha-backlist") {
+          await ctx.db.patch(obs._id, {
+            lastSeenAt: obs.lastSeenAt - 7 * 24 * 60 * 60 * 1000,
+          });
+        }
+      }
+    });
+    vi.unstubAllGlobals();
+    stubBacklist([BLUE_LOCK], pages);
+    requested.length = 0;
+    expect(await backlist(t)).toMatchObject({
+      seriesCrawled: 1,
+      errorCount: 0,
+    });
+    expect(requested).toContain(image);
+    expect((await releaseByIsbn(t, PAPERBACK.isbn))!.coverImage).toMatchObject({
+      sourceUrl: image,
+    });
+    expect((await releaseByIsbn(t, EBOOK.isbn))!.coverImage).toMatchObject({
+      sourceUrl: image,
+    });
+    await t.run(async (ctx) => {
+      const crawl = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceKey === "kodansha-backlist",
+      );
+      // Art stored: nothing left to re-check.
+      expect(crawl?.snapshot).toMatchObject({ recheck: [] });
+    });
   });
 });

@@ -149,9 +149,19 @@ export function pageHead({
 
 // ---------- JSON-LD (spec §11: no ratings markup in v1) ----------
 
-/** One `<script type="application/ld+json">` head entry. */
+/**
+ * One `<script type="application/ld+json">` head entry. TanStack renders
+ * `children` as raw HTML, and the JSON carries catalog text, so HTML-
+ * significant characters are escaped as JSON `\uXXXX` sequences: a title
+ * containing `</script>` or `<!--` can neither close the element nor open
+ * a comment, and the payload still parses to the same data.
+ */
 export function jsonLdScript(data: object) {
-  return { type: "application/ld+json", children: JSON.stringify(data) };
+  const json = JSON.stringify(data).replace(
+    /[<>&\u2028\u2029]/g,
+    (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  return { type: "application/ld+json", children: json };
 }
 
 /**

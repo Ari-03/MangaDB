@@ -477,6 +477,141 @@ describe("createReleaseBundle", () => {
   });
 });
 
+describe("createReleaseBundle — members that arrive later (B15)", () => {
+  it("a box imported before its books picks them up when retried", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const box = {
+        sourceKey: "prh",
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        name: "Fire Force Manga Box Set 1 (Vol. 1-3)",
+        labels: ["1", "2", "3"],
+        publisher: { name: "Kodansha", slug: "kodansha" },
+        release: { format: "physical" as const, isbn13: "9798888772584" },
+        tagBootstrapUnreviewed: true,
+        now: 1,
+      };
+      const early = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      expect(early).toMatchObject({ created: true, members: 0 });
+
+      // The books arrive after the box, volume 2 and 3 out of order.
+      const releaseIds: Record<string, Id<"releases">> = {};
+      for (const [label, isbn13] of [
+        ["3", "9780000000033"],
+        ["2", "9780000000026"],
+      ] as const) {
+        const result = await createCanonicalRecords(ctx, {
+          sourceKey: "prh",
+          observation: await observation(ctx, `vol-${label}`),
+          citation: CITATION,
+          importComment: "test",
+          seriesId,
+          seriesTitle: "Fire Force",
+          labels: [label],
+          release: {
+            format: "physical",
+            isbn13,
+            publisher: { name: "Kodansha", slug: "kodansha" },
+          },
+          tagBootstrapUnreviewed: false,
+          now: 1,
+        });
+        releaseIds[label] = result.releaseId!;
+      }
+
+      const retry = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      expect(retry).toMatchObject({ created: false, bundleId: early.bundleId, members: 2 });
+      const memberships = await ctx.db
+        .query("bundleMemberships")
+        .withIndex("by_bundle", (q) => q.eq("bundleId", early.bundleId))
+        .collect();
+      // Ordered by the box's own volume sequence, not by arrival.
+      expect(memberships.map((m) => [m.releaseId, m.order])).toEqual([
+        [releaseIds["2"], 2],
+        [releaseIds["3"], 3],
+      ]);
+      // The added members are public history on the bundle.
+      const revisions = await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) =>
+          q.eq("ref.type", "releaseBundle").eq("ref.id", early.bundleId),
+        )
+        .collect();
+      expect(revisions.map((r) => r.seq)).toEqual([1, 2]);
+      expect(revisions[1]!.changes).toEqual([
+        { field: "members", before: [], after: [releaseIds["2"], releaseIds["3"]] },
+      ]);
+
+      // A second retry with nothing new writes nothing.
+      await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+      expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(2);
+      expect(
+        await ctx.db
+          .query("revisions")
+          .withIndex("by_record", (q) =>
+            q.eq("ref.type", "releaseBundle").eq("ref.id", early.bundleId),
+          )
+          .collect(),
+      ).toHaveLength(2);
+    });
+  });
+
+  it("never edits a hidden or locked bundle's membership", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const box = {
+        sourceKey: "prh",
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        name: "Fire Force Box",
+        labels: ["1"],
+        publisher: { name: "Kodansha", slug: "kodansha" },
+        release: { format: "physical" as const, isbn13: "9798888772584" },
+        tagBootstrapUnreviewed: true,
+        now: 1,
+      };
+      const early = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      await createCanonicalRecords(ctx, {
+        sourceKey: "prh",
+        observation: await observation(ctx, "vol-1"),
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        seriesTitle: "Fire Force",
+        labels: ["1"],
+        release: {
+          format: "physical",
+          isbn13: "9780000000019",
+          publisher: { name: "Kodansha", slug: "kodansha" },
+        },
+        tagBootstrapUnreviewed: false,
+        now: 1,
+      });
+      for (const patch of [{ status: "hidden" as const }, { status: "active" as const, locked: true }]) {
+        await ctx.db.patch(early.bundleId, patch);
+        await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+        expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(0);
+      }
+    });
+  });
+});
+
 // Catalog repairs hide and merge records; the next sync must not undo them.
 describe("createCanonicalRecords — repairs stand", () => {
   /** A Series with one Volume "1" and a Kodansha Edition + Release on it. */

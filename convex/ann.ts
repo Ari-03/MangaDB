@@ -70,6 +70,7 @@ import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
 import {
   candidateSeries,
+  isWholeSingleVolume,
   labelsEqual,
   survivorOf,
   workMatch,
@@ -477,9 +478,10 @@ const PRINTING_YEAR_TOLERANCE = 1;
  * label + format is the full key (the ladder's publisher+title key exists
  * to disambiguate same-titled series; a stored series link is strictly
  * stronger) — but only for a line that is the entry's ONLY printing of that
- * label and format, and only onto a Release dated within a year of it. ANN
- * lists every North American printing of a volume; linking them all to one
- * Release made their dates overwrite each other. Exactly one clean
+ * label and format, only onto an ordinary whole-Volume Edition (never a
+ * split part or packaging), and only onto a Release dated within a year of
+ * it. ANN lists every North American printing of a volume; linking them all
+ * to one Release made their dates overwrite each other. Exactly one clean
  * candidate links; anything else stays unlinked — the importer never guesses.
  */
 async function matchReleaseInSeries(
@@ -505,11 +507,7 @@ async function matchReleaseInSeries(
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active") continue;
-      const editionCoverage = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
-      if (editionCoverage.length !== 1) continue;
+      if (!(await isWholeSingleVolume(ctx, edition))) continue;
       const releases = await ctx.db
         .query("releases")
         .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
@@ -1286,7 +1284,10 @@ export const applyReleasePage = internalMutation({
 
     // One Release per (Volume, publisher, format): a same-format sibling
     // without an ISBN is this book (link); one with another ISBN is a
-    // reprint or variant — held, never a second Release.
+    // reprint or variant — held, never a second Release. Only ordinary
+    // whole-Volume Editions count: an omnibus, a split part, or a line's
+    // packaging covering this Volume is another book, neither this line's
+    // Release nor a reason to hold it.
     const coverages = await ctx.db
       .query("volumeCoverages")
       .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
@@ -1296,6 +1297,7 @@ export const applyReleasePage = internalMutation({
       if (!edition || edition.status !== "active" || edition.publisherId !== publisher._id) {
         continue;
       }
+      if (!(await isWholeSingleVolume(ctx, edition))) continue;
       const releases = await ctx.db
         .query("releases")
         .withIndex("by_edition", (q) => q.eq("editionId", edition._id))

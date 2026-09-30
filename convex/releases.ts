@@ -17,7 +17,7 @@ import { query, type QueryCtx } from "./_generated/server";
 import { PUBLISHER_SCAN_CAP } from "./catalog";
 import { followMerges } from "./catalogPages";
 import { editionTitle, releaseAnchor } from "./lib/titles";
-import { coverIsbnForRelease, coverUrl } from "./lib/covers";
+import { coverIsbnCache, coverIsbnForRelease, coverUrl } from "./lib/covers";
 import { showMatureArg, visibleTo } from "./lib/mature";
 
 // A month window holds hundreds of releases across all publishers (spec §8);
@@ -75,6 +75,14 @@ export function memoize<A, V>(
  * the Publishers board), so each document is read once.
  */
 export function browseCache(ctx: QueryCtx) {
+  const coverage = memoize((editionId: Id<"editions">) =>
+    ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+      .collect(),
+  );
+  // ISBN-less Releases borrow by Edition; the fallback shares `coverage`.
+  const isbns = coverIsbnCache(ctx, coverage);
   return {
     // A Release's stored cover URL and the ISBN to fetch art by (lib/covers.ts),
     // keyed by `_id`, so two reads of the same Release share one lookup.
@@ -82,7 +90,7 @@ export function browseCache(ctx: QueryCtx) {
       async (release: Doc<"releases">) => {
         const [url, isbn] = await Promise.all([
           coverUrl(ctx, release.coverImage?.storageId),
-          coverIsbnForRelease(ctx, release),
+          coverIsbnForRelease(ctx, release, isbns),
         ]);
         return { coverUrl: url, coverIsbn: isbn };
       },
@@ -93,12 +101,7 @@ export function browseCache(ctx: QueryCtx) {
     volume: memoize((id: Id<"volumes">) => ctx.db.get(id)),
     edition: memoize((id: Id<"editions">) => ctx.db.get(id)),
     line: memoize((id: Id<"editionLines">) => ctx.db.get(id)),
-    coverage: memoize((editionId: Id<"editions">) =>
-      ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-        .collect(),
-    ),
+    coverage,
   };
 }
 export type BrowseCache = ReturnType<typeof browseCache>;

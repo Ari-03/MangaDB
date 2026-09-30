@@ -298,6 +298,18 @@ describe("Favorites of an omnibus Edition", () => {
     expect((await t.withIdentity({ subject: READER }).query(api.favorites.mine, {}))!.items).toEqual([]);
   });
 
+  // B36: a Volume Favorite's art follows the Volume page, which lists only active Editions.
+  it("takes a Volume Favorite's cover only from active Editions", async () => {
+    const { t, ids } = await seed();
+    const books = await seedEditions(t, ids);
+    await toggle(t, READER, { kind: "volume", id: ids.one.volumeId });
+    const reader = t.withIdentity({ subject: READER });
+    const cover = async () => (await reader.query(api.favorites.mine, {}))!.items[0];
+    expect(await cover()).toMatchObject({ publicId: 11, coverIsbn: "9781974700001" });
+    await t.run((ctx) => ctx.db.patch(books.omnibus, { status: "hidden" }));
+    expect(await cover()).toMatchObject({ publicId: 11, coverUrl: null, coverIsbn: null });
+  });
+
   it("purging a user deletes their Edition Favorites", async () => {
     const { t, ids } = await seed();
     const books = await seedEditions(t, ids);

@@ -198,6 +198,55 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     });
   });
 
+  // B20: an unmarked trailing number ("Chainsaw Man 22") is a provisional
+  // split — an existing base Series claims it as that Volume.
+  it("fills an ISBN-less Release from a bare trailing volume number the existing Series claims", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    stubDump([{ ...CHAINSAW_22, title: "Chainsaw Man 22" }]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.isbn13).toBe("9781974766512");
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.recordRef).toEqual({ type: "release", id: releaseId });
+    });
+  });
+
+  it("keeps a trailing number that is part of an existing Series' name", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: false });
+    // "Chainsaw Man 21" is its own Series here (no Volume split), so the
+    // bare split onto "Chainsaw Man" Vol. 21 must never happen.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("series", {
+        status: "active",
+        publicId: 2,
+        title: "Chainsaw Man 21",
+        altTitles: [],
+        searchText: "Chainsaw Man 21",
+      });
+    });
+    stubDump([{ ...CHAINSAW_22, title: "Chainsaw Man 21", isbn_13: ["9781974700035"] }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+    });
+  });
+
+  it("offers a bare split only to an existing Series, never as new structure", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: false });
+    stubDump([{ ...CHAINSAW_22, title: "Omega Nobody 6", isbn_13: ["9781974700042"] }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+    });
+  });
+
   it("a weak date never displaces a standard-authority one — recorded on the observation only", async () => {
     const t = makeT();
     await seedRegistry(t);

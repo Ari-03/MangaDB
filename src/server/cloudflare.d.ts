@@ -17,6 +17,8 @@ declare module "cloudflare:workers" {
       },
     ): Promise<unknown>;
   }
+  /** Keeps the invocation alive until `promise` settles (ctx.waitUntil). */
+  export function waitUntil(promise: Promise<unknown>): void;
   export const env: {
     /** The cover-art bucket (wrangler.jsonc `r2_buckets`). */
     COVERS?: R2Bucket;

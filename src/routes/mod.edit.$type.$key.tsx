@@ -4,16 +4,18 @@ import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import {
   EDITABLE_FIELDS,
   type RecordType,
 } from "../../convex/lib/moderationFields";
 import {
+  draftChanges,
+  draftIsStale,
+  editDraft,
   FieldInput,
-  fieldValue,
-  initialFormState,
-  stateKeysOf,
-  type FormState,
+  freshDraft,
+  type EditDraft,
 } from "~/lib/editForm";
 import { slugParams } from "~/lib/slug";
 import { useIsModerator } from "~/lib/moderation";
@@ -25,8 +27,10 @@ import { convexClient } from "~/providers";
  * producing one immutable public Revision on the record. The form renders
  * from the same field registry the mutation validates against
  * (convex/lib/moderationFields.ts), requires a change comment, and carries
- * the record's base Revision so a concurrent change is refused as stale, not
- * silently rebased.
+ * the base Revision its values were loaded from so a concurrent change is
+ * refused as stale, not silently rebased. Until the first keystroke the form
+ * follows the live record; after it, values and base are pinned together,
+ * and a newer Revision arriving asks the Moderator to reload before saving.
  *
  * Auth-gated client-side for UX; the Convex functions re-check the role on
  * every call. Never indexed.
@@ -98,8 +102,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
   const navigate = useNavigate();
   const form = useQuery(api.moderation.editForm, { type, key: editKey });
   const submitDirectEdit = useMutation(api.moderation.submitDirectEdit);
-  const [state, setState] = useState<FormState | null>(null);
-  const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
+  const [draft, setDraft] = useState<EditDraft<Id<"revisions"> | null> | null>(null);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,11 +126,10 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
     );
   }
 
-  const values = state ?? initialFormState(form.fields);
-  const setValue = (key: string, value: string) => {
-    setState({ ...values, [key]: value });
-    setDirty(new Set([...dirty, key]));
-  };
+  const current = draft ?? freshDraft(form);
+  const setValue = (key: string, value: string) => setDraft(editDraft(current, key, value));
+  // Someone else saved this record after the draft's values were loaded.
+  const stale = draftIsStale(current, form.baseRevisionId);
 
   const editable = form.status === "active" && !form.locked;
 
@@ -135,22 +137,17 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
     setBusy(true);
     setError(null);
     try {
-      const changes: Array<{ field: string; value: unknown }> = [];
-      for (const field of form.fields) {
-        if (!stateKeysOf(field).some((k) => dirty.has(k))) continue;
-        const result = fieldValue(field, values);
-        if (!result.ok) throw new ConvexError({ message: result.message });
-        changes.push({ field: field.name, value: result.value });
-      }
+      const built = draftChanges(form.fields, current);
+      if (!built.ok) throw new ConvexError({ message: built.message });
       const { seq } = await submitDirectEdit({
         ref: form.ref as never,
-        baseRevisionId:
-          (form.baseRevisionId as never) ?? undefined,
-        changes,
+        baseRevisionId: current.baseRevisionId ?? undefined,
+        changes: built.changes,
         comment,
       });
       setSavedSeq(seq);
-      setDirty(new Set());
+      // Follow the live record again, which now includes this Revision.
+      setDraft(null);
       setComment("");
       if (form.backLink) {
         const { entity, publicId, title } = form.backLink;
@@ -207,11 +204,30 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
             void save();
           }}
         >
+          {stale ? (
+            <div className="notice" role="alert">
+              <p>
+                This record was changed by someone else after you started
+                editing. Reload the latest version to continue; your unsaved
+                edits will be discarded.
+              </p>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setDraft(null);
+                  setError(null);
+                }}
+              >
+                Reload latest
+              </button>
+            </div>
+          ) : null}
           {form.fields.map((field) => (
             <FieldInput
               key={field.name}
               field={field}
-              values={values}
+              values={current.values}
               setValue={setValue}
             />
           ))}
@@ -229,7 +245,9 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={busy || dirty.size === 0 || comment.trim() === ""}
+              disabled={
+                busy || stale || current.dirty.size === 0 || comment.trim() === ""
+              }
             >
               {busy ? "Saving…" : "Save as approved change"}
             </button>

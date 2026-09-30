@@ -1606,3 +1606,113 @@ describe("ann.sync — a title match that is another work", () => {
     expect(await linkOf(t, 15835)).toEqual({ type: "series", id: series });
   });
 });
+
+describe("ann — a single-volume line never lands on packaging or a split part (B07)", () => {
+  const DELTA: FixtureManga = {
+    id: 1500,
+    title: "Delta Drift",
+    releases: [
+      { annId: 71001, date: "2024-03-05", designator: "GN 1", ean: "9781974700011" },
+      { annId: 71002, date: "2024-06-04", designator: "GN 2", ean: "9781974700028" },
+    ],
+  };
+  const PAGES = {
+    71001: releasePage({
+      title: "Delta Drift",
+      volume: "GN 1",
+      distributor: "Viz Media",
+      date: "2024-03-05",
+      isbn13: "9781974700011",
+      mangaId: 1500,
+    }),
+  };
+
+  /** A VIZ Edition over the given Volumes with one physical Release. */
+  async function seedEdition(
+    t: TestT,
+    labels: string[],
+    opts: { extent?: "complete" | "partial"; isbn13?: string } = {},
+  ) {
+    return await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volumes = await ctx.db.query("volumes").collect();
+      const publisher = await ctx.db
+        .query("publishers")
+        .withIndex("by_slug", (q) => q.eq("slug", "viz-media"))
+        .unique();
+      const publisherId =
+        publisher?._id ??
+        (await ctx.db.insert("publishers", { status: "active", name: "VIZ Media", slug: "viz-media" }));
+      const editionId = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 4242,
+        publisherId,
+      });
+      for (const [order, label] of labels.entries()) {
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId: volumes.find((v) => v.label === label)!._id,
+          order,
+          extent: opts.extent ?? "complete",
+        });
+      }
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        isbn13: opts.isbn13,
+        publisherId,
+        seriesIds: [series._id],
+      });
+    });
+  }
+
+  it("creates Volume 1's own Release instead of giving its ISBN to an ISBN-less omnibus", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([DELTA], PAGES);
+    await sync(t, { releasePages: false });
+    const omnibus = await seedEdition(t, ["1", "2"]);
+    await syncPages(t);
+    const placed = (await obsFor(t, 71001))!.recordRef;
+    expect(placed?.type).toBe("release");
+    expect(placed?.id).not.toBe(omnibus);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(omnibus))!.isbn13).toBeUndefined();
+      const release = (await ctx.db.get(placed!.id as Id<"releases">))!;
+      expect(release.isbn13).toBe("9781974700011");
+    });
+  });
+
+  it("an omnibus carrying its own ISBN never blocks the ordinary Release", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([DELTA], PAGES);
+    await sync(t, { releasePages: false });
+    await seedEdition(t, ["1", "2"], { isbn13: "9781974799909" });
+    await syncPages(t);
+    const observation = (await obsFor(t, 71001))!;
+    expect(observation.conflicts?.find((c) => c.field === "placement")).toBeUndefined();
+    expect(observation.recordRef?.type).toBe("release");
+  });
+
+  it("neither the page pass nor the mirror links a whole Volume onto a split part", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([DELTA], PAGES);
+    await sync(t, { releasePages: false });
+    const part = await seedEdition(t, ["1"], { extent: "partial" });
+    // The mirror's label link (matchReleaseInSeries) skips the part...
+    await sync(t, { releasePages: false });
+    expect((await obsFor(t, 71001))!.recordRef).toBeUndefined();
+    // ...and so does the page pass, which creates the whole Volume's book.
+    await syncPages(t);
+    const placed = (await obsFor(t, 71001))!.recordRef;
+    expect(placed?.type).toBe("release");
+    expect(placed?.id).not.toBe(part);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(part))!.isbn13).toBeUndefined();
+    });
+  });
+});

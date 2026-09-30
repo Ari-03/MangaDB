@@ -32,6 +32,15 @@ export const olEditionValidator = v.object({
   multiVolume: v.boolean(),
   /** Omnibus / deluxe / box-set / range shape, when the title has one. */
   packaging: v.optional(packagingValidator),
+  /**
+   * The parser's provisional readings (lib/bookTitle.ts), resolved against
+   * the existing catalog at apply time (lib/catalogTitle.ts
+   * resolveBaseSeries): "Chainsaw Man 22" is Vol. 22 only if an existing
+   * "Chainsaw Man" claims it.
+   */
+  bareNumber: v.optional(v.boolean()),
+  bareRoman: v.optional(v.boolean()),
+  bareSplit: v.optional(v.object({ seriesTitle: v.string(), volumeLabel: v.string() })),
   publishers: v.array(v.string()),
   publishDate: v.optional(
     v.object({
@@ -231,11 +240,17 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
   // ("Mashle" + "Magic and Muscles, Vol. 3", "Mission" + "Yozakura Family,
   // Vol. 12"). A subtitle the parser can't read as a bare volume marker is
   // re-read joined to the title; the joined reading wins only when it finds
-  // the volume (or packaging) the split one missed.
+  // the volume (or packaging) the split one missed. The provisional
+  // readings are resolved against `title`, so only the title's own parse
+  // carries them.
   let parsed = parseBookTitle(title, { subtitle });
+  let provisional = true;
   if (subtitle !== undefined && parsed.volumeLabel === null && parsed.packaging === null) {
     const joined = parseBookTitle(`${title}: ${subtitle}`);
-    if (joined.volumeLabel !== null || joined.packaging !== null) parsed = joined;
+    if (joined.volumeLabel !== null || joined.packaging !== null) {
+      parsed = joined;
+      provisional = false;
+    }
   }
   const coverRange = parsed.packaging?.coverRange ?? null;
   const publishers = Array.isArray(edition.publishers)
@@ -251,6 +266,13 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     volumeLabel: parsed.volumeLabel ?? undefined,
     multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
     packaging: parsed.packaging ?? undefined,
+    ...(provisional
+      ? {
+          bareNumber: parsed.bareNumber || undefined,
+          bareRoman: parsed.bareRoman || undefined,
+          bareSplit: parsed.bareSplit ?? undefined,
+        }
+      : {}),
     publishers,
     publishDate:
       typeof edition.publish_date === "string" ? parseOlDate(edition.publish_date) : undefined,

@@ -164,6 +164,9 @@ async function publisherMerge(
   // outgrows a mutation (and a manifest document) for thousands of rows:
   // repoint in chunks, each with its own manifest, then finish with the stock
   // merge for the small tables, the slug redirect, status, and Revisions.
+  // Each call is its own Proposal; Split still replays every chunk with the
+  // closing merge, since it groups a merge's manifests by survivor
+  // (lib/sensitiveOps.ts reversibleManifestsOf).
   const editions = await ctx.db
     .query("editions")
     .withIndex("by_publisher", (q) => q.eq("publisherId", loser._id))
@@ -811,6 +814,46 @@ async function retireVolumes(
   }
 }
 
+const STATE_RANK = { wanted: 0, ordered: 1, owned: 2 } as const;
+
+/**
+ * A box-set Release turned Release Bundle hands its Collection Entries to
+ * the bundle, so an Owned box set stays in its owner's library (and its
+ * members with it, by Derived Ownership). A User already holding an entry
+ * on the bundle keeps that one, raised to the stronger state (Owned over
+ * Ordered over Wanted), and the box-set entry folds into it. A pinned
+ * Release Variant was the box-set Release's own and is dropped.
+ */
+async function entriesToBundle(
+  ctx: MutationCtx,
+  audit: Audit,
+  moves: Moves,
+  boxId: Id<"releases">,
+  bundleId: Id<"releaseBundles">,
+) {
+  const entries = await ctx.db
+    .query("collectionEntries")
+    .withIndex("by_release", (q) => q.eq("releaseId", boxId))
+    .collect();
+  for (const entry of entries) {
+    const kept = await ctx.db
+      .query("collectionEntries")
+      .withIndex("by_user_bundle", (q) => q.eq("userId", entry.userId).eq("bundleId", bundleId))
+      .unique();
+    if (!kept) {
+      await refile(ctx, audit, moves, "collectionEntries", entry, { releaseId: undefined, bundleId, variantId: undefined });
+      continue;
+    }
+    if (STATE_RANK[entry.state] > STATE_RANK[kept.state]) {
+      await refile(ctx, audit, moves, "collectionEntries", kept, { state: entry.state });
+    }
+    await audit.meta();
+    await ctx.db.delete(entry._id);
+    const { releaseId, state, variantId } = entry;
+    moves.trail.push({ table: "collectionEntries", docId: entry._id, field: "(removed)", before: { releaseId, state, variantId }, into: kept._id });
+  }
+}
+
 /** An existing bundle for this box-set Release: same ISBN, else same name/publisher/format. */
 async function existingBundle(ctx: MutationCtx, release: Doc<"releases">, name: string, publisherId: Id<"publishers">) {
   if (release.isbn13) {
@@ -827,7 +870,8 @@ async function existingBundle(ctx: MutationCtx, release: Doc<"releases">, name: 
 
 /**
  * A box set is a Release Bundle (spec §2): each box-set Release's facts
- * become a bundle's, member Releases join in coverage order, and the
+ * become a bundle's, member Releases join in coverage order, their
+ * Collection Entries pass to the bundle (entriesToBundle), and the
  * box-set Releases/Edition are hidden (identity and history kept).
  */
 async function toBundle(
@@ -845,6 +889,7 @@ async function toBundle(
   const labels = (entry.groups[0]?.coverage ?? []).flatMap((c) => (c.label === null ? [] : [c.label]));
   const company = await companyRows(ctx, edition.publisherId);
   let firstMemberVolume: Id<"volumes"> | null = null;
+  const moves = newMoves();
 
   for (const box of boxes) {
     let bundle = await existingBundle(ctx, box, name, edition.publisherId);
@@ -898,12 +943,14 @@ async function toBundle(
       ]);
     }
     if (missing.length > 0) audit.note(`bundle ${bundle.publicId}: no member release for vol ${missing.join(", ")}`);
+    await entriesToBundle(ctx, audit, moves, box._id, bundleId);
     if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
       await audit.revise({ type: "release", id: box._id }, [
         { field: "convertedToBundle", after: `#${bundle.publicId} ${name}` },
       ]);
     }
   }
+  recordMoves(audit, { type: "edition", id: edition._id }, moves);
   await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
   await retireVolumes(ctx, audit, entry.retireVolumeIds, firstMemberVolume);
   return audit.wrote ? applied : already;
@@ -1085,6 +1132,172 @@ async function normalizeVolumes(
 }
 
 
+// ---------- personal tracking that follows a move ----------
+
+/**
+ * One change to a personal row: a field re-pointed, or (field "(inserted)" /
+ * "(removed)") a whole row added or folded into another (`into`). No row
+ * names its User.
+ */
+type TrailRow = { table: string; docId: string; field: string; before?: unknown; after?: unknown; into?: string };
+
+/** The personal rows one entry moved, and the Users whose tracking moved with them. */
+type Moves = { trail: TrailRow[]; trackers: Set<Id<"users">> };
+
+const newMoves = (): Moves => ({ trail: [], trackers: new Set() });
+
+type PersonalTable = "volumeProgress" | "releaseProgress" | "favorites" | "comments" | "userSeriesStates" | "collectionEntries";
+
+/** Patch a personal row, logging each field that changes on the trail. */
+async function refile<T extends PersonalTable>(
+  ctx: MutationCtx,
+  audit: Audit,
+  moves: Moves,
+  table: T,
+  doc: Doc<T>,
+  patch: Partial<Doc<T>>,
+) {
+  const current: Record<string, unknown> = doc;
+  const changed = Object.entries(patch).filter(([field, after]) => !sameValue(current[field], after));
+  if (changed.length === 0) return;
+  await audit.meta();
+  await ctx.db.patch(doc._id, patch);
+  for (const [field, after] of changed) {
+    moves.trail.push({ table, docId: doc._id, field, before: current[field], after });
+  }
+}
+
+/**
+ * Personal rows are no catalog fact, so they stay off the public Revisions;
+ * the entry's Proposal records them as a "personalTracking" pseudo-field on
+ * the record they followed, enough to read the move back or reverse it.
+ */
+function recordMoves(audit: Audit, ref: Ref, moves: Moves) {
+  if (moves.trail.length > 0) audit.op({ kind: "update", ref, changes: [{ field: "personalTracking", after: moves.trail }] });
+}
+
+/**
+ * A split re-parented this Volume: re-file what carries its Series (Volume
+ * Progress, Volume Favorites, Comments) and each covering Edition's rows
+ * (followEdition) under the Series it now sits in. Rows key on the Volume,
+ * so nothing collides; only rows still filed under the source move.
+ */
+async function followVolume(
+  ctx: MutationCtx,
+  audit: Audit,
+  moves: Moves,
+  volume: Doc<"volumes">,
+  sourceId: Id<"series">,
+) {
+  for (const table of ["volumeProgress", "favorites", "comments"] as const) {
+    const rows = await ctx.db
+      .query(table)
+      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
+      .collect();
+    for (const row of rows) {
+      if (row.seriesId !== sourceId) continue;
+      if (table === "volumeProgress") moves.trackers.add(row.userId);
+      await refile(ctx, audit, moves, table, row, { seriesId: volume.seriesId });
+    }
+  }
+  for (const edition of await activeEditionsCovering(ctx, volume._id)) {
+    await followEdition(ctx, audit, moves, edition._id, sourceId);
+  }
+}
+
+/**
+ * A split moved this Edition's coverage (and refreshed its Releases'
+ * Series): each Release Progress row takes its Release's first covered
+ * Series (reading.ts passSeriesId) and an omnibus Favorite its first
+ * covered Volume's. The Users holding passes, Collection Entries, or
+ * omnibus Ratings on it become trackers, whose visibility keepVisibility
+ * guards.
+ */
+async function followEdition(
+  ctx: MutationCtx,
+  audit: Audit,
+  moves: Moves,
+  editionId: Id<"editions">,
+  sourceId: Id<"series">,
+) {
+  for (const release of await releasesOf(ctx, editionId)) {
+    const passSeriesId = release.seriesIds[0];
+    const passes = await ctx.db
+      .query("releaseProgress")
+      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+      .collect();
+    for (const pass of passes) {
+      moves.trackers.add(pass.userId);
+      if (passSeriesId && pass.seriesId === sourceId) {
+        await refile(ctx, audit, moves, "releaseProgress", pass, { seriesId: passSeriesId });
+      }
+    }
+    const entries = await ctx.db
+      .query("collectionEntries")
+      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+      .collect();
+    for (const entry of entries) moves.trackers.add(entry.userId);
+  }
+  const ratings = await ctx.db
+    .query("ratings")
+    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .collect();
+  for (const rating of ratings) moves.trackers.add(rating.userId);
+
+  const first = (await coverageOf(ctx, editionId)).sort((a, b) => a.order - b.order)[0];
+  const firstSeriesId = first ? (await ctx.db.get(first.volumeId))?.seriesId : undefined;
+  if (!firstSeriesId) return;
+  const favorites = await ctx.db
+    .query("favorites")
+    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .collect();
+  for (const row of favorites) {
+    if (row.seriesId === sourceId) await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });
+  }
+}
+
+const VISIBILITY_FIELDS = ["ownershipVisibility", "readingVisibility"] as const;
+
+/**
+ * A split never widens Tracking Visibility: where a tracker's Ownership or
+ * Reading was private on the source Series but would show on the split-off
+ * one (its own override, else the User's default), the split-off Series
+ * gets an explicit private override, on a new state row if need be. The
+ * same rule a Series merge applies (sensitiveOps.ts stricterVisibility).
+ */
+async function keepVisibility(
+  ctx: MutationCtx,
+  audit: Audit,
+  moves: Moves,
+  sourceId: Id<"series">,
+  targetId: Id<"series">,
+) {
+  for (const userId of moves.trackers) {
+    const stateOn = (seriesId: Id<"series">) =>
+      ctx.db
+        .query("userSeriesStates")
+        .withIndex("by_user_series", (q) => q.eq("userId", userId).eq("seriesId", seriesId))
+        .unique();
+    const user = await ctx.db.get(userId);
+    const from = await stateOn(sourceId);
+    const to = await stateOn(targetId);
+    const patch: Partial<Pick<Doc<"userSeriesStates">, (typeof VISIBILITY_FIELDS)[number]>> = {};
+    for (const field of VISIBILITY_FIELDS) {
+      const fallback = user?.[field] ?? "private";
+      if ((to?.[field] ?? fallback) === "public" && (from?.[field] ?? fallback) === "private") patch[field] = "private";
+    }
+    if (Object.keys(patch).length === 0) continue;
+    if (to) {
+      await refile(ctx, audit, moves, "userSeriesStates", to, patch);
+      continue;
+    }
+    await audit.meta();
+    const fields = { seriesId: targetId, following: false, followPromptDismissed: false, ...patch };
+    const docId = await ctx.db.insert("userSeriesStates", { userId, ...fields });
+    moves.trail.push({ table: "userSeriesStates", docId, field: "(inserted)", after: fields });
+  }
+}
+
 // ---------- stage 12: series splits ----------
 
 /** Creation-Revision field naming the plan entry that split a Series off. */
@@ -1221,12 +1434,19 @@ async function splitSeries(
     ...entry.editions.map((row) => row.editionId),
   ]);
 
+  // Personal tracking follows the moved work (followVolume, followEdition),
+  // also on a re-run, which heals a split made before it did.
+  const moves = newMoves();
+
   // Whole Volumes: re-parented with the moved work's own label. Anything
   // the importers attached since planning (another Edition) is drift.
   for (const row of entry.volumes) {
     const volume = await ctx.db.get(row.volumeId);
     if (!volume) return skip(`volume ${row.volumeId} missing`);
-    if (volume.seriesId === targetId) continue;
+    if (volume.seriesId === targetId) {
+      await followVolume(ctx, audit, moves, volume, source._id);
+      continue;
+    }
     if (volume.status !== "active") skip(`volume ${volume.publicId} is ${volume.status}`);
     if (volume.seriesId !== source._id) skip(`volume ${volume.publicId} left the source series`);
     if (volume.locked) skip(`volume ${volume.publicId} is locked`);
@@ -1250,6 +1470,8 @@ async function splitSeries(
       await followLine(ctx, audit, edition, source._id, targetId, moving);
       await refreshReleaseDenorms(ctx, edition._id);
     }
+    const moved = await ctx.db.get(volume._id);
+    if (moved) await followVolume(ctx, audit, moves, moved, source._id);
   }
 
   // Editions on a Volume label both works share: the staying work keeps
@@ -1262,7 +1484,10 @@ async function splitSeries(
     const covered = [];
     for (const cover of coverage) covered.push(await ctx.db.get(cover.volumeId));
     const done = covered.length === row.labels.length && covered.every((vol, i) => vol?.seriesId === targetId && sameLabel(vol.label, row.labels[i]));
-    if (done) continue;
+    if (done) {
+      await followEdition(ctx, audit, moves, edition._id, source._id);
+      continue;
+    }
     if (!sameValue(coverage.map((c) => c.volumeId), row.fromVolumeIds)) {
       skip(`edition ${edition.publicId} coverage drifted`);
     }
@@ -1277,6 +1502,7 @@ async function splitSeries(
     }
     await followLine(ctx, audit, edition, source._id, targetId, moving);
     await replaceCoverage(ctx, audit, edition._id, rows);
+    await followEdition(ctx, audit, moves, edition._id, source._id);
   }
 
   // The moved work's backbone Volumes that have no Release yet.
@@ -1302,6 +1528,9 @@ async function splitSeries(
     await audit.revise(from, [{ field: "sourceObservation", before: record }]);
     await audit.revise(to, [{ field: "sourceObservation", after: record }]);
   }
+
+  await keepVisibility(ctx, audit, moves, source._id, targetId);
+  recordMoves(audit, { type: "series", id: source._id }, moves);
 
   await settlePositions(ctx, audit, source._id);
   await settlePositions(ctx, audit, targetId);
@@ -1427,7 +1656,8 @@ async function createRelease(
 
 /**
  * A Release Bundle whose members may sit in several Series: extend one, or
- * turn a box-set Release into one. Members keep the plan's order; a member
+ * turn a box-set Release into one (its Collection Entries pass to the
+ * bundle, entriesToBundle). Members keep the plan's order; a member
  * already in the bundle at another order is drift.
  */
 async function releaseBundle(
@@ -1516,6 +1746,9 @@ async function releaseBundle(
   }
 
   if (box) {
+    const moves = newMoves();
+    await entriesToBundle(ctx, audit, moves, box._id, bundle._id);
+    recordMoves(audit, { type: "release", id: box._id }, moves);
     if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
       await audit.revise({ type: "release", id: box._id }, [
         { field: "convertedToBundle", after: `#${bundle.publicId} ${bundle.name}` },

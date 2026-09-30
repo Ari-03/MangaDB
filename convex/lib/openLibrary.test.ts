@@ -97,6 +97,15 @@ describe("parseEditionJson — title splitting", () => {
     expect(titled("Naruto, Vol. 1-3")).toMatchObject({ multiVolume: true });
   });
 
+  it("keeps a bare trailing number's provisional split for apply-time resolution (B20)", () => {
+    expect(titled("Chainsaw Man 22")).toMatchObject({
+      seriesTitle: "Chainsaw Man 22",
+      volumeLabel: undefined,
+      bareSplit: { seriesTitle: "Chainsaw Man", volumeLabel: "22" },
+    });
+    expect(titled("Chainsaw Man, Vol. 22")?.bareSplit).toBeUndefined();
+  });
+
   it("maps packaging onto the base series, never onto a volume", () => {
     expect(titled("Fullmetal Alchemist: 3-in-1 Edition, Vol. 4")).toMatchObject({
       seriesTitle: "Fullmetal Alchemist",

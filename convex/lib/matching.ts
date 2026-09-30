@@ -4,7 +4,8 @@
 // this module resolves everything below it, strongest first:
 //
 //   ② ISBN-13 exact, with a title-similarity sanity check
-//   ③ publisher + normalized series title + volume label + format —
+//   ③ publisher + normalized series title + volume label + format, onto an
+//     ordinary whole-Volume Edition, Binding and language not contradicting —
 //     auto ONLY with exactly one candidate and no override/lock
 //   ④ title-only plausible candidates: always review
 //   ⑤ no match: the creation path
@@ -121,6 +122,10 @@ export type ReleaseFact = {
   /** Multi-volume coverage (omnibus ranges) skips rungs ③/④ — ISBN or bust. */
   multiVolume: boolean;
   format: "physical" | "digital";
+  /** Physical Binding ("Paperback", "hardcover"); case-insensitive, unknown when absent. */
+  binding?: string;
+  /** Language code ("en"); unknown when absent. */
+  language?: string;
   isbn13?: string;
   publisherId: Id<"publishers"> | null;
 };
@@ -314,10 +319,40 @@ export async function workMatch(
 }
 
 /**
+ * Whether an Edition is an ordinary book of one whole Volume: its only
+ * Volume Coverage row is complete and it belongs to no Edition Line. A
+ * single-volume record keyed by label (rung ③, ANN's label and page
+ * fallbacks) may link only onto such an Edition; a split part, an omnibus,
+ * or a line's packaging of the same Volume is another book.
+ */
+export async function isWholeSingleVolume(
+  ctx: QueryCtx | MutationCtx,
+  edition: Doc<"editions">,
+): Promise<boolean> {
+  if (edition.editionLineId !== undefined) return false;
+  const coverage = await ctx.db
+    .query("volumeCoverages")
+    .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
+    .take(2);
+  return coverage.length === 1 && coverage[0]!.extent === "complete";
+}
+
+/** Two known values that differ, compared case-insensitively ("Paperback" = "paperback"). */
+function contradicts(known: string | undefined, offered: string | undefined): boolean {
+  return (
+    known !== undefined &&
+    offered !== undefined &&
+    known.trim().toLowerCase() !== offered.trim().toLowerCase()
+  );
+}
+
+/**
  * Resolve one release fact against the canonical catalog, rungs ② → ⑤.
  * Rung ③ requires the full key — publisher, normalized title, volume label,
- * format — and an edition covering exactly that one volume; near-misses on
- * publisher/format/coverage become rung ④ title-only candidates.
+ * format — onto an ordinary whole-Volume Edition (isWholeSingleVolume);
+ * near-misses on publisher/coverage/packaging become rung ④ title-only
+ * candidates, and a same-Edition Release of another Format or Binding is a
+ * sibling (the creation path).
  */
 export async function matchRelease(
   ctx: QueryCtx | MutationCtx,
@@ -380,10 +415,11 @@ export async function matchRelease(
   // Rungs ③/④: walk title-matching Series → label-matching Volumes → their
   // covering Editions → Releases, splitting strict full-key hits from
   // loose title-only candidates. A candidate that matches the full key
-  // except Format is a SIBLING, not ambiguity: Releases of one Edition
-  // differ exactly in Format/Binding (spec §2), so a publisher's digital
-  // counterpart of an existing print volume is the creation path, never a
-  // review — the creation helper attaches it to the sibling's Edition.
+  // except Format or a known Binding is a SIBLING, not ambiguity: Releases
+  // of one Edition differ exactly in Format/Binding (spec §2), so a
+  // publisher's digital counterpart or hardcover of an existing paperback
+  // volume is the creation path, never a review — the creation helper
+  // attaches it to the sibling's Edition.
   const strict = new Map<string, Doc<"releases">>();
   const siblings = new Map<string, Doc<"releases">>();
   const loose = new Map<string, Doc<"releases">>();
@@ -402,11 +438,7 @@ export async function matchRelease(
       for (const coverage of coverages) {
         const edition = await ctx.db.get(coverage.editionId);
         if (!edition || edition.status !== "active") continue;
-        const editionCoverage = await ctx.db
-          .query("volumeCoverages")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect();
-        const coversOnlyThisVolume = editionCoverage.length === 1;
+        const wholeVolume = await isWholeSingleVolume(ctx, edition);
         const releases = await ctx.db
           .query("releases")
           .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
@@ -422,11 +454,13 @@ export async function matchRelease(
           ) {
             continue;
           }
+          // So is another language (a Release is one language).
+          if (contradicts(release.language, fact.language)) continue;
           const sameEdition =
-            coversOnlyThisVolume &&
-            fact.publisherId !== null &&
-            edition.publisherId === fact.publisherId;
-          const bucket = !sameEdition ? loose : release.format === fact.format ? strict : siblings;
+            wholeVolume && fact.publisherId !== null && edition.publisherId === fact.publisherId;
+          const sameRelease =
+            release.format === fact.format && !contradicts(release.binding, fact.binding);
+          const bucket = !sameEdition ? loose : sameRelease ? strict : siblings;
           bucket.set(release._id, release);
         }
       }
@@ -466,6 +500,6 @@ export async function matchRelease(
       reason: `title-only match: ${loose.size} plausible candidate${loose.size === 1 ? "" : "s"} under a same-titled series`,
     };
   }
-  // Only format-siblings (or nothing) found: create the new Release.
+  // Only Format/Binding siblings (or nothing) found: create the new Release.
   return { kind: "create", rung: 5 };
 }

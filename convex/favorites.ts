@@ -111,7 +111,10 @@ export const toggle = mutation({
   },
 });
 
-/** A Volume's jacket: the first stored cover among its Releases, else an ISBN to look one up by. */
+/**
+ * A Volume's jacket: the first stored cover among the active Releases of its
+ * active Editions (what its Volume page lists), else an ISBN to look one up by.
+ */
 async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
   const covering = await ctx.db
     .query("volumeCoverages")
@@ -121,6 +124,8 @@ async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
   covering.sort((a, b) => (a.extent === "complete" ? 0 : 1) - (b.extent === "complete" ? 0 : 1));
   let isbn: string | null = null;
   for (const row of covering) {
+    const edition = await ctx.db.get(row.editionId);
+    if (!edition || edition.status !== "active") continue;
     const releases = await ctx.db
       .query("releases")
       .withIndex("by_edition", (q) => q.eq("editionId", row.editionId))

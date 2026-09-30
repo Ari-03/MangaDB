@@ -204,7 +204,9 @@ function SeriesReadingProgressInner({
 /**
  * The Volume's durable, edition-independent read count with direct-edit
  * controls (CONTEXT.md: Volume Progress "may be updated directly or by
- * confirmed completion of a Release"). Renders nothing signed out.
+ * confirmed completion of a Release"). The buttons send ±1 deltas rather
+ * than a new total, so clicks made before the count refreshes all land.
+ * Renders nothing signed out.
  */
 export function VolumeReadCount({
   seriesPublicId,
@@ -230,7 +232,7 @@ function VolumeReadCountInner({
   volumePublicId: number;
 }) {
   const tracking = useQuery(api.reading.seriesTracking, { seriesPublicId });
-  const setCount = useMutation(api.reading.setVolumeReadCount);
+  const adjustCount = useMutation(api.reading.adjustVolumeReadCount);
   if (!tracking) return null;
   const row = tracking.volumes.find((v) => v.volumePublicId === volumePublicId);
   if (!row) return null;
@@ -245,7 +247,7 @@ function VolumeReadCountInner({
         type="button"
         className="read-adjust"
         onClick={() =>
-          void setCount({ volumeId: row.volumeId, readCount: row.readCount + 1 })
+          void adjustCount({ volumeId: row.volumeId, delta: 1 })
         }
       >
         {row.readCount > 0 ? "+1 read" : "Mark read"}
@@ -256,7 +258,7 @@ function VolumeReadCountInner({
           className="read-adjust"
           aria-label="Remove one completed read"
           onClick={() =>
-            void setCount({ volumeId: row.volumeId, readCount: row.readCount - 1 })
+            void adjustCount({ volumeId: row.volumeId, delta: -1 })
           }
         >
           −1

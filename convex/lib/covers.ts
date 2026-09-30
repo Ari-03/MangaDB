@@ -166,48 +166,84 @@ export async function storeCover(
  * another Edition covering the same Volume. The same book is often on file
  * twice — once from a publisher's own site without an ISBN, once from the
  * distribution catalog with one — and the jacket is the same either way.
+ * Pass one `coverIsbnCache` to every call a query makes so a page of
+ * ISBN-less Releases reads each Edition's Releases and Coverage once.
  */
 export async function coverIsbnForRelease(
   ctx: QueryCtx,
-  release: {
-    _id: Id<"releases">;
-    editionId: Id<"editions">;
-    isbn13?: string;
-    format: "physical" | "digital";
-  },
+  release: Pick<Doc<"releases">, "editionId" | "isbn13">,
+  cache: CoverIsbnCache = coverIsbnCache(ctx),
 ): Promise<string | null> {
-  if (release.isbn13) return release.isbn13;
-  const own = await isbnInEdition(ctx, release.editionId, release._id);
-  if (own) return own;
-  const coverage = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
-    .first();
-  if (!coverage) return null;
-  const covering = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", coverage.volumeId))
-    .collect();
-  for (const row of covering) {
-    if (row.editionId === release.editionId) continue;
-    const isbn = await isbnInEdition(ctx, row.editionId, release._id);
-    if (isbn) return isbn;
-  }
-  return null;
+  return release.isbn13 || (await cache.borrowed(release.editionId));
 }
 
-// Physical first: that jacket is the one a shelf should show.
-async function isbnInEdition(
+/**
+ * Per-query memo for `coverIsbnForRelease`, keyed by Edition: the ISBN an
+ * ISBN-less Release borrows depends only on its Edition, so every such
+ * Release of one Edition shares a single lookup, and each alternative
+ * Edition's preferred ISBN is read once. `coverage` loads an Edition's
+ * Coverage in order; a caller that already memoizes it (`browseCache`)
+ * passes its own so the fallback shares those reads.
+ */
+export function coverIsbnCache(
   ctx: QueryCtx,
-  editionId: Id<"editions">,
-  except: Id<"releases">,
-): Promise<string | null> {
+  coverage: (editionId: Id<"editions">) => Promise<Array<Doc<"volumeCoverages">>> = (
+    editionId,
+  ) =>
+    ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+      .take(1),
+) {
+  const once = (
+    memo: Map<Id<"editions">, Promise<string | null>>,
+    editionId: Id<"editions">,
+    load: () => Promise<string | null>,
+  ) => {
+    let hit = memo.get(editionId);
+    if (!hit) {
+      hit = load();
+      memo.set(editionId, hit);
+    }
+    return hit;
+  };
+  const preferredMemo = new Map<Id<"editions">, Promise<string | null>>();
+  const borrowedMemo = new Map<Id<"editions">, Promise<string | null>>();
+  const preferred = (editionId: Id<"editions">) =>
+    once(preferredMemo, editionId, () => isbnInEdition(ctx, editionId));
+  return {
+    /** The ISBN an ISBN-less Release of this Edition is looked up by. */
+    borrowed: (editionId: Id<"editions">) =>
+      once(borrowedMemo, editionId, async () => {
+        const own = await preferred(editionId);
+        if (own) return own;
+        const first = (await coverage(editionId))[0];
+        if (!first) return null;
+        const covering = await ctx.db
+          .query("volumeCoverages")
+          .withIndex("by_volume", (q) => q.eq("volumeId", first.volumeId))
+          .collect();
+        for (const row of covering) {
+          if (row.editionId === editionId) continue;
+          const isbn = await preferred(row.editionId);
+          if (isbn) return isbn;
+        }
+        return null;
+      }),
+  };
+}
+export type CoverIsbnCache = ReturnType<typeof coverIsbnCache>;
+
+// An Edition's preferred ISBN among its active Releases, physical first: that
+// jacket is the one a shelf should show. Only ISBN-less Releases borrow, and
+// they never carry one, so the borrower needs no excluding.
+async function isbnInEdition(ctx: QueryCtx, editionId: Id<"editions">): Promise<string | null> {
   const releases = (
     await ctx.db
       .query("releases")
       .withIndex("by_edition", (q) => q.eq("editionId", editionId))
       .collect()
-  ).filter((r) => r._id !== except && r.status === "active" && r.isbn13);
+  ).filter((r) => r.status === "active" && r.isbn13);
   return (
     releases.find((r) => r.format === "physical")?.isbn13 ??
     releases[0]?.isbn13 ??

@@ -599,3 +599,148 @@ describe("collection.setManyReleaseEntries", () => {
     ).rejects.toThrow(ConvexError);
   });
 });
+
+describe("collection pinned variants that were hidden later (B27)", () => {
+  async function pinThenHide(t: ReturnType<typeof convexTest>) {
+    const seeded = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: seeded.r1,
+      state: "wanted",
+      variantId: seeded.variantId,
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seeded.variantId, { status: "hidden" });
+    });
+    return { ...seeded, as };
+  }
+
+  it("a batch state change keeps the hidden pin instead of aborting the batch", async () => {
+    const t = convexTest(schema);
+    const { r1, r2, variantId, as } = await pinThenHide(t);
+    const result = await as.mutation(api.collection.setManyReleaseEntries, {
+      releaseIds: [r1, r2],
+      state: "owned",
+    });
+    expect(result.changed).toBe(2);
+    const rows = await entryRows(t);
+    expect(rows.map((row) => [row.releaseId, row.state, row.variantId ?? null])).toEqual(
+      expect.arrayContaining([
+        [r1, "owned", variantId],
+        [r2, "owned", null],
+      ]),
+    );
+  });
+
+  it("a single state change resending the unchanged pin keeps it", async () => {
+    const t = convexTest(schema);
+    const { r1, variantId, as } = await pinThenHide(t);
+    // The release row resends the current pin with every state change.
+    await as.mutation(api.collection.setReleaseEntry, {
+      releaseId: r1,
+      state: "owned",
+      variantId,
+    });
+    const rows = await entryRows(t);
+    expect(rows.map((row) => [row.state, row.variantId ?? null])).toEqual([
+      ["owned", variantId],
+    ]);
+  });
+
+  it("selecting a hidden variant as a new pin is still refused", async () => {
+    const t = convexTest(schema);
+    const { r1, r2, variantId, as } = await pinThenHide(t);
+    await as.mutation(api.collection.setReleaseEntry, { releaseId: r1 });
+    await expect(
+      as.mutation(api.collection.setReleaseEntry, {
+        releaseId: r1,
+        state: "owned",
+        variantId,
+      }),
+    ).rejects.toThrow(/does not belong/);
+    // Nor may another Release's entry carry it.
+    await expect(
+      as.mutation(api.collection.setReleaseEntry, {
+        releaseId: r2,
+        state: "owned",
+        variantId,
+      }),
+    ).rejects.toThrow(/does not belong/);
+  });
+});
+
+describe("collection batch cost (E01)", () => {
+  /** One Series with `count` Editions, each with one active Release. */
+  async function seedShelf(t: ReturnType<typeof convexTest>, count: number) {
+    return await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Kodansha",
+        slug: "kodansha",
+      });
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "Long Runner",
+        altTitles: [],
+        searchText: "Long Runner",
+      });
+      const releaseIds: Array<Id<"releases">> = [];
+      for (let i = 0; i < count; i++) {
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: 100 + i,
+          publisherId,
+        });
+        releaseIds.push(
+          await ctx.db.insert("releases", {
+            status: "active",
+            editionId,
+            format: "physical",
+            language: "en",
+            publisherId,
+            seriesIds: [seriesId],
+          }),
+        );
+      }
+      return releaseIds;
+    });
+  }
+
+  it("marks a full batch of new books within the deployed transaction limits", async () => {
+    // Enforce Convex's real per-transaction limits (32,000 documents read).
+    const t = convexTest({ schema, transactionLimits: true });
+    const releaseIds = await seedShelf(t, 200);
+    const as = await withUser(t);
+    const result = await as.mutation(api.collection.setManyReleaseEntries, {
+      releaseIds,
+      state: "owned",
+    });
+    expect(result.changed).toBe(200);
+    expect(result.suggestFollow).toEqual([
+      { seriesId: expect.anything(), title: "Long Runner" },
+    ]);
+    expect(await entryRows(t)).toHaveLength(200);
+  });
+
+  it("reads a batch in time linear in the collection, not quadratic", async () => {
+    // The same batch against a budget a per-insert collection rescan blows
+    // through (tens of thousands of reads for 200 books) but one final pass
+    // over the collection fits easily.
+    const t = convexTest({ schema, transactionLimits: { documentsRead: 3_000 } });
+    const releaseIds = await seedShelf(t, 200);
+    const as = await withUser(t);
+    // A collection already on the shelf joins the final pass exactly once.
+    await as.mutation(api.collection.setManyReleaseEntries, {
+      releaseIds: releaseIds.slice(0, 100),
+      state: "wanted",
+    });
+    const result = await as.mutation(api.collection.setManyReleaseEntries, {
+      releaseIds,
+      state: "owned",
+    });
+    expect(result.changed).toBe(200);
+    // The Series was already covered before this batch: no prompt.
+    expect(result.suggestFollow).toEqual([]);
+  });
+});

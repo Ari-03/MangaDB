@@ -185,6 +185,97 @@ describe("prh.sync — configuration", () => {
     },
   );
 
+  // B09: a record PRH still lists but the parser cannot normalize (here a
+  // null title) is still present at the source — never a withdrawal.
+  it("keeps a still-listed but malformed record present instead of withdrawing it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1, onsale: "2099-01-05" },
+    ]);
+    await sync(t);
+    const proposalsBefore = await t.run(
+      async (ctx) => (await ctx.db.query("proposals").collect()).length,
+    );
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({
+            recordCount: 1,
+            data: { titles: [{ isbn: "9781646519828", title: null, onsale: "2099-01-05" }] },
+          }),
+        ),
+    );
+    const result = await sync(t);
+    await t.run(async (ctx) => {
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations).toHaveLength(1);
+      expect(observations[0]!.withdrawn).toBe(false);
+      // No possible-cancellation review for a Release PRH still lists.
+      expect(await ctx.db.query("proposals").collect()).toHaveLength(proposalsBefore);
+      const runs = await ctx.db.query("importRuns").order("desc").collect();
+      expect(runs[0]!.errors).toEqual(["malformed 9781646519828: dropped by the parser"]);
+    });
+    expect(result).toMatchObject({ recordsSeen: 0, errorCount: 1 });
+  });
+
+  // B09: a withdrawn record that PRH relists as a malformed row is present
+  // again, so the possible-cancellation review its withdrawal queued retires.
+  it("retires the withdrawal's cancellation review when the record returns malformed", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1, onsale: "2099-01-05" },
+    ]);
+    await sync(t);
+    vi.unstubAllGlobals();
+    stubApi([]);
+    await sync(t);
+    const proposalId = await t.run(async (ctx) => {
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.withdrawn).toBe(true);
+      expect(obs!.queuedProposalId).toBeDefined();
+      expect((await ctx.db.get(obs!.queuedProposalId!))?.state).toBe("inReview");
+      return obs!.queuedProposalId!;
+    });
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({
+            recordCount: 1,
+            data: { titles: [{ isbn: "9781646519828", title: null, onsale: "2099-01-05" }] },
+          }),
+        ),
+    );
+    await sync(t);
+    await t.run(async (ctx) => {
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.withdrawn).toBe(false);
+      expect((await ctx.db.get(proposalId))?.state).toBe("withdrawn");
+    });
+  });
+
+  it("never calls a sweep complete when a listed record has no readable ISBN", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
+    await sync(t);
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify({ recordCount: 1, data: { titles: [{ isbn: null, title: null }] } }),
+        ),
+    );
+    expect(await sync(t)).toMatchObject({ completeSweep: false, errorCount: 1 });
+    await t.run(async (ctx) => {
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.withdrawn).toBe(false);
+    });
+  });
+
   it("does not call a prematurely empty upstream page a complete sweep", async () => {
     const t = makeT();
     await seedRegistry(t, true);

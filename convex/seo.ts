@@ -8,14 +8,15 @@
 // `lastmod` is each record's latest Revision (spec §11); records that
 // predate revision history fall back to their creation time. Hidden and
 // merged records never appear — the surviving record carries the URL.
-// Mature Series, their Volumes and Editions, and adult-only Publishers and
-// their Bundles are left out too (lib/mature.ts): reachable, not advertised.
+// Mature Series, their Volumes and Editions, adult-only Publishers, and
+// Bundles of either (an adult-only publisher's, or holding a Mature Series'
+// book) are left out too (lib/mature.ts): reachable, not advertised.
 
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
-import { editionCoverage } from "./catalogPages";
+import { bundleMembers, editionCoverage } from "./catalogPages";
 import { listed } from "./lib/mature";
 import { volumeTitle } from "./lib/titles";
 
@@ -134,8 +135,8 @@ export const sitemapPage = query({
         const result = await ctx.db.query("releaseBundles").paginate(paginationOpts);
         for (const doc of result.page) {
           if (doc.status !== "active") continue;
-          const publisher = await ctx.db.get(doc.publisherId);
-          if (publisher?.contentRating === "mature") continue;
+          // Judged as its page judges it: publisher or member content.
+          if ((await bundleMembers(ctx, doc)).mature) continue;
           entries.push({
             publicId: doc.publicId,
             slug: null,

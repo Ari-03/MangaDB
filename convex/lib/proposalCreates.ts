@@ -1,15 +1,21 @@
 // Proposal create ops (ticket #32, spec §5): one Proposal can atomically
 // create several new records — temp-IDs let later ops reference records
-// earlier ops create, so a Volume + its Edition + coverage + a Release land
-// together or not at all. This module is the creation registry: which tables
-// a create op may target, how its fields are validated and normalized
-// (reusing the direct-edit field registry for the overlapping fields), and
-// how a validated plan is applied at approval.
+// earlier ops create, so a Volume + its Edition Line + its Edition +
+// coverage + a Release land together or not at all. This module is the
+// creation registry: which tables a create op may target, how its fields
+// are validated and normalized (reusing the direct-edit field registry for
+// the overlapping fields), and how a validated plan is applied at approval.
 //
 // The field shapes deliberately match what the Seven Seas importer queues
 // (sevenSeas.ts queueCreationProposal): references accept either a stored
 // document ID or the temp-ID of an earlier create op; an edition names its
-// publisher by ID or slug; coverage rows use `volume`/`volumeId`.
+// publisher by ID or slug; coverage rows use `volume`/`volumeId`; an
+// edition joins an Edition Line through `editionLineId`.
+//
+// Hard invariants checked with every plan: a new Release never takes an
+// ISBN an active Release (or another op of the same proposal) holds, and an
+// Edition joins only a line of its own publisher under the base Series of
+// the Volumes it covers.
 //
 // Validation (`planCreateOps`) runs at draft save, submission, and approval;
 // application (`applyCreatePlan`) runs only inside the approval mutation.
@@ -39,6 +45,7 @@ export type CreateOpInput = {
 export const CREATABLE_TABLES = {
   series: "series",
   volumes: "volume",
+  editionLines: "editionLine",
   editions: "edition",
   releases: "release",
 } as const satisfies Record<string, RecordType>;
@@ -70,10 +77,18 @@ export type CreatePlan =
       fields: { label?: string; synopsis?: string };
     }
   | {
+      table: "editionLines";
+      tempId: string;
+      series: RefTo<"series">;
+      publisherId: Id<"publishers">;
+      fields: { name: string };
+    }
+  | {
       table: "editions";
       tempId: string;
       publisherId: Id<"publishers">;
       coverage: CoveragePlan[];
+      editionLine?: RefTo<"editionLines">;
       fields: { linePosition?: string };
     }
   | {
@@ -118,7 +133,7 @@ function asObject(raw: unknown, what: string): Record<string, unknown> {
  * Resolve a reference value — a temp-ID string of an earlier create op or a
  * stored document ID. Temp-IDs win over coincidental ID-shaped strings.
  */
-async function resolveRef<Table extends "series" | "volumes" | "editions">(
+async function resolveRef<Table extends "series" | "volumes" | "editionLines" | "editions">(
   ctx: QueryCtx | MutationCtx,
   raw: unknown,
   table: Table,
@@ -146,7 +161,7 @@ async function resolveRef<Table extends "series" | "volumes" | "editions">(
 }
 
 /** Tables a create op's fields may reference by stored ID. */
-type ReferencedTable = "series" | "volumes" | "editions" | "publishers";
+type ReferencedTable = "series" | "volumes" | "editionLines" | "editions" | "publishers";
 
 /**
  * Look up a stored-document reference: null when `raw` is not an ID of
@@ -169,8 +184,10 @@ async function storedRef<Table extends ReferencedTable>(
  * Validate a proposal's create ops in order and return the normalized plan.
  * Throws ConvexError (code "invalidCreate") on any structural problem: an
  * unknown table, duplicate or forward temp-ID references, missing required
- * fields, or a reference to a record that no longer exists. Runs at draft
- * save, submission, and approval — hard invariants are never overridable.
+ * fields, a reference to a record that no longer exists, a Release ISBN
+ * already taken, or an Edition Line that does not fit its Edition. Runs at
+ * draft save, submission, and approval (inside the approval transaction) —
+ * hard invariants are never overridable.
  */
 export async function planCreateOps(
   ctx: QueryCtx | MutationCtx,
@@ -178,6 +195,8 @@ export async function planCreateOps(
 ): Promise<CreatePlan[]> {
   const plans: CreatePlan[] = [];
   const tempIds = new Map<string, CreatableTable>();
+  const planByTemp = new Map<string, CreatePlan>();
+  const isbnsClaimed = new Set<string>();
   for (const op of ops) {
     if (!(op.table in CREATABLE_TABLES)) {
       bad(`Proposals cannot create "${op.table}" records.`);
@@ -231,14 +250,70 @@ export async function planCreateOps(
         });
         break;
       }
+      case "editionLines": {
+        const series = await resolveRef(
+          ctx,
+          fields.seriesId,
+          "series",
+          tempIds,
+          "New edition line's series",
+        );
+        const publisherId = await resolvePublisher(ctx, fields, "edition line");
+        const name = viaRegistry("editionLine", "name", fields.name);
+        if (typeof name !== "string") return bad("A new edition line needs a name.");
+        // One line per (base Series, publisher, name), as the importer keeps it.
+        const wanted = name.toLowerCase();
+        const twin = [...planByTemp.values()].some(
+          (plan) =>
+            plan.table === "editionLines" &&
+            seriesKey(plan.series) === seriesKey(series) &&
+            plan.publisherId === publisherId &&
+            plan.fields.name.toLowerCase() === wanted,
+        );
+        const stored =
+          series.kind === "id"
+            ? (
+                await ctx.db
+                  .query("editionLines")
+                  .withIndex("by_series", (q) => q.eq("seriesId", series.id))
+                  .collect()
+              ).some(
+                (line) =>
+                  line.status === "active" &&
+                  line.publisherId === publisherId &&
+                  line.name.toLowerCase() === wanted,
+              )
+            : false;
+        if (twin || stored) {
+          bad(
+            `The edition line "${name}" already exists for this series and publisher — reference it instead.`,
+          );
+        }
+        plans.push({ table, tempId: op.tempId, series, publisherId, fields: { name } });
+        break;
+      }
       case "editions": {
-        const publisherId = await resolvePublisher(ctx, fields);
+        const publisherId = await resolvePublisher(ctx, fields, "edition");
         const coverage = await planCoverage(ctx, fields, tempIds);
+        const editionLine =
+          fields.editionLineId === undefined
+            ? undefined
+            : await resolveRef(
+                ctx,
+                fields.editionLineId,
+                "editionLines",
+                tempIds,
+                "New edition's line",
+              );
+        if (editionLine !== undefined) {
+          await checkLineFits(ctx, editionLine, publisherId, coverage, planByTemp);
+        }
         plans.push({
           table,
           tempId: op.tempId,
           publisherId,
           coverage,
+          editionLine,
           fields: {
             linePosition: viaRegistry(
               "edition",
@@ -269,6 +344,10 @@ export async function planCreateOps(
           bad("Binding applies only to physical releases.");
         }
         const language = viaRegistry("release", "language", fields.language);
+        const isbn13 = viaRegistry("release", "isbn13", fields.isbn13) as string | undefined;
+        const isbn10 = viaRegistry("release", "isbn10", fields.isbn10) as string | undefined;
+        await claimIsbn(ctx, "isbn13", isbn13, isbnsClaimed);
+        await claimIsbn(ctx, "isbn10", isbn10, isbnsClaimed);
         plans.push({
           table,
           tempId: op.tempId,
@@ -277,12 +356,8 @@ export async function planCreateOps(
             format: format as "physical" | "digital",
             binding,
             language: language as string,
-            isbn13: viaRegistry("release", "isbn13", fields.isbn13) as
-              | string
-              | undefined,
-            isbn10: viaRegistry("release", "isbn10", fields.isbn10) as
-              | string
-              | undefined,
+            isbn13,
+            isbn10,
             pubDate: viaRegistry("release", "pubDate", fields.pubDate) as
               | { year: number; month?: number; day?: number; sort: number }
               | undefined,
@@ -300,19 +375,103 @@ export async function planCreateOps(
       }
     }
     tempIds.set(op.tempId, table);
+    planByTemp.set(op.tempId, plans[plans.length - 1]!);
   }
   return plans;
 }
 
-/** A new edition names its publisher by ID or by slug (the importer's form). */
+/**
+ * Release identity (CONTEXT.md): an ISBN names one Release. Refuse one that
+ * an active Release already holds or an earlier op of this proposal claimed
+ * — exact-ISBN matching would turn ambiguous. A real duplicate is resolved
+ * by merging or correcting the holder, never by creating a second Release.
+ */
+async function claimIsbn(
+  ctx: QueryCtx | MutationCtx,
+  field: "isbn13" | "isbn10",
+  isbn: string | undefined,
+  claimed: Set<string>,
+): Promise<void> {
+  if (isbn === undefined) return;
+  const key = `${field}:${isbn}`;
+  if (claimed.has(key)) bad(`Two new releases in this proposal share the ISBN ${isbn}.`);
+  claimed.add(key);
+  const holders =
+    field === "isbn13"
+      ? await ctx.db
+          .query("releases")
+          .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn))
+          .collect()
+      : await ctx.db
+          .query("releases")
+          .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn))
+          .collect();
+  if (holders.some((release) => release.status === "active")) {
+    bad(
+      `ISBN ${isbn} already belongs to an active Release — correct or merge that Release instead of creating another.`,
+    );
+  }
+}
+
+/** Identity of a Series reference: temp-IDs and stored IDs never collide. */
+const seriesKey = (ref: RefTo<"series">): string =>
+  ref.kind === "temp" ? `temp:${ref.tempId}` : `id:${ref.id}`;
+
+/**
+ * An Edition Line belongs to the base Series whose Volumes it collects and
+ * to one publisher (CONTEXT.md): a new edition may join a line only when the
+ * line's publisher is the edition's and every covered Volume sits in the
+ * line's Series. References may be stored records or earlier temp-IDs.
+ */
+async function checkLineFits(
+  ctx: QueryCtx | MutationCtx,
+  lineRef: RefTo<"editionLines">,
+  publisherId: Id<"publishers">,
+  coverage: CoveragePlan[],
+  planByTemp: Map<string, CreatePlan>,
+): Promise<void> {
+  let line: { series: RefTo<"series">; publisherId: Id<"publishers"> };
+  if (lineRef.kind === "temp") {
+    const plan = planByTemp.get(lineRef.tempId);
+    if (plan?.table !== "editionLines") return bad("New edition's line resolved out of order.");
+    line = plan;
+  } else {
+    const doc = (await ctx.db.get(lineRef.id))!;
+    line = { series: { kind: "id", id: doc.seriesId }, publisherId: doc.publisherId };
+  }
+  if (line.publisherId !== publisherId) {
+    bad("New edition's line belongs to another publisher.");
+  }
+  const lineSeries = seriesKey(line.series);
+  for (const row of coverage) {
+    let series: RefTo<"series">;
+    if (row.volume.kind === "temp") {
+      const plan = planByTemp.get(row.volume.tempId);
+      if (plan?.table !== "volumes") return bad("Coverage row resolved out of order.");
+      series = plan.series;
+    } else {
+      const volume = (await ctx.db.get(row.volume.id))!;
+      series = { kind: "id", id: volume.seriesId };
+    }
+    if (seriesKey(series) !== lineSeries) {
+      bad("New edition's line belongs to another series than the volumes it covers.");
+    }
+  }
+}
+
+/**
+ * A new edition or edition line names its publisher by ID or by slug (the
+ * importer's form).
+ */
 async function resolvePublisher(
   ctx: QueryCtx | MutationCtx,
   fields: Record<string, unknown>,
+  what: "edition" | "edition line",
 ): Promise<Id<"publishers">> {
   if (typeof fields.publisherId === "string" && fields.publisherId !== "") {
     const stored = await storedRef(ctx, fields.publisherId, "publishers");
     if (stored?.active) return stored.id;
-    return bad("New edition's publisher was not found.");
+    return bad(`New ${what}'s publisher was not found.`);
   }
   if (typeof fields.publisherSlug === "string" && fields.publisherSlug !== "") {
     const doc = await ctx.db
@@ -322,7 +481,7 @@ async function resolvePublisher(
     if (doc && doc.status === "active") return doc._id;
     return bad(`No active publisher with slug "${fields.publisherSlug}".`);
   }
-  return bad("A new edition needs publisherId or publisherSlug.");
+  return bad(`A new ${what} needs publisherId or publisherSlug.`);
 }
 
 // ---------- staleness ----------
@@ -330,6 +489,7 @@ async function resolvePublisher(
 const REFERENCED_TYPES: Record<ReferencedTable, RecordType> = {
   series: "series",
   volumes: "volume",
+  editionLines: "editionLine",
   editions: "edition",
   publishers: "publisher",
 };
@@ -342,10 +502,16 @@ function referencesOf(op: CreateOpInput): Array<{ table: ReferencedTable; raw: u
   switch (op.table) {
     case "volumes":
       return [{ table: "series", raw: f.seriesId }];
+    case "editionLines":
+      return [
+        { table: "series", raw: f.seriesId },
+        { table: "publishers", raw: f.publisherId },
+      ];
     case "editions": {
       const rows = Array.isArray(f.volumeCoverage) ? f.volumeCoverage : [];
       return [
         { table: "publishers", raw: f.publisherId },
+        { table: "editionLines", raw: f.editionLineId },
         ...rows.map((row) => {
           const r = (typeof row === "object" && row !== null ? row : {}) as Record<string, unknown>;
           return { table: "volumes" as const, raw: r.volumeId ?? r.volume };
@@ -385,7 +551,8 @@ export async function unavailableCreateRefs(
     const fields = op.fields as { publisherId?: unknown; publisherSlug?: unknown } | null;
     const byId = typeof fields?.publisherId === "string" && fields.publisherId !== "";
     const slug = fields?.publisherSlug;
-    if (op.table === "editions" && !byId && typeof slug === "string" && slug !== "") {
+    const namesPublisher = op.table === "editions" || op.table === "editionLines";
+    if (namesPublisher && !byId && typeof slug === "string" && slug !== "") {
       const doc = await ctx.db
         .query("publishers")
         .withIndex("by_slug", (q) => q.eq("slug", slug))
@@ -442,6 +609,7 @@ export type CreatedRecord = {
   ref:
     | { type: "series"; id: Id<"series"> }
     | { type: "volume"; id: Id<"volumes"> }
+    | { type: "editionLine"; id: Id<"editionLines"> }
     | { type: "edition"; id: Id<"editions"> }
     | { type: "release"; id: Id<"releases"> };
   publicId: number | null;
@@ -524,12 +692,29 @@ export async function applyCreatePlan(
         revisionFields: { ...plan.fields, position },
       };
     }
+    case "editionLines": {
+      const id = await ctx.db.insert("editionLines", {
+        status: "active",
+        seriesId: resolved(plan.series, temp),
+        publisherId: plan.publisherId,
+        name: plan.fields.name,
+      });
+      temp.set(plan.tempId, id);
+      return {
+        tempId: plan.tempId,
+        ref: { type: "editionLine", id },
+        publicId: null,
+        revisionFields: { ...plan.fields },
+      };
+    }
     case "editions": {
       const publicId = await allocatePublicId(ctx, "edition");
+      const editionLineId = plan.editionLine && resolved(plan.editionLine, temp);
       const id = await ctx.db.insert("editions", {
         status: "active",
         publicId,
         publisherId: plan.publisherId,
+        editionLineId,
         linePosition: plan.fields.linePosition,
       });
       const coverage = [];
@@ -555,7 +740,7 @@ export async function applyCreatePlan(
         ref: { type: "edition", id },
         publicId,
         // Coverage records as the Edition's pseudo-field (spec §8).
-        revisionFields: { ...plan.fields, volumeCoverage: coverage },
+        revisionFields: { ...plan.fields, editionLineId, volumeCoverage: coverage },
       };
     }
     case "releases": {

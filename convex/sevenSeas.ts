@@ -24,17 +24,25 @@
 // through the shared attach path (lib/covers.ts `storeCover`), and are
 // replaced when the book's cover URL changes. A placeholder image is recorded
 // on the Release instead, keeping any art already shown, and not fetched again
-// until its URL changes.
+// until its URL changes. A download that fails is retried by later runs from
+// the stored snapshot's URL, without refetching an unchanged book page.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
-import { coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
+import {
+  coverKey,
+  coverRequest,
+  storeCover,
+  type CoverRequest,
+  type StoredCovers,
+} from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { rangeLabels } from "./lib/bookTitle";
+import { inferCoverage } from "./lib/coverage";
 import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
@@ -92,6 +100,8 @@ export const sync = internalAction({
     maxListingPages: v.optional(v.number()),
     /** Cap book-page fetches per run; skipped books wait for the next run. */
     maxDetailFetches: v.optional(v.number()),
+    /** Cap retries of earlier failed cover downloads per run (default 50). */
+    maxCoverRetries: v.optional(v.number()),
     /** Pause before every request; tests pass 0. */
     politeDelayMs: v.optional(v.number()),
     /** Re-fetch details even for observations whose modified_gmt is unchanged. */
@@ -129,6 +139,7 @@ export const sync = internalAction({
         let page = 1;
         let totalPages = 1;
         let detailBudget = args.maxDetailFetches ?? 200;
+        let coverBudget = args.maxCoverRetries ?? 50;
 
         while (page <= totalPages) {
           if (args.maxListingPages !== undefined && page > args.maxListingPages) {
@@ -180,7 +191,24 @@ export const sync = internalAction({
             // previously imported book as prose. Scope changes are not deletion.
             if (!isMangaBook({ title: listing.title })) continue;
             seen++;
-            if (!note.needsDetail) continue;
+            if (!note.needsDetail) {
+              // An unchanged book whose art never landed (a failed download
+              // after its apply committed): retry just the art, paced by its
+              // own budget so it never starves book-page fetches.
+              if (note.cover && (covers.has(coverKey(note.cover)) || coverBudget-- > 0)) {
+                try {
+                  const notice = await storeCover(ctx, covers, {
+                    ...note.cover,
+                    attribution: source.attribution ?? PUBLISHER.name,
+                    delayMs: delay,
+                  });
+                  if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
+                } catch (e) {
+                  errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
+                }
+              }
+              continue;
+            }
             if (detailBudget <= 0) {
               completeSweep = false;
               continue;
@@ -285,7 +313,10 @@ export const sync = internalAction({
 /**
  * Note one listing hit: presence in the listing bumps last-seen (unchanged
  * fetches bump last-seen ONLY — spec §6); the stored snapshot's
- * modified_gmt decides whether the book page is worth fetching.
+ * modified_gmt decides whether the book page is worth fetching. When it is
+ * not, `cover` is art the linked Release still lacks from the snapshot's
+ * cover URL (a download that failed after the book applied), for the
+ * action to retry without the page.
  */
 export const noteListing = internalMutation({
   args: {
@@ -295,7 +326,10 @@ export const noteListing = internalMutation({
     /** The listing carries a blurb (`content.rendered`). */
     offersBlurb: v.boolean(),
   },
-  handler: async (ctx, { sourceRecordId, modifiedGmt, force, offersBlurb }) => {
+  handler: async (
+    ctx,
+    { sourceRecordId, modifiedGmt, force, offersBlurb },
+  ): Promise<{ needsDetail: boolean; cover?: CoverRequest }> => {
     const obs = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
     if (!obs) return { needsDetail: true };
     await ctx.db.patch(obs._id, { lastSeenAt: Date.now(), withdrawn: false });
@@ -304,15 +338,20 @@ export const noteListing = internalMutation({
     // Age ratings predate their import too: a book read before them is
     // re-read once, paced by the same budget (lib/mature.ts).
     if (stored?.mature === undefined) return { needsDetail: true };
+    const release =
+      obs.recordRef?.type === "release" ? await ctx.db.get(obs.recordRef.id) : null;
     // Descriptions predate their import: a linked Release still without one
     // is re-read while the listing offers a blurb, paced by the detail
     // budget, so the backfill needs no forced run. A human's cleared
     // description is theirs to keep (`blurbPending` in applyBook agrees).
-    if (offersBlurb && obs.recordRef?.type === "release") {
-      const release = await ctx.db.get(obs.recordRef.id);
-      return { needsDetail: release !== null && blurbWanted(release) };
-    }
-    return { needsDetail: false };
+    if (offersBlurb && release !== null && blurbWanted(release)) return { needsDetail: true };
+    // Pending art is whatever the snapshot names that the Release does not
+    // hold yet; applyBook's rung ① serves only active, unlocked Releases.
+    const cover =
+      release !== null && release.status === "active" && !release.locked
+        ? coverRequest(release, stored?.coverUrl)
+        : undefined;
+    return cover ? { needsDetail: false, cover } : { needsDetail: false };
   },
 });
 
@@ -466,10 +505,13 @@ export const applyBook = internalMutation({
       .withIndex("by_slug", (q) => q.eq("slug", PUBLISHER.slug))
       .unique();
     // Packaging covers the base Series' real Volumes; it is never a Volume.
+    // The coverage comes from the title, else the listing blurb, else a line
+    // name that declares its size (lib/coverage.ts).
     const packaging = snapshot.packaging ?? null;
+    const coverRange = packaging ? inferCoverage(packaging, [snapshot.description]) : null;
     const labels = packaging
-      ? packaging.coverRange
-        ? rangeLabels(packaging.coverRange)
+      ? coverRange
+        ? rangeLabels(coverRange)
         : []
       : snapshot.volumeLabel !== undefined
         ? [snapshot.volumeLabel]
@@ -566,11 +608,26 @@ export const applyBook = internalMutation({
       return { status: bundle.created ? "created" : "linked", changed: true };
     }
 
-    if (packaging && labels.length === 0) {
+    const editionLine =
+      packaging?.lineName != null
+        ? { name: packaging.lineName, position: packaging.linePosition }
+        : undefined;
+    // Packaging with no coverage from any signal. In Bootstrap Mode a named
+    // line's member is still created, as Unmapped Packaging under its line
+    // (CONTEXT.md), for a Moderator to map; a bare range with no line name,
+    // an ambiguous Series, or steady state keeps it on its observation
+    // (lib/catalogTitle.ts applies the same rule).
+    const unmapped =
+      packaging !== null &&
+      labels.length === 0 &&
+      editionLine !== undefined &&
+      bootstrap &&
+      ambiguousSeries === 0;
+    if (packaging && labels.length === 0 && !unmapped) {
       await recordUnplaced(
         ctx,
         observation,
-        `"${snapshot.title}" is packaging whose covered Volumes the title does not state — an Editor maps it.`,
+        `"${snapshot.title}" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.`,
         now,
       );
       return {
@@ -579,10 +636,6 @@ export const applyBook = internalMutation({
         reason: "packaging without coverage",
       };
     }
-    const editionLine =
-      packaging?.lineName != null
-        ? { name: packaging.lineName, position: packaging.linePosition }
-        : undefined;
 
     if (match.kind === "review" || ambiguousSeries > 0) {
       // Ambiguity always queues flagged (spec §6) — the importer never
@@ -649,6 +702,7 @@ export const applyBook = internalMutation({
       seriesUrl: snapshot.seriesUrl,
       labels,
       editionLine,
+      ...(unmapped ? { coverageUnmapped: true as const } : {}),
       release: { ...releasePayload, publisher: PUBLISHER },
       // Tag exactly what steady state would have queued (spec §7).
       tagBootstrapUnreviewed: bootstrap && gates.length > 0,

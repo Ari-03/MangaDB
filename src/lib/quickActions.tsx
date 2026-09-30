@@ -3,14 +3,15 @@
 // shelves), so a whole run can be marked without opening each Edition page.
 // The badges the cover wears come from the same picture. Everything reads
 // the signed-in overlay (collection.seriesEntries + reading.seriesTracking)
-// and writes through the existing single-entry mutations, so the rules are
+// and writes through the existing entry and read mutations, so the rules are
 // exactly those of the Edition page: one state per entry, clicking the
-// current state removes it, and reading never changes a Series status —
-// a first entry or a fully read Series only *prompts*, in the shelf's
-// prompt area.
+// current state removes it, a state change keeps the entry's pinned Variant,
+// and reading never changes a Series status — a first entry or a fully read
+// Series only *prompts*, in the shelf's prompt area.
 
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
+import { ConvexError } from "convex/values";
 import { useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
@@ -175,12 +176,15 @@ export function BookQuickActions({
   book: QuickBook;
   onPrompt: (prompts: Partial<ShelfPromptState>) => void;
 }) {
-  const setEntry = useMutation(api.collection.setReleaseEntry);
+  // The batch write with one Release: unlike setReleaseEntry (where an
+  // omitted variantId clears the pin), it changes only the state and keeps
+  // a pinned Variant, read inside the same transaction.
+  const setEntries = useMutation(api.collection.setManyReleaseEntries);
   const setRead = useMutation(api.reading.setEditionRead);
   const pick = (state: EntryState) => {
     if (!book.targetReleaseId) return;
-    void setEntry({
-      releaseId: book.targetReleaseId,
+    void setEntries({
+      releaseIds: [book.targetReleaseId],
       state: book.state === state ? undefined : state,
     }).then((result) => {
       if (result.suggestFollow.length > 0) onPrompt({ follow: result.suggestFollow });
@@ -234,11 +238,31 @@ export function BookQuickActions({
 }
 
 /**
+ * Whole-run writes go to the backend in sequential batches of this many —
+ * collection.MANY_ENTRIES_CAP and reading.MANY_EDITIONS_CAP, the most either
+ * mutation accepts in one call (kept equal by quickActions.test.ts).
+ */
+export const RUN_BATCH = 200;
+
+type RunAction = EntryState | "read";
+
+function errorMessage(err: unknown): string {
+  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
+    const message = (err.data as { message?: string }).message;
+    if (message) return message;
+  }
+  return "That didn't go through. Try again.";
+}
+
+/**
  * Whole-run marking above a shelf: Want / Order / Own every book here, or
  * mark every book read, in one click — collection.setManyReleaseEntries and
- * reading.setEditionsRead, the same rules as one click each. A button whose
- * state every book already holds reads as done and does nothing; nothing
- * here ever removes entries in bulk. Signed-in only (needs the overlay).
+ * reading.setEditionsRead, the same rules as one click each. A run longer
+ * than RUN_BATCH goes out batch by batch with the count shown; a rejected
+ * batch stops the run and says how many books were marked before it. A
+ * button whose state every book already holds reads as done and does
+ * nothing; nothing here ever removes entries in bulk. Signed-in only (needs
+ * the overlay).
  */
 export function RunActions({
   books,
@@ -251,7 +275,10 @@ export function RunActions({
 }) {
   const setMany = useMutation(api.collection.setManyReleaseEntries);
   const setRead = useMutation(api.reading.setEditionsRead);
-  const [busy, setBusy] = useState<EntryState | "read" | null>(null);
+  const [busy, setBusy] = useState<{ action: RunAction; done: number; total: number } | null>(
+    null,
+  );
+  const [failure, setFailure] = useState<string | null>(null);
   const quick = books.map((book) => quickBookFor(book, overlay));
   const pendingFor = (state: EntryState) =>
     quick.filter((book) => book.state !== state && book.targetReleaseId !== null);
@@ -259,33 +286,61 @@ export function RunActions({
   const total = quick.filter((book) => book.targetReleaseId !== null).length;
   if (total === 0) return null;
 
-  const run = (state: EntryState) => {
-    const pending = pendingFor(state);
-    if (pending.length === 0 || busy) return;
-    setBusy(state);
-    void setMany({
-      releaseIds: pending.map((book) => book.targetReleaseId!),
-      state,
-    })
-      .then((result) => {
-        if (result.suggestFollow.length > 0) onPrompt({ follow: result.suggestFollow });
-      })
-      .finally(() => setBusy(null));
-  };
-  const readAll = () => {
-    if (unread.length === 0 || busy) return;
-    setBusy("read");
-    void setRead({
-      editionPublicIds: unread.map((book) => book.editionPublicId),
-      read: true,
-    })
-      .then((result) => {
-        if (result.suggestCompleted.length > 0) {
-          onPrompt({ completed: result.suggestCompleted });
+  // Write `items` in RUN_BATCH slices, one after another, merging each
+  // batch's prompt suggestions by Series and raising them once at the end —
+  // also after a failure, for the batches that did land.
+  const inBatches = async <T, S extends SeriesSuggestion>(
+    action: RunAction,
+    items: T[],
+    write: (batch: T[]) => Promise<S[]>,
+    prompt: (suggestions: S[]) => void,
+  ) => {
+    if (items.length === 0 || busy) return;
+    setFailure(null);
+    const suggestions = new Map<Id<"series">, S>();
+    let done = 0;
+    setBusy({ action, done, total: items.length });
+    try {
+      for (let start = 0; start < items.length; start += RUN_BATCH) {
+        const batch = items.slice(start, start + RUN_BATCH);
+        for (const suggestion of await write(batch)) {
+          suggestions.set(suggestion.seriesId, suggestion);
         }
-      })
-      .finally(() => setBusy(null));
+        done += batch.length;
+        setBusy({ action, done, total: items.length });
+      }
+    } catch (err) {
+      setFailure(
+        `Marked ${done} of ${items.length} ${items.length === 1 ? "book" : "books"}, then stopped: ${errorMessage(err)}`,
+      );
+    } finally {
+      if (suggestions.size > 0) prompt([...suggestions.values()]);
+      setBusy(null);
+    }
   };
+
+  const run = (state: EntryState) =>
+    void inBatches(
+      state,
+      pendingFor(state).flatMap((book) => book.targetReleaseId ?? []),
+      async (releaseIds) => (await setMany({ releaseIds, state })).suggestFollow,
+      (follow) => onPrompt({ follow }),
+    );
+  const readAll = () =>
+    void inBatches(
+      "read",
+      unread.map((book) => book.editionPublicId),
+      async (editionPublicIds) =>
+        (await setRead({ editionPublicIds, read: true })).suggestCompleted,
+      (completed) => onPrompt({ completed }),
+    );
+  // "Marking…", with the running count once the run spans several batches.
+  const marking = (action: RunAction) =>
+    busy?.action !== action
+      ? null
+      : busy.total > RUN_BATCH
+        ? `Marking ${busy.done} of ${busy.total}…`
+        : "Marking…";
 
   return (
     <div className="run-actions" role="group" aria-label="Every book in this run">
@@ -308,7 +363,7 @@ export function RunActions({
             }
             onClick={() => run(state)}
           >
-            {busy === state ? "Marking…" : pending === 0 ? `All ${ENTRY_LABELS[state].toLowerCase()}` : `${QUICK_LABELS[state]} all`}
+            {marking(state) ?? (pending === 0 ? `All ${ENTRY_LABELS[state].toLowerCase()}` : `${QUICK_LABELS[state]} all`)}
           </button>
         );
       })}
@@ -324,8 +379,13 @@ export function RunActions({
         }
         onClick={readAll}
       >
-        {busy === "read" ? "Marking…" : unread.length === 0 ? "All read" : "Read all"}
+        {marking("read") ?? (unread.length === 0 ? "All read" : "Read all")}
       </button>
+      {failure ? (
+        <span className="form-error" role="alert">
+          {failure}
+        </span>
+      ) : null}
     </div>
   );
 }

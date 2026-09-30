@@ -334,22 +334,22 @@ export const publicProfile = query({
         memberships.sort((a, b) => a.order - b.order);
         // Derived member ownership shows with the Bundle; one member whose
         // Series is private hides the whole box set (it would reveal that
-        // Series either way).
+        // Series either way). Privacy is judged before display filtering: a
+        // member hidden (or merged into a hidden Release) leaves the list,
+        // but its own Series still decide whether the box set may show.
         let allPublic = true;
         let checkedAny = false;
         const members = [];
         for (const membership of memberships) {
-          const release = await followMerges(
-            ctx,
-            "releases",
-            await ctx.db.get(membership.releaseId),
-          );
-          if (!release) continue;
+          const stored = await ctx.db.get(membership.releaseId);
+          if (!stored) continue;
           checkedAny = true;
-          if (!(await ownershipPublic(release.seriesIds))) {
+          const release = await followMerges(ctx, "releases", stored);
+          if (!(await ownershipPublic((release ?? stored).seriesIds))) {
             allPublic = false;
             break;
           }
+          if (!release) continue;
           const link = await releaseLink(ctx, release);
           if (!link) continue;
           members.push({
@@ -359,7 +359,7 @@ export const publicProfile = query({
         }
         if (!allPublic) continue;
         // A Bundle whose members carry no Series signal (memberless, or every
-        // member hidden) has nothing to override; the default alone governs.
+        // member deleted) has nothing to override; the default alone governs.
         if (!checkedAny && user.ownershipVisibility !== "public") continue;
         bundles.push({
           bundlePublicId: bundle.publicId,

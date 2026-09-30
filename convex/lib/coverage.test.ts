@@ -34,6 +34,15 @@ describe("coverageFromText — publisher blurbs that state the collected volumes
   });
 });
 
+describe("coverageFromText — explicit lists (B18)", () => {
+  it("never turns a gapped list into a range over the skipped Volumes", () => {
+    expect(coverageFromText("Collects volumes 1 and 3.")).toBeNull();
+    expect(coverageFromText("Collects Berserk Volumes 40, 42, and the Guidebook.")).toBeNull();
+    expect(coverageFromText("Collects volumes 1, 2, and 3.")).toEqual({ from: "1", to: "3" });
+    expect(coverageFromText("Collects volume 5 in hardcover.")).toEqual({ from: "5", to: "5" });
+  });
+});
+
 describe("coverageFromLine — line names that declare their size", () => {
   it("maps N-in-1 and VIZBIG positions onto volume ranges", () => {
     expect(coverageFromLine("3-in-1 Edition", "1")).toEqual({ from: "1", to: "3" });

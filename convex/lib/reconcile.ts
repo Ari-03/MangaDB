@@ -13,12 +13,17 @@
 //              conflict Proposal is withdrawn and replaced
 // - recordOnly → the disagreement is recorded on the observation only
 //
+// With nothing left to queue, the observation's open field correction for
+// this record is retired, and so is a possible-cancellation review whose
+// withdrawal no longer applies (the source lists the record again).
+//
 // Source-agnostic: every adapter (Seven Seas today; Kodansha, PRH, ANN,
 // OpenLibrary later) funnels linked updates through reconcileFields.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
+import { retireLapsedCancellation } from "./observations";
 import {
   authorityRank,
   decideField,
@@ -329,10 +334,13 @@ export async function reconcileFields(
         )
         .unique();
       const op = version?.ops.length === 1 ? version.ops[0] : undefined;
-      // Only retire this record's field correction. Creation and cancellation
-      // proposals may share the observation and have their own review rules.
+      // Only retire this record's field correction, or a cancellation review
+      // the relisted observation no longer supports. Creation proposals may
+      // share the observation and have their own review rules.
       if (op?.kind === "update" && op.ref.type === ref.type && op.ref.id === ref.id) {
         await ctx.db.patch(open._id, { state: "withdrawn", decidedAt: now });
+        result.changed = true;
+      } else if (await retireLapsedCancellation(ctx, observation, now)) {
         result.changed = true;
       }
     }

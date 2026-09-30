@@ -330,6 +330,26 @@ describe("parseTitleList", () => {
     expect(parseTitleList(raw)).toMatchObject({ titles: [], rawCount: 0 }),
   );
 
+  it("reports every dropped entry with its identity and why (B09)", () => {
+    expect(
+      parseTitleList({
+        recordCount: 4,
+        data: {
+          titles: [
+            TITLE,
+            { ...TITLE, isbn: "9781646519828", title: null },
+            { ...TITLE, isbn: "9781646519811", title: "A Light Novel" },
+            { junk: true },
+          ],
+        },
+      }).dropped,
+    ).toEqual([
+      { isbn13: "9781646519828", reason: "malformed" },
+      { isbn13: "9781646519811", reason: "outOfScope" },
+      { reason: "malformed" },
+    ]);
+  });
+
   it("reads the data.titles envelope with recordCount", () => {
     const { titles, recordCount } = parseTitleList({
       recordCount: 812,

@@ -54,11 +54,21 @@ async function retrieveAsset(request: Request, path: string): Promise<Response> 
 }
 
 /**
+ * Largest upload the proxy passes on, matching PostHog's own request-size
+ * limit for event batches. Replay snapshots are chunked well below it.
+ */
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+/**
  * Pass a request on to `target` without our cookies or auth. The visitor's
  * IP comes from Cloudflare's CF-Connecting-IP only: a client-sent
- * X-Forwarded-For is dropped, never trusted.
+ * X-Forwarded-For is dropped, never trusted. Bodies stream through, so the
+ * Worker never holds a whole upload; one over MAX_UPLOAD_BYTES is refused
+ * (413) when declared, or cut off mid-stream when its length is unknown.
  */
 async function forwardRequest(request: Request, target: string): Promise<Response> {
+  const declared = Number(request.headers.get("content-length") ?? NaN);
+  if (declared > MAX_UPLOAD_BYTES) return new Response("Payload too large", { status: 413 });
   const headers = new Headers(request.headers);
   headers.delete("cookie");
   headers.delete("authorization");
@@ -66,11 +76,24 @@ async function forwardRequest(request: Request, target: string): Promise<Respons
   headers.delete("x-forwarded-for");
   const ip = request.headers.get("CF-Connecting-IP");
   if (ip) headers.set("X-Forwarded-For", ip);
-  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  const body =
+    request.body && !Number.isFinite(declared) ? request.body.pipeThrough(uploadLimit()) : request.body;
   return fetch(target, {
     method: request.method,
     headers,
-    body: hasBody ? await request.arrayBuffer() : null,
+    body,
     redirect: request.redirect,
+  });
+}
+
+/** Passes bytes through until MAX_UPLOAD_BYTES, then errors the stream. */
+function uploadLimit(): TransformStream<Uint8Array, Uint8Array> {
+  let seen = 0;
+  return new TransformStream({
+    transform(chunk, controller) {
+      seen += chunk.byteLength;
+      if (seen > MAX_UPLOAD_BYTES) controller.error(new Error("Upload too large"));
+      else controller.enqueue(chunk);
+    },
   });
 }

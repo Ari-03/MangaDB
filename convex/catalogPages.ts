@@ -94,8 +94,8 @@ export async function primaryVolumeSeries(
 /**
  * An Edition's ordered Volume Coverage joined with each covered Volume and
  * its Series, plus the composed Edition title (lib/titles.ts). Hidden
- * Volumes/Series drop out of the coverage listing; `volumeCount` still
- * counts them. Exported for moderation.ts (edit-form display titles).
+ * Volumes/Series drop out of the coverage listing; `volumeCount` and
+ * `mature` still count them. Exported for moderation.ts (edit-form display titles).
  */
 export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   const line = edition.editionLineId
@@ -105,10 +105,14 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
 
   const rows = await coverageRows(ctx, edition._id);
   const coverage = [];
+  // Maturity is the content's (B34): a hidden Volume or Series still counts,
+  // though it drops out of the listing.
+  let collectsMature = false;
   for (const row of rows) {
-    const found = await activeCoveredVolume(ctx, row);
-    if (!found) continue;
-    const { volume, series } = found;
+    const volume = await ctx.db.get(row.volumeId);
+    const series = volume ? await ctx.db.get(volume.seriesId) : null;
+    if (series?.mature === true) collectsMature = true;
+    if (!volume || volume.status !== "active" || !series || series.status !== "active") continue;
     coverage.push({
       volumePublicId: volume.publicId,
       position: volume.position,
@@ -149,8 +153,11 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
      * book is an omnibus does not change while a Volume is hidden.
      */
     volumeCount: new Set(rows.map((row) => row.volumeId)).size,
-    /** It collects any Mature Series (lib/mature.ts). */
-    mature: coverage.some((c) => c.series.mature) || series?.mature === true,
+    /**
+     * It collects any Mature Series (lib/mature.ts), judged before hiding:
+     * hiding a covered Volume or Series does not make the book general.
+     */
+    mature: collectsMature || series?.mature === true,
     coverageUnmapped: edition.coverageUnmapped === true,
   };
 }
@@ -391,6 +398,33 @@ export const editionPage = query({
 // ---------- Bundle page ----------
 
 /**
+ * A Bundle's listed members, each with its Release and Edition (merges
+ * followed; hidden ones dropped) and the Edition's composed title, and
+ * whether the box set is mature: an adult-only publisher's, or holding a
+ * Mature Series' book. Shared by `bundlePage` and the sitemap (seo.ts) so
+ * both judge a box set alike.
+ */
+export async function bundleMembers(ctx: QueryCtx, bundle: Doc<"releaseBundles">) {
+  const publisher = await ctx.db.get(bundle.publisherId);
+  const memberships = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+    .collect();
+  const members = [];
+  let mature = publisher?.contentRating === "mature";
+  for (const membership of memberships) {
+    const release = await followMerges(ctx, "releases", await ctx.db.get(membership.releaseId));
+    if (!release) continue;
+    const edition = await followMerges(ctx, "editions", await ctx.db.get(release.editionId));
+    if (!edition) continue;
+    const coverage = await editionCoverage(ctx, edition);
+    if (coverage.mature) mature = true;
+    members.push({ membership, release, edition, title: coverage.title });
+  }
+  return { publisher, mature, members };
+}
+
+/**
  * The Bundle page (spec §2, ticket #23): the Release Bundle's own publication
  * facts (box-set ISBN, date, price) and its member Releases in order, each
  * linking back to its Edition page anchored at the Release row, with the
@@ -408,32 +442,9 @@ export const bundlePage = query({
     const bundle = await followMerges(ctx, "releaseBundles", stored);
     if (!bundle) return null;
 
-    const publisher = await ctx.db.get(bundle.publisherId);
-    const memberships = await ctx.db
-      .query("bundleMemberships")
-      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-      .collect();
-
+    const { publisher, mature, members: resolved } = await bundleMembers(ctx, bundle);
     const members = [];
-    // An adult-only publisher's box set, or one holding a Mature Series' book.
-    let mature = publisher?.contentRating === "mature";
-    for (const membership of memberships) {
-      const release = await followMerges(
-        ctx,
-        "releases",
-        await ctx.db.get(membership.releaseId),
-      );
-      if (!release) continue;
-      const edition = await followMerges(
-        ctx,
-        "editions",
-        await ctx.db.get(release.editionId),
-      );
-      if (!edition) continue;
-      const coverage = await editionCoverage(ctx, edition);
-      const { title } = coverage;
-      if (coverage.mature) mature = true;
-
+    for (const { membership, release, edition, title } of resolved) {
       let pinnedVariant: { name: string } | null = null;
       if (membership.variantId) {
         const variant = await ctx.db.get(membership.variantId);

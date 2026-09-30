@@ -14,7 +14,8 @@
 // Cadence (spec §6): daily future-dated + weekly full sweep. The registry
 // row ticks daily; the adapter widens to a full sweep on UTC Sundays (or
 // with {mode: "full"}). Withdrawal marks fire only after a complete,
-// uncapped full sweep.
+// uncapped full sweep; a listed entry the parser drops still counts as
+// present (notePresent), and one with no readable ISBN voids completeness.
 //
 // Configuration (no live key exists in this repo — see README):
 //   PRH_API_KEY        the Enhanced API key (manual activation by PRH)
@@ -36,6 +37,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
+import { getObservation, retireLapsedCancellation } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { parseTitleList, prhTitleValidator } from "./lib/prh";
 import { withExceptionCapture } from "./lib/posthog";
@@ -228,10 +230,27 @@ export const sync = internalAction({
               `${API_BASE}/imprints/${encodeURIComponent(imprint)}/titles?${params}`,
               delay,
             );
-            const { titles, recordCount, rawCount } = parseTitleList(await res.json());
+            const { titles, dropped, recordCount, rawCount } = parseTitleList(await res.json());
             pages++;
             if (rawCount === 0 && recordCount !== undefined && start < recordCount) {
               throw new Error("PRH returned an empty page before its reported record count");
+            }
+
+            // A listed entry is present whether or not it parsed (B09): bump
+            // its observation's last-seen so a full sweep never withdraws a
+            // record PRH still lists. An entry with no readable ISBN could be
+            // any record, so the sweep can no longer prove absence.
+            const presentIsbns = dropped.flatMap((d) => (d.isbn13 !== undefined ? [d.isbn13] : []));
+            if (presentIsbns.length > 0) {
+              await ctx.runMutation(internal.prh.notePresent, { isbns: presentIsbns });
+            }
+            for (const d of dropped) {
+              if (d.isbn13 === undefined) completeSweep = false;
+              if (d.reason === "malformed") {
+                errors.push(
+                  `malformed ${d.isbn13 ?? "record without an ISBN"}: dropped by the parser`,
+                );
+              }
             }
 
             // Newest-first, so the first title dated before today ends the
@@ -320,6 +339,31 @@ export const sync = internalAction({
         };
       }
     }),
+});
+
+// ---------- listing presence ----------
+
+/**
+ * Note listed ISBNs that produced no snapshot (malformed or out of scope):
+ * presence bumps last-seen, clears a withdrawn mark and retires the
+ * possible-cancellation review that withdrawal queued, exactly as an
+ * unchanged fetch does (lib/observations.ts). ISBNs never imported are
+ * ignored.
+ */
+export const notePresent = internalMutation({
+  args: { isbns: v.array(v.string()) },
+  handler: async (ctx, { isbns }) => {
+    const now = Date.now();
+    for (const isbn of isbns) {
+      const obs = await getObservation(ctx, SOURCE_KEY, isbn);
+      if (!obs) continue;
+      await ctx.db.patch(obs._id, { lastSeenAt: now, withdrawn: false });
+      if (obs.withdrawn) {
+        await retireLapsedCancellation(ctx, { ...obs, lastSeenAt: now, withdrawn: false }, now);
+      }
+    }
+    return null;
+  },
 });
 
 // ---------- applying one title ----------

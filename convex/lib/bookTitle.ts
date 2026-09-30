@@ -145,13 +145,30 @@ export function canonicalLabel(label: string): string {
   return roman !== null ? String(roman) : text;
 }
 
-/** "1-3" / "1 & 2" / "1, 2, 3" → {from: "1", to: "3"}; a lone number → null. */
-function parseRange(text: string): CoverRange | null {
-  const numbers = text.match(/\d+(?:\.\d+)?/g) ?? [];
+/**
+ * A designation naming several Volumes ("1-3", "1 & 2", "1, 2, 3", "1-3,
+ * 4-6"): the range it spans, or a null `coverRange` when its list skips a
+ * Volume ("1 & 3", "1-3, 5"). A from–to range over a gap would claim the
+ * Volumes the book leaves out, and a range is all Coverage can hold, so a
+ * gapped list stays multi-volume with its coverage unknown. A lone number
+ * is no list: null. Parsers and blurb inference (lib/coverage.ts) share it.
+ */
+export function parseVolumeList(text: string): { coverRange: CoverRange | null } | null {
+  // "10-11+EX": the extra after "+" is not a numbered Volume.
+  const spans = text
+    .replace(/\s*\+\s*\w+$/, "")
+    .split(/\s*(?:&|,|\band\b)\s*/i)
+    .map((item) => item.match(/\d+(?:\.\d+)?/g) ?? [])
+    .filter((span) => span.length > 0);
+  const numbers = spans.flat();
   if (numbers.length < 2) return null;
+  const contiguous = spans.every(
+    (span, i) => i === 0 || Number(span[0]) === Number(spans[i - 1]!.at(-1)) + 1,
+  );
   return {
-    from: canonicalLabel(numbers[0]!),
-    to: canonicalLabel(numbers[numbers.length - 1]!),
+    coverRange: contiguous
+      ? { from: canonicalLabel(numbers[0]!), to: canonicalLabel(numbers.at(-1)!) }
+      : null,
   };
 }
 
@@ -264,6 +281,8 @@ type Peeled = {
   /** Packaging names found in bracket groups, closest to the series first. */
   lineNames: string[];
   coverRange: CoverRange | null;
+  /** A bracket group listed several Volumes, even when a gap left `coverRange` unknown. */
+  multiVolume: boolean;
   noteLabel: string | null;
 };
 
@@ -274,6 +293,7 @@ function emptyPeel(): Peeled {
     isBox: false,
     lineNames: [],
     coverRange: null,
+    multiVolume: false,
     noteLabel: null,
   };
 }
@@ -290,14 +310,13 @@ function absorbGroup(inner: string, peel: Peeled): boolean {
     peel.formatTags.push(text);
     return true;
   }
-  // "(Contains Vol. 9 & Ashen Victor)": whatever it lists is the coverage.
-  const contains = /^contains\s+vol(?:ume)?s?\.?\s*(\d+(?:\.\d+)?)/i.exec(text);
+  // "(Contains Vol. 9 & Ashen Victor)": whatever Volumes it lists are the coverage.
+  const contains = /^contains\s+vol(?:ume)?s?\.?\s*(\d+(?:\.\d+)?)(.*)$/i.exec(text);
   if (contains) {
-    const numbers = text.match(/\d+(?:\.\d+)?/g) ?? [contains[1]!];
-    peel.coverRange = {
-      from: canonicalLabel(numbers[0]!),
-      to: canonicalLabel(numbers[numbers.length - 1]!),
-    };
+    const listed = parseVolumeList(contains[1]! + contains[2]!);
+    const only = canonicalLabel(contains[1]!);
+    peel.coverRange = listed ? listed.coverRange : { from: only, to: only };
+    peel.multiVolume ||= listed !== null;
     return true;
   }
   const coverage = new RegExp(
@@ -305,7 +324,9 @@ function absorbGroup(inner: string, peel: Peeled): boolean {
     "i",
   ).exec(text);
   if (coverage) {
-    peel.coverRange = parseRange(coverage[1]!);
+    const listed = parseVolumeList(coverage[1]!);
+    peel.coverRange = listed?.coverRange ?? null;
+    peel.multiVolume ||= listed !== null;
     const rest = coverage[2]?.trim();
     if (rest) {
       if (PACKAGING_TAG.test(rest)) peel.lineNames.push(tidyLineName(rest));
@@ -379,6 +400,8 @@ type TrailingPackaging = {
   lineName: string;
   position: string | null;
   range: CoverRange | null;
+  /** What follows the phrase lists several Volumes ("Omnibus 5-6"), gapped or not. */
+  multiVolume: boolean;
   isBox: boolean;
 };
 
@@ -393,9 +416,10 @@ function trailingPackaging(text: string): TrailingPackaging | null {
   const phrase = m[2]!;
   const season = new RegExp(`^${SEASON_PREFIX}`, "i").exec(phrase)?.[0]?.trim();
   const name = season ? phrase.slice(season.length).trim() : phrase;
-  const range = m[3] !== undefined ? parseRange(m[3]) : null;
+  const listed = m[3] !== undefined ? parseVolumeList(m[3]) : null;
+  const range = listed?.coverRange ?? null;
   const position =
-    range === null && m[3] !== undefined
+    listed === null && m[3] !== undefined
       ? /^\d/.test(m[3])
         ? canonicalLabel(m[3])
         : m[3]
@@ -407,6 +431,7 @@ function trailingPackaging(text: string): TrailingPackaging | null {
     lineName: tidyLineName(name),
     position,
     range,
+    multiVolume: listed !== null,
     isBox: BOX.test(phrase),
   };
 }
@@ -458,6 +483,8 @@ export function parseBookTitle(
   let bareSplit: ParsedBookTitle["bareSplit"] = null;
   let packagingName: string | null = null;
   let linePosition: string | null = null;
+  // A designation listed several Volumes: packaging even when a gap left `range` null.
+  let multiVolume = false;
 
   // A trailing packaging phrase, maybe with its own position: "Negima!
   // Omnibus 4"; without one the text before it may still carry a marker
@@ -468,23 +495,27 @@ export function parseBookTitle(
     packagingName = packaged.lineName;
     linePosition = packaged.position;
     range = packaged.range;
+    multiVolume = packaged.multiVolume;
     peel.isBox ||= packaged.isBox;
     // A second phrase is part of the same packaging: "Deluxe Complete Series Box Set".
     const more = trailingPackaging(text);
-    if (more && more.position === null && more.range === null) {
+    if (more && more.position === null && !more.multiVolume) {
       text = more.rest;
       peel.formatTags.push(more.lineName);
       peel.isBox ||= more.isBox;
     }
   }
-  if (linePosition === null && range === null) {
+  if (linePosition === null && !multiVolume) {
     const marked = VOLUME_MARKER.exec(text);
     if (marked) {
       text = marked[1]!;
       const designation = marked[2]!;
       // "18+1" is one extra volume's label, never a range.
-      range = PLUS_EXTRA_RE.test(designation) ? null : parseRange(designation);
-      if (range === null) volumeLabel = canonicalLabel(designation);
+      const listed = PLUS_EXTRA_RE.test(designation) ? null : parseVolumeList(designation);
+      if (listed) {
+        range = listed.coverRange;
+        multiVolume = true;
+      } else volumeLabel = canonicalLabel(designation);
       const subtitle = (marked[3] ?? marked[4])?.trim();
       volumeSubtitle = subtitle ? subtitle : null;
     }
@@ -507,7 +538,7 @@ export function parseBookTitle(
 
   // An unmarked trailing number: only with a peeled tag or packaging as
   // context, or when it equals the source's own volume number.
-  if (volumeLabel === null && range === null && linePosition === null) {
+  if (volumeLabel === null && !multiVolume && linePosition === null) {
     const bare = BARE_NUMBER.exec(text);
     const context =
       peel.formatTags.length > 0 ||
@@ -515,48 +546,54 @@ export function parseBookTitle(
       packagingName !== null;
     if (bare && !/\bno\.?$/i.test(bare[1]!.trim())) {
       const designation = bare[2]!;
-      const rangeHere = parseRange(designation);
+      const listed = parseVolumeList(designation);
+      const numbers = designation.match(/\d+(?:\.\d+)?/g) ?? [];
       const licensed =
         context ||
-        (rangeHere
-          ? sameNumber(rangeHere.from, options.seriesNumber) ||
-            sameNumber(rangeHere.to, options.seriesNumber)
+        (listed
+          ? sameNumber(numbers[0]!, options.seriesNumber) ||
+            sameNumber(numbers.at(-1)!, options.seriesNumber)
           : sameNumber(designation, options.seriesNumber));
       if (licensed) {
         // A trailing alt-title note after the number is dropped:
         // "The Blue Wolves of Mibu 5 (Blue Miburo)".
         text = peelTrailingGroups(bare[1]!, peel);
         bareNumber = true;
-        if (rangeHere) range = rangeHere;
-        else volumeLabel = canonicalLabel(designation);
+        if (listed) {
+          range = listed.coverRange;
+          multiVolume = true;
+        } else volumeLabel = canonicalLabel(designation);
         volumeSubtitle = bare[3]?.trim() || null;
-      } else if (!rangeHere) {
+      } else if (!listed) {
         bareSplit = { seriesTitle: tidySeries(bare[1]!), volumeLabel: canonicalLabel(designation) };
       }
     }
   }
 
   // A volume noted only in brackets: "(Kase-san and... Book 3)", "(Vol. 13)".
-  if (volumeLabel === null && range === null && peel.noteLabel !== null) {
+  if (volumeLabel === null && !multiVolume && peel.noteLabel !== null) {
     volumeLabel = peel.noteLabel;
   }
 
   // A separately carried subtitle may hold the marker (OpenLibrary).
-  if (volumeLabel === null && range === null && options.subtitle) {
+  if (volumeLabel === null && !multiVolume && options.subtitle) {
     const sub = new RegExp(
       `^${MARKER}\\s*(${RANGE}|${LABEL})(?:\\s*[:\\-–]\\s*(.+))?$`,
       "i",
     ).exec(options.subtitle.trim());
     if (sub) {
-      range = parseRange(sub[1]!);
-      if (range === null) volumeLabel = canonicalLabel(sub[1]!);
+      const listed = parseVolumeList(sub[1]!);
+      if (listed) {
+        range = listed.coverRange;
+        multiVolume = true;
+      } else volumeLabel = canonicalLabel(sub[1]!);
       volumeSubtitle = sub[2]?.trim() || null;
     }
   }
 
   // Last, and only when nothing else named the volume (a bracket, a
   // subtitle): "Kingdom Hearts II (Vol. 3)" is Vol. 3 of Kingdom Hearts II.
-  if (volumeLabel === null && range === null && linePosition === null && packagingName === null) {
+  if (volumeLabel === null && !multiVolume && linePosition === null && packagingName === null) {
     const roman = BARE_ROMAN.exec(text);
     if (roman && !CONJUNCTION_BEFORE.test(roman[1]!)) {
       text = roman[1]!;
@@ -567,13 +604,13 @@ export function parseBookTitle(
   }
   // A declined split is offered only while no label is known: "Tower
   // Dungeon 7 (Vol. 8)" is Vol. 8, never 7.
-  if (volumeLabel !== null || range !== null) bareSplit = null;
+  if (volumeLabel !== null || multiVolume) bareSplit = null;
 
   // Bracket packaging names apply when no trailing phrase named the line.
   const lineName = packagingName ?? peel.lineNames[0] ?? null;
   const coverRange = peel.coverRange ?? range;
   let packaging: Packaging | null = null;
-  if (lineName !== null || coverRange !== null || peel.isBox) {
+  if (lineName !== null || coverRange !== null || multiVolume || peel.multiVolume || peel.isBox) {
     packaging = {
       lineName: lineName ?? (peel.isBox ? "Box Set" : null),
       // A single number next to packaging is its line position, never a Volume.

@@ -1,6 +1,14 @@
+import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 
-import { seriesCoverIsbn, type SeriesCoverCandidate } from "./covers";
+import type { Id } from "../_generated/dataModel";
+import schema from "../schema";
+import {
+  coverIsbnCache,
+  coverIsbnForRelease,
+  seriesCoverIsbn,
+  type SeriesCoverCandidate,
+} from "./covers";
 
 const NOW = new Date(Date.UTC(2026, 8, 25));
 const release = (
@@ -63,5 +71,76 @@ describe("seriesCoverIsbn", () => {
     expect(
       seriesCoverIsbn([release("9780000000001", { format: "digital", inLine: true })], NOW),
     ).toBe("9780000000001");
+  });
+});
+
+describe("coverIsbnForRelease", () => {
+  test("own ISBN, else an active sibling (physical first), else another Edition of the Volume", async () => {
+    const t = convexTest(schema);
+    await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "VIZ Media",
+        slug: "viz-media",
+      });
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "Tokyo Ghoul",
+        altTitles: [],
+        searchText: "Tokyo Ghoul",
+      });
+      const volumeId = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 1,
+        seriesId,
+        position: 1,
+      });
+      const edition = async (publicId: number, covers = true) => {
+        const id = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
+        if (covers) {
+          await ctx.db.insert("volumeCoverages", {
+            editionId: id,
+            volumeId,
+            order: 1,
+            extent: "complete",
+          });
+        }
+        return id;
+      };
+      const release = async (
+        editionId: Id<"editions">,
+        format: "physical" | "digital",
+        isbn13?: string,
+        status: "active" | "hidden" = "active",
+      ) => {
+        const id = await ctx.db.insert("releases", {
+          status,
+          editionId,
+          format,
+          language: "en",
+          isbn13,
+          publisherId,
+          seriesIds: [seriesId],
+        });
+        return (await ctx.db.get(id))!;
+      };
+
+      const standard = await edition(1);
+      const ebook = await release(standard, "digital", "9780000000001");
+      await release(standard, "physical", "9780000000009", "hidden");
+      const print = await release(standard, "physical", "9780000000002");
+      const bare = await release(standard, "physical");
+      const other = await edition(2);
+      const otherBare = await release(other, "digital");
+      const lonely = await release(await edition(3, false), "physical");
+
+      const cache = coverIsbnCache(ctx);
+      expect(await coverIsbnForRelease(ctx, ebook, cache)).toBe("9780000000001");
+      expect(await coverIsbnForRelease(ctx, bare, cache)).toBe("9780000000002");
+      expect(await coverIsbnForRelease(ctx, print)).toBe("9780000000002");
+      expect(await coverIsbnForRelease(ctx, otherBare, cache)).toBe("9780000000002");
+      expect(await coverIsbnForRelease(ctx, lonely, cache)).toBeNull();
+    });
   });
 });

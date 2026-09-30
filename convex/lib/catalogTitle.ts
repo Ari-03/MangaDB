@@ -9,8 +9,8 @@
 // mutation per record, spec §6).
 
 import { v, type Infer } from "convex/values";
-import type { Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { Doc, Id } from "../_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
 import { packagingValidator, rangeLabels } from "./bookTitle";
 import { inferCoverage } from "./coverage";
@@ -102,6 +102,65 @@ function offeredReleaseFields(snapshot: CatalogTitle): Record<string, unknown> {
   return offered;
 }
 
+/** A parsed book title with its provisional readings (lib/bookTitle.ts). */
+export type ProvisionalTitle = Pick<
+  CatalogTitle,
+  "title" | "seriesTitle" | "volumeLabel" | "bareNumber" | "bareRoman" | "bareSplit"
+>;
+
+/**
+ * The conservative resolution of a title's provisional readings against the
+ * EXISTING catalog: the base Series title, the covered Volume label, and the
+ * active Series that title names. Shared by every adapter that parses book
+ * titles (catalog feeds here, OpenLibrary).
+ *
+ * An unmarked trailing number may belong to the name ("Omega 6"): when only
+ * the whole title names an existing Series, the book is that Series'. A
+ * trailing roman numeral is more often a sequel's name ("Kingdom Hearts
+ * II") than a volume, so the whole title is asked first, and the split
+ * stands only when an existing base Series claims it ("BARBARITIES II" →
+ * Barbarities Vol. 2); a new work keeps its whole name. A trailing number
+ * the parser left in place for want of a volume number ("Tower Dungeon 7"
+ * from a PRH row without seriesNumber) follows the same rule: whole title
+ * first, else an existing base Series takes it as a Volume, else the new
+ * work keeps its whole name.
+ */
+export async function resolveBaseSeries(
+  ctx: QueryCtx | MutationCtx,
+  parsed: ProvisionalTitle,
+): Promise<{ seriesTitle: string; volumeLabel: string | null; candidates: Doc<"series">[] }> {
+  const named = await candidateSeries(ctx, parsed.seriesTitle);
+  const plain = {
+    seriesTitle: parsed.seriesTitle,
+    volumeLabel: parsed.volumeLabel ?? null,
+    candidates: named,
+  };
+  if (parsed.bareRoman) {
+    const whole = await candidateSeries(ctx, parsed.title);
+    if (whole.length > 0 || named.length === 0) {
+      return { seriesTitle: whole[0]?.title ?? parsed.title, volumeLabel: null, candidates: whole };
+    }
+    return plain;
+  }
+  if (named.length > 0) return plain;
+  if (parsed.bareNumber) {
+    const whole = await candidateSeries(ctx, parsed.title);
+    if (whole.length > 0) {
+      return { seriesTitle: whole[0]!.title, volumeLabel: null, candidates: whole };
+    }
+  } else if (parsed.bareSplit) {
+    const base = await candidateSeries(ctx, parsed.bareSplit.seriesTitle);
+    if (base.length > 0) {
+      return {
+        seriesTitle: base[0]!.title,
+        volumeLabel: parsed.bareSplit.volumeLabel,
+        candidates: base,
+      };
+    }
+  }
+  return plain;
+}
+
 /**
  * Reconcile one catalog title into the canonical catalog: ISBN matching
  * links it to the existing skeleton record, then the source's dates/ISBNs/
@@ -165,42 +224,8 @@ export async function applyCatalogTitle(
     return { status: changed ? "recordOnly" : "unchanged", changed: false };
   }
 
-  // Series first: every placement below hangs off the base Series. An
-  // unmarked trailing number may belong to the name ("Omega 6"): when only
-  // the whole title names an existing Series, the book is that Series'. A
-  // trailing roman numeral is more often a sequel's name ("Kingdom Hearts
-  // II") than a volume, so the whole title is asked first, and the split
-  // stands only when an existing base Series claims it ("BARBARITIES II" →
-  // Barbarities Vol. 2); a new work keeps its whole name. A trailing number
-  // the parser left in place for want of a volume number ("Tower Dungeon
-  // 7" from a PRH row without seriesNumber) follows the same rule: whole
-  // title first, else an existing base Series takes it as a Volume, else
-  // the new work keeps its whole name.
-  let seriesTitle = snapshot.seriesTitle;
-  let volumeLabel = snapshot.volumeLabel ?? null;
-  let candidates = await candidateSeries(ctx, seriesTitle);
-  if (snapshot.bareRoman) {
-    const whole = await candidateSeries(ctx, snapshot.title);
-    if (whole.length > 0 || candidates.length === 0) {
-      candidates = whole;
-      seriesTitle = whole[0]?.title ?? snapshot.title;
-      volumeLabel = null;
-    }
-  } else if (candidates.length === 0 && snapshot.bareNumber) {
-    const whole = await candidateSeries(ctx, snapshot.title);
-    if (whole.length > 0) {
-      candidates = whole;
-      seriesTitle = whole[0]!.title;
-      volumeLabel = null;
-    }
-  } else if (candidates.length === 0 && snapshot.bareSplit) {
-    const base = await candidateSeries(ctx, snapshot.bareSplit.seriesTitle);
-    if (base.length > 0) {
-      candidates = base;
-      seriesTitle = base[0]!.title;
-      volumeLabel = snapshot.bareSplit.volumeLabel;
-    }
-  }
+  // Series first: every placement below hangs off the base Series.
+  const { seriesTitle, volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
   const seriesId = candidates.length === 1 ? candidates[0]!._id : null;
 
   // Packaging maps onto the base Series' real Volumes — never a Volume or
