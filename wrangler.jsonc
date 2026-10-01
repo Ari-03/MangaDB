@@ -23,10 +23,10 @@
     "VITE_CONVEX_URL": "https://intent-curlew-625.convex.cloud",
     "VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cHJlc2VudC1ncmFja2xlLTk1NjQuY2xlcmsuYWNjb3VudHMuZGV2JA",
     // PostHog (README "Analytics (PostHog)"). The browser bundle takes VITE_*
-    // values from the *build* environment (.env.local or the shell running
-    // `npm run deploy`), not from these vars; they record what is deployed.
-    // The project key (phc_...) is never committed: set it in the build
-    // environment. "/_s" is the same-origin proxy in src/server/posthogProxy.ts.
+    // values from the *build* environment (GitHub environment variables in the
+    // Deploy workflow, or .env.local for a local `npm run deploy`), not from
+    // these vars; they record what is deployed. The project key (phc_...) is
+    // never committed. "/_s" is the same-origin proxy in src/server/posthogProxy.ts.
     "VITE_PUBLIC_POSTHOG_KEY": "",
     "VITE_PUBLIC_POSTHOG_HOST": "/_s"
   },
@@ -37,7 +37,8 @@
     { "pattern": "mangadb.org", "custom_domain": true },
     { "pattern": "www.mangadb.org", "custom_domain": true }
   ],
-  // Staging: `npm run deploy:staging`. Separate Worker on its workers.dev URL,
+  // Staging: the Deploy workflow or `npm run deploy:staging` (README
+  // "Deployment"). Separate Worker on its workers.dev URL,
   // backed by the mangadb-staging Convex project (its production deployment)
   // and its own cover cache. No custom domain, so no canonical-host redirect.
   // Per-environment keys are not inherited, so vars and bindings repeat here.

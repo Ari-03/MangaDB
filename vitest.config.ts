@@ -12,6 +12,8 @@ export default defineConfig({
   },
   test: {
     environment: "edge-runtime",
+    // The slowest convex-test cases near 4s on a 4-vCPU CI runner; 5s is too thin.
+    testTimeout: 15_000,
     // The rate-limiter package is inlined so its component test helper's
     // import.meta.glob (of the component's TS sources) gets transformed.
     server: { deps: { inline: ["convex-test", "@convex-dev/rate-limiter", "@posthog/convex"] } },

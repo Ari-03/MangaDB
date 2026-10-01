@@ -42,9 +42,18 @@ Three environments; see README "Environments" for the full table.
 - Production: Convex `intent-curlew-625`, Worker `mangadb` at mangadb.org.
   Read-only unless the user gives a fresh, explicit yes for that action.
 - Staging: Convex `brave-kingfisher-844` (project `mangadb-staging`), Worker
-  `mangadb-staging` on workers.dev. Deploy with `npm run deploy:staging`.
+  `mangadb-staging` on workers.dev. Deploy a branch with
+  `gh workflow run deploy.yml --ref <branch> -f environment=staging`, or
+  `npm run deploy:staging` locally.
 - Local: `npx convex dev` (backend on port 3220). Data lives in the main
   checkout's `.convex/`; worktrees symlink to it.
+
+`main` is protected; changes land by pull request. A merge to `main` that
+touches more than docs queues a production deploy that waits for the user's
+approval in GitHub. Never approve a pending production deployment, never run
+the Deploy workflow with `environment=production`, and never weaken the
+ruleset or the environment protection without a fresh, explicit yes. See
+README "Deployment".
 
 Wrangler environments inherit top-level `routes`. Any new `env.*` block in
 `wrangler.jsonc` must set `"routes": []` or it will take the production
