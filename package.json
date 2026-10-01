@@ -7,14 +7,15 @@
     "dev": "vite dev",
     "dev:staging": "CLOUDFLARE_ENV=staging vite dev --mode staging",
     "build": "vite build",
+    "build:staging": "CLOUDFLARE_ENV=staging VITE_SITE_URL=https://mangadb-staging.mangadb.workers.dev npm run build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p convex",
     "codegen": "convex codegen",
     "cf-typegen": "wrangler types",
     "convex:dev": "convex dev",
-    "deploy": "convex deploy --cmd-url-env-var-name VITE_CONVEX_URL --cmd \"npm run build\" && wrangler deploy",
-    "deploy:staging": "convex deploy --env-file .env.staging --cmd-url-env-var-name VITE_CONVEX_URL --cmd \"CLOUDFLARE_ENV=staging VITE_SITE_URL=https://mangadb-staging.mangadb.workers.dev npm run build\" && wrangler deploy"
+    "deploy": "convex deploy --cmd-url-env-var-name VITE_CONVEX_URL --cmd \"npm run build && node scripts/check-deploy-target.mjs production\" && wrangler deploy",
+    "deploy:staging": "convex deploy --env-file .env.staging --cmd-url-env-var-name VITE_CONVEX_URL --cmd \"npm run build:staging && node scripts/check-deploy-target.mjs staging\" && wrangler deploy"
   },
   "dependencies": {
     "@clerk/tanstack-react-start": "^1.5.2",
