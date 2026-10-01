@@ -32,7 +32,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { canonicalLabel } from "./bookTitle";
-import { hiddenSeriesTitled, labelsEqual, survivorOf } from "./matching";
+import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { getObservation, upsertObservation } from "./observations";
 import { allocatePublicId } from "./publicIds";
 import {
@@ -1197,7 +1197,7 @@ export async function createReleaseBundle(
 
 /**
  * The member Releases a box's covered Volumes have today: for each label,
- * the publisher's active single-Volume Release of that Volume in the box's
+ * the publisher's active Release of that whole Volume alone in the box's
  * Format, outside any Edition Line. `order` is the label's place in the box
  * (1-based), so members that arrive late still sort by Volume
  * (`addLateBundleMembers` renumbers generated orders to match).
@@ -1222,14 +1222,12 @@ async function expectedBundleMembers(
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active") continue;
-      if (edition.publisherId !== publisherId || edition.editionLineId !== undefined) {
+      // The member is the publisher's whole single-Volume book: never a
+      // packaging line's, an omnibus, or a book holding part of the Volume
+      // (the rule matching applies, lib/matching.ts).
+      if (edition.publisherId !== publisherId || !(await isWholeSingleVolume(ctx, edition))) {
         continue;
       }
-      const rows = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
-      if (rows.length !== 1) continue;
       const member = (
         await ctx.db
           .query("releases")

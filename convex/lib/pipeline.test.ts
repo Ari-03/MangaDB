@@ -684,6 +684,30 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
     });
   });
 
+  it("never seats a book that holds only part of a Volume as the box's member", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const vol = volumeCreator(ctx, seriesId);
+      const one = await vol("1", "9780000000019");
+      const two = await vol("2", "9780000000026");
+      // Volume 2's only book is a split one: it holds part of the Volume.
+      const split = (await ctx.db.get(two))!;
+      const [coverage] = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", split.editionId))
+        .collect();
+      await ctx.db.patch(coverage!._id, { extent: "partial" });
+
+      const made = await createReleaseBundle(ctx, {
+        ...fireForceBox(seriesId, ["1", "2"]),
+        observation: await observation(ctx, "box"),
+      });
+      expect((await membershipsOf(ctx, made.bundleId)).map((m) => m.releaseId)).toEqual([one]);
+    });
+  });
+
   it("keeps a deliberately reordered bundle's order, appending late members", async () => {
     const t = makeT();
     await t.run(async (ctx) => {
