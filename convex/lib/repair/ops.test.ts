@@ -17,7 +17,7 @@ import type { Id } from "../../_generated/dataModel";
 import schema from "../../schema";
 import { TRAIL_CHUNK } from "./audit";
 import type { RepairEntry } from "./entries";
-import { SWEEP_BUDGET } from "./ops";
+import { SWEEP_BUDGET, sweepPage } from "./ops";
 
 function makeT() {
   const t = convexTest(schema);
@@ -1124,5 +1124,78 @@ describe("other repairs that move tracking between Series", () => {
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     expect(await passTitles(t)).toEqual({ [s.b1.releaseId]: "Else", [second]: "Else", [s.b2.releaseId]: "Doubt!!" });
     expect((await profileOf(t, "dave")).reading).toEqual([]);
+  });
+});
+
+
+// A sweep's cursor is a creation time, and Convex does not promise those are
+// unique. convex-test never hands out a tie, so the paging is driven here
+// over rows that share one.
+describe("sweepPage — rows created at the same instant", () => {
+  type Row = { id: number; _creationTime: number };
+  /** `page` over rows in creation order, counting what it was asked to read. */
+  const reader = (times: Array<number>) => {
+    const rows: Array<Row> = times.map((_creationTime, id) => ({ id, _creationTime }));
+    return async (after: number, count: number) =>
+      rows.filter((row) => row._creationTime > after).slice(0, count);
+  };
+  /** Every row a whole sweep visits, in order, paging `count` at a time. */
+  const sweepAll = async (times: Array<number>, count: number) => {
+    const page = reader(times);
+    const visited: Array<number> = [];
+    let after = -1;
+    for (let steps = 0; steps < 1000; steps++) {
+      const step = await sweepPage(page, after, count);
+      visited.push(...step.rows.map((row) => row.id));
+      expect(step.done || step.after > after, "the cursor must move").toBe(true);
+      after = step.after;
+      if (step.done) return visited;
+    }
+    throw new Error("the sweep never finished");
+  };
+  const everyRowOnce = (times: Array<number>) => times.map((_, id) => id);
+
+  it("pages plainly when no creation time repeats", async () => {
+    const page = reader([1, 2, 3, 4, 5]);
+    expect(await sweepPage(page, -1, 2)).toEqual({
+      rows: [
+        { id: 0, _creationTime: 1 },
+        { id: 1, _creationTime: 2 },
+      ],
+      after: 2,
+      done: false,
+    });
+    expect(await sweepAll([1, 2, 3, 4, 5], 2)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("ends on the last page, and on an empty one", async () => {
+    expect(await sweepPage(reader([1, 2]), -1, 2)).toMatchObject({ after: 2, done: true });
+    expect(await sweepPage(reader([]), 7, 2)).toEqual({ rows: [], after: 7, done: true });
+  });
+
+  it("never ends a page between two rows created at one instant", async () => {
+    // The second page boundary would fall inside the pair at time 3.
+    const times = [1, 2, 3, 3, 4];
+    const step = await sweepPage(reader(times), 2, 1);
+    expect(step.rows.map((row) => row.id)).toEqual([2, 3]);
+    expect(step).toMatchObject({ after: 3, done: false });
+    expect(await sweepAll(times, 1)).toEqual(everyRowOnce(times));
+    expect(await sweepAll(times, 3)).toEqual(everyRowOnce(times));
+  });
+
+  it("gets past a run of same-instant rows larger than the whole budget", async () => {
+    // One more than the budget at one instant, then more rows after it.
+    const times = [1, ...Array.from({ length: SWEEP_BUDGET + 1 }, () => 5), 6, 7];
+    expect(await sweepAll(times, SWEEP_BUDGET)).toEqual(everyRowOnce(times));
+    // The run is taken whole in one step, and the sweep goes on after it.
+    const step = await sweepPage(reader(times), 1, SWEEP_BUDGET);
+    expect(step.rows).toHaveLength(SWEEP_BUDGET + 1);
+    expect(step).toMatchObject({ after: 5, done: false });
+  });
+
+  it("ends when a split run is the last thing in the sweep", async () => {
+    const times = [1, 2, 2, 2];
+    expect(await sweepAll(times, 2)).toEqual(everyRowOnce(times));
+    expect(await sweepPage(reader(times), 1, 2)).toMatchObject({ after: 2, done: true });
   });
 });

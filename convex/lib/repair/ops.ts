@@ -1232,7 +1232,7 @@ async function normalizeVolumes(
  */
 export const SWEEP_BUDGET = 250;
 
-/** How far one sweep got this leg: up to the row created at `after`, or `done`. */
+/** How far one sweep got this leg: past every row created at or before `after`, or `done`. */
 type SweepState = { after: number; done: boolean };
 
 /**
@@ -1275,15 +1275,48 @@ async function refile<T extends PersonalTable>(
 }
 
 /**
- * Visit, in creation order, the rows `page` returns from a creation time on,
+ * One page of a sweep: up to `count` rows created after `after`, the cursor
+ * past them, and whether the sweep is over. `_creationTime` is not
+ * guaranteed unique, and a cursor that stopped between two rows created at
+ * the same instant would skip the second. So a page never ends inside such
+ * a run: when the row after its last shares that row's creation time, the
+ * whole run is read, however long, and the page grows by it. The cursor
+ * therefore always moves past every row returned.
+ */
+export async function sweepPage<D extends { _creationTime: number }>(
+  page: (after: number, count: number) => Promise<D[]>,
+  after: number,
+  count: number,
+): Promise<{ rows: D[]; after: number; done: boolean }> {
+  // One row past the page shows whether its last row's instant goes on.
+  const read = await page(after, count + 1);
+  if (read.length <= count) {
+    return { rows: read, after: read.at(-1)?._creationTime ?? after, done: true };
+  }
+  const instant = read[count]!._creationTime;
+  const rows = read.slice(0, count);
+  if (rows[count - 1]!._creationTime !== instant) {
+    return { rows, after: rows[count - 1]!._creationTime, done: false };
+  }
+  // The page would split the run at `instant`: read that run from its start
+  // (just past the row before it), doubling until a later row or the end shows.
+  const lead = rows.filter((row) => row._creationTime < instant);
+  const before = lead.at(-1)?._creationTime ?? after;
+  for (let ask = 2 * (read.length - lead.length); ; ask *= 2) {
+    const from = await page(before, ask);
+    const run = from.filter((row) => row._creationTime === instant);
+    if (run.length < from.length || from.length < ask) {
+      return { rows: [...lead, ...run], after: instant, done: run.length === from.length };
+    }
+  }
+}
+
+/**
+ * Visit, in creation order, the rows `page` returns after a creation time,
  * resuming where this entry's earlier leg left the sweep `name` and
  * spending the leg's budget. A sweep the budget cuts short marks the entry
- * unfinished. Rows a visit re-files stay in their range, hence the cursor.
- *
- * The cursor is inclusive: each page starts at the last row visited, not
- * after it, because `_creationTime` is not guaranteed unique and a page may
- * end between two rows created at the same instant. So `page` must read with
- * `gte`, and `visit` must be a no-op on a row it already re-filed.
+ * unfinished. Rows a visit re-files stay in their range, hence the cursor
+ * (`sweepPage` keeps it from ever splitting rows created at one instant).
  */
 async function sweep<D extends { _creationTime: number }>(
   ctx: MutationCtx,
@@ -1306,14 +1339,11 @@ async function sweep<D extends { _creationTime: number }>(
       moves.unfinished = true;
       return;
     }
-    const count = moves.left;
-    const rows = await page(state.after, count);
-    for (const row of rows) {
-      await visit(row);
-      state.after = row._creationTime;
-    }
-    moves.left -= rows.length;
-    state.done = rows.length < count;
+    const step = await sweepPage(page, state.after, moves.left);
+    for (const row of step.rows) await visit(row);
+    state.after = step.after;
+    state.done = step.done;
+    moves.left -= step.rows.length;
   }
 }
 
@@ -1450,7 +1480,7 @@ async function followVolume(
     (after, count) =>
       ctx.db
         .query("volumeProgress")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gte("_creationTime", after))
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
         .take(count),
     async (row) => {
       if (stale(row)) await refile(ctx, audit, moves, "volumeProgress", row, to);
@@ -1463,7 +1493,7 @@ async function followVolume(
     (after, count) =>
       ctx.db
         .query("favorites")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gte("_creationTime", after))
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
         .take(count),
     async (row) => {
       if (stale(row)) await refile(ctx, audit, moves, "favorites", row, to);
@@ -1476,7 +1506,7 @@ async function followVolume(
     (after, count) =>
       ctx.db
         .query("comments")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gte("_creationTime", after))
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
         .take(count),
     async (row) => {
       if (stale(row)) await refile(ctx, audit, moves, "comments", row, to);
@@ -1513,7 +1543,7 @@ async function followRelease(
     (after, count) =>
       ctx.db
         .query("releaseProgress")
-        .withIndex("by_release", (q) => q.eq("releaseId", release._id).gte("_creationTime", after))
+        .withIndex("by_release", (q) => q.eq("releaseId", release._id).gt("_creationTime", after))
         .take(count),
     async (pass) => {
       if (pass.seriesId === passSeriesId) return;
@@ -1554,7 +1584,7 @@ async function followEdition(
     (after, count) =>
       ctx.db
         .query("favorites")
-        .withIndex("by_edition", (q) => q.eq("editionId", editionId).gte("_creationTime", after))
+        .withIndex("by_edition", (q) => q.eq("editionId", editionId).gt("_creationTime", after))
         .take(count),
     async (row) => {
       if (row.seriesId !== firstSeriesId) await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });
