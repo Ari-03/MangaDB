@@ -1232,7 +1232,7 @@ async function normalizeVolumes(
  */
 export const SWEEP_BUDGET = 250;
 
-/** How far one sweep got this leg: past the row created at `after`, or `done`. */
+/** How far one sweep got this leg: up to the row created at `after`, or `done`. */
 type SweepState = { after: number; done: boolean };
 
 /**
@@ -1275,10 +1275,15 @@ async function refile<T extends PersonalTable>(
 }
 
 /**
- * Visit, in creation order, the rows `page` returns after a creation time,
+ * Visit, in creation order, the rows `page` returns from a creation time on,
  * resuming where this entry's earlier leg left the sweep `name` and
  * spending the leg's budget. A sweep the budget cuts short marks the entry
  * unfinished. Rows a visit re-files stay in their range, hence the cursor.
+ *
+ * The cursor is inclusive: each page starts at the last row visited, not
+ * after it, because `_creationTime` is not guaranteed unique and a page may
+ * end between two rows created at the same instant. So `page` must read with
+ * `gte`, and `visit` must be a no-op on a row it already re-filed.
  */
 async function sweep<D extends { _creationTime: number }>(
   ctx: MutationCtx,
@@ -1445,7 +1450,7 @@ async function followVolume(
     (after, count) =>
       ctx.db
         .query("volumeProgress")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gte("_creationTime", after))
         .take(count),
     async (row) => {
       if (stale(row)) await refile(ctx, audit, moves, "volumeProgress", row, to);
@@ -1458,7 +1463,7 @@ async function followVolume(
     (after, count) =>
       ctx.db
         .query("favorites")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gte("_creationTime", after))
         .take(count),
     async (row) => {
       if (stale(row)) await refile(ctx, audit, moves, "favorites", row, to);
@@ -1471,7 +1476,7 @@ async function followVolume(
     (after, count) =>
       ctx.db
         .query("comments")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gt("_creationTime", after))
+        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id).gte("_creationTime", after))
         .take(count),
     async (row) => {
       if (stale(row)) await refile(ctx, audit, moves, "comments", row, to);
@@ -1508,7 +1513,7 @@ async function followRelease(
     (after, count) =>
       ctx.db
         .query("releaseProgress")
-        .withIndex("by_release", (q) => q.eq("releaseId", release._id).gt("_creationTime", after))
+        .withIndex("by_release", (q) => q.eq("releaseId", release._id).gte("_creationTime", after))
         .take(count),
     async (pass) => {
       if (pass.seriesId === passSeriesId) return;
@@ -1549,7 +1554,7 @@ async function followEdition(
     (after, count) =>
       ctx.db
         .query("favorites")
-        .withIndex("by_edition", (q) => q.eq("editionId", editionId).gt("_creationTime", after))
+        .withIndex("by_edition", (q) => q.eq("editionId", editionId).gte("_creationTime", after))
         .take(count),
     async (row) => {
       if (row.seriesId !== firstSeriesId) await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });

@@ -131,6 +131,25 @@ describe("coverResponse", () => {
   });
 });
 
+describe("coverResponse with a failing edge cache", () => {
+  test("a failed cache read is a miss: the art is still served", async () => {
+    vi.stubGlobal("caches", {
+      default: {
+        match: async () => {
+          throw new Error("cache read failed");
+        },
+        put: async () => {},
+      },
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    upstreams = [image];
+    const res = await get();
+    expect(res?.status).toBe(200);
+    expect(res?.headers.get("X-Cover-Origin")).toBe("upstream");
+    errors.mockRestore();
+  });
+});
+
 describe("coversOnFile", () => {
   const ORIGIN = "https://mangadb.org";
   // Each test uses its own ISBNs: the module remembers what it learned.

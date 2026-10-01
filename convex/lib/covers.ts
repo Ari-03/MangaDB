@@ -183,9 +183,10 @@ export async function coverIsbnForRelease(
  * ISBN-less Release borrows depends only on its Edition, so every such
  * Release of one Edition shares a single lookup, each alternative
  * Edition's preferred ISBN is read once, and the Editions covering a Volume
- * are scanned once for all its borrowers. `coverage` loads an Edition's
- * Coverage in order; a caller that already memoizes it (`browseCache`)
- * passes its own so the fallback shares those reads.
+ * are scanned once for all its borrowers. Only active Editions lend. `coverage` loads an Edition's
+ * Coverage in order and `edition` an Edition; a caller that already
+ * memoizes them (`browseCache`) passes its own so the fallback shares those
+ * reads.
  */
 export function coverIsbnCache(
   ctx: QueryCtx,
@@ -196,6 +197,8 @@ export function coverIsbnCache(
       .query("volumeCoverages")
       .withIndex("by_edition", (q) => q.eq("editionId", editionId))
       .take(1),
+  edition: (editionId: Id<"editions">) => Promise<Doc<"editions"> | null> = (editionId) =>
+    ctx.db.get(editionId),
 ) {
   // Promises are memoized so concurrent callers share one in-flight read.
   const once = <K, V>(memo: Map<K, Promise<V>>, key: K, load: () => Promise<V>) => {
@@ -209,8 +212,13 @@ export function coverIsbnCache(
   const preferredMemo = new Map<Id<"editions">, Promise<string | null>>();
   const borrowedMemo = new Map<Id<"editions">, Promise<string | null>>();
   const coveringMemo = new Map<Id<"volumes">, Promise<Array<Doc<"volumeCoverages">>>>();
+  const lendsMemo = new Map<Id<"editions">, Promise<boolean>>();
   const preferred = (editionId: Id<"editions">) =>
     once(preferredMemo, editionId, () => isbnInEdition(ctx, editionId));
+  // Only an active Edition lends: a hidden or merged one is off the public
+  // catalog, and so is its art (the rule favorites.ts and volumePage apply).
+  const lends = (editionId: Id<"editions">) =>
+    once(lendsMemo, editionId, async () => (await edition(editionId))?.status === "active");
   const covering = (volumeId: Id<"volumes">) =>
     once(coveringMemo, volumeId, () =>
       ctx.db
@@ -227,7 +235,7 @@ export function coverIsbnCache(
         const first = (await coverage(editionId))[0];
         if (!first) return null;
         for (const row of await covering(first.volumeId)) {
-          if (row.editionId === editionId) continue;
+          if (row.editionId === editionId || !(await lends(row.editionId))) continue;
           const isbn = await preferred(row.editionId);
           if (isbn) return isbn;
         }

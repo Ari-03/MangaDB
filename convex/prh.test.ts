@@ -846,6 +846,33 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     });
   });
 
+  it("asks for a roman-numeral name without the groups the raw title carries", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // Both the base and the sequel exist: the sequel's own book must not
+    // become the base's Volume 2 because its title ends in "(Manga)".
+    const base = await backbone(t, "Kingdom Hearts", []);
+    const sequel = await backbone(t, "Kingdom Hearts II", []);
+    stubApi([
+      { isbn: "9781975300000", title: "Kingdom Hearts II (Manga)", imprint: "Yen Press" },
+      // No Series by either name: the new work is named without the group.
+      { isbn: "9781685795009", title: "Barbarities II (Manga)", imprint: "Seven Seas" },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.find((r) => r.isbn13 === "9781975300000")?.seriesIds).toEqual([sequel]);
+      expect(
+        await ctx.db
+          .query("volumes")
+          .withIndex("by_series", (q) => q.eq("seriesId", base))
+          .collect(),
+      ).toEqual([]);
+      const titles = (await ctx.db.query("series").collect()).map((s) => s.title).sort();
+      expect(titles).toEqual(["Barbarities II", "Kingdom Hearts", "Kingdom Hearts II"]);
+    });
+  });
+
   it("makes a box set a Release Bundle of the base Series' Releases", async () => {
     const t = makeT();
     await seedRegistry(t, true);

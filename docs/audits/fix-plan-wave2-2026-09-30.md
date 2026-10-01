@@ -25,7 +25,9 @@ rounds per leg.
 
 All ten legs ended approved, across the main run (36 agents), a follow-up
 on the two rejected legs (10 agents), and a third round on R12 (2 agents).
-Every finding reproduced through its real entry point before any fix.
+Every functional finding (R01 to R18) reproduced through its real entry
+point before any fix. The two Standards findings are static, code-verified
+concerns and have no runtime reproduction.
 
 - R01, R02, R04 needed three rounds. Merge and Split now share one
   enumeration of affected users that walks the current dependent records

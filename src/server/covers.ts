@@ -60,7 +60,11 @@ export async function coverResponse(request: Request): Promise<Response | null> 
   // Edge cache first. Keyed on the bare path so query strings can't bust it.
   const cache = (caches as unknown as { default: Cache }).default;
   const cacheKey = new Request(`${url.origin}${url.pathname}`);
-  const cached = await cache.match(cacheKey);
+  // A failed read is a miss: the cache may cost a lookup, never the art.
+  const cached = await cache.match(cacheKey).catch((error: unknown) => {
+    console.error("covers: edge cache read failed", error);
+    return undefined;
+  });
   if (cached) {
     const hit = new Response(cached.body, cached);
     hit.headers.set("X-Cover-Cache", "hit");

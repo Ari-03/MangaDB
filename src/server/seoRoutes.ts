@@ -254,8 +254,8 @@ export async function seoResponse(
 /**
  * A child sitemap from the edge cache, generating and storing it on a miss.
  * Keyed on a GET of the bare path, so HEADs and query strings share one
- * entry; the write finishes in the background and a failed one is only
- * logged.
+ * entry; the write finishes in the background, and a failed read or write
+ * is only logged.
  */
 async function cachedChildSitemap(
   request: Request,
@@ -266,7 +266,12 @@ async function cachedChildSitemap(
   const url = new URL(request.url);
   const cache = (caches as unknown as { default: Cache }).default;
   const cacheKey = new Request(`${url.origin}${url.pathname}`);
-  const cached = await cache.match(cacheKey);
+  // A failed read is a miss, as a failed write is only logged: the cache
+  // may cost a regeneration, never the sitemap.
+  const cached = await cache.match(cacheKey).catch((error: unknown) => {
+    console.error("sitemap cache read failed", error);
+    return undefined;
+  });
   if (cached) return cached;
   const response = xmlResponse(await childSitemapXml(child, origin, data));
   waitUntil(

@@ -202,6 +202,23 @@ describe("seoResponse", () => {
     expect(sitemapPage).toHaveBeenCalledTimes(2);
   });
 
+  it("still serves the sitemap when the cache read fails", async () => {
+    vi.stubGlobal("caches", {
+      default: {
+        match: async () => {
+          throw new Error("cache read failed");
+        },
+        put: async () => {},
+      },
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), fakeData());
+    expect(res?.status).toBe(200);
+    expect(await res?.text()).toContain("<urlset");
+    errors.mockRestore();
+    await Promise.all(background);
+  });
+
   it("still serves the sitemap when the cache write fails", async () => {
     vi.stubGlobal("caches", {
       default: {

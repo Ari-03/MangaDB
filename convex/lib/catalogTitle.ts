@@ -113,6 +113,23 @@ export type ProvisionalTitle = Pick<
   "title" | "seriesTitle" | "volumeLabel" | "bareNumber" | "bareRoman" | "bareSplit"
 >;
 
+const ROMAN_ONES = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"];
+
+/**
+ * A bare-Roman title read as one work's whole name: the parsed base and its
+ * numeral ("Barbarities" and Volume 2 make "Barbarities II"), free of the
+ * format and packaging groups the raw source title carries. Null outside the
+ * numerals the parser splits (I to XXXIX).
+ */
+function romanWholeName(parsed: ProvisionalTitle): string | null {
+  const value = Number(parsed.volumeLabel);
+  if (!Number.isInteger(value) || value < 1 || value > 39) return null;
+  return `${parsed.seriesTitle} ${"X".repeat(Math.floor(value / 10))}${ROMAN_ONES[value % 10]}`;
+}
+
+/** A title's letters and digits only, for telling a spelling from extra words. */
+const lettersOf = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
 /**
  * The conservative resolution of a title's provisional readings against the
  * EXISTING catalog: the base Series title, the covered Volume label, and the
@@ -141,9 +158,19 @@ export async function resolveBaseSeries(
     candidates: named,
   };
   if (parsed.bareRoman) {
-    const whole = await candidateSeries(ctx, parsed.title);
+    // The source's raw title may still carry groups the parser peeled
+    // ("Barbarities II (Manga)"), so the whole name is asked both ways and
+    // a new work is named without them.
+    // Punctuation alone ("Alpha, II") is the source's own spelling and stays.
+    const tidied = romanWholeName(parsed);
+    const wholeName =
+      tidied !== null && lettersOf(tidied) !== lettersOf(parsed.title) ? tidied : parsed.title;
+    let whole = await candidateSeries(ctx, parsed.title);
+    if (whole.length === 0 && wholeName !== parsed.title) {
+      whole = await candidateSeries(ctx, wholeName);
+    }
     if (whole.length > 0 || named.length === 0) {
-      return { seriesTitle: whole[0]?.title ?? parsed.title, volumeLabel: null, candidates: whole };
+      return { seriesTitle: whole[0]?.title ?? wholeName, volumeLabel: null, candidates: whole };
     }
     return plain;
   }

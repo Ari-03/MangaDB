@@ -1353,6 +1353,9 @@ describe("parseBookTitle — packaging", () => {
         ["Alpha, Omnibus Book 2 - Vol. 1-3 - Vol.2", null],
         ["Blade Runner 2049 Omnibus Book 2 - Vol. 1 + Vol. 2 - Vol. 4-6", null],
         ["Alpha (Omnibus Vol. 4-6-8)", null],
+        // A plain bracket is the same kind of statement: never 4–8 with 5 and 7 invented.
+        ["Alpha Omnibus 2 (Vol. 4-6-8)", null],
+        ["Alpha Omnibus 2 (Vol. 2 - 4-6)", null],
         ["Alpha (Omnibus) Volume 2", "Vol. 4-6-8"],
         ["Alpha (Omnibus) Volume 2", "Vol. 2 - 4-6"],
       ] as const) {

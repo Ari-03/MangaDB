@@ -81,8 +81,9 @@ export function browseCache(ctx: QueryCtx) {
       .withIndex("by_edition", (q) => q.eq("editionId", editionId))
       .collect(),
   );
-  // ISBN-less Releases borrow by Edition; the fallback shares `coverage`.
-  const isbns = coverIsbnCache(ctx, coverage);
+  const edition = memoize((id: Id<"editions">) => ctx.db.get(id));
+  // ISBN-less Releases borrow by Edition; the fallback shares these reads.
+  const isbns = coverIsbnCache(ctx, coverage, edition);
   return {
     // A Release's stored cover URL and the ISBN to fetch art by (lib/covers.ts),
     // keyed by `_id`, so two reads of the same Release share one lookup.
@@ -99,7 +100,7 @@ export function browseCache(ctx: QueryCtx) {
     publisher: memoize((id: Id<"publishers">) => ctx.db.get(id)),
     series: memoize((id: Id<"series">) => ctx.db.get(id)),
     volume: memoize((id: Id<"volumes">) => ctx.db.get(id)),
-    edition: memoize((id: Id<"editions">) => ctx.db.get(id)),
+    edition,
     line: memoize((id: Id<"editionLines">) => ctx.db.get(id)),
     coverage,
   };

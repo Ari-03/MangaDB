@@ -375,8 +375,8 @@ const DASH_CHAIN = new RegExp(`${NUM}\\s*[-–—]\\s*(?:${VOLS})?#?${NUM}\\s*[-
 
 /**
  * A Volume list read where the title's designation grammar reads none: a
- * packaging bracket's own list, a subtitle, a carried subtitle beside the
- * book's designation. A dash chain there names no range, so it is a
+ * bracket's list ("(Vol. 4-6)", "(Omnibus Vol. 1-3)"), a subtitle, a carried
+ * subtitle beside the book's designation. A dash chain there names no range, so it is a
  * statement no range holds, never the span from its first number to its last.
  */
 function statedList(list: string): Stated {
@@ -417,7 +417,7 @@ function absorbGroup(inner: string, peel: Peeled): boolean {
     "i",
   ).exec(text);
   if (coverage) {
-    peel.stated = agreed(peel.stated, parseVolumeList(coverage[1]!)?.coverRange);
+    peel.stated = agreed(peel.stated, statedList(coverage[1]!));
     const rest = coverage[2]?.trim();
     if (rest) {
       if (PACKAGING_TAG.test(rest)) peel.lineNames.push(tidyLineName(rest));
