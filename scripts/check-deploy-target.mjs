@@ -21,12 +21,14 @@ import { loadEnv } from "vite";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+/** Print every problem, say that nothing was deployed, and exit 1. */
 function fail(problems) {
   for (const problem of problems) console.error(`check-deploy-target: ${problem}`);
   console.error("check-deploy-target: nothing was deployed.");
   process.exit(1);
 }
 
+/** Parse a JSON file the build wrote, or fail with a hint to build first. */
 function readJson(path) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
