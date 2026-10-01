@@ -69,13 +69,19 @@ Source: https://docs.convex.dev/cli and `npx convex deploy --help`.
 Source: https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/
 
 - Wrangler reads `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the
-  environment. Cloudflare's "Edit Cloudflare Workers" token template is the
-  one its docs recommend for this. I have not run a deploy with such a token,
-  so the first run is the test that it covers the R2 binding and the custom
-  domains.
-- A Cloudflare token is scoped to an account and zone, never to one Worker.
-  The token that deploys `mangadb-staging` can deploy `mangadb` too. See
-  section 7.
+  environment.
+- Since 2026-09-15 a Cloudflare token can be scoped to one Worker. Source:
+  https://developers.cloudflare.com/workers/authorization/workers/ and the
+  changelog entry of that date. An account-owned token with scope "Specified
+  Workers" and the Editor role can deploy that Worker and nothing else. It
+  needs no extra permission for the Worker's R2 binding. It cannot create or
+  delete Workers. Each environment gets its own token. The older "Edit
+  Cloudflare Workers" template covers every Worker on the account, so a
+  staging token made from it could deploy `mangadb`. See section 7.
+- Per-Worker roles do not cover custom domains yet. The docs say a deploy
+  that leaves an already attached domain unchanged needs only Editor, and
+  that changing one needs Workers Routes Write on the zone. I have not run a
+  production deploy with such a token, so the first run is the test.
 - The Cloudflare Vite plugin picks the Wrangler environment at build time from
   `CLOUDFLARE_ENV`. The build writes a flattened `dist/server/wrangler.json`
   and points `.wrangler/deploy/config.json` at it, and `wrangler deploy`
@@ -173,8 +179,8 @@ any branch ──> "Run workflow" (environment: staging) ──> CI ──> stag
   `CONVEX_DEPLOY_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
 - `scripts/check-deploy-target.mjs` runs inside `--cmd` after the build and
   applies the check from section 3. It also checks the Worker's name, that a
-  staging build carries no routes, and that the Clerk key in the build
-  environment matches the Worker's. The local `deploy` scripts call it too.
+  staging build carries no routes, and that the Clerk key Vite inlined
+  matches the Worker's. The local `deploy` scripts call it too.
 - The ruleset lives in `.github/rulesets/main.json` so the repo records what
   protects `main`.
 
@@ -186,13 +192,15 @@ revert pull request through the same path.
 
 A second pass over the finished workflows found these.
 
-- **The approval gate covers less than it seems.** It guards the secrets in
-  the `production` environment. Because of the token scoping in section 3,
-  the Cloudflare token in the unprotected `staging` environment can also
-  replace the production Worker. So approval really gates the production
-  Convex deploy key, and write access to the repo gates the production
-  Worker. Fork pull requests get no secrets and cannot do this. Closing the
-  gap needs a second Cloudflare account for staging.
+- **The approval gate is only as good as the staging secrets.** It guards
+  the secrets in the `production` environment, and anyone with write access
+  can run an edited workflow against the unprotected `staging` environment.
+  I first wrote that Cloudflare tokens cannot be scoped below the account,
+  which would have let the staging token replace the production Worker.
+  CodeRabbit pointed at the per-Worker roles from section 3, which had
+  shipped two weeks earlier. With one token per Worker the staging
+  environment holds nothing that reaches production. Fork pull requests get
+  no secrets at all.
 - **A waiting production run holds the queue.** The deploy job's concurrency
   group counts a run that is waiting for approval as running. A second merge
   waits behind it and cannot be approved, and a third replaces the second.
@@ -200,9 +208,11 @@ A second pass over the finished workflows found these.
   17401, not from a test here. To keep the queue short, merges that touch
   only Markdown, `docs/` or `.scratch/` queue no deploy.
 - **Convex goes first, so a bad Cloudflare token used to strand a deploy
-  halfway.** The workflow now asks the Cloudflare API to list Workers on the
-  account before it pushes Convex. That proves the token and account ID are
-  valid. It cannot prove every permission `wrangler deploy` needs.
+  halfway.** The workflow now asks the Cloudflare API for the target
+  Worker's deployments before it pushes Convex. That proves the token and
+  account ID are valid and that the token can see that Worker. It asks for
+  one Worker because a per-Worker token may not list the account. It cannot
+  prove every permission `wrangler deploy` needs.
 - **The required check names its source.** The ruleset pins the `check`
   context to the GitHub Actions app, id 15368, so another installed app
   cannot report a passing `check`.

@@ -45,7 +45,7 @@ jobs:
     env:
       TARGET: ${{ inputs.environment || 'production' }}
     steps:
-      # The one place that maps a target to its URL and build script.
+      # The one place that maps a target to its URL, Worker and build script.
       - name: Resolve target
         id: target
         run: |
@@ -57,10 +57,12 @@ jobs:
                 exit 1
               fi
               url=https://mangadb.org
+              worker=mangadb
               build=build
               ;;
             staging)
               url=https://mangadb-staging.mangadb.workers.dev
+              worker=mangadb-staging
               build=build:staging
               ;;
             *)
@@ -69,6 +71,7 @@ jobs:
               ;;
           esac
           echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "worker=$worker" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
 
       # Checks presence only; values are never printed.
@@ -88,24 +91,27 @@ jobs:
             exit 1
           fi
 
-      # Checks that the token can read Workers on this account before Convex
-      # is pushed, so bad Cloudflare credentials fail with nothing deployed.
+      # Reads the target Worker's deployments before Convex is pushed, so a bad
+      # token, a wrong account ID, or a token scoped to the other Worker fails
+      # with nothing deployed. It asks for one Worker, not the account's list,
+      # because each token is scoped to a single Worker (README "Deployment").
       # It cannot prove every permission `wrangler deploy` needs.
       - name: Check Cloudflare credentials
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER: ${{ steps.target.outputs.worker }}
         run: |
           status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 30 \
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts") || status=000
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$WORKER/deployments") || status=000
           case "$status" in
-            2??) echo "Cloudflare credentials can read Workers (HTTP $status)." ;;
+            2??) echo "Cloudflare credentials can read Worker $WORKER (HTTP $status)." ;;
             401|403)
-              echo "::error::Cloudflare answered HTTP $status. CLOUDFLARE_API_TOKEN is invalid or lacks Workers permission on this account."
+              echo "::error::Cloudflare answered HTTP $status. CLOUDFLARE_API_TOKEN is invalid or has no access to Worker $WORKER."
               exit 1 ;;
             404)
-              echo "::error::Cloudflare answered HTTP 404. CLOUDFLARE_ACCOUNT_ID is probably wrong."
+              echo "::error::Cloudflare answered HTTP 404. CLOUDFLARE_ACCOUNT_ID is wrong or Worker $WORKER does not exist there."
               exit 1 ;;
             *)
               echo "::error::Cloudflare answered HTTP $status. Could not confirm the Cloudflare credentials."

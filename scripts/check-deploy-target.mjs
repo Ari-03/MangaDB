@@ -12,11 +12,12 @@
 // - the Convex URL in the Worker's vars equals VITE_CONVEX_URL, which
 //   `convex deploy` sets to the URL of the deployment its credentials select,
 // - the Clerk key in the Worker's vars equals VITE_CLERK_PUBLISHABLE_KEY, the
-//   value inlined into the client bundle, when that variable is set.
+//   value Vite inlines into the client bundle, when the build has one.
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadEnv } from "vite";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -87,8 +88,10 @@ if (!convexUrl) {
 }
 
 // The client bundle inlines the build's key while the Worker reads its var at
-// runtime. Unset means a build without Clerk, which stays allowed.
-const clerkKey = process.env.VITE_CLERK_PUBLISHABLE_KEY;
+// runtime. loadEnv resolves it as `vite build` did: process.env first, then
+// .env.local and the other .env files. Unset means a build without Clerk,
+// which stays allowed.
+const clerkKey = loadEnv("production", root, "VITE_").VITE_CLERK_PUBLISHABLE_KEY;
 const workerClerkKey = config.vars?.VITE_CLERK_PUBLISHABLE_KEY;
 if (clerkKey && clerkKey !== workerClerkKey) {
   problems.push(

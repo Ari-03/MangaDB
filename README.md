@@ -1838,17 +1838,16 @@ any branch ──> Run workflow (staging) ──> CI ──> staging
 3. Approve it. The run waits on the `production` environment until a
    required reviewer opens it in the Actions tab and clicks Review
    deployments, then Approve and deploy. Until then the job cannot read the
-   `production` environment's secrets, and the one that matters is the
-   production Convex deploy key. The approval does not protect the Worker,
-   as the next paragraph explains.
+   `production` environment's secrets.
 
-A Cloudflare API token is scoped to an account and its zones, not to one
-Worker. The token in the unprotected `staging` environment can therefore
-deploy the `mangadb` Worker too, and anyone with write access to the repo can
-replace the production Worker from a branch, for example by editing the
-workflow there and running it against staging. No approval stops that. Fork
-pull requests cannot do it, since they get no secrets. The real fix is a
-separate Cloudflare account for staging with its own token.
+The approval only protects production if the `staging` environment holds
+nothing that can reach it. Anyone with write access can edit the workflow on
+a branch and run it against staging without approval, so the staging secrets
+must be staging-only. The Convex deploy key already is. The Cloudflare token
+must be scoped to the `mangadb-staging` Worker alone, as One-time setup
+describes. A token with account-wide Workers access in `staging` could
+replace the `mangadb` Worker from any branch. Fork pull requests get no
+secrets either way.
 
 A production run waiting for approval holds the production queue. A later
 merge waits behind it and cannot be approved yet, and a third merge replaces
@@ -1884,9 +1883,10 @@ After CI passes, the deploy job:
 
 1. refuses production from any ref but `main`,
 2. checks that the environment's secrets and Clerk variable are set,
-3. checks that the Cloudflare token can read Workers on the account, so a bad
-   token or account ID fails before Convex is touched. This cannot prove
-   every permission `wrangler deploy` needs,
+3. checks that the Cloudflare token can read the target Worker, so a bad
+   token, a wrong account ID, or the other environment's token fails before
+   Convex is touched. This cannot prove every permission `wrangler deploy`
+   needs,
 4. runs `convex deploy`, which builds the Worker, runs the target check and
    then pushes Convex functions and schema,
 5. runs `wrangler deploy`,
@@ -1914,9 +1914,10 @@ scripts call it. It stops the deploy when:
 - the Convex credentials select a different deployment than the Convex URL in
   the built Worker's `vars`, such as a production deploy key saved in the
   staging environment,
-- `VITE_CLERK_PUBLISHABLE_KEY` in the build environment differs from the key
-  in the Worker's `vars`, which would leave the client bundle and the server
-  on different Clerk keys. A build without that variable skips this check.
+- the `VITE_CLERK_PUBLISHABLE_KEY` the build inlined differs from the key in
+  the Worker's `vars`, which would leave the client bundle and the server on
+  different Clerk keys. The check resolves the key as Vite does, from the
+  shell and then `.env.local`. A build with no key skips this check.
 
 ### Local fallback
 
@@ -1963,12 +1964,20 @@ protection, and then fails because it has no secrets.
    The production `CONVEX_DEPLOY_KEY` is a production deploy key generated
    under Settings in the `mangadb` Convex project. The staging one comes from
    the `mangadb-staging` project's production deployment,
-   `brave-kingfisher-844`, in the same place. Create the Cloudflare token
-   from the "Edit Cloudflare Workers" template under My Profile, API Tokens.
-   One token serves both environments, which is why the staging copy can
-   also deploy the production Worker (see Production). A separate Cloudflare
-   account for staging, with its own token, closes that gap.
-   `npx wrangler whoami` prints the account ID.
+   `brave-kingfisher-844`, in the same place.
+
+   Create two Cloudflare tokens, one per environment, so the staging token
+   cannot touch production. In the Cloudflare dashboard go to Manage Account,
+   Account API Tokens, create a token, set its scope to Specified Workers,
+   pick the one Worker, and give it the Editor role: `mangadb-staging` for
+   the `staging` secret and `mangadb` for the `production` secret. Editor can
+   deploy an existing Worker with its R2 binding but cannot create or delete
+   one. Do not use the "Edit Cloudflare Workers" template, which covers every
+   Worker on the account. Per-Worker roles do not cover custom domains yet.
+   Cloudflare's docs say a deploy that leaves the configured domains
+   unchanged needs only Editor. If the production `wrangler deploy` is still
+   refused over `mangadb.org`, add Workers Routes Write for that zone to the
+   production token. `npx wrangler whoami` prints the account ID.
 3. Add the build-time keys as variables, not secrets, since both ship in the
    client bundle. The deploy fails without the Clerk key. Leave the PostHog
    key unset to keep analytics off in that environment.
