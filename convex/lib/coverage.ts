@@ -322,9 +322,10 @@ export function coverageFromLine(
  * else the first blurb that says anything, else the line's declared size.
  * `texts` are the source's blurbs in order of trust (PRH: flap copy,
  * positioning, keynote). Evidence no range can hold is null, and weaker
- * signals never override it: a gapped list in the title or the deciding
- * blurb, a statement the size contradicts, or two readings the size does
- * not settle. The title's own range needs no settling: it decides first.
+ * signals never override it: a title whose own statements are rejected or
+ * disagree (`coverageGapped`), a gapped list in the deciding blurb, a
+ * statement the size contradicts, or two readings the size does not
+ * settle. The title's own range needs no settling: it decides first.
  */
 export function inferCoverage(
   packaging: Packaging,

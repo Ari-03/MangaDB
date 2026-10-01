@@ -2003,6 +2003,172 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     expect(await syncFresh(title, flapcopy)).toEqual(expected);
   });
 
+  // N04: a range outside the brackets never stands in for a bracket
+  // statement no range holds, and two ranges that disagree place nothing:
+  // no Volume 4–9 is invented. Only an agreeing pair maps the book.
+  it.each([
+    ["Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3)", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 7-9 in one book)", onlyCovering(ONE_TO_NINE)],
+    ["Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1 and 3)", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-6)", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3)", onlyCovering(["1", "2", "3"])],
+    // The reverse: a gapped designation outside, a range in the bracket.
+    ["Alpha Deluxe Edition Vol. 1 & 3 (Collects Vols. 1-3)", FRESH_UNMAPPED],
+  ])("a title stating its coverage twice (%s) maps only when both agree", async (title, expected) => {
+    expect(await syncFresh(title)).toEqual(expected);
+  });
+
+  // N04: with no Edition Line to wait under, a bare range whose bracket
+  // disagrees places nothing at all; the observation waits for an Editor.
+  it.each([
+    "Alpha, Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)",
+    "Alpha, Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)",
+  ])("a bare range beside a rejected bracket statement (%s) creates no Volume", async (title) => {
+    expect(await syncFresh(title)).toEqual({ volumes: [], covered: [], unmapped: [] });
+  });
+
+  // N04: the rejected title is evidence, so a readable blurb never stands in.
+  it("a blurb never stands in for a title statement the outer range contradicts", async () => {
+    const title = "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)";
+    expect(await syncFresh(title, "<p>Collects volumes 1-9.</p>")).toEqual(FRESH_UNMAPPED);
+  });
+
+  // N04 siblings: a list after the packaging phrase meets the marker's
+  // designation in `agreed`, so the 3-in-1 size never places a gapped book.
+  // A lone number after the phrase is a line position and still maps.
+  it.each([
+    ["Alpha 3-in-1 Edition 1 & 3, Vol. 1", FRESH_UNMAPPED],
+    ["Alpha Omnibus 1-3 Vol. 4-6", FRESH_UNMAPPED],
+    ["Alpha Omnibus 1-3 Vol. 1-3", onlyCovering(["1", "2", "3"])],
+    ["Alpha Omnibus 2 (Vol. 4-6)", onlyCovering(["4", "5", "6"])],
+    ["Alpha Omnibus 2 Vol. 4-6", onlyCovering(["4", "5", "6"])],
+  ])("a list before a marker (%s) maps only when both agree", async (title, expected) => {
+    expect(await syncFresh(title)).toEqual(expected);
+  });
+
+  // N04 siblings: a line-less book's subtitle statement meets its range in
+  // `agreed`; a disagreeing one places nothing.
+  it.each([
+    ["Alpha, Vol. 1-3: Includes Vols. 1 & 3", { volumes: [], covered: [], unmapped: [] }],
+    ["Alpha, Vol. 1-3: Includes Vols. 1-6", { volumes: [], covered: [], unmapped: [] }],
+    ["Alpha, Vol. 1-3: Includes Vols. 1-3", onlyCovering(["1", "2", "3"])],
+  ])("a line-less subtitle statement (%s) maps only when it agrees", async (title, expected) => {
+    expect(await syncFresh(title)).toEqual(expected);
+  });
+
+  // N04 follow-up: a packaging bracket's own Volume list, a subtitle
+  // statement after a phrase's own number or list, and a subtitle that is
+  // only a list are statements too. A Volume list or a phrase's list the
+  // grammar cannot read (left in the Series title or a subtitle) stands
+  // against the rest. A gapped or disagreeing one places nothing, and the
+  // line size never stands in for it.
+  it.each([
+    ["Alpha (3-in-1 Edition 1 & 3), Vol. 1", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition 1 (Omnibus Vol. 1 & 3)", FRESH_UNMAPPED],
+    ["Alpha (Omnibus 1-3) Vol. 4-6", FRESH_UNMAPPED],
+    ["Alpha (Omnibus Vol. 1-3) Vol. 2", onlyCovering(["1", "2", "3"])],
+    ["Alpha Vol. 1 & 3 3-in-1 Edition 1", FRESH_UNMAPPED],
+    ["Alpha Vol. 4-6 Omnibus 1-3", FRESH_UNMAPPED],
+    ["Alpha Omnibus 1 & 3 Deluxe Edition 2 Vol. 4-6", FRESH_UNMAPPED],
+    ["Alpha Deluxe Edition 1-3: Includes Vols. 4-6", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition 1 & 3: Includes Vols. 1-3", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition 1: Includes Vols. 1-3", onlyCovering(["1", "2", "3"])],
+    ["Alpha 3-in-1 Edition, Vol. 1: Vols. 1 & 3", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition, Vol. 1: Volumes 1 & 3", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition, Vol. 1: Vols. 1-3", onlyCovering(["1", "2", "3"])],
+    // A phrase's list in a marker's subtitle, or before a later phrase.
+    ["Alpha Vol. 1-3 Omnibus 1 & 3 Deluxe Edition 1", FRESH_UNMAPPED],
+    ["Alpha Omnibus 1 & 3 Vol. 1-3 Deluxe Edition 1", FRESH_UNMAPPED],
+    ["Alpha Vol. 4-6 Omnibus 1-3 Deluxe Edition 2", FRESH_UNMAPPED],
+    ["Alpha, Vol. 1-3 Omnibus 1 & 3: Cloud Dragon", { volumes: [], covered: [], unmapped: [] }],
+    ["Alpha Vol. 1-3 Omnibus 4-6 Hardcover", { volumes: [], covered: [], unmapped: [] }],
+    // A dash chain where the title read no list before: no Volumes 2–6 or 4–8.
+    ["Alpha Omnibus, Vol. 2: Vol. 2 - 4-6", FRESH_UNMAPPED],
+    ["Alpha (Omnibus) Vol. 2: Vols. 4-6-8", FRESH_UNMAPPED],
+    ["Alpha 3-in-1 Edition, Vol. 1: Vols. 1-2-5", FRESH_UNMAPPED],
+    ["Alpha (Omnibus Vol. 4-6-8)", FRESH_UNMAPPED],
+  ])("a statement or an unread list in the title (%s) maps only when all agree", async (title, expected) => {
+    expect(await syncFresh(title)).toEqual(expected);
+  });
+
+  // N04 follow-up: an unmarked list, a Part or Book list, and a phrase's
+  // range beside a lone number belong to the name or the position, never
+  // to the coverage: the book places as it always did.
+  it.each([
+    ["Persona 3 & 4 Omnibus 1", FRESH_UNMAPPED],
+    ["Persona 3 & 4 3-in-1 Edition 1", onlyCovering(["1", "2", "3"])],
+    ["Alpha Book 1-2 Omnibus 1", FRESH_UNMAPPED],
+    ["Alpha Part 1-2 Omnibus 1 (Vol. 1-3)", onlyCovering(["1", "2", "3"])],
+    ["Alpha Part 1-2, Vol. 1-3", onlyCovering(["1", "2", "3"])],
+    ["Alpha 1, 2 & 3 Omnibus 2", FRESH_UNMAPPED],
+    ["Alpha Omnibus 1-3 Vol. 2", FRESH_UNMAPPED],
+    // An earlier marker designates the book; the trailing statement is its subtitle.
+    ["Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1-3", onlyCovering(["2"])],
+    ["Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1 & 3", onlyCovering(["2"])],
+    ["Alpha, Vol. 2: Omnibus 1 - Includes Vols. 4-6", onlyCovering(["2"])],
+    ["Alpha Part 2: Omnibus 1: Includes Vols. 1-3", onlyCovering(["2"])],
+    ["Alpha Vol. 3: Box Set 1: Includes Vols. 1-3", onlyCovering(["3"])],
+    ["Alpha Omnibus Omnibus Vol. 1-3: Includes Vols. 1-3", onlyCovering(["1", "2", "3"])],
+    ["Alpha Box Set Omnibus Vol. 1-3: Includes Vols. 1-3", onlyCovering(["1", "2", "3"])],
+  ])("a list that is no statement (%s) places the book as before", async (title, expected) => {
+    expect(await syncFresh(title)).toEqual(expected);
+  });
+
+  // A trailing statement split off only where the marker grammar would read
+  // it: an earlier marker keeps the Series the title always named.
+  it.each([
+    ["Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1-3", "Alpha"],
+    ["Alpha: Part 4 - Diamond Deluxe Edition 1: Includes Vols. 1-3", "Alpha"],
+    ["Alpha Omnibus Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha Omnibus"],
+    ["Alpha 3-in-1 Edition Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha 3-in-1 Edition"],
+    ["Alpha Box Set Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha Box Set"],
+  ])("a trailing statement after an earlier marker (%s) keeps Series %s", async (title, seriesTitle) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([{ isbn: "9781646519828", title }]);
+    await sync(t);
+    const series = await t.run(async (ctx) => (await ctx.db.query("series").collect()).map((s) => s.title));
+    expect(series).toEqual([seriesTitle]);
+  });
+
+  // N04 follow-up: a box whose subtitle lists other Volumes links no
+  // members; one whose title agrees links them.
+  it.each([
+    ["Alpha Vol. 4-6 Omnibus 1-3 Box Set", 0],
+    ["Alpha Vol. 4-6 Box Set", 3],
+  ])("a box set (%s) links only the members its title agrees on", async (title, members) => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi([
+      { isbn: "9781646519040", title: "Alpha 4", seriesNumber: 4 },
+      { isbn: "9781646519057", title: "Alpha 5", seriesNumber: 5 },
+      { isbn: "9781646519064", title: "Alpha 6", seriesNumber: 6 },
+      { isbn: "9798888772607", title },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releaseBundles").collect()).toHaveLength(1);
+      expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(members);
+    });
+  });
+
+  // A Series name's thousands-separated number is no list left unread.
+  const SAVING = "Saving 80,000 Gold in Another World for My Retirement";
+  it.each([
+    [`${SAVING} Omnibus 1 (Vol. 1-3)`, undefined, onlyCovering(["1", "2", "3"])],
+    [`${SAVING}, Vol. 1-3`, undefined, onlyCovering(["1", "2", "3"])],
+    [`${SAVING} 3-in-1 Edition 1`, undefined, onlyCovering(["1", "2", "3"])],
+    [`${SAVING} Deluxe Edition 1`, "<p>Collects volumes 1-3.</p>", onlyCovering(["1", "2", "3"])],
+    ["I'm Standing on 1,000,000 Lives Omnibus 1 (Vol. 1-2)", undefined, onlyCovering(["1", "2"])],
+  ])("a thousands-separated number in the Series name (%s) still maps", async (title, flapcopy, expected) => {
+    expect(await syncFresh(title, flapcopy)).toEqual(expected);
+  });
+
   // W05: "Negima!" is the Series' name, not a sentence end. The verb governs
   // 37–38, which the 3-in-1 size at position 13 (37–39) contradicts: no
   // Volume 39 is invented. With no size the statement places the book.

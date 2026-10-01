@@ -37,13 +37,14 @@ export const packagingValidator = v.object({
   linePosition: v.union(v.string(), v.null()),
   /**
    * The source Volumes the book collects, inclusive; null when the title
-   * never says, or lists them with a gap (`coverageGapped`).
+   * never says, or says it in a way no range holds (`coverageGapped`).
    */
   coverRange: v.union(coverRangeValidator, v.null()),
   /**
-   * The title lists its Volumes with a gap ("Vol. 1 & 3"): stated coverage
-   * no range can hold, so neither a blurb nor the line's declared size may
-   * stand in for it (lib/coverage.ts inferCoverage).
+   * The title states its coverage, but no range holds it: a list with a gap
+   * ("Vol. 1 & 3"), a statement that reads two ways, or two statements that
+   * disagree ("Vol. 1-9 (Collects Vols. 1-3)"). Neither a blurb nor the
+   * line's declared size may stand in for it (lib/coverage.ts inferCoverage).
    */
   coverageGapped: v.optional(v.literal(true)),
 });
@@ -293,15 +294,40 @@ const CONJUNCTION_BEFORE = /(?:^|\s)(?:and|&|or|vs\.?|with|the|a)$/i;
 
 // ---------- peeling ----------
 
+/**
+ * What one place in a title says the book collects: undefined when it says
+ * nothing, a range, or null for coverage it states but no range holds (a
+ * gapped list, a statement that reads two ways). The same three states as a
+ * blurb's reading (lib/coverage.ts blurbCoverage). Silence and a rejected
+ * statement are different facts, so these values meet only in `agreed`,
+ * never through `??`.
+ */
+type Stated = CoverRange | null | undefined;
+
+/**
+ * Everything a title states about its coverage, as one reading. A bracket
+ * statement, a bracket range, a subtitle statement or list, and every list
+ * after a marker, a packaging phrase or none (a licensed bare list) are all
+ * the title's own explicit evidence, and none outranks another: silence
+ * yields to whatever the other states; a statement no range holds stands
+ * against any range; and two ranges that differ ("Vol. 1-9 (Collects Vols.
+ * 1-3)") contradict each other, so neither is taken. Picking one would be a
+ * guess.
+ */
+function agreed(a: Stated, b: Stated): Stated {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return a !== null && b !== null && a.from === b.from && a.to === b.to ? a : null;
+}
+
 type Peeled = {
   formatTags: string[];
   isNovel: boolean;
   isBox: boolean;
   /** Packaging names found in bracket groups, closest to the series first. */
   lineNames: string[];
-  coverRange: CoverRange | null;
-  /** A bracket group listed several Volumes, even when a gap left `coverRange` unknown. */
-  multiVolume: boolean;
+  /** What the bracket groups and a subtitle statement say the book collects. */
+  stated: Stated;
   noteLabel: string | null;
 };
 
@@ -311,17 +337,51 @@ function emptyPeel(): Peeled {
     isNovel: false,
     isBox: false,
     lineNames: [],
-    coverRange: null,
-    multiVolume: false,
+    stated: undefined,
     noteLabel: null,
   };
 }
 
-const STATING = "(?:contain(?:s|ing)|includ(?:es|ing)|collect(?:s|ing))\\s+vol(?:ume)?s?\\.?\\s*";
+const VOLS = "vol(?:ume)?s?\\.?\\s*";
+const STATING = `(?:contain(?:s|ing)|includ(?:es|ing)|collect(?:s|ing))\\s+${VOLS}`;
 /** Text that states the book's coverage: a collect-verb, a marker, and a number. */
 const STATEMENT = new RegExp(`^${STATING}#?${NUM}`, "i");
-/** A packaged book's subtitle that only states its coverage: "…, Vol. 1: Includes Vols. 1 & 3". */
-const STATED_SUBTITLE = new RegExp(`^${STATING}(?:${RANGE}|#?${NUM})$`, "i");
+const STATED = `${STATING}(?:${RANGE}|#?${NUM})`;
+/**
+ * A subtitle that only states the book's coverage: a statement ("…, Vol. 1:
+ * Includes Vols. 1 & 3") or a bare list of Volumes ("…, Vol. 1: Vols. 1 & 3").
+ */
+const STATED_SUBTITLE = new RegExp(`^(?:${STATED}|${VOLS}(${RANGE}))$`, "i");
+/**
+ * A trailing subtitle statement, split off before any designation is read so
+ * its marker is never taken for one: "Alpha Deluxe Edition 1-3: Includes Vols. 4-6".
+ */
+const TRAILING_STATEMENT = new RegExp(`^(.*?\\S)\\s*(?::|\\s[-–—])\\s*(${STATED})$`, "i");
+/** A list a packaging phrase introduces: "Omnibus 1 & 3", "Deluxe Edition Vol. 1-3". */
+const PHRASE_LIST = `\\b(?:${PACKAGING_PHRASE})\\s*(?:vols?\\.?|volumes?|#)?\\s*${RANGE}`;
+/**
+ * What a packaged book must never leave unread in its Series title or line
+ * name: a Volume list ("Vol. 1 & 3", "#1-3") or a phrase's list. A Part or
+ * Book list ("Alpha Part 1-2") and an unmarked one ("Persona 3 & 4") belong
+ * to the name.
+ */
+const LEFT_LIST = new RegExp(`(?<![a-z])(?:${VOLS}|#\\s*)${RANGE}|${PHRASE_LIST}`, "i");
+/** A phrase's list in a subtitle: "Alpha Vol. 1-3 Omnibus 1 & 3 Deluxe Edition 1". */
+const SUBTITLE_LIST = new RegExp(PHRASE_LIST, "i");
+/** A packaging bracket's own Volume list: "(Omnibus Vol. 1-3)", "(Omnibus #1 & 3)". */
+const GROUP_LIST = new RegExp(`^(.*?)\\s*(?:vols?\\.?|volumes?|#)\\s*(${RANGE})$`, "i");
+/** A dash chain ("2 - 4-6", "4-6-8"), which `parseVolumeList` spans first to last. */
+const DASH_CHAIN = new RegExp(`${NUM}\\s*[-–—]\\s*(?:${VOLS})?#?${NUM}\\s*[-–—]`, "i");
+
+/**
+ * A Volume list read where the title's designation grammar reads none: a
+ * packaging bracket's own list, a subtitle, a carried subtitle beside the
+ * book's designation. A dash chain there names no range, so it is a
+ * statement no range holds, never the span from its first number to its last.
+ */
+function statedList(list: string): Stated {
+  return DASH_CHAIN.test(list) ? null : parseVolumeList(list)?.coverRange;
+}
 
 /**
  * "Contains Vol. 9 & Ashen Victor", "Collecting Vols. 1-3 plus 4-6 and 7-9
@@ -334,10 +394,8 @@ const STATED_SUBTITLE = new RegExp(`^${STATING}(?:${RANGE}|#?${NUM})$`, "i");
  */
 function absorbStatement(text: string, peel: Peeled): boolean {
   if (!STATEMENT.test(text)) return false;
-  const range = coverageFromText(text);
-  peel.coverRange = range;
-  // Null is a list of several items or one no range holds: gapped, never silence.
-  peel.multiVolume ||= range === null || range.from !== range.to;
+  // The text states coverage, so a list left unread is rejected, never silence.
+  peel.stated = agreed(peel.stated, coverageFromText(text));
   return true;
 }
 
@@ -359,9 +417,7 @@ function absorbGroup(inner: string, peel: Peeled): boolean {
     "i",
   ).exec(text);
   if (coverage) {
-    const listed = parseVolumeList(coverage[1]!);
-    peel.coverRange = listed?.coverRange ?? null;
-    peel.multiVolume ||= listed !== null;
+    peel.stated = agreed(peel.stated, parseVolumeList(coverage[1]!)?.coverRange);
     const rest = coverage[2]?.trim();
     if (rest) {
       if (PACKAGING_TAG.test(rest)) peel.lineNames.push(tidyLineName(rest));
@@ -375,7 +431,14 @@ function absorbGroup(inner: string, peel: Peeled): boolean {
   }
   if (PACKAGING_TAG.test(text)) {
     if (BOX.test(text)) peel.isBox = true;
-    peel.lineNames.push(tidyLineName(text));
+    // "(Omnibus Vol. 1-3)": the list is a statement, never part of the line name.
+    const list = GROUP_LIST.exec(text);
+    if (list && PACKAGING_TAG.test(list[1]!)) {
+      peel.stated = agreed(peel.stated, statedList(list[2]!));
+      peel.lineNames.push(tidyLineName(list[1]!));
+    } else {
+      peel.lineNames.push(tidyLineName(text));
+    }
     return true;
   }
   const note = BRACKET_MARKER.exec(text);
@@ -434,9 +497,8 @@ type TrailingPackaging = {
   rest: string;
   lineName: string;
   position: string | null;
-  range: CoverRange | null;
-  /** What follows the phrase lists several Volumes ("Omnibus 5-6"), gapped or not. */
-  multiVolume: boolean;
+  /** The Volumes listed after the phrase ("Omnibus 5-6"); a gapped list is null. */
+  listed: Stated;
   isBox: boolean;
 };
 
@@ -451,10 +513,9 @@ function trailingPackaging(text: string): TrailingPackaging | null {
   const phrase = m[2]!;
   const season = new RegExp(`^${SEASON_PREFIX}`, "i").exec(phrase)?.[0]?.trim();
   const name = season ? phrase.slice(season.length).trim() : phrase;
-  const listed = m[3] !== undefined ? parseVolumeList(m[3]) : null;
-  const range = listed?.coverRange ?? null;
+  const listed = m[3] !== undefined ? parseVolumeList(m[3])?.coverRange : undefined;
   const position =
-    listed === null && m[3] !== undefined
+    listed === undefined && m[3] !== undefined
       ? /^\d/.test(m[3])
         ? canonicalLabel(m[3])
         : m[3]
@@ -465,10 +526,15 @@ function trailingPackaging(text: string): TrailingPackaging | null {
     rest: m[1]!,
     lineName: tidyLineName(name),
     position,
-    range,
-    multiVolume: listed !== null,
+    listed,
     isBox: BOX.test(phrase),
   };
+}
+
+/** The text ends, brackets aside, in a packaging phrase with its own number or list ("Dragonball 3-in-1 Edition 1"). */
+function endsInPackaging(text: string): boolean {
+  const phrase = trailingPackaging(peelTrailingGroups(text, emptyPeel()));
+  return phrase !== null && (phrase.position !== null || phrase.listed !== undefined);
 }
 
 function sameNumber(
@@ -512,14 +578,28 @@ export function parseBookTitle(
 
   let volumeLabel: string | null = null;
   let volumeSubtitle: string | null = null;
-  let range: CoverRange | null = null;
+  // The Volumes a designation lists outside the brackets ("Vol. 1-3",
+  // "Omnibus 5-6"): packaging even when a gap leaves it null.
+  let listed: Stated = undefined;
   let bareNumber = false;
   let bareRoman = false;
   let bareSplit: ParsedBookTitle["bareSplit"] = null;
   let packagingName: string | null = null;
   let linePosition: string | null = null;
-  // A designation listed several Volumes: packaging even when a gap left `range` null.
-  let multiVolume = false;
+
+  // A subtitle statement goes first when a packaging phrase's own number or
+  // list precedes it and the marker grammar would otherwise take its "Vols."
+  // for the designation: "Dragonball 3-in-1 Edition 1: Includes vols. 1, 2 &
+  // 3". An earlier marker keeps its reading: "Alpha, Vol. 2: Includes Vols.
+  // 4-6" and "Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1-3" are Vol.
+  // 2, the subtitle display text.
+  const trailing = TRAILING_STATEMENT.exec(text);
+  const marker = trailing ? VOLUME_MARKER.exec(text) : null;
+  const statement =
+    trailing && (marker === null || marker[1]!.length > trailing[1]!.length) && endsInPackaging(trailing[1]!)
+      ? trailing
+      : null;
+  if (statement) text = peelTrailingGroups(statement[1]!, peel);
 
   // A trailing packaging phrase, maybe with its own position: "Negima!
   // Omnibus 4"; without one the text before it may still carry a marker
@@ -529,30 +609,25 @@ export function parseBookTitle(
     text = packaged.rest;
     packagingName = packaged.lineName;
     linePosition = packaged.position;
-    range = packaged.range;
-    multiVolume = packaged.multiVolume;
+    listed = packaged.listed;
     peel.isBox ||= packaged.isBox;
     // A second phrase is part of the same packaging: "Deluxe Complete Series Box Set".
     const more = trailingPackaging(text);
-    if (more && more.position === null && !more.multiVolume) {
+    if (more && more.position === null && more.listed === undefined) {
       text = more.rest;
       peel.formatTags.push(more.lineName);
       peel.isBox ||= more.isBox;
     }
   }
-  if (linePosition === null && !multiVolume) {
+  if (linePosition === null && listed === undefined) {
     const marked = VOLUME_MARKER.exec(text);
     if (marked) {
       text = marked[1]!;
       const designation = marked[2]!;
       // "18+1" is one extra volume's label, never a range.
-      const listed = PLUS_EXTRA_RE.test(designation) ? null : parseVolumeList(designation);
-      if (listed) {
-        range = listed.coverRange;
-        multiVolume = true;
-      } else volumeLabel = canonicalLabel(designation);
-      const subtitle = (marked[3] ?? marked[4])?.trim();
-      volumeSubtitle = subtitle ? subtitle : null;
+      listed = PLUS_EXTRA_RE.test(designation) ? undefined : parseVolumeList(designation)?.coverRange;
+      if (listed === undefined) volumeLabel = canonicalLabel(designation);
+      volumeSubtitle = (marked[3] ?? marked[4])?.trim() || null;
     }
   }
 
@@ -566,6 +641,15 @@ export function parseBookTitle(
       text = inner.rest;
       packagingName = inner.lineName;
       linePosition ??= inner.position;
+      // "Alpha Omnibus 1-3 Vol. 4-6": beside a marker's list, the list after
+      // the phrase is one more statement, and a gap there stands against a
+      // marker's lone number too ("Alpha 3-in-1 Edition 1 & 3, Vol. 1"). A
+      // range beside a lone number ("Omnibus 1-3 Vol. 2") is no statement of
+      // its own, and with no marker read the bare number before the phrase
+      // is still read ("Alpha 2 Omnibus (Light Novel) 1 & 3" is position 2).
+      if (listed !== undefined || (inner.listed === null && volumeLabel !== null)) {
+        listed = agreed(listed, inner.listed);
+      }
       peel.isBox ||= inner.isBox;
       text = peelTrailingGroups(text, peel);
     }
@@ -573,7 +657,7 @@ export function parseBookTitle(
 
   // An unmarked trailing number: only with a peeled tag or packaging as
   // context, or when it equals the source's own volume number.
-  if (volumeLabel === null && !multiVolume && linePosition === null) {
+  if (volumeLabel === null && listed === undefined && linePosition === null) {
     const bare = BARE_NUMBER.exec(text);
     const context =
       peel.formatTags.length > 0 ||
@@ -581,11 +665,11 @@ export function parseBookTitle(
       packagingName !== null;
     if (bare && !/\bno\.?$/i.test(bare[1]!.trim())) {
       const designation = bare[2]!;
-      const listed = parseVolumeList(designation);
+      const list = parseVolumeList(designation)?.coverRange;
       const numbers = designation.match(/\d+(?:\.\d+)?/g) ?? [];
       const licensed =
         context ||
-        (listed
+        (list !== undefined
           ? sameNumber(numbers[0]!, options.seriesNumber) ||
             sameNumber(numbers.at(-1)!, options.seriesNumber)
           : sameNumber(designation, options.seriesNumber));
@@ -594,41 +678,48 @@ export function parseBookTitle(
         // "The Blue Wolves of Mibu 5 (Blue Miburo)".
         text = peelTrailingGroups(bare[1]!, peel);
         bareNumber = true;
-        if (listed) {
-          range = listed.coverRange;
-          multiVolume = true;
-        } else volumeLabel = canonicalLabel(designation);
+        listed = list;
+        if (list === undefined) volumeLabel = canonicalLabel(designation);
         volumeSubtitle = bare[3]?.trim() || null;
-      } else if (!listed) {
+      } else if (list === undefined) {
         bareSplit = { seriesTitle: tidySeries(bare[1]!), volumeLabel: canonicalLabel(designation) };
       }
     }
   }
 
   // A volume noted only in brackets: "(Kase-san and... Book 3)", "(Vol. 13)".
-  if (volumeLabel === null && !multiVolume && peel.noteLabel !== null) {
+  if (volumeLabel === null && listed === undefined && peel.noteLabel !== null) {
     volumeLabel = peel.noteLabel;
   }
 
-  // A separately carried subtitle may hold the marker (OpenLibrary).
-  if (volumeLabel === null && !multiVolume && options.subtitle) {
-    const sub = new RegExp(
-      `^${MARKER}\\s*(${RANGE}|${LABEL})(?:\\s*[:\\-–]\\s*(.+))?$`,
-      "i",
-    ).exec(options.subtitle.trim());
-    if (sub) {
-      const listed = parseVolumeList(sub[1]!);
-      if (listed) {
-        range = listed.coverRange;
-        multiVolume = true;
-      } else volumeLabel = canonicalLabel(sub[1]!);
-      volumeSubtitle = sub[2]?.trim() || null;
+  // A separately carried subtitle may hold the marker (OpenLibrary). Beside
+  // a packaged book's own designation (judged here, once the bare number has
+  // peeled its brackets) a Volume list there is one more statement ("Aoashi
+  // (3-in-1 Edition) Volume 3" carrying "Vol. 7,8,9"), and so may be its
+  // subtitle. A Part or Book list there names no Volumes.
+  const carried = options.subtitle
+    ? new RegExp(`^(${MARKER})\\s*(${RANGE}|${LABEL})(?:\\s*[:\\-–]\\s*(.+))?$`, "i").exec(options.subtitle.trim())
+    : null;
+  let carriedSubtitle: string | undefined;
+  if (carried) {
+    const list = parseVolumeList(carried[2]!)?.coverRange;
+    if (volumeLabel === null && listed === undefined) {
+      listed = list;
+      if (list === undefined) volumeLabel = canonicalLabel(carried[2]!);
+      volumeSubtitle = carried[3]?.trim() || null;
+    } else if (
+      list !== undefined &&
+      /^(?:vol|#)/i.test(carried[1]!) &&
+      (packagingName !== null || peel.lineNames.length > 0 || peel.stated !== undefined || listed !== undefined)
+    ) {
+      listed = agreed(listed, statedList(carried[2]!));
+      carriedSubtitle = carried[3];
     }
   }
 
   // Last, and only when nothing else named the volume (a bracket, a
   // subtitle): "Kingdom Hearts II (Vol. 3)" is Vol. 3 of Kingdom Hearts II.
-  if (volumeLabel === null && !multiVolume && linePosition === null && packagingName === null) {
+  if (volumeLabel === null && listed === undefined && linePosition === null && packagingName === null) {
     const roman = BARE_ROMAN.exec(text);
     if (roman && !CONJUNCTION_BEFORE.test(roman[1]!)) {
       text = roman[1]!;
@@ -639,26 +730,47 @@ export function parseBookTitle(
   }
   // A declined split is offered only while no label is known: "Tower
   // Dungeon 7 (Vol. 8)" is Vol. 8, never 7.
-  if (volumeLabel !== null || multiVolume) bareSplit = null;
+  if (volumeLabel !== null || listed !== undefined) bareSplit = null;
 
   // Bracket packaging names apply when no trailing phrase named the line.
   const lineName = packagingName ?? peel.lineNames[0] ?? null;
-  // "Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1 & 3": a packaged
-  // book's subtitle may state the coverage its title left out.
-  const unstated = !multiVolume && !peel.multiVolume && peel.coverRange === null;
-  if (lineName !== null && unstated && volumeSubtitle !== null && STATED_SUBTITLE.test(volumeSubtitle)) {
-    absorbStatement(volumeSubtitle, peel);
+  // "Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1 & 3", "Alpha 3-in-1
+  // Edition, Vol. 1: Vols. 1 & 3": a subtitle may state the coverage too,
+  // with or without a line, unless the book is a plain Volume ("Alpha, Vol.
+  // 1: Includes Vols. 1 & 3" stays Vol. 1, the subtitle display text). A
+  // carried subtitle is read whole as well as after its marker: "Includes
+  // Vols. 1 & 3" carried beside "Alpha Omnibus Vol. 1-3" states it too.
+  const isPackaging = lineName !== null || listed !== undefined || peel.stated !== undefined;
+  if (isPackaging || volumeLabel === null) {
+    const subtitles = [volumeSubtitle, statement?.[2], carriedSubtitle, options.subtitle];
+    for (const subtitle of new Set(subtitles)) {
+      const said = subtitle ? STATED_SUBTITLE.exec(subtitle.trim()) : null;
+      if (!said) continue;
+      if (said[1] === undefined) absorbStatement(said[0], peel);
+      else peel.stated = agreed(peel.stated, statedList(said[1]));
+    }
   }
-  const coverRange = peel.coverRange ?? range;
+  volumeSubtitle ??= statement?.[2] ?? null;
+  // Brackets and the designation outside them must agree (see `agreed`): a
+  // rejected statement is never replaced by the other's range. A list still
+  // left in a packaged book's Series title or line name, or a phrase's list
+  // in its subtitle, was stated but never read, so it stands against any
+  // range as a rejected statement would.
+  const unread =
+    LEFT_LIST.test(text) ||
+    (lineName !== null && LEFT_LIST.test(lineName)) ||
+    [volumeSubtitle, options.subtitle].some((subtitle) => subtitle && SUBTITLE_LIST.test(subtitle));
+  const read = agreed(peel.stated, listed);
+  const stated = unread && (read !== undefined || lineName !== null || peel.isBox) ? null : read;
   let packaging: Packaging | null = null;
-  if (lineName !== null || coverRange !== null || multiVolume || peel.multiVolume || peel.isBox) {
+  if (lineName !== null || stated !== undefined || peel.isBox) {
     packaging = {
       lineName: lineName ?? (peel.isBox ? "Box Set" : null),
       // A single number next to packaging is its line position, never a Volume.
       linePosition: linePosition ?? volumeLabel,
-      coverRange,
-      // Several Volumes listed, yet no range: the list skips one.
-      ...(coverRange === null && (multiVolume || peel.multiVolume) ? { coverageGapped: true } : {}),
+      // The stored shape: silence is a null range alone, a rejection carries the flag.
+      coverRange: stated ?? null,
+      ...(stated === null ? { coverageGapped: true } : {}),
     };
     volumeLabel = null;
   }

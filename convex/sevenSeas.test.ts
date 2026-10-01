@@ -2090,6 +2090,171 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     expect(await syncOne(book, blurb)).toEqual(expected);
   });
 
+  // N04: a range outside the brackets never stands in for a bracket
+  // statement no range holds, and two ranges that disagree place nothing:
+  // no Volume 4–9 is invented. Only an agreeing pair maps the book.
+  it.each([
+    [DELUXE, "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)", UNMAPPED],
+    [DELUXE, "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", UNMAPPED],
+    [DELUXE, "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)", UNMAPPED],
+    [DELUXE, "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3)", UNMAPPED],
+    [
+      DELUXE,
+      "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 7-9 in one book)",
+      onlyCovering(ONE_TO_NINE),
+    ],
+    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1 and 3)", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-6)", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3)", PLACED_1_3],
+    // The reverse: a gapped designation outside, a range in the bracket.
+    [DELUXE, "Alpha Deluxe Edition Vol. 1 & 3 (Collects Vols. 1-3)", UNMAPPED],
+  ])("a title stating its coverage twice (%#) maps only when both agree", async (book, title, expected) => {
+    expect(await syncOne({ ...book, title }, "")).toEqual(expected);
+  });
+
+  // N04: with no Edition Line to wait under, a bare range whose bracket
+  // disagrees places nothing at all; the observation waits for an Editor.
+  it.each([
+    "Alpha, Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)",
+    "Alpha, Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)",
+  ])("a bare range beside a rejected bracket statement (%s) creates no Volume", async (title) => {
+    const book = { ...DELUXE, title, seriesSlug: "alpha", seriesTitle: "Alpha" };
+    expect(await syncOne(book, "")).toEqual({ volumes: [], coverages: 0, unmapped: [] });
+  });
+
+  // N04: the rejected title is evidence, so a readable blurb never stands in.
+  it("a blurb never stands in for a title statement the outer range contradicts", async () => {
+    const title = "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)";
+    expect(await syncOne({ ...DELUXE, title }, "<p>Collects volumes 1-9.</p>")).toEqual(UNMAPPED);
+  });
+
+  // N04 siblings: a list after the packaging phrase meets the marker's
+  // designation in `agreed`, so the 3-in-1 size never places a gapped book.
+  // A lone number after the phrase is a line position and still maps.
+  it.each([
+    [THREE_IN_1, "Alpha 3-in-1 Edition 1 & 3, Vol. 1", UNMAPPED],
+    [OMNIBUS, "Alpha Omnibus 1-3 Vol. 4-6", UNMAPPED],
+    [OMNIBUS, "Alpha Omnibus 1-3 Vol. 1-3", PLACED_1_3],
+    [OMNIBUS, "Alpha Omnibus 2 (Vol. 4-6)", onlyCovering(["4", "5", "6"])],
+    [OMNIBUS, "Alpha Omnibus 2 Vol. 4-6", onlyCovering(["4", "5", "6"])],
+  ])("a list before a marker (%#) maps only when both agree", async (book, title, expected) => {
+    expect(await syncOne({ ...book, title }, "")).toEqual(expected);
+  });
+
+  // N04 siblings: a line-less book's subtitle statement meets its range in
+  // `agreed`; a disagreeing one places nothing.
+  it.each([
+    ["Alpha, Vol. 1-3: Includes Vols. 1 & 3", { volumes: [], coverages: 0, unmapped: [] }],
+    ["Alpha, Vol. 1-3: Includes Vols. 1-6", { volumes: [], coverages: 0, unmapped: [] }],
+    ["Alpha, Vol. 1-3: Includes Vols. 1-3", PLACED_1_3],
+  ])("a line-less subtitle statement (%s) maps only when it agrees", async (title, expected) => {
+    const book = { ...DELUXE, title, seriesSlug: "alpha", seriesTitle: "Alpha" };
+    expect(await syncOne(book, "")).toEqual(expected);
+  });
+
+  // N04 follow-up: a packaging bracket's own Volume list, a subtitle
+  // statement after a phrase's own number or list, and a subtitle that is
+  // only a list are statements too. A Volume list or a phrase's list the
+  // grammar cannot read (left in the Series title or a subtitle) stands
+  // against the rest. A gapped or disagreeing one places nothing, and the
+  // line size never stands in for it.
+  it.each([
+    [THREE_IN_1, "Alpha (3-in-1 Edition 1 & 3), Vol. 1", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition 1 (Omnibus Vol. 1 & 3)", UNMAPPED],
+    [OMNIBUS, "Alpha (Omnibus 1-3) Vol. 4-6", UNMAPPED],
+    [OMNIBUS, "Alpha (Omnibus Vol. 1-3) Vol. 2", PLACED_1_3],
+    [THREE_IN_1, "Alpha Vol. 1 & 3 3-in-1 Edition 1", UNMAPPED],
+    [OMNIBUS, "Alpha Vol. 4-6 Omnibus 1-3", UNMAPPED],
+    [DELUXE, "Alpha Omnibus 1 & 3 Deluxe Edition 2 Vol. 4-6", UNMAPPED],
+    [DELUXE, "Alpha Deluxe Edition 1-3: Includes Vols. 4-6", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition 1 & 3: Includes Vols. 1-3", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition 1: Includes Vols. 1-3", PLACED_1_3],
+    [THREE_IN_1, "Alpha 3-in-1 Edition, Vol. 1: Vols. 1 & 3", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition, Vol. 1: Volumes 1 & 3", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition, Vol. 1: Vols. 1-3", PLACED_1_3],
+    // A phrase's list in a marker's subtitle, or before a later phrase.
+    [DELUXE, "Alpha Vol. 1-3 Omnibus 1 & 3 Deluxe Edition 1", UNMAPPED],
+    [DELUXE, "Alpha Omnibus 1 & 3 Vol. 1-3 Deluxe Edition 1", UNMAPPED],
+    [DELUXE, "Alpha Vol. 4-6 Omnibus 1-3 Deluxe Edition 2", UNMAPPED],
+    // A dash chain where the title read no list before: no Volumes 2–6 or 4–8.
+    [OMNIBUS, "Alpha Omnibus, Vol. 2: Vol. 2 - 4-6", UNMAPPED],
+    [OMNIBUS, "Alpha (Omnibus) Vol. 2: Vols. 4-6-8", UNMAPPED],
+    [THREE_IN_1, "Alpha 3-in-1 Edition, Vol. 1: Vols. 1-2-5", UNMAPPED],
+    [OMNIBUS, "Alpha (Omnibus Vol. 4-6-8)", UNMAPPED],
+  ])("a statement or an unread list in the title (%#) maps only when all agree", async (book, title, expected) => {
+    expect(await syncOne({ ...book, title }, "")).toEqual(expected);
+  });
+
+  it.each(["Alpha, Vol. 1-3 Omnibus 1 & 3: Cloud Dragon", "Alpha Vol. 1-3 Omnibus 4-6 Hardcover"])(
+    "a line-less book whose subtitle holds a phrase's list (%s) creates no Volume",
+    async (title) => {
+      const book = { ...DELUXE, title, seriesSlug: "alpha", seriesTitle: "Alpha" };
+      expect(await syncOne(book, "")).toEqual({ volumes: [], coverages: 0, unmapped: [] });
+    },
+  );
+
+  // N04 follow-up: an unmarked list, a Part or Book list, and a phrase's
+  // range beside a lone number belong to the name or the position, never
+  // to the coverage: the book places as it always did.
+  it.each([
+    [OMNIBUS, "Persona 3 & 4 Omnibus 1", UNMAPPED],
+    [THREE_IN_1, "Persona 3 & 4 3-in-1 Edition 1", PLACED_1_3],
+    [OMNIBUS, "Alpha Book 1-2 Omnibus 1", UNMAPPED],
+    [OMNIBUS, "Alpha Part 1-2 Omnibus 1 (Vol. 1-3)", PLACED_1_3],
+    [OMNIBUS, "Alpha 1, 2 & 3 Omnibus 2", UNMAPPED],
+    [OMNIBUS, "Alpha Omnibus 1-3 Vol. 2", UNMAPPED],
+    // An earlier marker designates the book; the trailing statement is its subtitle.
+    [DELUXE, "Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1-3", onlyCovering(["2"])],
+    [DELUXE, "Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1 & 3", onlyCovering(["2"])],
+    [OMNIBUS, "Alpha, Vol. 2: Omnibus 1 - Includes Vols. 4-6", onlyCovering(["2"])],
+    [OMNIBUS, "Alpha Part 2: Omnibus 1: Includes Vols. 1-3", onlyCovering(["2"])],
+    [OMNIBUS, "Alpha Vol. 3: Box Set 1: Includes Vols. 1-3", onlyCovering(["3"])],
+    [OMNIBUS, "Alpha Omnibus Omnibus Vol. 1-3: Includes Vols. 1-3", PLACED_1_3],
+    [OMNIBUS, "Alpha Box Set Omnibus Vol. 1-3: Includes Vols. 1-3", PLACED_1_3],
+  ])("a list that is no statement (%#) places the book as before", async (book, title, expected) => {
+    expect(await syncOne({ ...book, title }, "")).toEqual(expected);
+  });
+
+  it("a Part list beside a line-less range (Alpha Part 1-2, Vol. 1-3) places it as before", async () => {
+    const book = { ...DELUXE, title: "Alpha Part 1-2, Vol. 1-3", seriesSlug: "alpha", seriesTitle: "Alpha" };
+    expect(await syncOne(book, "")).toEqual(PLACED_1_3);
+  });
+
+  // A trailing statement split off only where the marker grammar would read
+  // it: an earlier marker keeps the Series the title always named.
+  it.each([
+    ["Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1-3", "Alpha"],
+    ["Alpha: Part 4 - Diamond Deluxe Edition 1: Includes Vols. 1-3", "Alpha"],
+    ["Alpha Omnibus Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha Omnibus"],
+    ["Alpha 3-in-1 Edition Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha 3-in-1 Edition"],
+    ["Alpha Box Set Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha Box Set"],
+  ])("a trailing statement after an earlier marker (%s) keeps Series %s", async (title, seriesTitle) => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([{ ...OMNIBUS, slug: "alpha-book", seriesSlug: "alpha-book", seriesTitle: undefined, title }]);
+    await sync(t);
+    const series = await t.run(async (ctx) => (await ctx.db.query("series").collect()).map((s) => s.title));
+    expect(series).toEqual([seriesTitle]);
+  });
+
+  // A Series name's thousands-separated number is no list left unread.
+  const SAVING = "Saving 80,000 Gold in Another World for My Retirement";
+  it.each([
+    [OMNIBUS, `${SAVING} Omnibus 1 (Vol. 1-3)`, "", PLACED_1_3],
+    [THREE_IN_1, `${SAVING} 3-in-1 Edition 1`, "", PLACED_1_3],
+    [DELUXE, `${SAVING} Deluxe Edition 1`, "<p>Collects volumes 1-3.</p>", PLACED_1_3],
+    [OMNIBUS, "I'm Standing on 1,000,000 Lives Omnibus 1 (Vol. 1-2)", "", onlyCovering(["1", "2"])],
+  ])("a thousands-separated number in the Series name (%#) still maps", async (book, title, blurb, expected) => {
+    expect(await syncOne({ ...book, title }, blurb)).toEqual(expected);
+  });
+
+  it("a thousands-separated number in a line-less Series name still maps", async () => {
+    const book = { ...DELUXE, title: `${SAVING}, Vol. 1-3`, seriesSlug: "saving", seriesTitle: SAVING };
+    expect(await syncOne(book, "")).toEqual(PLACED_1_3);
+  });
+
   // W05: "Negima!" is the Series' name, not a sentence end. The verb governs
   // 37–38, which the 3-in-1 size at position 13 (37–39) contradicts: no
   // Volume 39 is invented. With no size the statement places the book.

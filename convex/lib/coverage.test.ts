@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseBookTitle } from "./bookTitle";
 import { coverageFromLine, coverageFromText, inferCoverage } from "./coverage";
 import { cleanBlurb } from "./text";
 
@@ -97,6 +98,24 @@ describe("inferCoverage — precedence", () => {
     });
     // An unusable bare range states nothing, so the size still applies.
     expect(inferCoverage(threeIn1, ["Volumes 1-80 of the saga."])).toEqual({ from: "1", to: "3" });
+  });
+
+  // N04: a title that rejects its own statement, or states two ranges,
+  // arrives gapped, so no blurb and no line size stands in for it.
+  it("never places a title whose own coverage statements are rejected or disagree", () => {
+    for (const title of [
+      "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)",
+      "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1 and 3)",
+      "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-6)",
+      "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)",
+      "Alpha, Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)",
+    ]) {
+      const packaging = parseBookTitle(title).packaging!;
+      expect(inferCoverage(packaging, []), title).toBeNull();
+      expect(inferCoverage(packaging, ["Collects volumes 1-3."]), title).toBeNull();
+    }
+    const agreeing = parseBookTitle("Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3)").packaging!;
+    expect(inferCoverage(agreeing, ["Collects volumes 4-6."])).toEqual({ from: "1", to: "3" });
   });
 
   // R12: a gapped list needs no collect-verb to count. Without one it was
