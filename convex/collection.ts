@@ -22,7 +22,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { resolveActiveSeries } from "./catalog";
 import { editionCoverage, followMerges } from "./catalogPages";
 import { requireUser, viewerOrNull } from "./lib/auth";
-import { coverIsbnForRelease, coverUrl } from "./lib/covers";
+import { releaseCover } from "./lib/covers";
 import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
 import { requireActiveRelease } from "./reading";
@@ -509,8 +509,7 @@ async function libraryBook(
       anchor: releaseAnchor(release),
       format: release.format,
       binding: release.binding ?? null,
-      coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
-      coverIsbn: await coverIsbnForRelease(ctx, release),
+      ...(await releaseCover(ctx, release)),
       read: await editionRead(ctx, userId, edition._id),
     },
   };
@@ -704,7 +703,7 @@ export const myLibrary = query({
         seriesPublicId: shelf.seriesPublicId,
         title: shelf.title,
         coverUrl: stats?.coverUrl ?? paths[0]?.books[0]?.coverUrl ?? null,
-        coverIsbn: stats?.coverIsbn ?? paths[0]?.books[0]?.coverIsbn ?? null,
+        coverIsbn: stats?.coverIsbn ?? paths[0]?.books[0]?.coverIsbns[0] ?? null,
         paths,
       });
     }

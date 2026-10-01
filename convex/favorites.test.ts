@@ -310,6 +310,62 @@ describe("Favorites of an omnibus Edition", () => {
     expect(await cover()).toMatchObject({ publicId: 11, coverUrl: null, coverIsbn: null });
   });
 
+  // An ebook ISBN rarely has art upstream; the print one usually does.
+  it("looks a favorited Edition's jacket up by its print ISBN, though the ebook came first", async () => {
+    const { t, ids } = await seed();
+    const books = await seedEditions(t, ids);
+    await t.run(async (ctx) => {
+      const twin = (await ctx.db.get(books.twin))!;
+      const release = (format: "physical" | "digital", isbn13: string, sort: number) =>
+        ctx.db.insert("releases", {
+          status: "active",
+          editionId: books.twin,
+          publisherId: twin.publisherId,
+          seriesIds: [ids.one.seriesId],
+          format,
+          language: "en",
+          isbn13,
+          pubDate: { year: Math.floor(sort / 10000), sort },
+        });
+      await release("digital", "9781974700902", 20240101);
+      await release("physical", "9781974700901", 20240601);
+    });
+    await toggle(t, READER, { kind: "edition", id: books.twin });
+    const mine = await t.withIdentity({ subject: READER }).query(api.favorites.mine, {});
+    expect(mine!.items[0]).toMatchObject({ publicId: 904, coverUrl: null, coverIsbn: "9781974700901" });
+  });
+
+  it("looks a favorited Volume's jacket up by a print ISBN before an ebook one", async () => {
+    const { t, ids } = await seed();
+    await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 905, publisherId });
+      await ctx.db.insert("volumeCoverages", {
+        editionId,
+        volumeId: ids.two.volumeId,
+        order: 0,
+        extent: "complete",
+      });
+      for (const [format, isbn13] of [
+        ["digital", "9781974700952"],
+        ["physical", "9781974700951"],
+      ] as const) {
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          publisherId,
+          seriesIds: [ids.two.seriesId],
+          format,
+          language: "en",
+          isbn13,
+        });
+      }
+    });
+    await toggle(t, READER, { kind: "volume", id: ids.two.volumeId });
+    const mine = await t.withIdentity({ subject: READER }).query(api.favorites.mine, {});
+    expect(mine!.items[0]).toMatchObject({ publicId: 21, coverUrl: null, coverIsbn: "9781974700951" });
+  });
+
   it("purging a user deletes their Edition Favorites", async () => {
     const { t, ids } = await seed();
     const books = await seedEditions(t, ids);

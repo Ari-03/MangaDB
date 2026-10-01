@@ -23,7 +23,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { resolveActiveSeries } from "./catalog";
 import { editionCoverage, followMerges } from "./catalogPages";
 import { requireUser, viewerOrNull } from "./lib/auth";
-import { coverIsbnForRelease, coverUrl } from "./lib/covers";
+import { releaseCover } from "./lib/covers";
 import { releaseAnchor } from "./lib/titles";
 
 // Mirrors the userSeriesStates.readingStatus union in schema.ts.
@@ -264,7 +264,7 @@ export const myReading = query({
         editionTitle: string;
         anchor: string;
         coverUrl: string | null;
-        coverIsbn: string | null;
+        coverIsbns: string[];
       }>;
     };
     const rows = new Map<Id<"series">, Row>();
@@ -336,8 +336,7 @@ export const myReading = query({
         editionPublicId: edition.publicId,
         editionTitle: title,
         anchor: releaseAnchor(release),
-        coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
-        coverIsbn: await coverIsbnForRelease(ctx, release),
+        ...(await releaseCover(ctx, release)),
       });
     }
 

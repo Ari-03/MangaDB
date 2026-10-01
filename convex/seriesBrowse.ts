@@ -31,7 +31,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { coverUrl, seriesCoverIsbn, type SeriesCoverCandidate } from "./lib/covers";
+import { coverUrl, seriesCoverIsbns, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
 import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
@@ -480,7 +480,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     ratingCount: rating.count,
     ratingRank: ratingRankOf(rating),
     coverUrl: storedCover,
-    coverIsbn: seriesCoverIsbn(coverCandidates),
+    coverIsbn: seriesCoverIsbns(coverCandidates)[0] ?? null,
     ...(mature ? { mature: true as const } : {}),
     rebuiltAt,
   };

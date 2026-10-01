@@ -48,12 +48,17 @@ by size and hash, so those books stay cloth. A miss everywhere is remembered
 for a day; an upstream that is down or rate-limiting (OpenLibrary returns 403
 past ~100 ISBN lookups per 5 minutes per IP) makes it a five-minute miss.
 
-`<Cover>` takes a stored `src` and one or more ISBNs (`isbn13`, or the
-ordered list `coverIsbns()` builds: physical before digital) and tries them
-in order, drawing cloth after the last 404, including one that failed before
-hydration. Series shelves store one ISBN per Series (`seriesStats.coverIsbn`,
-and `seriesCover` for the home shelf), picked by `seriesCoverIsbn`: physical,
-already published, earliest Volume, standard run before an Edition Line. The
+`<Cover>` takes a stored `src` and up to three ISBNs (`isbn13`), tried in
+order, drawing cloth after the last 404, including one that failed before
+hydration. A Release wears its Edition's jacket (`convex/lib/covers.ts`
+`releaseCover`): its own stored cover, else the Edition's first, and the
+Edition's ISBNs, physical before digital, so an ebook row and the Edition
+page find the same print art. An Edition with no ISBN borrows one from
+another Edition of its first Volume. The Volume and Series pages build their
+list with `coverIsbns()` the same way. Series shelves store one ISBN per
+Series (`seriesStats.coverIsbn`), the first `seriesCoverIsbns` pick:
+physical, already published, earliest Volume, standard run before an Edition
+Line; the home shelf's `seriesCover` offers the first three. The
 few stored covers (Kodansha and Seven Seas imports) win where they exist, and
 `convex/lib/covers.ts` hides the blank SVG some importers once stored. That
 publisher art is stored once per Edition and image URL, shared by print and

@@ -457,7 +457,7 @@ function BookItem({ book, eager }: { book: Book; eager: boolean }) {
         >
           <Cover
             src={book.coverUrl}
-            isbn13={book.coverIsbn}
+            isbn13={book.coverIsbns}
             title={title}
             foot={[book.volumeLabel, book.publisher?.name]}
             lazy={!eager}

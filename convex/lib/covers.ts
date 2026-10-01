@@ -160,35 +160,56 @@ export async function storeCover(
   return notice;
 }
 
+// How many ISBNs a jacket offers `<Cover>`, best first (src/lib/cover.tsx
+// MAX_CANDIDATES applies the same cap): enough to step past a physical ISBN
+// nobody has art for to its digital twin, without a long chain of misses per
+// cover. Each miss is a request, and may spend a rate-limited OpenLibrary
+// lookup (src/server/covers.ts).
+export const COVER_CANDIDATES = 3;
+
 /**
- * The ISBN-13 the site should look cover art up by for a Release: its own,
- * else a sibling Release of the same Edition, else any active Release of
- * another Edition covering the same Volume. The same book is often on file
- * twice — once from a publisher's own site without an ISBN, once from the
- * distribution catalog with one — and the jacket is the same either way.
- * Pass one `coverIsbnCache` to every call a query makes so a page of
- * ISBN-less Releases reads each Edition's Releases and Coverage once, and
- * each Volume's covering Editions once however many Editions borrow from it.
+ * An Edition's jacket, shared by its page and every row of its Releases:
+ * the first stored cover among its active Releases in date order, and the
+ * ISBN-13s to look art up by when there is none.
  */
-export async function coverIsbnForRelease(
+export type Jacket = { coverUrl: string | null; coverIsbns: string[] };
+
+/**
+ * The art a Release row shows: its own stored cover, else its Edition's
+ * jacket. Every Release of an Edition looks art up by the same ISBNs (the
+ * jacket's), physical first, because the jacket is the same book's and an
+ * ebook ISBN rarely has art upstream. Pass one `jacketCache` to every call
+ * a query makes so each Edition's jacket is read once.
+ */
+export async function releaseCover(
   ctx: QueryCtx,
-  release: Pick<Doc<"releases">, "editionId" | "isbn13">,
-  cache: CoverIsbnCache = coverIsbnCache(ctx),
-): Promise<string | null> {
-  return release.isbn13 || (await cache.borrowed(release.editionId));
+  release: Pick<Doc<"releases">, "editionId" | "coverImage">,
+  cache: JacketCache = jacketCache(ctx),
+): Promise<Jacket> {
+  const [own, jacket] = await Promise.all([
+    coverUrl(ctx, release.coverImage?.storageId),
+    cache.jacket(release.editionId),
+  ]);
+  return { coverUrl: own ?? jacket.coverUrl, coverIsbns: jacket.coverIsbns };
 }
 
 /**
- * Per-query memo for `coverIsbnForRelease`, keyed by Edition: the ISBN an
- * ISBN-less Release borrows depends only on its Edition, so every such
- * Release of one Edition shares a single lookup, each alternative
- * Edition's preferred ISBN is read once, and the Editions covering a Volume
- * are scanned once for all its borrowers. Only active Editions lend. `coverage` loads an Edition's
+ * Per-query memo of Edition jackets, keyed by Edition. A jacket reads its
+ * Edition's Releases once (active ones, date-sorted with undated last, as
+ * the Edition page lists them): `coverUrl` is the first usable stored
+ * cover, and `coverIsbns` their ISBNs, physical Releases first, each group
+ * in date order, deduped, at most COVER_CANDIDATES. An Edition with no ISBN
+ * at all borrows one: the same book is often on file twice, once from a
+ * publisher's own site without an ISBN and once from the distribution
+ * catalog with one. It takes the preferred ISBN (physical first) of the
+ * first other Edition covering its first covered Volume that has one; a
+ * hidden or merged Edition never lends. The Editions covering a Volume are
+ * scanned once for all its borrowers. `coverage` loads an Edition's
  * Coverage in order and `edition` an Edition; a caller that already
- * memoizes them (`browseCache`) passes its own so the fallback shares those
+ * memoizes them (`browseCache`) passes its own so the borrow shares those
  * reads.
  */
-export function coverIsbnCache(
+export function jacketCache(
   ctx: QueryCtx,
   coverage: (editionId: Id<"editions">) => Promise<Array<Doc<"volumeCoverages">>> = (
     editionId,
@@ -209,12 +230,21 @@ export function coverIsbnCache(
     }
     return hit;
   };
-  const preferredMemo = new Map<Id<"editions">, Promise<string | null>>();
-  const borrowedMemo = new Map<Id<"editions">, Promise<string | null>>();
+  const releasesMemo = new Map<Id<"editions">, Promise<Array<Doc<"releases">>>>();
+  const jacketMemo = new Map<Id<"editions">, Promise<Jacket>>();
   const coveringMemo = new Map<Id<"volumes">, Promise<Array<Doc<"volumeCoverages">>>>();
   const lendsMemo = new Map<Id<"editions">, Promise<boolean>>();
-  const preferred = (editionId: Id<"editions">) =>
-    once(preferredMemo, editionId, () => isbnInEdition(ctx, editionId));
+  const releases = (editionId: Id<"editions">) =>
+    once(releasesMemo, editionId, async () =>
+      (
+        await ctx.db
+          .query("releases")
+          .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+          .collect()
+      )
+        .filter((r) => r.status === "active")
+        .sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity)),
+    );
   // Only an active Edition lends: a hidden or merged one is off the public
   // catalog, and so is its art (the rule favorites.ts and volumePage apply).
   const lends = (editionId: Id<"editions">) =>
@@ -226,40 +256,44 @@ export function coverIsbnCache(
         .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
         .collect(),
     );
+  // The ISBN an ISBN-less Edition borrows from another Edition of its first Volume.
+  const borrowed = async (editionId: Id<"editions">) => {
+    const first = (await coverage(editionId))[0];
+    if (!first) return null;
+    for (const row of await covering(first.volumeId)) {
+      if (row.editionId === editionId || !(await lends(row.editionId))) continue;
+      const isbn = jacketIsbns(await releases(row.editionId))[0];
+      if (isbn) return isbn;
+    }
+    return null;
+  };
   return {
-    /** The ISBN an ISBN-less Release of this Edition is looked up by. */
-    borrowed: (editionId: Id<"editions">) =>
-      once(borrowedMemo, editionId, async () => {
-        const own = await preferred(editionId);
-        if (own) return own;
-        const first = (await coverage(editionId))[0];
-        if (!first) return null;
-        for (const row of await covering(first.volumeId)) {
-          if (row.editionId === editionId || !(await lends(row.editionId))) continue;
-          const isbn = await preferred(row.editionId);
-          if (isbn) return isbn;
+    /** The jacket of this Edition (see above). */
+    jacket: (editionId: Id<"editions">) =>
+      once(jacketMemo, editionId, async (): Promise<Jacket> => {
+        const docs = await releases(editionId);
+        let url: string | null = null;
+        for (const release of docs) {
+          url = await coverUrl(ctx, release.coverImage?.storageId);
+          if (url) break;
         }
-        return null;
+        const own = jacketIsbns(docs);
+        if (own.length > 0) return { coverUrl: url, coverIsbns: own };
+        const lent = await borrowed(editionId);
+        return { coverUrl: url, coverIsbns: lent ? [lent] : [] };
       }),
   };
 }
-export type CoverIsbnCache = ReturnType<typeof coverIsbnCache>;
+export type JacketCache = ReturnType<typeof jacketCache>;
 
-// An Edition's preferred ISBN among its active Releases, physical first: that
-// jacket is the one a shelf should show. Only ISBN-less Releases borrow, and
-// they never carry one, so the borrower needs no excluding.
-async function isbnInEdition(ctx: QueryCtx, editionId: Id<"editions">): Promise<string | null> {
-  const releases = (
-    await ctx.db
-      .query("releases")
-      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-      .collect()
-  ).filter((r) => r.status === "active" && r.isbn13);
-  return (
-    releases.find((r) => r.format === "physical")?.isbn13 ??
-    releases[0]?.isbn13 ??
-    null
-  );
+// The ISBNs of an Edition's date-sorted Releases to look its jacket up by:
+// physical first (the upstreams know print best), deduped, capped.
+function jacketIsbns(releases: ReadonlyArray<Doc<"releases">>): string[] {
+  const ordered = [
+    ...releases.filter((r) => r.format === "physical"),
+    ...releases.filter((r) => r.format !== "physical"),
+  ].flatMap((r) => (r.isbn13 ? [r.isbn13] : []));
+  return [...new Set(ordered)].slice(0, COVER_CANDIDATES);
 }
 
 /** What picking a Series' jacket needs to know about one of its Releases. */
@@ -271,18 +305,19 @@ export type SeriesCoverCandidate = Pick<Doc<"releases">, "isbn13" | "format" | "
 };
 
 /**
- * The ISBN-13 a Series' jacket is looked up by (library shelf, home shelf):
- * physical before digital, published before forthcoming (unannounced books
- * have no art yet), then the earliest Volume, the standard run before an
- * Edition Line covering the same Volume, and the earliest release — so a
- * standard-edition Volume 1 in print when one is on file, else the earliest
- * book that is. Only one ISBN is stored per Series, so the pick favours the
- * Releases the cover upstreams know best.
+ * The ISBN-13s a Series' jacket is looked up by (library shelf, home shelf),
+ * best first, at most COVER_CANDIDATES: physical before digital, published
+ * before forthcoming (unannounced books have no art yet), then the earliest
+ * Volume, the standard run before an Edition Line covering the same Volume,
+ * and the earliest release — so a standard-edition Volume 1 in print when
+ * one is on file, else the earliest book that is. Only the first is stored
+ * per Series (`seriesStats.coverIsbn`), so the order favours the Releases
+ * the cover upstreams know best.
  */
-export function seriesCoverIsbn(
+export function seriesCoverIsbns(
   candidates: ReadonlyArray<SeriesCoverCandidate>,
   now: Date = new Date(),
-): string | null {
+): string[] {
   const today = todaySortKey(now);
   const published = (c: SeriesCoverCandidate) => {
     const sort = c.pubDate?.sort ?? 0;
@@ -301,17 +336,15 @@ export function seriesCoverIsbn(
       const n = a.key.findIndex((k, i) => k !== b.key[i]);
       return n < 0 ? 0 : a.key[n]! - b.key[n]!;
     });
-  return ranked[0]?.isbn13 ?? null;
+  return [...new Set(ranked.map((c) => c.isbn13))].slice(0, COVER_CANDIDATES);
 }
 
 /**
  * A jacket for a whole Series from its first few Volumes: the first stored
- * cover, else the `seriesCoverIsbn` pick. Cheap enough for a home-page shelf.
+ * cover, else the `seriesCoverIsbns` candidates. Cheap enough for a
+ * home-page shelf.
  */
-export async function seriesCover(
-  ctx: QueryCtx,
-  seriesId: Id<"series">,
-): Promise<{ coverUrl: string | null; coverIsbn: string | null }> {
+export async function seriesCover(ctx: QueryCtx, seriesId: Id<"series">): Promise<Jacket> {
   const volumes = await ctx.db
     .query("volumes")
     .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
@@ -337,7 +370,7 @@ export async function seriesCover(
       ).filter((r) => r.status === "active");
       for (const release of releases) {
         const url = await coverUrl(ctx, release.coverImage?.storageId);
-        if (url) return { coverUrl: url, coverIsbn: release.isbn13 ?? null };
+        if (url) return { coverUrl: url, coverIsbns: release.isbn13 ? [release.isbn13] : [] };
         candidates.push({
           ...release,
           inLine: edition.editionLineId !== undefined,
@@ -346,5 +379,5 @@ export async function seriesCover(
       }
     }
   }
-  return { coverUrl: null, coverIsbn: seriesCoverIsbn(candidates) };
+  return { coverUrl: null, coverIsbns: seriesCoverIsbns(candidates) };
 }

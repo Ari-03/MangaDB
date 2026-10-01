@@ -375,7 +375,7 @@ async function buildMonthBoard(
   // reuses the lookup for the picks.
   const hasArt = async (release: Doc<"releases">) => {
     const cover = await cache.cover(release);
-    return cover.coverUrl !== null || cover.coverIsbn !== null;
+    return cover.coverUrl !== null || cover.coverIsbns.length > 0;
   };
 
   const cards = await Promise.all(
@@ -568,7 +568,7 @@ export function nearMonths(now: Date): { from: number; to: number } {
 const MAX_BOARD_PAYLOAD = 700_000;
 
 /** Bump when `buildMonthBoard`'s result changes shape: older rows are then ignored. */
-const BOARD_VERSION = 2;
+const BOARD_VERSION = 3;
 
 /**
  * Recompute the months in `boardWindow` (only `nearMonths` for scope "near")
