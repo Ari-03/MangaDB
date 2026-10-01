@@ -21,7 +21,10 @@
 // art"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
 import { env, waitUntil } from "cloudflare:workers";
 
+import type { CoverShelf } from "~/lib/homeShelves";
+
 const COVER_PATH = /^\/covers\/(97[89]\d{10})\.jpg$/;
+const ISBN13 = /^97[89]\d{10}$/;
 /** Upstreams in order of preference; each maps an ISBN-13 to a jacket URL. */
 const UPSTREAMS: ReadonlyArray<(isbn13: string) => string> = [
   (isbn13) => `https://images.penguinrandomhouse.com/cover/${isbn13}`,
@@ -186,4 +189,102 @@ function coverMissing(): Response {
       "Cache-Control": `public, max-age=${MISS_TTL}`,
     },
   });
+}
+
+// ---------- which jackets we hold ----------
+
+// A shelf that shows art only (the home page, lib/homeShelves.ts) has to
+// know before it renders which of its books have a real jacket. R2 is that
+// record: only real art is ever stored there, so an object under an ISBN
+// means a jacket and its absence means cloth (or art nobody has asked for
+// yet, which the warm-up below goes and gets).
+
+/** Asked-about shelves and seats per call; the home page uses 4 and 15. */
+const MAX_SHELVES = 8;
+const MAX_SEATS = 30;
+const MAX_CANDIDATES = 120;
+/** Absent jackets fetched in the background per call, so upstreams see a trickle. */
+const WARM_LIMIT = 8;
+/** A stored jacket stays stored; an absent one may arrive within minutes. */
+const ON_FILE_TTL_MS = 24 * 60 * 60 * 1000;
+const ABSENT_TTL_MS = 5 * 60 * 1000;
+const MEMO_MAX = 20_000;
+
+/** What this isolate last learned per ISBN, so a warm one rarely asks R2. */
+const onFileMemo = new Map<string, { onFile: boolean; expires: number }>();
+
+/** Whether R2 holds a jacket for `isbn13`; a failed read is "no", unremembered. */
+async function jacketOnFile(
+  bucket: NonNullable<typeof env.COVERS>,
+  isbn13: string,
+): Promise<boolean> {
+  const now = Date.now();
+  const known = onFileMemo.get(isbn13);
+  if (known && known.expires > now) return known.onFile;
+  let onFile: boolean;
+  try {
+    onFile = (await bucket.head(`${isbn13}.jpg`)) !== null;
+  } catch (error) {
+    console.error("covers: R2 head failed", error);
+    return false;
+  }
+  if (onFileMemo.size >= MEMO_MAX) onFileMemo.clear();
+  onFileMemo.set(isbn13, { onFile, expires: now + (onFile ? ON_FILE_TTL_MS : ABSENT_TTL_MS) });
+  return onFile;
+}
+
+/**
+ * The ISBNs among `shelves`' candidates whose jacket we hold, or null when
+ * no bucket is bound and nothing can be said. Each shelf is walked in order
+ * only until its seats are filled (a null candidate already shows publisher
+ * art and takes a seat), so a full shelf costs about one R2 read per seat.
+ * Jackets found absent are requested through `coverResponse` in the
+ * background, a few per call: one that exists upstream is stored for the
+ * next visitor, and a real miss is remembered at the edge for a day.
+ *
+ * Input comes from the client on navigations, so it is bounded and every
+ * candidate is checked to be an ISBN-13 before it becomes an R2 key.
+ */
+export async function coversOnFile(
+  shelves: ReadonlyArray<CoverShelf>,
+  origin: string,
+): Promise<Array<string> | null> {
+  const bucket = env.COVERS;
+  if (!bucket) return null;
+  const onFile = new Set<string>();
+  const absent = new Set<string>();
+  await Promise.all(
+    shelves.slice(0, MAX_SHELVES).map(async ({ need, candidates }) => {
+      const seats = Math.min(MAX_SEATS, Math.max(0, Math.floor(need)));
+      const asked = candidates
+        .slice(0, MAX_CANDIDATES)
+        .filter((isbn) => isbn === null || ISBN13.test(isbn));
+      let seated = 0;
+      let next = 0;
+      while (seated < seats && next < asked.length) {
+        // Never more reads at once than seats still empty.
+        const round = asked.slice(next, next + (seats - seated));
+        next += round.length;
+        const held = await Promise.all(
+          round.map((isbn) => (isbn === null ? true : jacketOnFile(bucket, isbn))),
+        );
+        round.forEach((isbn, index) => {
+          if (held[index]) seated++;
+          if (isbn !== null) (held[index] ? onFile : absent).add(isbn);
+        });
+      }
+    }),
+  );
+  for (const isbn13 of [...absent].slice(0, WARM_LIMIT)) {
+    inBackground(
+      "jacket warm-up",
+      // The art itself is not wanted here, only the lookup's side effects
+      // (R2 and the edge cache). Not awaited: the body is teed for the cache
+      // write, and a tee's cancel settles only once both halves are done.
+      coverResponse(new Request(`${origin}/covers/${isbn13}.jpg`)).then((response) => {
+        void response?.body?.cancel();
+      }),
+    );
+  }
+  return [...onFile];
 }

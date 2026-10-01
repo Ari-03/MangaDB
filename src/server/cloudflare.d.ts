@@ -8,6 +8,8 @@ declare module "cloudflare:workers" {
   }
   interface R2Bucket {
     get(key: string): Promise<R2ObjectBody | null>;
+    /** The object's metadata without its body; null when absent. */
+    head(key: string): Promise<object | null>;
     put(
       key: string,
       value: ArrayBuffer,

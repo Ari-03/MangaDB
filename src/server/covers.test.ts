@@ -9,7 +9,7 @@ vi.mock("cloudflare:workers", () => ({
   env: worker.env,
   waitUntil: (promise: Promise<unknown>) => void worker.background.push(promise),
 }));
-const { coverResponse } = await import("./covers");
+const { coverResponse, coversOnFile } = await import("./covers");
 
 // A real-sized jacket (JPEG magic + padding) and the no-art answers.
 const JACKET = new Uint8Array(20_000).fill(7);
@@ -128,5 +128,89 @@ describe("coverResponse", () => {
     const res = await get();
     expect(res?.status).toBe(200);
     expect(res?.headers.get("X-Cover-Origin")).toBe("upstream");
+  });
+});
+
+describe("coversOnFile", () => {
+  const ORIGIN = "https://mangadb.org";
+  // Each test uses its own ISBNs: the module remembers what it learned.
+  const isbn = (n: number) => `9781974${String(n).padStart(6, "0")}`;
+  /** An R2 bucket holding jackets for `held`, counting its head reads. */
+  const bucket = (held: Array<string>) => {
+    const keys = new Set(held.map((value) => `${value}.jpg`));
+    const head = vi.fn(async (key: string) => (keys.has(key) ? {} : null));
+    return { head, get: vi.fn(async () => null), put: vi.fn(async () => {}) };
+  };
+
+  test("says nothing when no bucket is bound", async () => {
+    expect(await coversOnFile([{ need: 2, candidates: [isbn(1)] }], ORIGIN)).toBeNull();
+  });
+
+  test("returns the candidates whose jacket R2 holds", async () => {
+    worker.env.COVERS = bucket([isbn(10), isbn(12)]);
+    const shelf = { need: 3, candidates: [isbn(10), isbn(11), isbn(12)] };
+    expect(await coversOnFile([shelf], ORIGIN)).toEqual([isbn(10), isbn(12)]);
+  });
+
+  test("stops reading once a shelf's seats are filled", async () => {
+    const covers = bucket([isbn(20), isbn(21), isbn(22), isbn(23)]);
+    worker.env.COVERS = covers;
+    const shelf = { need: 2, candidates: [isbn(20), isbn(21), isbn(22), isbn(23)] };
+    expect(await coversOnFile([shelf], ORIGIN)).toEqual([isbn(20), isbn(21)]);
+    expect(covers.head).toHaveBeenCalledTimes(2);
+  });
+
+  test("reads on past a missing jacket, one read per empty seat", async () => {
+    const covers = bucket([isbn(30), isbn(32)]);
+    worker.env.COVERS = covers;
+    const shelf = { need: 2, candidates: [isbn(30), isbn(31), isbn(32), isbn(33)] };
+    expect(await coversOnFile([shelf], ORIGIN)).toEqual([isbn(30), isbn(32)]);
+    expect(covers.head).toHaveBeenCalledTimes(3);
+  });
+
+  test("publisher art takes a seat without a read", async () => {
+    const covers = bucket([isbn(40), isbn(41)]);
+    worker.env.COVERS = covers;
+    const shelf = { need: 2, candidates: [null, isbn(40), isbn(41)] };
+    expect(await coversOnFile([shelf], ORIGIN)).toEqual([isbn(40)]);
+    expect(covers.head).toHaveBeenCalledTimes(1);
+  });
+
+  test("remembers what it learned, so a second ask reads nothing", async () => {
+    const covers = bucket([isbn(50)]);
+    worker.env.COVERS = covers;
+    const shelf = { need: 2, candidates: [isbn(50), isbn(51)] };
+    await coversOnFile([shelf], ORIGIN);
+    expect(await coversOnFile([shelf], ORIGIN)).toEqual([isbn(50)]);
+    expect(covers.head).toHaveBeenCalledTimes(2);
+  });
+
+  test("never turns a non-ISBN candidate into an R2 key", async () => {
+    const covers = bucket([]);
+    worker.env.COVERS = covers;
+    const shelf = { need: 2, candidates: ["../secrets", "9781974", isbn(60)] };
+    expect(await coversOnFile([shelf], ORIGIN)).toEqual([]);
+    expect(covers.head.mock.calls.map(([key]) => key)).toEqual([`${isbn(60)}.jpg`]);
+  });
+
+  test("fetches an absent jacket in the background for the next visitor", async () => {
+    const covers = bucket([]);
+    worker.env.COVERS = covers;
+    upstreams = [image];
+    expect(await coversOnFile([{ need: 1, candidates: [isbn(70)] }], ORIGIN)).toEqual([]);
+    await Promise.all(worker.background);
+    await Promise.all(worker.background);
+    expect(covers.put).toHaveBeenCalledWith(`${isbn(70)}.jpg`, expect.anything(), expect.anything());
+  });
+
+  test("a failed R2 read is no jacket, and is asked again next time", async () => {
+    const covers = bucket([isbn(80)]);
+    covers.head.mockRejectedValueOnce(new Error("r2 down"));
+    worker.env.COVERS = covers;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const shelf = { need: 1, candidates: [isbn(80)] };
+    expect(await coversOnFile([shelf], ORIGIN)).toEqual([]);
+    expect(await coversOnFile([shelf], ORIGIN)).toEqual([isbn(80)]);
+    errors.mockRestore();
   });
 });
