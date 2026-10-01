@@ -144,6 +144,11 @@ function coverageHints(entry: Record<string, unknown>, isbn13: string): string[]
 
 // ---------- title records ----------
 
+/** The entry's ISBN-13 — its identity, and the PRH observation's source-record id. */
+function entryIsbn13(entry: Record<string, unknown>): string | undefined {
+  return asIsbn13(entry.isbn ?? entry.isbnHyphenated);
+}
+
 const DIGITAL = /\be-?book\b|\bdigital\b|\bDN\b/i;
 const AUDIO = /audio/i;
 
@@ -197,27 +202,36 @@ export function prhScopeReason(
   return null;
 }
 
+/** Why readTitle produced no snapshot: unusable data, or deliberately not manga. */
+type DropReason = "malformed" | "outOfScope";
+
 /** One title entry → a snapshot, or null when malformed / out of scope. */
 export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
-  if (typeof raw !== "object" || raw === null) return null;
+  const read = readTitle(raw);
+  return typeof read === "string" ? null : read;
+}
+
+/** parseTitle, saying why an entry was dropped (parseTitleList reports it). */
+function readTitle(raw: unknown): PrhTitleSnapshot | DropReason {
+  if (typeof raw !== "object" || raw === null) return "malformed";
   const entry = raw as Record<string, unknown>;
-  const isbn13 = asIsbn13(entry.isbn ?? entry.isbnHyphenated);
-  if (isbn13 === undefined) return null;
+  const isbn13 = entryIsbn13(entry);
+  if (isbn13 === undefined) return "malformed";
   const title = typeof entry.title === "string" ? entry.title.trim() : "";
-  if (title === "") return null;
+  if (title === "") return "malformed";
 
   // Scope (spec §1): prose imprints, novels, merchandise, samplers, and
   // non-English editions never enter the catalog.
   const imprint = described(entry.imprint) ?? described(entry.publisher);
-  if (imprint !== undefined && DENIED_IMPRINTS.test(imprint)) return null;
-  if (outOfScopeReason(title) !== null) return null;
-  if (prhScopeReason(entry, imprint) !== null) return null;
+  if (imprint !== undefined && DENIED_IMPRINTS.test(imprint)) return "outOfScope";
+  if (outOfScopeReason(title) !== null) return "outOfScope";
+  if (prhScopeReason(entry, imprint) !== null) return "outOfScope";
   const language = described(entry.language);
-  if (language !== undefined && !/^(?:e|en|eng|english)$/i.test(language)) return null;
+  if (language !== undefined && !/^(?:e|en|eng|english)$/i.test(language)) return "outOfScope";
 
   // Format family: audio is out of catalog scope entirely (spec §1).
   const formatText = described(entry.format) ?? described(entry.formatFamily) ?? "";
-  if (AUDIO.test(formatText)) return null;
+  if (AUDIO.test(formatText)) return "outOfScope";
   const digital = DIGITAL.test(formatText);
   const binding = !digital
     ? /hardcover/i.test(formatText)
@@ -268,6 +282,13 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
   };
 }
 
+/** A listed entry that produced no snapshot: still present at the source. */
+export type DroppedTitle = {
+  /** The entry's identity, when its ISBN is readable. */
+  isbn13?: string;
+  reason: DropReason;
+};
+
 /**
  * The title-list envelope → its parsed titles + the total record count.
  * Verified live 2026-09-26 (__fixtures__/prh/titles-page.json): every page
@@ -276,9 +297,14 @@ export function parseTitle(raw: unknown): PrhTitleSnapshot | null {
  * imprint is an HTTP 404, never an empty page. So the count is required —
  * without it an empty page is no evidence the imprint is empty, and a
  * missing `titles` array is tolerated only with an explicit recordCount 0.
+ *
+ * Entries the parser drops are reported in `dropped`: presence at the
+ * source does not depend on normalizing, so the sync keeps them present
+ * rather than letting a full sweep withdraw them (B09).
  */
 export function parseTitleList(raw: unknown): {
   titles: PrhTitleSnapshot[];
+  dropped: DroppedTitle[];
   recordCount: number;
   /** Upstream page size, before scope filtering. */
   rawCount: number;
@@ -296,14 +322,23 @@ export function parseTitleList(raw: unknown): {
   const list = data?.titles;
   if (!Array.isArray(list)) {
     if (list == null && recordCount === 0) {
-      return { titles: [], rawCount: 0, recordCount };
+      return { titles: [], dropped: [], rawCount: 0, recordCount };
     }
     throw new Error("PRH response is missing its titles array");
   }
   const titles: PrhTitleSnapshot[] = [];
+  const dropped: DroppedTitle[] = [];
   for (const entry of list) {
-    const parsed = parseTitle(entry);
-    if (parsed) titles.push(parsed);
+    const read = readTitle(entry);
+    if (typeof read !== "string") {
+      titles.push(read);
+      continue;
+    }
+    const isbn13 =
+      typeof entry === "object" && entry !== null
+        ? entryIsbn13(entry as Record<string, unknown>)
+        : undefined;
+    dropped.push({ ...(isbn13 !== undefined ? { isbn13 } : {}), reason: read });
   }
-  return { titles, rawCount: list.length, recordCount };
+  return { titles, dropped, rawCount: list.length, recordCount };
 }

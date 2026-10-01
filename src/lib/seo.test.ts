@@ -1,3 +1,12 @@
+import {
+  Asset,
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from "@tanstack/react-router";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -119,6 +128,30 @@ describe("JSON-LD builders", () => {
     const script = jsonLdScript({ "@type": "Thing" });
     expect(script.type).toBe("application/ld+json");
     expect(JSON.parse(script.children)).toEqual({ "@type": "Thing" });
+  });
+
+  // Audit B01: catalog strings flow into JSON-LD, which TanStack renders as
+  // raw script HTML. A "</script>" inside a value must not close the element.
+  it("jsonLdScript cannot be broken out of by catalog text", () => {
+    const hostile = "</script><script>globalThis.auditPoC=1</script><!--";
+    const { type, children } = jsonLdScript({ name: hostile });
+    const router = createRouter({
+      routeTree: createRootRoute(),
+      history: createMemoryHistory(),
+      isServer: true,
+    });
+    const html = renderToString(
+      createElement(RouterContextProvider, {
+        router,
+        children: createElement(Asset, { tag: "script", attrs: { type }, children }),
+      }),
+    );
+    expect(html.match(/<script/g)).toHaveLength(1);
+    expect(html.match(/<\/script>/g)).toHaveLength(1);
+    expect(html).not.toContain("<!--");
+    // Still valid JSON that round-trips to the original string.
+    const body = html.replace(/^<script[^>]*>/, "").replace(/<\/script>$/, "");
+    expect(JSON.parse(body)).toEqual({ name: hostile });
   });
 
   it("BreadcrumbList numbers positions and links all but the last crumb", () => {

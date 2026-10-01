@@ -6,7 +6,7 @@
 // adapter run against a stubbed yenpress.com — no network.
 
 import { readFileSync } from "node:fs";
-import { convexTest } from "convex-test";
+import { convexTest, type TestConvex } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
@@ -245,10 +245,49 @@ describe("yenPress.booksToFetch", () => {
         withdrawn: false,
       });
     });
-    const due = (books: string[][]) => t.query(internal.yenPress.booksToFetch, { books, now });
+    const plan = (books: string[][]) => t.query(internal.yenPress.booksToFetch, { books, now });
     // Print alone is fresh; print + a digital ISBN never seen is due.
-    expect(await due([["9798855438611"]])).toEqual([]);
-    expect(await due([["9798855438611", "9798855438628"]])).toEqual([0]);
+    expect(await plan([["9798855438611"]])).toEqual({ due: [], boxes: [] });
+    expect(await plan([["9798855438611", "9798855438628"]])).toEqual({ due: [0], boxes: [] });
+  });
+
+  // Standards 2: the planner names fresh linked boxes, so the sync can
+  // reconcile each in its own mutation; a due box is simply re-read.
+  it("reports fresh linked boxes apart from the pages due", async () => {
+    const t = convexTest(schema);
+    const now = Date.UTC(2026, 8, 25);
+    await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Yen Press",
+        slug: "yen-press",
+      });
+      const bundleId = await ctx.db.insert("releaseBundles", {
+        status: "active",
+        publicId: 1,
+        name: "Mignon Box Set (Vol. 1-2)",
+        publisherId,
+      });
+      for (const [isbn, lastSeenAt] of [
+        ["9798400906855", now],
+        ["9798400906862", 0],
+      ] as const) {
+        await ctx.db.insert("sourceObservations", {
+          sourceKey: "yenpress",
+          sourceRecordId: isbn,
+          snapshot: { onsale: { year: 2020, month: 1, day: 1 }, mature: false },
+          lastSeenAt,
+          withdrawn: false,
+          recordRef: { type: "releaseBundle", id: bundleId },
+        });
+      }
+    });
+    expect(
+      await t.query(internal.yenPress.booksToFetch, {
+        books: [["9798400906855"], ["9798400906862"], ["9798855438611"]],
+        now,
+      }),
+    ).toEqual({ due: [1, 2], boxes: [0] });
   });
 });
 
@@ -497,5 +536,332 @@ describe("yenPress.sync", () => {
     const again = await sync(t);
     expect(again).toMatchObject({ fetched: 0 });
     expect(requested).toEqual(["https://yenpress.com/sitemap.xml"]);
+  });
+});
+
+// R09: Yen re-reads a box set's page when it falls due; that re-apply,
+// unchanged, links the books that arrived after the box.
+/** A Mignon single-Volume snapshot. */
+const mignonBook = (
+  isbn13: string,
+  volumeLabel: string,
+  format: "physical" | "digital" = "physical",
+) => ({
+  kind: "yenTitle" as const,
+  url: `https://yenpress.com/titles/${isbn13}-mignon-vol-${volumeLabel}`,
+  isbn13,
+  title: `Mignon, Vol. ${volumeLabel}`,
+  seriesTitle: "Mignon",
+  volumeLabel,
+  multiVolume: false,
+  format,
+  imprint: "Yen Press",
+});
+
+/** The Mignon Vol. 1–2 paperback box's snapshot. */
+const MIGNON_BOX = {
+  ...mignonBook("9798400906855", "1"),
+  url: "https://yenpress.com/titles/9798400906855-mignon-box-set",
+  title: "Mignon Box Set (Vol. 1-2)",
+  volumeLabel: undefined,
+  multiVolume: true,
+  isBox: true,
+  packaging: { lineName: "Box Set", linePosition: null, coverRange: { from: "1", to: "2" } },
+};
+
+/** Seed the registry (Bootstrap Mode) and the Mignon Series. */
+async function seedMignon(t: ReturnType<typeof convexTest>) {
+  await seed(t);
+  await t.run((ctx) =>
+    ctx.db.insert("series", {
+      status: "active",
+      publicId: 1,
+      title: "Mignon",
+      altTitles: [],
+      searchText: "Mignon",
+    }),
+  );
+}
+
+/** The one bundle's member ISBNs and orders in page order. */
+const mignonMembers = (t: TestConvex<typeof schema>) =>
+  t.run(async (ctx) => {
+    const [bundle, ...more] = await ctx.db.query("releaseBundles").collect();
+    expect(more).toHaveLength(0);
+    const rows = await ctx.db
+      .query("bundleMemberships")
+      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
+      .collect();
+    return await Promise.all(
+      rows.map(async (row) => `${(await ctx.db.get(row.releaseId))!.isbn13}@${row.order}`),
+    );
+  });
+
+describe("yenPress.applyTitle — a box set gains members that arrive after it (B15)", () => {
+  it("an unchanged box re-applied after its books arrive links them", async () => {
+    const t = convexTest(schema);
+    await seedMignon(t);
+    expect(await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX })).toMatchObject({
+      status: "created",
+    });
+    for (const [isbn13, label] of [
+      ["9781975300012", "1"],
+      ["9781975300029", "2"],
+    ] as const) {
+      await t.mutation(internal.yenPress.applyTitle, { snapshot: mignonBook(isbn13, label) });
+    }
+    expect(await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX })).toMatchObject({
+      status: "updated",
+      changed: true,
+    });
+    await t.run(async (ctx) => {
+      const [bundle] = await ctx.db.query("releaseBundles").collect();
+      const rows = await ctx.db
+        .query("bundleMemberships")
+        .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
+        .collect();
+      const members = await Promise.all(rows.map((row) => ctx.db.get(row.releaseId)));
+      expect(members.map((release) => release!.isbn13)).toEqual(["9781975300012", "9781975300029"]);
+    });
+    expect(await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX })).toMatchObject({
+      status: "unchanged",
+    });
+  });
+});
+
+// W08: a linked box fills only from its canonical identity; a Format the
+// Bundle does not have goes to review instead.
+describe("yenPress.applyTitle — a linked box keeps its canonical identity (W08)", () => {
+  it("a paperback box re-applied as digital adds no digital member", async () => {
+    const t = convexTest(schema);
+    await seedMignon(t);
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: mignonBook("9781975300012", "1") });
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX });
+    await t.mutation(internal.yenPress.applyTitle, {
+      snapshot: mignonBook("9781975300029", "1", "digital"),
+    });
+    expect(
+      await t.mutation(internal.yenPress.applyTitle, {
+        snapshot: { ...MIGNON_BOX, format: "digital" },
+      }),
+    ).toMatchObject({ status: "needsReview", reason: expect.stringMatching(/Format/) });
+    expect(await mignonMembers(t)).toEqual(["9781975300012@1"]);
+  });
+});
+
+// Standards 2: a fresh box is reconciled from its stored snapshot in a
+// mutation of its own (yenPress.reconcileLinkedBox).
+describe("yenPress.reconcileLinkedBox", () => {
+  // W09: backlist boxes are filled here, so a legacy compact order (the
+  // baseline importer stored a lone Vol. 2 at order 1) is renumbered.
+  it("fills a legacy box by label position, renumbering its compact order", async () => {
+    const t = convexTest(schema);
+    await seedMignon(t);
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: mignonBook("9781975300029", "2") });
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX });
+    await t.run(async (ctx) => {
+      const [member] = await ctx.db.query("bundleMemberships").collect();
+      await ctx.db.patch(member!._id, { order: 1 });
+    });
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: mignonBook("9781975300012", "1") });
+    expect(
+      await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: MIGNON_BOX.isbn13 }),
+    ).toEqual({ added: 1 });
+    expect(await mignonMembers(t)).toEqual(["9781975300012@1", "9781975300029@2"]);
+  });
+
+  it("adds nothing for a Release, or while the source is disabled", async () => {
+    const t = convexTest(schema);
+    await seedMignon(t);
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX });
+    await t.mutation(internal.yenPress.applyTitle, { snapshot: mignonBook("9781975300012", "1") });
+    expect(
+      await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: "9781975300012" }),
+    ).toEqual({ added: 0 });
+    const enable = (enabled: boolean) =>
+      t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled });
+    await enable(false);
+    expect(
+      await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: MIGNON_BOX.isbn13 }),
+    ).toEqual({ added: 0 });
+    expect(await mignonMembers(t)).toEqual([]);
+    await enable(true);
+    expect(
+      await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: MIGNON_BOX.isbn13 }),
+    ).toEqual({ added: 1 });
+  });
+});
+
+// R09 through the cron entry point: the sitemap sorts a box's slug before
+// its volumes', so a first run creates the box before its books. The box is
+// backlist — its page not due again for months — yet the next run links the
+// books from its stored snapshot, without re-reading its page.
+describe("yenPress.sync — a fresh box set gains members that arrived after it (B15)", () => {
+  /** The fixture page cut to its paperback: one format, one snapshot. */
+  const PRINT_ONLY_PAGE = MANGA_PAGE.replace(' <span class="deliver" data-id="">Digital</span>', "")
+    .replace('<div class="deliver-info"><p class="book-price">$6.99 US / $8.99 CAN</p></div>', "")
+    .replace(/<div class="detail"> <div class="txt-hold">.*<\/section>/, "</section>");
+  /** A backlist paperback's page, built from the fixture with its facts swapped. */
+  const titlePage = (title: string, isbn13: string) =>
+    PRINT_ONLY_PAGE.replaceAll(
+      "A Misanthrope Teaches a Class for Demi-Humans, Vol. 4 (manga): Mr. Hitoma, Won’t You Teach Us About Humans…?",
+      title,
+    )
+      .replaceAll("A Misanthrope Teaches a Class for Demi-Humans (manga)", "Alpha Adventures")
+      .replaceAll("9798855438611", isbn13)
+      .replaceAll("Jan 26, 2027", "Jan 26, 2020");
+  const BOX_URL = "https://yenpress.com/titles/9781975300050-alpha-adventures-box-set";
+  const VOL_1_URL = "https://yenpress.com/titles/9781975300012-alpha-adventures-vol-1";
+  const VOL_2_URL = "https://yenpress.com/titles/9781975300029-alpha-adventures-vol-2";
+  const pages = {
+    [BOX_URL]: titlePage("Alpha Adventures Box Set (Vol. 1-2)", "9781975300050"),
+    [VOL_1_URL]: titlePage("Alpha Adventures, Vol. 1", "9781975300012"),
+    [VOL_2_URL]: titlePage("Alpha Adventures, Vol. 2", "9781975300029"),
+  };
+  /** The one box's members, by their Releases' ISBNs in bundle order. */
+  const boxMembers = (t: ReturnType<typeof convexTest>) =>
+    t.run(async (ctx) => {
+      const [bundle, ...more] = await ctx.db.query("releaseBundles").collect();
+      expect(more).toHaveLength(0);
+      const rows = (await ctx.db.query("bundleMemberships").collect())
+        .filter((row) => row.bundleId === bundle!._id)
+        .sort((a, b) => a.order - b.order);
+      return await Promise.all(rows.map(async (row) => (await ctx.db.get(row.releaseId))!.isbn13));
+    });
+
+  it("links the late books on the next run, without fetching the box page", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    await t.run((ctx) =>
+      ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "Alpha Adventures",
+        altTitles: [],
+        searchText: "Alpha Adventures",
+      }),
+    );
+    stubYen(pages);
+    await sync(t);
+    // The box was applied first: its books did not exist yet.
+    expect(await boxMembers(t)).toEqual([]);
+
+    // (stubYen's sitemap also lists a page it 404s, so that one is re-tried.)
+    requested.length = 0;
+    expect(await sync(t)).toMatchObject({ recordsChanged: 1 });
+    expect(requested.filter((url) => url in pages)).toEqual([]);
+    expect(await boxMembers(t)).toEqual(["9781975300012", "9781975300029"]);
+
+    // Nothing left to add: a further run writes nothing.
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    expect(await boxMembers(t)).toHaveLength(2);
+  });
+
+  it("links the late books of every fresh box, one box at a time", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    // The same three pages for a second Series, under valid Beta ISBNs.
+    const betaIsbn = (html: string) =>
+      html
+        .replaceAll("9781975300050", "9781975300159")
+        .replaceAll("9781975300012", "9781975300111")
+        .replaceAll("9781975300029", "9781975300128");
+    const betaPages = Object.fromEntries(
+      Object.entries(pages).map(([url, html]) => [
+        betaIsbn(url.replace("alpha", "beta")),
+        betaIsbn(html.replaceAll("Alpha", "Beta")),
+      ]),
+    );
+    await t.run(async (ctx) => {
+      for (const title of ["Alpha Adventures", "Beta Adventures"]) {
+        await ctx.db.insert("series", {
+          status: "active",
+          publicId: 1,
+          title,
+          altTitles: [],
+          searchText: title,
+        });
+      }
+    });
+    stubYen({ ...pages, ...betaPages });
+    await sync(t);
+    const members = () =>
+      t.run(async (ctx) => {
+        const bundles = await ctx.db.query("releaseBundles").collect();
+        return await Promise.all(
+          bundles.map(async (bundle) => {
+            const rows = await ctx.db
+              .query("bundleMemberships")
+              .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
+              .collect();
+            const releases = await Promise.all(rows.map((row) => ctx.db.get(row.releaseId)));
+            return [bundle.name, releases.map((release) => release!.isbn13)] as const;
+          }),
+        );
+      });
+    expect(await members()).toEqual([
+      ["Alpha Adventures Box Set (Vol. 1-2)", []],
+      ["Beta Adventures Box Set (Vol. 1-2)", []],
+    ]);
+
+    expect(await sync(t)).toMatchObject({ recordsChanged: 2 });
+    expect(await members()).toEqual([
+      ["Alpha Adventures Box Set (Vol. 1-2)", ["9781975300012", "9781975300029"]],
+      ["Beta Adventures Box Set (Vol. 1-2)", ["9781975300111", "9781975300128"]],
+    ]);
+  });
+});
+
+// R12: Yen Press places through the shared catalog path (lib/catalogTitle.ts);
+// a page blurb listing Volumes with a gap keeps the 3-in-1 size from
+// inventing the Volume it skips.
+describe("yenPress.applyTitle — a gapped coverage statement is never widened (R12)", () => {
+  it("a blurb collecting Volumes 1 and 3 leaves the book Unmapped Packaging", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const page = {
+      ...parseTitlePage(DELUXE_PAGE)!,
+      title: "Battle Royale 3-in-1 Edition, Vol. 1",
+      description: "Collects volumes 1 and 3 of the thriller.",
+    };
+    for (const snapshot of toSnapshots(page, DELUXE_URL)) {
+      await t.mutation(internal.yenPress.applyTitle, { snapshot });
+    }
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("volumes").collect()).toHaveLength(0);
+      expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(0);
+      const editions = await ctx.db.query("editions").collect();
+      expect(editions.map((e) => e.coverageUnmapped)).toEqual([true]);
+    });
+  });
+
+  it("a bare gapped list with no collect-verb leaves the book Unmapped Packaging", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const page = {
+      ...parseTitlePage(DELUXE_PAGE)!,
+      title: "Battle Royale 3-in-1 Edition, Vol. 1",
+      description: "Volumes 1 and 3 in one book!",
+    };
+    for (const snapshot of toSnapshots(page, DELUXE_URL)) {
+      await t.mutation(internal.yenPress.applyTitle, { snapshot });
+    }
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("volumes").collect()).toHaveLength(0);
+      expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(0);
+    });
+  });
+
+  it("a title listing Volumes 1 & 3 leaves the book Unmapped Packaging", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const page = { ...parseTitlePage(DELUXE_PAGE)!, title: "Battle Royale 3-in-1 Edition 1 (Vol. 1 & 3)" };
+    for (const snapshot of toSnapshots(page, DELUXE_URL)) {
+      await t.mutation(internal.yenPress.applyTitle, { snapshot });
+    }
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("volumes").collect()).toHaveLength(0);
+      expect(await ctx.db.query("editions").collect()).toHaveLength(1);
+    });
   });
 });

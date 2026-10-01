@@ -36,11 +36,14 @@ import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { runToContinue } from "./lib/importRuns";
-import { candidateSeries, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
+import { resolveBaseSeries } from "./lib/catalogTitle";
+import { labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   createCanonicalRecords,
   findPublisherByName,
+  IMPORT_LANGUAGE,
+  isbnHeldElsewhere,
   needsEditionLine,
   recordUnplaced,
   toPartialDate,
@@ -332,6 +335,11 @@ export const applyEdition = internalMutation({
         return { status: "recordOnly", changed: false };
       }
       if (!changed) return { status: "unchanged", changed: false };
+      // An ISBN another Release holds is that book's: none of the record's
+      // facts are filled onto this link; the pair stays on the observation.
+      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+        return { status: "recordOnly", changed: false, releaseId: release._id };
+      }
       const result = await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
         ref: { type: "release", id: release._id },
@@ -363,13 +371,19 @@ export const applyEdition = internalMutation({
       if (publisher) break;
     }
     // Packaging (omnibus, deluxe, box sets) matches by ISBN only — an
-    // Omnibus 4 is never Volume 4.
+    // Omnibus 4 is never Volume 4. A bare trailing number or roman numeral
+    // resolves against the existing Series first, exactly as the catalog
+    // feeds do ("Chainsaw Man 22" → Chainsaw Man Vol. 22 only when that
+    // Series exists and no "Chainsaw Man 22" does).
     const packaged = snapshot.multiVolume || snapshot.packaging !== undefined;
+    const { seriesTitle, volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
     const fact: ReleaseFact = {
-      seriesTitle: snapshot.seriesTitle,
-      volumeLabel: packaged ? null : (snapshot.volumeLabel ?? null),
+      seriesTitle,
+      volumeLabel: packaged ? null : volumeLabel,
       multiVolume: packaged,
       format: snapshot.format,
+      binding: snapshot.binding,
+      language: IMPORT_LANGUAGE,
       isbn13: snapshot.isbn13,
       publisherId: publisher?._id ?? null,
     };
@@ -415,7 +429,6 @@ export const applyEdition = internalMutation({
     if (publisher === null || packaged || needsEditionLine(snapshot.title)) {
       return { status: "recordOnly", changed: false };
     }
-    const candidates = await candidateSeries(ctx, snapshot.seriesTitle);
     if (candidates.length !== 1) return { status: "recordOnly", changed: false };
     const series = candidates[0]!;
     if (series.locked) return { status: "recordOnly", changed: false };
@@ -424,15 +437,15 @@ export const applyEdition = internalMutation({
       .withIndex("by_series", (q) => q.eq("seriesId", series._id))
       .collect();
     const volume = volumes.find(
-      (vol) => vol.status === "active" && labelsEqual(vol.label, snapshot.volumeLabel ?? null),
+      (vol) => vol.status === "active" && labelsEqual(vol.label, volumeLabel),
     );
     if (!volume) return { status: "recordOnly", changed: false };
 
     // One OpenLibrary leaf per (Volume, publisher, format): the ladder
-    // already linked a same-format sibling without an ISBN, so one found
-    // here carries ANOTHER ISBN — a reprint, a library binding, or an OL
-    // duplicate. Never a second Release; the record stays on its
-    // observation.
+    // already linked a same-format sibling without an ISBN unless its known
+    // Binding differs, so one found here carries ANOTHER ISBN or Binding — a
+    // reprint, a library binding, a hardcover, or an OL duplicate. Never a
+    // second Release; the record stays on its observation.
     const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
     if (sibling) {
       await recordUnplaced(
@@ -460,8 +473,8 @@ export const applyEdition = internalMutation({
       citation,
       importComment: IMPORT_COMMENT,
       seriesId: series._id,
-      seriesTitle: snapshot.seriesTitle,
-      labels: snapshot.volumeLabel !== undefined ? [snapshot.volumeLabel] : [],
+      seriesTitle,
+      labels: volumeLabel !== null ? [volumeLabel] : [],
       release: {
         format: snapshot.format,
         binding: snapshot.binding,

@@ -53,7 +53,10 @@ import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { runToContinue } from "./lib/importRuns";
 import {
+  baseRecordId,
   crawlMode,
+  isbnRecordId,
+  isSeriesPage,
   kodanshaSnapshotValidator,
   LISTING_PAGE_SIZE,
   needsRecheck,
@@ -67,6 +70,7 @@ import {
   sourceRecordId,
   toBacklistSnapshots,
   toSnapshots,
+  volumePageAwaitsIsbn,
   volumesToFetch,
   type KodanshaItem,
   type KodanshaSnapshot,
@@ -74,16 +78,20 @@ import {
   type SeriesListingEntry,
 } from "./lib/kodansha";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
-import { getObservation, upsertObservation } from "./lib/observations";
+import { getObservation, markSeen, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
   creationGates,
+  IMPORT_LANGUAGE,
+  isbnHeldElsewhere,
+  isbnHolderBesides,
   linkSeriesObservation,
   publisherBySlug,
   queueCreationProposal,
   reconcileLinkedSeries,
   removedSeriesFor,
+  recordIsbnConflict,
   recordUnplaced,
   toPartialDate,
 } from "./lib/pipeline";
@@ -303,7 +311,8 @@ export const recordSeriesCrawl = internalMutation({
     const existing = await getObservation(ctx, BACKLIST_KEY, slug);
     const stored = existing?.snapshot as SeriesCrawl | undefined;
     if (existing && sameValue({ ...stored, fullCrawledAt: crawl.fullCrawledAt }, crawl)) {
-      await ctx.db.patch(existing._id, { snapshot: crawl, lastSeenAt: now, withdrawn: false });
+      await ctx.db.patch(existing._id, { snapshot: crawl });
+      await markSeen(ctx, existing, now);
       return;
     }
     await upsertObservation(ctx, {
@@ -507,6 +516,11 @@ export const backlistSync = internalAction({
             try {
               const html = await (await politeFetch(seriesUrl, delay)).text();
               volumes = parseSeriesPage(html, entry.slug);
+              // A 200 that is no series page (a challenge, changed markup) is
+              // a failure, never an empty series remembered until its refresh.
+              if (volumes.length === 0 && !isSeriesPage(html)) {
+                throw new Error("unrecognized series page: no ComicSeries JSON-LD or volume links");
+              }
               synopsis = parseSeriesSynopsis(html) ?? entry.synopsis;
             } catch (e) {
               // Unrecorded, so the series stays due and is retried next run.
@@ -523,7 +537,13 @@ export const backlistSync = internalAction({
               fetchedHere++;
               fetchedTotal++;
               try {
-                const page = parseVolumePage(await (await politeFetch(url, delay)).text(), url);
+                const html = await (await politeFetch(url, delay)).text();
+                const page = parseVolumePage(html, url);
+                // A Book with no ISBN yet is re-checked quietly; any other
+                // unparsed page (a challenge, changed markup) fails below.
+                if (page === null && !volumePageAwaitsIsbn(html)) {
+                  throw new Error("unrecognized volume page: no JSON-LD Book");
+                }
                 if (page === null || needsRecheck(page.offers, Date.now())) recheck.push(volumeSlug);
                 if (page === null) continue;
                 for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(
@@ -541,8 +561,9 @@ export const backlistSync = internalAction({
                       errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
                     }
                     if (result.cover) {
-                      // A download counts against the budget; a failed one is a
-                      // notice, retried when the volume is next applied.
+                      // A download counts against the budget. A failed one is a
+                      // notice, and its volume is re-checked at the next weekly
+                      // run so the art is retried there, not at the 180-day refresh.
                       if (!covers.has(coverKey(result.cover))) {
                         fetchedHere++;
                         fetchedTotal++;
@@ -555,6 +576,7 @@ export const backlistSync = internalAction({
                         });
                         if (notice) errors.push(`cover ${recordId}: ${notice}`);
                       } catch (e) {
+                        if (!recheck.includes(volumeSlug)) recheck.push(volumeSlug);
                         errors.push(`cover ${recordId}: ${errorMessage(e)}`);
                       }
                     }
@@ -690,9 +712,10 @@ async function withPageFacts(
  * Reconcile one normalized (volume, format) snapshot into the canonical
  * catalog — one atomic mutation per record (spec §6). Mirrors
  * sevenSeas.applyBook on the shared pipeline; a snapshot with an ISBN
- * (volume pages) matches by ISBN first. Each feed gates itself on its own
- * registry row ("kodansha" / "kodansha-backlist"); authority is always the
- * "kodansha" row's.
+ * (volume pages) matches by ISBN first, and is stored under the identity its
+ * ISBN owns (`offerRecordId`), whatever id the page order proposed. Each feed
+ * gates itself on its own registry row ("kodansha" / "kodansha-backlist");
+ * authority is always the "kodansha" row's.
  */
 export const applyVolume = internalMutation({
   args: { sourceRecordId: v.string(), snapshot: kodanshaSnapshotValidator },
@@ -700,12 +723,13 @@ export const applyVolume = internalMutation({
     const now = Date.now();
     const source = await getSourceByKey(ctx, SOURCE_KEY);
     const sourceName = source?.name ?? PUBLISHER.name;
-    const snapshot = await withPageFacts(ctx, args.sourceRecordId, args.snapshot);
+    const recordId = await offerRecordId(ctx, args.sourceRecordId, args.snapshot);
+    const snapshot = await withPageFacts(ctx, recordId, args.snapshot);
     const citation = { sourceName, url: snapshot.url };
 
     const { observation, changed } = await upsertObservation(ctx, {
       sourceKey: SOURCE_KEY,
-      sourceRecordId: args.sourceRecordId,
+      sourceRecordId: recordId,
       snapshot,
       now,
     });
@@ -729,6 +753,38 @@ export const applyVolume = internalMutation({
       if (!changed && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
+      // Another ISBN than the linked Release's is another book (a record an
+      // old order-keyed crawl rewrote): an Editor decides, and none of its
+      // binding, date, or price is reconciled onto this Release.
+      if (
+        release.isbn13 !== undefined &&
+        snapshot.isbn13 !== undefined &&
+        release.isbn13 !== snapshot.isbn13
+      ) {
+        await recordIsbnConflict(
+          ctx,
+          observation,
+          snapshot.isbn13,
+          `This record now offers ISBN ${snapshot.isbn13}, but the Release it links (${release._id}) is ISBN ${release.isbn13}; its facts are not applied until an Editor resolves which book it is.`,
+          now,
+        );
+        return {
+          status: "needsReview",
+          changed,
+          releaseId: release._id,
+          reason: "ISBN differs from the linked Release's",
+        };
+      }
+      // So is an ISBN another Release holds, whatever this link lacks: a
+      // calendar duplicate awaiting a merge, or a legacy record's facts.
+      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+        return {
+          status: "needsReview",
+          changed,
+          releaseId: release._id,
+          reason: "ISBN held by another Release",
+        };
+      }
       const seriesResult = await reconcileLinkedSeries(ctx, {
         sourceKey: SOURCE_KEY,
         seriesKey: snapshot.seriesSlug,
@@ -737,15 +793,11 @@ export const applyVolume = internalMutation({
         citation,
         now,
       });
-      const offered = offeredReleaseFields(snapshot);
-      if (await isbnHeldElsewhere(ctx, observation, release, snapshot, now)) {
-        delete offered.isbn13;
-      }
       const result = await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
         ref: { type: "release", id: release._id },
         doc: release,
-        offered,
+        offered: offeredReleaseFields(snapshot),
         observation,
         citation,
         now,
@@ -804,6 +856,8 @@ export const applyVolume = internalMutation({
       volumeLabel: packaging ? null : (snapshot.volumeLabel ?? null),
       multiVolume: packaging !== null,
       format: snapshot.format,
+      binding: snapshot.binding,
+      language: IMPORT_LANGUAGE,
       isbn13: snapshot.isbn13,
       publisherId: publisher && publisher.status === "active" ? publisher._id : null,
     };
@@ -963,38 +1017,47 @@ export const applyVolume = internalMutation({
 });
 
 /**
- * A calendar-created Release (linked by slug, no ISBN) may duplicate one
- * PRH or ANN already created under the ISBN the volume page now states.
- * Then the ISBN is never copied onto it — two Releases would share one —
- * and the observation records the pair for an Editor to merge.
+ * The identity a volume-page offer is stored under. Page order only proposes
+ * one (lib/kodansha.ts `toBacklistSnapshots`): the base key
+ * `{series}/{volume}#{format}` belongs to the ISBN it already holds (its
+ * linked Release's, else its stored snapshot's), and every other ISBN of that
+ * format takes `…:{isbn}`, so reordered bindings never trade records. A base
+ * key an older order-keyed crawl rewrote is reclaimed by its linked Release's
+ * ISBN, so stored observations need no migration. A base linked to an
+ * ISBN-less Release is not the offer's when that Release's known Binding
+ * differs, nor by its stored snapshot's ISBN alone while another Release
+ * holds that ISBN (an older crawl may have stored another binding's facts
+ * there): the offer takes its ISBN key. With no ISBN on the base yet (none
+ * stored, or calendar-only), an existing ISBN key wins, else the proposal
+ * stands.
  */
-async function isbnHeldElsewhere(
+async function offerRecordId(
   ctx: MutationCtx,
-  observation: Doc<"sourceObservations">,
-  release: Doc<"releases">,
+  proposed: string,
   snapshot: KodanshaSnapshot,
-  now: number,
-): Promise<boolean> {
+): Promise<string> {
   const isbn13 = snapshot.isbn13;
-  if (isbn13 === undefined || release.isbn13 === isbn13) return false;
-  const holder = await ctx.db
-    .query("releases")
-    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-    .first();
-  if (!holder || holder._id === release._id || holder.status !== "active") return false;
-  const kept = (observation.conflicts ?? []).filter((c) => c.field !== "isbn13");
-  await ctx.db.patch(observation._id, {
-    conflicts: [
-      ...kept,
-      {
-        field: "isbn13",
-        offered: isbn13,
-        at: now,
-        reason: `ISBN ${isbn13} is already on Release ${holder._id}; the Release this record links to (${release._id}) looks like its duplicate — an Editor merges them.`,
-      },
-    ],
-  });
-  return true;
+  if (isbn13 === undefined) return proposed;
+  const base = baseRecordId(proposed);
+  const keyed = isbnRecordId(base, isbn13);
+  const stored = await getObservation(ctx, SOURCE_KEY, base);
+  const ref = stored?.recordRef;
+  const linked = ref?.type === "release" ? await ctx.db.get(ref.id) : null;
+  if (linked?.isbn13 !== undefined) return linked.isbn13 === isbn13 ? base : keyed;
+  if (
+    linked?.binding !== undefined &&
+    snapshot.binding !== undefined &&
+    linked.binding.toLowerCase() !== snapshot.binding.toLowerCase()
+  ) {
+    return keyed;
+  }
+  const claimed = (stored?.snapshot as KodanshaSnapshot | undefined)?.isbn13;
+  if (claimed !== undefined) {
+    if (claimed !== isbn13) return keyed;
+    const holder = linked === null ? null : await isbnHolderBesides(ctx, linked, isbn13);
+    return holder === null ? base : keyed;
+  }
+  return (await getObservation(ctx, SOURCE_KEY, keyed)) ? keyed : proposed;
 }
 
 /**

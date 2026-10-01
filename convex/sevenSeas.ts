@@ -16,37 +16,56 @@
 //       Proposal creating Series/Volume/Edition/Release with public
 //       importer-authored Revisions citing the source name + record URL.
 //     → in steady state, a brand-new Series, multi-Volume Coverage, or an
-//       Edition-Line-shaped release queues an In-Review Proposal instead;
-//       in Bootstrap Mode those records are created directly and tagged
-//       bootstrap-unreviewed (spec §7).
+//       Edition-Line-shaped release queues an In-Review Proposal carrying
+//       its Edition Line instead; in Bootstrap Mode those records are
+//       created directly and tagged bootstrap-unreviewed (spec §7).
+//     → a box set is a Release Bundle; once linked, it picks up members
+//       whose books arrived after it, on every listing that notes it.
+//     → packaging an older planner left unplaced is replayed once from its
+//       stored snapshot, without its page, paced by the detail budget.
+//     → a relisted book retires the cancellation review its withdrawal
+//       queued (lib/observations.ts markSeen).
 //
 // Covers land in Convex file storage as {storageId, sourceUrl, attribution}
 // through the shared attach path (lib/covers.ts `storeCover`), and are
 // replaced when the book's cover URL changes. A placeholder image is recorded
 // on the Release instead, keeping any art already shown, and not fetched again
-// until its URL changes.
+// until its URL changes. A download that fails is retried by later runs from
+// the stored snapshot's URL, without refetching an unchanged book page.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalAction, internalMutation } from "./_generated/server";
+import { internalAction, internalMutation, type MutationCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
-import { coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
+import {
+  coverKey,
+  coverRequest,
+  storeCover,
+  type CoverRequest,
+  type StoredCovers,
+} from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { rangeLabels } from "./lib/bookTitle";
+import { parseBookTitle, rangeLabels } from "./lib/bookTitle";
+import { inferCoverage } from "./lib/coverage";
 import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
-import { getObservation, upsertObservation } from "./lib/observations";
+import { getObservation, markSeen, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
   createReleaseBundle,
   creationGates,
+  IMPORT_LANGUAGE,
+  isbnHeldElsewhere,
+  linkedSeriesId,
   queueCreationProposal,
+  reconcileLinkedBundle,
   reconcileLinkedSeries,
   recordUnplaced,
   toPartialDate,
   linkSeriesObservation,
+  type BundleReconcile,
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
 import {
@@ -92,6 +111,8 @@ export const sync = internalAction({
     maxListingPages: v.optional(v.number()),
     /** Cap book-page fetches per run; skipped books wait for the next run. */
     maxDetailFetches: v.optional(v.number()),
+    /** Cap retries of earlier failed cover downloads per run (default 50). */
+    maxCoverRetries: v.optional(v.number()),
     /** Pause before every request; tests pass 0. */
     politeDelayMs: v.optional(v.number()),
     /** Re-fetch details even for observations whose modified_gmt is unchanged. */
@@ -129,6 +150,7 @@ export const sync = internalAction({
         let page = 1;
         let totalPages = 1;
         let detailBudget = args.maxDetailFetches ?? 200;
+        let coverBudget = args.maxCoverRetries ?? 50;
 
         while (page <= totalPages) {
           if (args.maxListingPages !== undefined && page > args.maxListingPages) {
@@ -180,7 +202,27 @@ export const sync = internalAction({
             // previously imported book as prose. Scope changes are not deletion.
             if (!isMangaBook({ title: listing.title })) continue;
             seen++;
-            if (!note.needsDetail) continue;
+            if (!note.needsDetail && note.replay === undefined) {
+              if (note.review !== undefined) errors.push(`review ${listing.slug}: ${note.review}`);
+              // An unchanged book whose art never landed (a failed download
+              // after its apply committed): retry just the art, paced by its
+              // own budget so it never starves book-page fetches.
+              if (note.cover && (covers.has(coverKey(note.cover)) || coverBudget-- > 0)) {
+                try {
+                  const notice = await storeCover(ctx, covers, {
+                    ...note.cover,
+                    attribution: source.attribution ?? PUBLISHER.name,
+                    delayMs: delay,
+                  });
+                  if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
+                } catch (e) {
+                  errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
+                }
+              }
+              continue;
+            }
+            // A book page to read, or a stored snapshot to replay: either
+            // spends one unit of the detail budget.
             if (detailBudget <= 0) {
               completeSweep = false;
               continue;
@@ -188,9 +230,12 @@ export const sync = internalAction({
             detailBudget--;
 
             try {
-              const pageRes = await politeFetch(listing.url, delay);
-              const details = parseBookPage(await pageRes.text());
-              const snapshot = normalizeBook(listing, details);
+              const snapshot =
+                note.replay ??
+                normalizeBook(
+                  listing,
+                  parseBookPage(await (await politeFetch(listing.url, delay)).text()),
+                );
               if (
                 !isMangaBook({
                   category: snapshot.category,
@@ -284,8 +329,14 @@ export const sync = internalAction({
 
 /**
  * Note one listing hit: presence in the listing bumps last-seen (unchanged
- * fetches bump last-seen ONLY — spec §6); the stored snapshot's
- * modified_gmt decides whether the book page is worth fetching.
+ * fetches bump last-seen ONLY — spec §6) and retires the cancellation
+ * review a withdrawal queued; the stored snapshot's modified_gmt decides
+ * whether the book page is worth fetching. When it is not, `cover` is art
+ * the linked Release still lacks from the snapshot's cover URL (a download
+ * that failed after the book applied), for the action to retry without the
+ * page, and `replay` is a stored snapshot for the action to apply again
+ * without the page (an unplaced book an older planner judged). `review` is
+ * why a linked box its stored snapshot could not fill went to review.
  */
 export const noteListing = internalMutation({
   args: {
@@ -295,24 +346,69 @@ export const noteListing = internalMutation({
     /** The listing carries a blurb (`content.rendered`). */
     offersBlurb: v.boolean(),
   },
-  handler: async (ctx, { sourceRecordId, modifiedGmt, force, offersBlurb }) => {
-    const obs = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
-    if (!obs) return { needsDetail: true };
-    await ctx.db.patch(obs._id, { lastSeenAt: Date.now(), withdrawn: false });
+  handler: async (
+    ctx,
+    { sourceRecordId, modifiedGmt, force, offersBlurb },
+  ): Promise<{
+    needsDetail: boolean;
+    cover?: CoverRequest;
+    replay?: BookSnapshot;
+    review?: string;
+  }> => {
+    const found = await getObservation(ctx, SOURCE_KEY, sourceRecordId);
+    if (!found) return { needsDetail: true };
+    const obs = await markSeen(ctx, found, Date.now());
     const stored = obs.snapshot as Partial<BookSnapshot> | null;
     if (force || stored?.modifiedGmt !== modifiedGmt) return { needsDetail: true };
     // Age ratings predate their import too: a book read before them is
     // re-read once, paced by the same budget (lib/mature.ts).
     if (stored?.mature === undefined) return { needsDetail: true };
+    // A linked box's members arrive through other books, never through its
+    // own page: the stored snapshot places them without a detail fetch.
+    if (obs.recordRef?.type === "releaseBundle") {
+      const { conflict } = await reconcileBoxMembers(
+        ctx,
+        obs,
+        obs.snapshot as BookSnapshot,
+        Date.now(),
+      );
+      return conflict === undefined
+        ? { needsDetail: false }
+        : { needsDetail: false, review: conflict };
+    }
+    // Packaging an older planner left unplaced (B19) is replayed from its
+    // stored snapshot: the page is unchanged, only the verdict is stale. The
+    // title's shape comes from today's parser, as normalizeBook reads it, so
+    // a snapshot stored before the parser marked a gapped list (R12) never
+    // replays its stale packaging. The action paces replays with the detail
+    // budget.
+    if (obs.recordRef === undefined && obs.queuedProposalId === undefined && staleVerdict(obs)) {
+      const snapshot = obs.snapshot as BookSnapshot;
+      const parsed = parseBookTitle(snapshot.title);
+      return {
+        needsDetail: false,
+        replay: {
+          ...snapshot,
+          volumeLabel: parsed.volumeLabel ?? undefined,
+          packaging: parsed.packaging ?? undefined,
+          isBox: parsed.isBox || undefined,
+        },
+      };
+    }
+    const release =
+      obs.recordRef?.type === "release" ? await ctx.db.get(obs.recordRef.id) : null;
     // Descriptions predate their import: a linked Release still without one
     // is re-read while the listing offers a blurb, paced by the detail
     // budget, so the backfill needs no forced run. A human's cleared
     // description is theirs to keep (`blurbPending` in applyBook agrees).
-    if (offersBlurb && obs.recordRef?.type === "release") {
-      const release = await ctx.db.get(obs.recordRef.id);
-      return { needsDetail: release !== null && blurbWanted(release) };
-    }
-    return { needsDetail: false };
+    if (offersBlurb && release !== null && blurbWanted(release)) return { needsDetail: true };
+    // Pending art is whatever the snapshot names that the Release does not
+    // hold yet; applyBook's rung ① serves only active, unlocked Releases.
+    const cover =
+      release !== null && release.status === "active" && !release.locked
+        ? coverRequest(release, stored?.coverUrl)
+        : undefined;
+    return cover ? { needsDetail: false, cover } : { needsDetail: false };
   },
 });
 
@@ -377,6 +473,83 @@ function reconcileSeries(
 }
 
 /**
+ * Whether an unplaced observation carries a verdict a planner older than the
+ * blurb, the line's size and Unmapped Packaging recorded (B19). Only those
+ * texts replay: a replay links, queues, or overwrites them with a verdict of
+ * today's planner (unplacedVerdict, a hidden Series' note), none of which
+ * replays again, so each observation replays at most once. No verdict at
+ * all (an Editor's unlink) is settled too, until the page changes.
+ */
+function staleVerdict(observation: Doc<"sourceObservations">): boolean {
+  const snapshot = observation.snapshot as Partial<BookSnapshot> | null;
+  if (!snapshot?.title || !isMangaBook({ category: snapshot.category, title: snapshot.title })) {
+    return false;
+  }
+  const reason = observation.conflicts?.find((c) => c.field === "placement")?.reason;
+  return (
+    reason ===
+      `"${snapshot.title}" is packaging whose covered Volumes the title does not state — an Editor maps it.` ||
+    reason ===
+      `Box set "${snapshot.title}" needs a unique base Series and stated coverage, and outside Bootstrap Mode a review.`
+  );
+}
+
+/** Why a packaging book or box set stays on its observation, today. */
+function unplacedVerdict(snapshot: BookSnapshot): string {
+  return snapshot.isBox
+    ? `Box set "${snapshot.title}" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.`
+    : `"${snapshot.title}" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.`;
+}
+
+/**
+ * The Volume labels a book covers: a packaging range (from the title, else
+ * the listing blurb, else a line name that declares its size —
+ * lib/coverage.ts), else its own Volume; [] when nothing states it.
+ */
+function coveredLabels(snapshot: BookSnapshot): string[] {
+  if (snapshot.packaging) {
+    const range = inferCoverage(snapshot.packaging, [snapshot.description]);
+    return range ? rangeLabels(range) : [];
+  }
+  return snapshot.volumeLabel !== undefined ? [snapshot.volumeLabel] : [];
+}
+
+/**
+ * A linked box set picks up the members whose books arrived after it
+ * (lib/pipeline.ts reconcileLinkedBundle), from its snapshot alone: the base
+ * Series is the source's series link, else the one Series of that title.
+ * Returns how many members it added, or the `conflict` when that Series is
+ * not the bundle's own (a repointed series link goes to review).
+ */
+async function reconcileBoxMembers(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  snapshot: BookSnapshot,
+  now: number,
+): Promise<BundleReconcile> {
+  if (observation.recordRef?.type !== "releaseBundle" || !snapshot.packaging) return { added: 0 };
+  const labels = coveredLabels(snapshot);
+  if (labels.length === 0) return { added: 0 };
+  let seriesId = await linkedSeriesId(ctx, SOURCE_KEY, snapshot.seriesSlug);
+  if (seriesId === null) {
+    const candidates = await candidateSeries(ctx, snapshot.seriesTitle);
+    if (candidates.length !== 1) return { added: 0 };
+    seriesId = candidates[0]!._id;
+  }
+  const source = await getSourceByKey(ctx, SOURCE_KEY);
+  return await reconcileLinkedBundle(ctx, observation.recordRef.id, {
+    sourceKey: SOURCE_KEY,
+    observation,
+    citation: { sourceName: source?.name ?? PUBLISHER.name, url: snapshot.url },
+    importComment: IMPORT_COMMENT,
+    seriesId,
+    labels,
+    format: "physical",
+    now,
+  });
+}
+
+/**
  * Reconcile one normalized book snapshot into the canonical catalog. One
  * atomic mutation per record (spec §6): the observation write, the match,
  * and the proposal/revision/record writes commit together or not at all.
@@ -413,6 +586,16 @@ export const applyBook = internalMutation({
       if (!changed && !blurbPending && cover === undefined) {
         return { status: "unchanged", changed: false };
       }
+      // An ISBN another Release holds is that book's: none of its facts
+      // are reconciled onto this link until an Editor resolves the pair.
+      if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+        return {
+          status: "needsReview",
+          changed,
+          releaseId: release._id,
+          reason: "ISBN held by another Release",
+        };
+      }
       const seriesResult = await reconcileSeries(ctx, snapshot, citation, now);
       const result = await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
@@ -436,7 +619,15 @@ export const applyBook = internalMutation({
       };
     }
 
+    // A box set already placed as a Release Bundle: its only reconcile is
+    // the members that arrived after it, changed snapshot or not. A box now
+    // listed under another Series goes to review instead.
     if (observation.recordRef?.type === "releaseBundle") {
+      const { added, conflict } = await reconcileBoxMembers(ctx, observation, snapshot, now);
+      if (conflict !== undefined) {
+        return { status: "needsReview", changed: false, reason: conflict };
+      }
+      if (added > 0) return { status: "updated", changed: true };
       return { status: changed ? "recordOnly" : "unchanged", changed: false };
     }
 
@@ -467,18 +658,14 @@ export const applyBook = internalMutation({
       .unique();
     // Packaging covers the base Series' real Volumes; it is never a Volume.
     const packaging = snapshot.packaging ?? null;
-    const labels = packaging
-      ? packaging.coverRange
-        ? rangeLabels(packaging.coverRange)
-        : []
-      : snapshot.volumeLabel !== undefined
-        ? [snapshot.volumeLabel]
-        : [];
+    const labels = coveredLabels(snapshot);
     const fact: ReleaseFact = {
       seriesTitle: snapshot.seriesTitle,
       volumeLabel: packaging ? null : (snapshot.volumeLabel ?? null),
       multiVolume: packaging !== null,
       format: "physical",
+      binding: snapshot.binding,
+      language: IMPORT_LANGUAGE,
       isbn13: snapshot.isbn13,
       publisherId: publisher && publisher.status === "active" ? publisher._id : null,
     };
@@ -542,12 +729,7 @@ export const applyBook = internalMutation({
     // A box set is a Release Bundle of the base Series' existing Releases.
     if (snapshot.isBox) {
       if (seriesId === null || labels.length === 0 || !bootstrap) {
-        await recordUnplaced(
-          ctx,
-          observation,
-          `Box set "${snapshot.title}" needs a unique base Series and stated coverage, and outside Bootstrap Mode a review.`,
-          now,
-        );
+        await recordUnplaced(ctx, observation, unplacedVerdict(snapshot), now);
         return { status: "recordOnly", changed: false, reason: "box set" };
       }
       const bundle = await createReleaseBundle(ctx, {
@@ -563,26 +745,35 @@ export const applyBook = internalMutation({
         tagBootstrapUnreviewed: true,
         now,
       });
+      if (bundle.conflict !== undefined) {
+        return { status: "needsReview", changed: true, reason: bundle.conflict };
+      }
       return { status: bundle.created ? "created" : "linked", changed: true };
     }
 
-    if (packaging && labels.length === 0) {
-      await recordUnplaced(
-        ctx,
-        observation,
-        `"${snapshot.title}" is packaging whose covered Volumes the title does not state — an Editor maps it.`,
-        now,
-      );
+    const editionLine =
+      packaging?.lineName != null
+        ? { name: packaging.lineName, position: packaging.linePosition }
+        : undefined;
+    // Packaging with no coverage from any signal. In Bootstrap Mode a named
+    // line's member is still created, as Unmapped Packaging under its line
+    // (CONTEXT.md), for a Moderator to map; a bare range with no line name,
+    // an ambiguous Series, or steady state keeps it on its observation
+    // (lib/catalogTitle.ts applies the same rule).
+    const unmapped =
+      packaging !== null &&
+      labels.length === 0 &&
+      editionLine !== undefined &&
+      bootstrap &&
+      ambiguousSeries === 0;
+    if (packaging && labels.length === 0 && !unmapped) {
+      await recordUnplaced(ctx, observation, unplacedVerdict(snapshot), now);
       return {
         status: "recordOnly",
         changed: false,
         reason: "packaging without coverage",
       };
     }
-    const editionLine =
-      packaging?.lineName != null
-        ? { name: packaging.lineName, position: packaging.linePosition }
-        : undefined;
 
     if (match.kind === "review" || ambiguousSeries > 0) {
       // Ambiguity always queues flagged (spec §6) — the importer never
@@ -599,6 +790,7 @@ export const applyBook = internalMutation({
         seriesId,
         seriesTitle: snapshot.seriesTitle,
         labels,
+        editionLine,
         linePosition: packaging?.linePosition ?? undefined,
         release: { ...releasePayload, publisherSlug: PUBLISHER.slug },
         now,
@@ -630,6 +822,7 @@ export const applyBook = internalMutation({
         seriesId,
         seriesTitle: snapshot.seriesTitle,
         labels,
+        editionLine,
         linePosition: packaging?.linePosition ?? undefined,
         release: { ...releasePayload, publisherSlug: PUBLISHER.slug },
         now,
@@ -649,11 +842,16 @@ export const applyBook = internalMutation({
       seriesUrl: snapshot.seriesUrl,
       labels,
       editionLine,
+      ...(unmapped ? { coverageUnmapped: true as const } : {}),
       release: { ...releasePayload, publisher: PUBLISHER },
       // Tag exactly what steady state would have queued (spec §7).
       tagBootstrapUnreviewed: bootstrap && gates.length > 0,
       now,
     });
+    // A Series an Editor hid: nothing was created, the reason is noted.
+    if (creation.blocked !== undefined) {
+      return { status: "recordOnly", changed: false, reason: "hidden series" };
+    }
     const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
     return {
       status: "created",

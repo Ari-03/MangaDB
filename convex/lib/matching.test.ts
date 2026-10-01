@@ -102,13 +102,21 @@ type Catalog = {
   releaseId: Id<"releases">;
 };
 
-/** publisher → series → volume "1" → single-coverage edition → release. */
+/**
+ * publisher → series → volume "1" → single-coverage edition → release. The
+ * coverage extent, an Edition Line membership, and the Release's binding
+ * and language are overridable for the packaging and identity rules.
+ */
 async function buildCatalog(
   t: TestT,
   overrides: Partial<{
     seriesTitle: string;
     label: string;
     format: "physical" | "digital";
+    binding: string;
+    language: string;
+    extent: "complete" | "partial";
+    editionLine: string;
     isbn13: string;
     locked: boolean;
     overriddenFields: string[];
@@ -143,22 +151,33 @@ async function buildCatalog(
       position: 1,
       label: overrides.label ?? "1",
     });
+    const editionLineId =
+      overrides.editionLine === undefined
+        ? undefined
+        : await ctx.db.insert("editionLines", {
+            status: "active",
+            seriesId,
+            publisherId,
+            name: overrides.editionLine,
+          });
     const editionId = await ctx.db.insert("editions", {
       status: "active",
       publicId: Math.floor(Math.random() * 1e9),
       publisherId,
+      editionLineId,
     });
     await ctx.db.insert("volumeCoverages", {
       editionId,
       volumeId,
       order: 1,
-      extent: "complete",
+      extent: overrides.extent ?? "complete",
     });
     const releaseId = await ctx.db.insert("releases", {
       status: "active",
       editionId,
       format: overrides.format ?? "physical",
-      language: "en",
+      binding: overrides.binding,
+      language: overrides.language ?? "en",
       isbn13: overrides.isbn13,
       locked: overrides.locked,
       overriddenFields: overrides.overriddenFields,
@@ -291,6 +310,50 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
     expect(outcome).toMatchObject({ kind: "create", rung: 5 });
     // Without an ISBN on the fact, the full key still links.
     expect(await match(t, fact(catalog.publisherId))).toMatchObject({
+      kind: "match",
+      rung: 3,
+    });
+  });
+
+  it("never auto-links a whole Volume onto a split part or a line's packaging (B06)", async () => {
+    // An ISBN-less Part 1 of a split Volume 1 is not the full Volume 1:
+    // linking it would hand the part the full book's ISBN, date and cover.
+    const t = makeT();
+    const split = await buildCatalog(t, { extent: "partial" });
+    const outcome = await match(t, fact(split.publisherId, { isbn13: "9781999000103" }));
+    expect(outcome).toMatchObject({ kind: "review", rung: 4 });
+
+    // A single-volume book of an Edition Line (a Collector's Edition) is
+    // packaging, never the ordinary Volume 1.
+    const t2 = makeT();
+    const collectors = await buildCatalog(t2, { editionLine: "Collector's Edition" });
+    expect(await match(t2, fact(collectors.publisherId))).toMatchObject({
+      kind: "review",
+      rung: 4,
+    });
+  });
+
+  it("a hardcover or another language is another Release, never the paperback (B14)", async () => {
+    const t = makeT();
+    const paperback = await buildCatalog(t, { binding: "paperback" });
+    // Another Binding of the same Edition is a sibling: the creation path.
+    expect(
+      await match(t, fact(paperback.publisherId, { binding: "Hardcover" })),
+    ).toMatchObject({ kind: "create", rung: 5 });
+    // Same Binding (any case), or a fact that does not know it, still links.
+    expect(
+      await match(t, fact(paperback.publisherId, { binding: "Paperback" })),
+    ).toMatchObject({ kind: "match", rung: 3, release: { _id: paperback.releaseId } });
+    expect(await match(t, fact(paperback.publisherId))).toMatchObject({ kind: "match", rung: 3 });
+
+    // Another language is another Release by definition.
+    const t2 = makeT();
+    const french = await buildCatalog(t2, { language: "fr" });
+    expect(await match(t2, fact(french.publisherId, { language: "en" }))).toMatchObject({
+      kind: "create",
+      rung: 5,
+    });
+    expect(await match(t2, fact(french.publisherId, { language: "fr" }))).toMatchObject({
       kind: "match",
       rung: 3,
     });

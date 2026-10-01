@@ -8,6 +8,9 @@
 // so one failing or drifted entry rolls back alone and is reported. A dry
 // run applies the entry for real and then throws, rolling the writes back:
 // the report is exactly what the real run would do against the current data.
+// An entry with more to do than one call should (a chunked publisher merge,
+// a split's or box set's personal rows past lib/repair/ops.ts SWEEP_BUDGET)
+// reports "partial", and scripts/repair.ts calls it again until it is not.
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";

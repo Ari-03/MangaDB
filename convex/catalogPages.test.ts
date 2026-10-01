@@ -325,6 +325,27 @@ describe("catalogPages.editionPage", () => {
   });
 });
 
+describe("Edition maturity", () => {
+  // B34: maturity is the content's, not what the page may display of it.
+  it("stays mature after its only covered Volume is hidden", async () => {
+    const t = convexTest(schema);
+    const { seriesId, v1 } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seriesId, { mature: true });
+      await ctx.db.patch(v1, { status: "hidden" });
+    });
+    // The lineless standard Edition of Vol 1 now lists no coverage.
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
+    expect(page?.coverage).toEqual([]);
+    expect(page?.mature).toBe(true);
+    const sitemap = await t.query(api.seo.sitemapPage, {
+      entity: "edition",
+      paginationOpts: { cursor: null, numItems: 100 },
+    });
+    expect(sitemap.entries).toEqual([]);
+  });
+});
+
 describe("catalogPages.bundlePage", () => {
   it("lists members in order with pinned Variants and Edition backlinks", async () => {
     const t = convexTest(schema);

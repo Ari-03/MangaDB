@@ -6,8 +6,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  baseRecordId,
   crawlMode,
   FULL_REFRESH_MS,
+  isbnRecordId,
+  isSeriesPage,
   needsRecheck,
   parseCalendar,
   parseCreators,
@@ -24,6 +27,7 @@ import {
   sourceRecordId,
   toBacklistSnapshots,
   toSnapshots,
+  volumePageAwaitsIsbn,
   volumesToFetch,
   type SeriesCrawl,
 } from "./kodansha";
@@ -560,5 +564,36 @@ describe("backlist: crawl state", () => {
     expect(needsRecheck(old.offers, now)).toBe(false);
     expect(needsRecheck([{ format: "digital", isbn13: "9781636990033" }], now)).toBe(true);
     expect(needsRecheck([], now)).toBe(true);
+  });
+});
+
+describe("backlist: telling pages from challenges (audit B21)", () => {
+  const challenge =
+    "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body></body></html>";
+
+  it("recognizes series pages by their ComicSeries JSON-LD, even with no volumes", () => {
+    expect(isSeriesPage(fixture("series-7-billion-needles.html"))).toBe(true);
+    expect(isSeriesPage(fixture("series-blue-lock-omnibus.html"))).toBe(true);
+    expect(isSeriesPage(challenge)).toBe(false);
+    // A volume page's ComicSeries is nested under isPartOf, not a series page.
+    expect(isSeriesPage(fixture("blue-lock-volume-1.html"))).toBe(false);
+  });
+
+  it("tells a volume page awaiting ISBNs from an unrecognized one", () => {
+    const html = fixture("blue-lock-volume-1.html");
+    const noIsbn = html.replace(/"isbn": "\d+",/g, "");
+    expect(parseVolumePage(noIsbn, "https://kodansha.us/series/blue-lock/volume-1/")).toBeNull();
+    expect(volumePageAwaitsIsbn(noIsbn)).toBe(true);
+    expect(volumePageAwaitsIsbn(challenge)).toBe(false);
+    expect(volumePageAwaitsIsbn(html)).toBe(false);
+  });
+});
+
+describe("backlist: offer identities (audit B08)", () => {
+  it("maps an ISBN-keyed identity back to its base", () => {
+    const base = "blue-lock/volume-1#physical";
+    expect(isbnRecordId(base, "9780316473996")).toBe("blue-lock/volume-1#physical:9780316473996");
+    expect(baseRecordId(isbnRecordId(base, "9780316473996"))).toBe(base);
+    expect(baseRecordId(base)).toBe(base);
   });
 });

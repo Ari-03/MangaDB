@@ -3,14 +3,15 @@
 // Yen Press. One record → the matching ladder → authority reconciliation
 // on a match, or the standard creation boundaries under the imprint's
 // publisher row: omnibus/deluxe books become Edition Line members covering
-// real Volumes, box sets Release Bundles, and packaging whose coverage the
-// title never states stays on its observation for an Editor. Each adapter
+// real Volumes, box sets Release Bundles (which pick up books arriving after
+// them), and packaging whose coverage the title never states stays on its
+// observation for an Editor. Each adapter
 // wraps `applyCatalogTitle` in its own internalMutation (one atomic
 // mutation per record, spec §6).
 
 import { v, type Infer } from "convex/values";
-import type { Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { Doc, Id } from "../_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
 import { packagingValidator, rangeLabels } from "./bookTitle";
 import { inferCoverage } from "./coverage";
@@ -18,12 +19,16 @@ import { candidateSeries, matchRelease, type ReleaseFact } from "./matching";
 import { upsertObservation } from "./observations";
 import {
   alreadyHandled,
+  type BundleReconcile,
   createCanonicalRecords,
   createReleaseBundle,
   creationGates,
   ensurePublisher,
   findPublisherByName,
+  IMPORT_LANGUAGE,
+  isbnHeldElsewhere,
   queueCreationProposal,
+  reconcileLinkedBundle,
   recordUnplaced,
   removedSeriesFor,
   toPartialDate,
@@ -102,6 +107,145 @@ function offeredReleaseFields(snapshot: CatalogTitle): Record<string, unknown> {
   return offered;
 }
 
+/** A parsed book title with its provisional readings (lib/bookTitle.ts). */
+export type ProvisionalTitle = Pick<
+  CatalogTitle,
+  "title" | "seriesTitle" | "volumeLabel" | "bareNumber" | "bareRoman" | "bareSplit"
+>;
+
+const ROMAN_ONES = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"];
+
+/**
+ * A bare-Roman title read as one work's whole name: the parsed base and its
+ * numeral ("Barbarities" and Volume 2 make "Barbarities II"), free of the
+ * format and packaging groups the raw source title carries. Null outside the
+ * numerals the parser splits (I to XXXIX).
+ */
+function romanWholeName(parsed: ProvisionalTitle): string | null {
+  const value = Number(parsed.volumeLabel);
+  if (!Number.isInteger(value) || value < 1 || value > 39) return null;
+  return `${parsed.seriesTitle} ${"X".repeat(Math.floor(value / 10))}${ROMAN_ONES[value % 10]}`;
+}
+
+/** A title's letters and digits only, for telling a spelling from extra words. */
+const lettersOf = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
+/**
+ * The conservative resolution of a title's provisional readings against the
+ * EXISTING catalog: the base Series title, the covered Volume label, and the
+ * active Series that title names. Shared by every adapter that parses book
+ * titles (catalog feeds here, OpenLibrary).
+ *
+ * An unmarked trailing number may belong to the name ("Omega 6"): when only
+ * the whole title names an existing Series, the book is that Series'. A
+ * trailing roman numeral is more often a sequel's name ("Kingdom Hearts
+ * II") than a volume, so the whole title is asked first, and the split
+ * stands only when an existing base Series claims it ("BARBARITIES II" →
+ * Barbarities Vol. 2); a new work keeps its whole name. A trailing number
+ * the parser left in place for want of a volume number ("Tower Dungeon 7"
+ * from a PRH row without seriesNumber) follows the same rule: whole title
+ * first, else an existing base Series takes it as a Volume, else the new
+ * work keeps its whole name.
+ */
+export async function resolveBaseSeries(
+  ctx: QueryCtx | MutationCtx,
+  parsed: ProvisionalTitle,
+): Promise<{ seriesTitle: string; volumeLabel: string | null; candidates: Doc<"series">[] }> {
+  const named = await candidateSeries(ctx, parsed.seriesTitle);
+  const plain = {
+    seriesTitle: parsed.seriesTitle,
+    volumeLabel: parsed.volumeLabel ?? null,
+    candidates: named,
+  };
+  if (parsed.bareRoman) {
+    // The source's raw title may still carry groups the parser peeled
+    // ("Barbarities II (Manga)"), so the whole name is asked both ways and
+    // a new work is named without them.
+    // Punctuation alone ("Alpha, II") is the source's own spelling and stays.
+    const tidied = romanWholeName(parsed);
+    const wholeName =
+      tidied !== null && lettersOf(tidied) !== lettersOf(parsed.title) ? tidied : parsed.title;
+    let whole = await candidateSeries(ctx, parsed.title);
+    if (whole.length === 0 && wholeName !== parsed.title) {
+      whole = await candidateSeries(ctx, wholeName);
+    }
+    if (whole.length > 0 || named.length === 0) {
+      return { seriesTitle: whole[0]?.title ?? wholeName, volumeLabel: null, candidates: whole };
+    }
+    return plain;
+  }
+  if (named.length > 0) return plain;
+  if (parsed.bareNumber) {
+    const whole = await candidateSeries(ctx, parsed.title);
+    if (whole.length > 0) {
+      return { seriesTitle: whole[0]!.title, volumeLabel: null, candidates: whole };
+    }
+  } else if (parsed.bareSplit) {
+    const base = await candidateSeries(ctx, parsed.bareSplit.seriesTitle);
+    if (base.length > 0) {
+      return {
+        seriesTitle: base[0]!.title,
+        volumeLabel: parsed.bareSplit.volumeLabel,
+        candidates: base,
+      };
+    }
+  }
+  return plain;
+}
+
+/**
+ * The Volume labels a title covers: for packaging, the range its title
+ * states, else its blurbs, else a line name that declares its size
+ * (lib/coverage.ts), [] when none does; else its own Volume, if any.
+ */
+function coveredLabels(snapshot: CatalogTitle, volumeLabel: string | null): string[] {
+  if (snapshot.packaging) {
+    const range = inferCoverage(snapshot.packaging, [
+      snapshot.description,
+      ...(snapshot.coverageHints ?? []),
+    ]);
+    return range ? rangeLabels(range) : [];
+  }
+  return volumeLabel !== null ? [volumeLabel] : [];
+}
+
+/**
+ * Rung ① for a box set already placed as a Release Bundle: the bundle picks
+ * up the members whose books arrived after it (lib/pipeline.ts
+ * reconcileLinkedBundle), from the box's snapshot alone — so a planner that
+ * skips re-reading a fresh box can still pass its stored snapshot. The base
+ * Series is the one active Series the title names. Returns how many members
+ * it added (none when the observation links no bundle), or the `conflict`
+ * when the box now names another Series or Format than its bundle's.
+ */
+export async function reconcileCatalogBox(
+  ctx: MutationCtx,
+  args: {
+    sourceKey: string;
+    importComment: string;
+    citation: { sourceName: string; url: string };
+    observation: Doc<"sourceObservations">;
+    snapshot: CatalogTitle;
+    now: number;
+  },
+): Promise<BundleReconcile> {
+  const { observation, snapshot } = args;
+  if (observation.recordRef?.type !== "releaseBundle" || !snapshot.packaging) return { added: 0 };
+  const { volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
+  const labels = coveredLabels(snapshot, volumeLabel);
+  if (candidates.length !== 1 || labels.length === 0) return { added: 0 };
+  return await reconcileLinkedBundle(ctx, observation.recordRef.id, {
+    sourceKey: args.sourceKey,
+    observation,
+    citation: args.citation,
+    importComment: args.importComment,
+    seriesId: candidates[0]!._id,
+    labels,
+    format: snapshot.format,
+    now: args.now,
+  });
+}
+
 /**
  * Reconcile one catalog title into the canonical catalog: ISBN matching
  * links it to the existing skeleton record, then the source's dates/ISBNs/
@@ -143,6 +287,16 @@ export async function applyCatalogTitle(
       return { status: "recordOnly", changed: false };
     }
     if (!changed) return { status: "unchanged", changed: false };
+    // An ISBN another Release holds is that book's: none of the record's
+    // facts are reconciled onto this link until an Editor resolves the pair.
+    if (await isbnHeldElsewhere(ctx, observation, release, snapshot.isbn13, now)) {
+      return {
+        status: "needsReview",
+        changed,
+        releaseId: release._id,
+        reason: "ISBN held by another Release",
+      };
+    }
     const result = await reconcileFields(ctx, {
       sourceKey: opts.sourceKey,
       ref: { type: "release", id: release._id },
@@ -160,64 +314,33 @@ export async function applyCatalogTitle(
     };
   }
 
-  // A box set already placed as a Release Bundle has nothing to reconcile.
+  // A box set already placed as a Release Bundle: its only reconcile is the
+  // members that arrived after it, changed record or not (they arrive
+  // through other records, never through the box's own). A box now naming
+  // another Series or Format goes to review instead.
   if (observation.recordRef?.type === "releaseBundle") {
+    const { added, conflict } = await reconcileCatalogBox(ctx, {
+      sourceKey: opts.sourceKey,
+      importComment: opts.importComment,
+      citation,
+      observation,
+      snapshot,
+      now,
+    });
+    if (conflict !== undefined) return { status: "needsReview", changed: false, reason: conflict };
+    if (added > 0) return { status: "updated", changed: true };
     return { status: changed ? "recordOnly" : "unchanged", changed: false };
   }
 
-  // Series first: every placement below hangs off the base Series. An
-  // unmarked trailing number may belong to the name ("Omega 6"): when only
-  // the whole title names an existing Series, the book is that Series'. A
-  // trailing roman numeral is more often a sequel's name ("Kingdom Hearts
-  // II") than a volume, so the whole title is asked first, and the split
-  // stands only when an existing base Series claims it ("BARBARITIES II" →
-  // Barbarities Vol. 2); a new work keeps its whole name. A trailing number
-  // the parser left in place for want of a volume number ("Tower Dungeon
-  // 7" from a PRH row without seriesNumber) follows the same rule: whole
-  // title first, else an existing base Series takes it as a Volume, else
-  // the new work keeps its whole name.
-  let seriesTitle = snapshot.seriesTitle;
-  let volumeLabel = snapshot.volumeLabel ?? null;
-  let candidates = await candidateSeries(ctx, seriesTitle);
-  if (snapshot.bareRoman) {
-    const whole = await candidateSeries(ctx, snapshot.title);
-    if (whole.length > 0 || candidates.length === 0) {
-      candidates = whole;
-      seriesTitle = whole[0]?.title ?? snapshot.title;
-      volumeLabel = null;
-    }
-  } else if (candidates.length === 0 && snapshot.bareNumber) {
-    const whole = await candidateSeries(ctx, snapshot.title);
-    if (whole.length > 0) {
-      candidates = whole;
-      seriesTitle = whole[0]!.title;
-      volumeLabel = null;
-    }
-  } else if (candidates.length === 0 && snapshot.bareSplit) {
-    const base = await candidateSeries(ctx, snapshot.bareSplit.seriesTitle);
-    if (base.length > 0) {
-      candidates = base;
-      seriesTitle = base[0]!.title;
-      volumeLabel = snapshot.bareSplit.volumeLabel;
-    }
-  }
+  // Series first: every placement below hangs off the base Series.
+  const { seriesTitle, volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
   const seriesId = candidates.length === 1 ? candidates[0]!._id : null;
 
   // Packaging maps onto the base Series' real Volumes — never a Volume or
-  // Series of its own. The coverage comes from the title, else the blurbs,
-  // else a line name that declares its size (lib/coverage.ts); without any
-  // of those it links by ISBN or not at all.
+  // Series of its own; without a stated coverage it links by ISBN or not at
+  // all.
   const packaging = snapshot.packaging ?? null;
-  const coverRange = packaging
-    ? inferCoverage(packaging, [snapshot.description, ...(snapshot.coverageHints ?? [])])
-    : null;
-  const labels = packaging
-    ? coverRange
-      ? rangeLabels(coverRange)
-      : []
-    : volumeLabel !== null
-      ? [volumeLabel]
-      : [];
+  const labels = coveredLabels(snapshot, volumeLabel);
 
   // The publisher key is the imprint, resolved against existing rows (a
   // duplicate string like "Kodansha Comics" resolves to its company; an
@@ -266,6 +389,9 @@ export async function applyCatalogTitle(
       tagBootstrapUnreviewed: true,
       now,
     });
+    if (bundle.conflict !== undefined) {
+      return { status: "needsReview", changed: true, reason: bundle.conflict };
+    }
     return { status: bundle.created ? "created" : "linked", changed: true };
   }
 
@@ -276,6 +402,8 @@ export async function applyCatalogTitle(
     volumeLabel: packaging ? null : volumeLabel,
     multiVolume: packaging !== null,
     format: snapshot.format,
+    binding: snapshot.binding,
+    language: IMPORT_LANGUAGE,
     isbn13: snapshot.isbn13,
     publisherId: publisher?._id ?? null,
   };
@@ -306,8 +434,8 @@ export async function applyCatalogTitle(
   // line's member is still created, as Unmapped Packaging under its line
   // (CONTEXT.md): the book shows in the publisher's own numbering and a
   // Moderator maps its Volumes later. A bare range with no line name, an
-  // ambiguous Series, or steady state (whose review queue cannot yet carry
-  // an Edition Line) keeps the book on its observation instead.
+  // ambiguous Series, or steady state (which never queues a guess without
+  // coverage) keeps the book on its observation instead.
   const unmapped =
     packaging !== null &&
     labels.length === 0 &&
@@ -326,6 +454,8 @@ export async function applyCatalogTitle(
   }
 
   const linePosition = packaging?.linePosition ?? undefined;
+  // A queued packaging guess carries its Edition Line, so approval files the
+  // Edition under the base Series' line of that name (or creates it).
   const queue = async (comment: string, reason?: string): Promise<ApplyResult> => {
     if (await alreadyHandled(ctx, observation)) {
       return { status: "alreadyQueued", changed: false, reason };
@@ -343,6 +473,7 @@ export async function applyCatalogTitle(
       seriesId,
       seriesTitle,
       labels,
+      editionLine,
       linePosition,
       release: { ...releasePayload, publisherSlug: row.slug },
       now,

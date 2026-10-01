@@ -566,45 +566,79 @@ export const cancelPass = mutation({
 });
 
 /**
+ * The Volume Progress write shared by the direct edits: store `readCount`
+ * for the viewer (zero removes the row). An increase is a completed read
+ * now; a decrease is a correction and keeps the last completion time.
+ */
+async function writeVolumeReadCount(
+  ctx: MutationCtx,
+  volumeId: Id<"volumes">,
+  toCount: (current: number) => number,
+) {
+  const user = await requireUser(ctx);
+  const volume = await followMerges(ctx, "volumes", await ctx.db.get(volumeId));
+  if (!volume) {
+    throw new ConvexError({ code: "notFound", message: "Volume not found." });
+  }
+  const progress = await volumeProgressRow(ctx, user._id, volume._id);
+  const readCount = toCount(progress?.readCount ?? 0);
+  if (!Number.isInteger(readCount) || readCount < 0) {
+    throw new ConvexError({
+      code: "badCount",
+      message: "Read count must be a whole number of completed reads.",
+    });
+  }
+  if (readCount === 0) {
+    if (progress) await ctx.db.delete(progress._id);
+  } else if (progress) {
+    await ctx.db.patch(progress._id, {
+      readCount,
+      lastCompletedAt:
+        readCount > progress.readCount ? Date.now() : progress.lastCompletedAt,
+    });
+  } else {
+    await ctx.db.insert("volumeProgress", {
+      userId: user._id,
+      volumeId: volume._id,
+      seriesId: volume.seriesId,
+      readCount,
+      lastCompletedAt: Date.now(),
+    });
+  }
+  return { readCount };
+}
+
+/**
  * Direct Volume Progress edit (CONTEXT.md: read counts "may be updated
- * directly or by confirmed completion") — mark a volume read without a pass,
- * record an offline reread, or correct a count. Zero removes the row.
+ * directly or by confirmed completion") — correct a count to an exact value.
+ * Zero removes the row. The Volume page's +1 / −1 buttons use
+ * adjustVolumeReadCount instead, so clicks made before the count refreshes
+ * are not lost.
  */
 export const setVolumeReadCount = mutation({
   args: { volumeId: v.id("volumes"), readCount: v.number() },
-  handler: async (ctx, { volumeId, readCount }) => {
-    const user = await requireUser(ctx);
-    const volume = await followMerges(ctx, "volumes", await ctx.db.get(volumeId));
-    if (!volume) {
-      throw new ConvexError({ code: "notFound", message: "Volume not found." });
-    }
-    if (!Number.isInteger(readCount) || readCount < 0) {
+  handler: async (ctx, { volumeId, readCount }) =>
+    await writeVolumeReadCount(ctx, volumeId, () => readCount),
+});
+
+/**
+ * Add `delta` completed reads to a Volume (mark read, record an offline
+ * reread, or take one back) against the stored count, not the count the
+ * client last saw — two quick +1 clicks are two reads. The count stops at
+ * zero, which removes the row.
+ */
+export const adjustVolumeReadCount = mutation({
+  args: { volumeId: v.id("volumes"), delta: v.number() },
+  handler: async (ctx, { volumeId, delta }) => {
+    if (!Number.isInteger(delta)) {
       throw new ConvexError({
         code: "badCount",
-        message: "Read count must be a whole number of completed reads.",
+        message: "Read count must change by a whole number of completed reads.",
       });
     }
-    const progress = await volumeProgressRow(ctx, user._id, volume._id);
-    if (readCount === 0) {
-      if (progress) await ctx.db.delete(progress._id);
-    } else if (progress) {
-      await ctx.db.patch(progress._id, {
-        readCount,
-        // A direct increment is a completed read now; a downward correction
-        // keeps the existing completion time.
-        lastCompletedAt:
-          readCount > progress.readCount ? Date.now() : progress.lastCompletedAt,
-      });
-    } else {
-      await ctx.db.insert("volumeProgress", {
-        userId: user._id,
-        volumeId: volume._id,
-        seriesId: volume.seriesId,
-        readCount,
-        lastCompletedAt: Date.now(),
-      });
-    }
-    return { readCount };
+    return await writeVolumeReadCount(ctx, volumeId, (current) =>
+      Math.max(0, current + delta),
+    );
   },
 });
 

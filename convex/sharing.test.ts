@@ -312,6 +312,53 @@ describe("sharing.publicProfile", () => {
     expect(profile!.ownership.bundles).toEqual([]);
   });
 
+  it("a hidden bundle member still carries its private Series — the box set stays off the profile", async () => {
+    const t = convexTest(schema);
+    const seeded = await seed(t);
+    const as = await trackEverything(t, seeded);
+    await as.mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
+    await as.mutation(api.sharing.setSeriesVisibility, {
+      seriesId: seeded.seriesA,
+      kind: "ownership",
+      visibility: "private",
+    });
+    // A Moderator hides every member Release; they leave the display but
+    // not the privacy decision.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seeded.r1, { status: "hidden" });
+      await ctx.db.patch(seeded.r2, { status: "hidden" });
+    });
+
+    const profile = await t.query(api.sharing.publicProfile, {
+      username: "sharer",
+    });
+    expect(profile!.ownership.bundles).toEqual([]);
+  });
+
+  it("a box set of hidden members on a public Series shows with no members listed", async () => {
+    const t = convexTest(schema);
+    const seeded = await seed(t);
+    const as = await trackEverything(t, seeded);
+    await as.mutation(api.sharing.setDefaultVisibility, {
+      kind: "ownership",
+      visibility: "public",
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seeded.r1, { status: "hidden" });
+      await ctx.db.patch(seeded.r2, { status: "hidden" });
+    });
+
+    const profile = await t.query(api.sharing.publicProfile, {
+      username: "sharer",
+    });
+    expect(profile!.ownership.bundles).toEqual([
+      { bundlePublicId: 41, name: "Witch Hat Atelier Box Set", members: [] },
+    ]);
+  });
+
   it("a public per-Series override opens exactly that Series against a private default", async () => {
     const t = convexTest(schema);
     const seeded = await seed(t);

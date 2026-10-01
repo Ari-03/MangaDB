@@ -42,7 +42,11 @@ export function initialFormState(
   return state;
 }
 
-/** The submitted value for one field, from the raw form state. */
+/**
+ * The submitted value for one field, from the raw form state. A cleared
+ * date or price is `null`, not `undefined`: Convex drops undefined object
+ * properties on the wire, and the mutations require every change's `value`.
+ */
 export function fieldValue(
   descriptor: FieldDescriptor,
   state: FormState,
@@ -60,7 +64,7 @@ export function fieldValue(
       const year = (state[`${descriptor.name}.year`] ?? "").trim();
       const month = (state[`${descriptor.name}.month`] ?? "").trim();
       const day = (state[`${descriptor.name}.day`] ?? "").trim();
-      if (year === "") return { ok: true, value: undefined };
+      if (year === "") return { ok: true, value: null };
       const parsed: { year: number; month?: number; day?: number } = {
         year: Number(year),
       };
@@ -73,7 +77,7 @@ export function fieldValue(
     }
     case "price": {
       const amount = (state[`${descriptor.name}.amount`] ?? "").trim();
-      if (amount === "") return { ok: true, value: undefined };
+      if (amount === "") return { ok: true, value: null };
       const parsed = Number(amount);
       if (!Number.isFinite(parsed) || parsed < 0) {
         return { ok: false, message: `${descriptor.label}: malformed amount.` };
@@ -107,14 +111,79 @@ export function stateKeysOf(descriptor: FieldDescriptor): string[] {
   }
 }
 
+/**
+ * One edit session's local state: the form values, which inputs were
+ * touched, and the base Revision those values were loaded from. The base is
+ * snapshotted with the values so a save cannot pair a newer base with older
+ * values and slip past the server's stale-revision check.
+ */
+export type EditDraft<Base> = {
+  values: FormState;
+  dirty: ReadonlySet<string>;
+  baseRevisionId: Base;
+};
+
+/** An untouched draft of the live record (what the form shows before any edit). */
+export function freshDraft<Base>(form: {
+  fields: Array<FieldDescriptor & { value: unknown }>;
+  baseRevisionId: Base;
+}): EditDraft<Base> {
+  return {
+    values: initialFormState(form.fields),
+    dirty: new Set(),
+    baseRevisionId: form.baseRevisionId,
+  };
+}
+
+/** The draft with one input changed; the base Revision stays pinned. */
+export function editDraft<Base>(
+  draft: EditDraft<Base>,
+  key: string,
+  value: string,
+): EditDraft<Base> {
+  return {
+    ...draft,
+    values: { ...draft.values, [key]: value },
+    dirty: new Set([...draft.dirty, key]),
+  };
+}
+
+/** Whether the record gained a Revision after this draft's values were loaded. */
+export function draftIsStale<Base>(draft: EditDraft<Base>, liveBase: Base): boolean {
+  return draft.baseRevisionId !== liveBase;
+}
+
+/** The field/value changes a draft submits: one per field with a touched input. */
+export function draftChanges<Base>(
+  fields: FieldDescriptor[],
+  draft: EditDraft<Base>,
+):
+  | { ok: true; changes: Array<{ field: string; value: unknown }> }
+  | { ok: false; message: string } {
+  const changes: Array<{ field: string; value: unknown }> = [];
+  for (const field of fields) {
+    if (!stateKeysOf(field).some((k) => draft.dirty.has(k))) continue;
+    const result = fieldValue(field, draft.values);
+    if (!result.ok) return result;
+    changes.push({ field: field.name, value: result.value });
+  }
+  return { ok: true, changes };
+}
+
+/**
+ * The input(s) for one field. `disabled` locks them, e.g. while a save is in
+ * flight, so nothing typed then can be discarded when the save resets the form.
+ */
 export function FieldInput({
   field,
   values,
   setValue,
+  disabled = false,
 }: {
   field: FieldDescriptor & { value: unknown };
   values: FormState;
   setValue: (key: string, value: string) => void;
+  disabled?: boolean;
 }) {
   switch (field.kind) {
     case "textarea":
@@ -124,6 +193,7 @@ export function FieldInput({
           {field.label}
           <textarea
             value={values[field.name] ?? ""}
+            disabled={disabled}
             onChange={(event) => setValue(field.name, event.target.value)}
             rows={field.kind === "stringList" ? 3 : 4}
           />
@@ -136,6 +206,7 @@ export function FieldInput({
           {field.label}
           <select
             value={values[field.name] ?? ""}
+            disabled={disabled}
             onChange={(event) => setValue(field.name, event.target.value)}
           >
             {field.required ? null : <option value="">(not set)</option>}
@@ -157,6 +228,7 @@ export function FieldInput({
             <input
               inputMode="numeric"
               value={values[`${field.name}.year`] ?? ""}
+              disabled={disabled}
               onChange={(event) => setValue(`${field.name}.year`, event.target.value)}
             />
           </label>
@@ -165,6 +237,7 @@ export function FieldInput({
             <input
               inputMode="numeric"
               value={values[`${field.name}.month`] ?? ""}
+              disabled={disabled}
               onChange={(event) => setValue(`${field.name}.month`, event.target.value)}
             />
           </label>
@@ -173,6 +246,7 @@ export function FieldInput({
             <input
               inputMode="numeric"
               value={values[`${field.name}.day`] ?? ""}
+              disabled={disabled}
               onChange={(event) => setValue(`${field.name}.day`, event.target.value)}
             />
           </label>
@@ -191,6 +265,7 @@ export function FieldInput({
             <input
               inputMode="decimal"
               value={values[`${field.name}.amount`] ?? ""}
+              disabled={disabled}
               onChange={(event) => setValue(`${field.name}.amount`, event.target.value)}
             />
           </label>
@@ -198,6 +273,7 @@ export function FieldInput({
             Currency
             <input
               value={values[`${field.name}.currency`] ?? "USD"}
+              disabled={disabled}
               onChange={(event) =>
                 setValue(`${field.name}.currency`, event.target.value)
               }
@@ -211,6 +287,7 @@ export function FieldInput({
           {field.label}
           <input
             value={values[field.name] ?? ""}
+            disabled={disabled}
             onChange={(event) => setValue(field.name, event.target.value)}
           />
           {field.help ? <span className="field-help">{field.help}</span> : null}

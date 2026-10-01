@@ -83,17 +83,26 @@ async function bundleEntryRow(
     .unique();
 }
 
-/** Active, merge-resolved Series covered by one Collection Entry's target. */
+/**
+ * Active, merge-resolved Series covered by one Collection Entry's target.
+ * `seriesCache` (raw Series id → resolved Series) lets a pass over a whole
+ * collection read each Series once instead of once per entry.
+ */
 async function entrySeries(
   ctx: QueryCtx,
   entry: Doc<"collectionEntries">,
+  seriesCache = new Map<Id<"series">, Doc<"series"> | null>(),
 ): Promise<Map<Id<"series">, Doc<"series">>> {
   const covered = new Map<Id<"series">, Doc<"series">>();
   const addRelease = async (releaseId: Id<"releases">) => {
     const release = await followMerges(ctx, "releases", await ctx.db.get(releaseId));
     if (!release) return;
     for (const seriesId of release.seriesIds) {
-      const series = await followMerges(ctx, "series", await ctx.db.get(seriesId));
+      let series = seriesCache.get(seriesId);
+      if (series === undefined) {
+        series = await followMerges(ctx, "series", await ctx.db.get(seriesId));
+        seriesCache.set(seriesId, series);
+      }
       if (series) covered.set(series._id, series);
     }
   };
@@ -119,32 +128,43 @@ async function entrySeries(
 
 /**
  * The one non-blocking follow prompt per Series (ticket #29, spec §3),
- * computed after a *new* entry was inserted: for each Series the new entry's
- * target covers, suggest a Series Follow exactly when this is the user's
- * first Collection Entry in that Series (no other entry covers it), they are
- * not already following it, and the prompt was never dismissed for it. The
- * client renders the suggestion; only follows.setSeriesFollow ever creates
- * the follow, and follows.dismissFollowPrompt suppresses it permanently.
+ * computed once after *new* entries were inserted (one click, or a whole
+ * batch): for each Series the new entries' targets cover, suggest a Series
+ * Follow exactly when no older entry of the user covers it (so this is their
+ * first Collection Entry in that Series), they are not already following
+ * it, and the prompt was never dismissed for it. The collection is read in
+ * one pass however many entries are new, so a batch stays linear. The client
+ * renders the suggestion; only follows.setSeriesFollow ever creates the
+ * follow, and follows.dismissFollowPrompt suppresses it permanently.
  */
 async function followSuggestions(
   ctx: QueryCtx,
   userId: Id<"users">,
-  newEntry: Doc<"collectionEntries">,
+  newEntryIds: ReadonlySet<Id<"collectionEntries">>,
 ) {
-  const target = await entrySeries(ctx, newEntry);
+  if (newEntryIds.size === 0) return [];
+  const rows = await ctx.db
+    .query("collectionEntries")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  const seriesCache = new Map<Id<"series">, Doc<"series"> | null>();
+
+  const target = new Map<Id<"series">, Doc<"series">>();
+  for (const row of rows) {
+    if (!newEntryIds.has(row._id)) continue;
+    for (const [seriesId, series] of await entrySeries(ctx, row, seriesCache)) {
+      target.set(seriesId, series);
+    }
+  }
   if (target.size === 0) return [];
 
-  const others = (
-    await ctx.db
-      .query("collectionEntries")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .collect()
-  ).filter((entry) => entry._id !== newEntry._id);
   const alreadyCovered = new Set<Id<"series">>();
-  for (const other of others) {
-    for (const seriesId of (await entrySeries(ctx, other)).keys()) {
-      alreadyCovered.add(seriesId);
+  for (const row of rows) {
+    if (newEntryIds.has(row._id)) continue;
+    for (const seriesId of (await entrySeries(ctx, row, seriesCache)).keys()) {
+      if (target.has(seriesId)) alreadyCovered.add(seriesId);
     }
+    if (alreadyCovered.size === target.size) return []; // every Series already collected
   }
 
   const suggestions = [];
@@ -700,28 +720,32 @@ export const myLibrary = query({
  * The Collection Entry write for one Release, shared by the single and batch
  * mutations: set the exact state (Wanted | Ordered | Owned — replacing any
  * previous state, so exactly one ever holds) with an optional pinned
- * Variant, or pass no state to remove the entry. Removal deletes only the
- * direct entry; Derived Ownership is computed, so it is untouchable from
- * here. Returns the follow suggestions (ticket #29) a *first* entry in a
- * Series earns — a suggestion only; nothing here writes the follow.
+ * Variant, or pass no state to remove the entry. `variant` is the Variant to
+ * pin (undefined clears the pin) or "keep" to leave an existing entry's pin
+ * untouched. Only a newly selected pin must be an active Variant of this
+ * Release; a pin the entry already holds is kept even if the Variant was
+ * hidden since, so a state change never fails on it. Removal deletes only
+ * the direct entry; Derived Ownership is computed, so it is untouchable from
+ * here. Returns the inserted entry's id when this was a new entry, for the
+ * caller to compute follow suggestions (ticket #29) once.
  */
 async function writeReleaseEntry(
   ctx: MutationCtx,
   user: Doc<"users">,
   releaseId: Id<"releases">,
   state: Doc<"collectionEntries">["state"] | undefined,
-  variantId: Id<"releaseVariants"> | undefined,
+  variant: Id<"releaseVariants"> | undefined | "keep",
 ) {
   const release = await requireActiveRelease(ctx, releaseId);
   const existing = await releaseEntryRow(ctx, user._id, release._id);
   if (!state) {
     if (existing) await ctx.db.delete(existing._id);
-    return { entry: null, suggestFollow: [] };
+    return { entry: null, insertedId: null };
   }
 
-  if (variantId) {
-    const variant = await ctx.db.get(variantId);
-    if (!variant || variant.status !== "active" || variant.releaseId !== release._id) {
+  if (variant && variant !== "keep" && variant !== existing?.variantId) {
+    const doc = await ctx.db.get(variant);
+    if (!doc || doc.status !== "active" || doc.releaseId !== release._id) {
       throw new ConvexError({
         code: "badVariant",
         message: "That variant does not belong to this release.",
@@ -729,27 +753,31 @@ async function writeReleaseEntry(
     }
   }
 
-  let suggestFollow: Awaited<ReturnType<typeof followSuggestions>> = [];
   if (existing) {
     // Patching variantId with undefined clears a previously pinned Variant.
     // A state change on an existing entry is never a first entry — no prompt.
-    await ctx.db.patch(existing._id, { state, variantId });
-  } else {
-    const entryId = await ctx.db.insert("collectionEntries", {
-      userId: user._id,
-      releaseId: release._id,
-      state,
-      variantId,
-    });
-    suggestFollow = await followSuggestions(ctx, user._id, (await ctx.db.get(entryId))!);
+    await ctx.db.patch(
+      existing._id,
+      variant === "keep" ? { state } : { state, variantId: variant },
+    );
+    const variantId = variant === "keep" ? existing.variantId : variant;
+    return { entry: { state, variantId: variantId ?? null }, insertedId: null };
   }
-  return { entry: { state, variantId: variantId ?? null }, suggestFollow };
+  const variantId = variant === "keep" ? undefined : variant;
+  const insertedId = await ctx.db.insert("collectionEntries", {
+    userId: user._id,
+    releaseId: release._id,
+    state,
+    variantId,
+  });
+  return { entry: { state, variantId: variantId ?? null }, insertedId };
 }
 
 /**
  * The one write path for a Release's Collection Entry (see
  * writeReleaseEntry): set the exact state with an optional pinned Variant, or
- * omit `state` to remove the entry.
+ * omit `state` to remove the entry. A first entry in a Series returns
+ * `suggestFollow` (ticket #29) — a suggestion only.
  */
 export const setReleaseEntry = mutation({
   args: {
@@ -759,7 +787,19 @@ export const setReleaseEntry = mutation({
   },
   handler: async (ctx, { releaseId, state, variantId }) => {
     const user = await requireUser(ctx);
-    return await writeReleaseEntry(ctx, user, releaseId, state, variantId);
+    const { entry, insertedId } = await writeReleaseEntry(
+      ctx,
+      user,
+      releaseId,
+      state,
+      variantId,
+    );
+    const suggestFollow = await followSuggestions(
+      ctx,
+      user._id,
+      new Set(insertedId ? [insertedId] : []),
+    );
+    return { entry, suggestFollow };
   },
 });
 
@@ -768,8 +808,9 @@ export const setReleaseEntry = mutation({
  * and the Series page's whole-path marking. Each Release gets exactly the
  * state given (or its entry removed when `state` is omitted), through the
  * same rules as one click; pinned Variants are left as they were on entries
- * that already exist. Follow suggestions are merged by Series, so a first
- * entry in a Series still prompts once. Capped at MANY_ENTRIES_CAP.
+ * that already exist. Follow suggestions are computed once over all the new
+ * entries, so a first entry in a Series still prompts once and the batch's
+ * reads stay linear in the collection. Capped at MANY_ENTRIES_CAP.
  */
 export const setManyReleaseEntries = mutation({
   args: {
@@ -784,24 +825,14 @@ export const setManyReleaseEntries = mutation({
         message: `Mark at most ${MANY_ENTRIES_CAP} releases at once.`,
       });
     }
-    const suggested = new Map<Id<"series">, { seriesId: Id<"series">; title: string }>();
+    const inserted = new Set<Id<"collectionEntries">>();
     let changed = 0;
     for (const releaseId of new Set(releaseIds)) {
-      const release = await requireActiveRelease(ctx, releaseId);
-      const existing = await releaseEntryRow(ctx, user._id, release._id);
-      const result = await writeReleaseEntry(
-        ctx,
-        user,
-        release._id,
-        state,
-        state ? existing?.variantId : undefined,
-      );
+      const { insertedId } = await writeReleaseEntry(ctx, user, releaseId, state, "keep");
+      if (insertedId) inserted.add(insertedId);
       changed += 1;
-      for (const suggestion of result.suggestFollow) {
-        suggested.set(suggestion.seriesId, suggestion);
-      }
     }
-    return { changed, suggestFollow: [...suggested.values()] };
+    return { changed, suggestFollow: await followSuggestions(ctx, user._id, inserted) };
   },
 });
 
@@ -828,21 +859,18 @@ export const setBundleEntry = mutation({
       if (existing) await ctx.db.delete(existing._id);
       return { entry: null, suggestFollow: [] };
     }
-    let suggestFollow: Awaited<ReturnType<typeof followSuggestions>> = [];
     if (existing) {
       await ctx.db.patch(existing._id, { state });
-    } else {
-      const entryId = await ctx.db.insert("collectionEntries", {
-        userId: user._id,
-        bundleId: bundle._id,
-        state,
-      });
-      suggestFollow = await followSuggestions(
-        ctx,
-        user._id,
-        (await ctx.db.get(entryId))!,
-      );
+      return { entry: { state }, suggestFollow: [] };
     }
-    return { entry: { state }, suggestFollow };
+    const entryId = await ctx.db.insert("collectionEntries", {
+      userId: user._id,
+      bundleId: bundle._id,
+      state,
+    });
+    return {
+      entry: { state },
+      suggestFollow: await followSuggestions(ctx, user._id, new Set([entryId])),
+    };
   },
 });

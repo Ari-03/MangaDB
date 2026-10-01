@@ -24,6 +24,8 @@ export const olEditionValidator = v.object({
   /** The stable OpenLibrary edition key ("/books/OL…M") — observation identity. */
   key: v.string(),
   url: v.string(),
+  /** The book title: OpenLibrary's title, joined with its subtitle when the
+   * subtitle completes the volume title. */
   title: v.string(),
   /** The base Series title (lib/bookTitle.ts), never the book title. */
   seriesTitle: v.string(),
@@ -32,6 +34,15 @@ export const olEditionValidator = v.object({
   multiVolume: v.boolean(),
   /** Omnibus / deluxe / box-set / range shape, when the title has one. */
   packaging: v.optional(packagingValidator),
+  /**
+   * The parser's provisional readings (lib/bookTitle.ts), resolved against
+   * the existing catalog at apply time (lib/catalogTitle.ts
+   * resolveBaseSeries): "Chainsaw Man 22" is Vol. 22 only if an existing
+   * "Chainsaw Man" claims it.
+   */
+  bareNumber: v.optional(v.boolean()),
+  bareRoman: v.optional(v.boolean()),
+  bareSplit: v.optional(v.object({ seriesTitle: v.string(), volumeLabel: v.string() })),
   publishers: v.array(v.string()),
   publishDate: v.optional(
     v.object({
@@ -228,14 +239,22 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     : undefined;
 
   // OpenLibrary often splits a volume title across title + subtitle
-  // ("Mashle" + "Magic and Muscles, Vol. 3", "Mission" + "Yozakura Family,
-  // Vol. 12"). A subtitle the parser can't read as a bare volume marker is
-  // re-read joined to the title; the joined reading wins only when it finds
-  // the volume (or packaging) the split one missed.
+  // ("Mashle" + "Magic and Muscles, Vol. 3", "Kingdom" + "Hearts II"). A
+  // subtitle the parser can't read as a bare volume marker is re-read
+  // joined to the title; the joined reading wins when it finds the volume,
+  // packaging, or bare split the split one missed. The joined text then
+  // becomes the book title, so its provisional readings resolve against the
+  // whole name in resolveBaseSeries ("Kingdom: Hearts II" is the sequel
+  // when that Series exists, not "Kingdom Hearts" Vol. 2).
   let parsed = parseBookTitle(title, { subtitle });
+  let bookTitle = title;
   if (subtitle !== undefined && parsed.volumeLabel === null && parsed.packaging === null) {
-    const joined = parseBookTitle(`${title}: ${subtitle}`);
-    if (joined.volumeLabel !== null || joined.packaging !== null) parsed = joined;
+    const joinedTitle = `${title}: ${subtitle}`;
+    const joined = parseBookTitle(joinedTitle);
+    if (joined.volumeLabel !== null || joined.packaging !== null || joined.bareSplit !== null) {
+      parsed = joined;
+      bookTitle = joinedTitle;
+    }
   }
   const coverRange = parsed.packaging?.coverRange ?? null;
   const publishers = Array.isArray(edition.publishers)
@@ -246,11 +265,14 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     kind: "olEdition",
     key,
     url: `https://openlibrary.org${key}`,
-    title,
+    title: bookTitle,
     seriesTitle: parsed.seriesTitle,
     volumeLabel: parsed.volumeLabel ?? undefined,
     multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
     packaging: parsed.packaging ?? undefined,
+    bareNumber: parsed.bareNumber || undefined,
+    bareRoman: parsed.bareRoman || undefined,
+    bareSplit: parsed.bareSplit ?? undefined,
     publishers,
     publishDate:
       typeof edition.publish_date === "string" ? parseOlDate(edition.publish_date) : undefined,

@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
+import type { SitemapData } from "./seoRoutes";
+
+// `waitUntil` collects the background cache writes.
+const background = vi.hoisted(() => [] as Promise<unknown>[]);
+vi.mock("cloudflare:workers", () => ({
+  waitUntil: (promise: Promise<unknown>) => void background.push(promise),
+}));
+const {
   lastmodDate,
   monthPaths,
   robotsTxt,
@@ -8,8 +15,26 @@ import {
   sitemapIndexXml,
   urlsetXml,
   xmlEscape,
-  type SitemapData,
-} from "./seoRoutes";
+} = await import("./seoRoutes");
+
+// The Workers edge cache, keyed by URL; like the real one, GETs only.
+let cached: Map<string, Response>;
+beforeEach(() => {
+  cached = new Map();
+  vi.stubGlobal("caches", {
+    default: {
+      match: async (req: Request) => cached.get(req.url)?.clone(),
+      put: async (req: Request, res: Response) => {
+        if (req.method !== "GET") throw new TypeError("Cannot cache response to non-GET request.");
+        cached.set(req.url, res);
+      },
+    },
+  });
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  background.length = 0;
+});
 
 const ORIGIN = "https://mangadb.org";
 
@@ -149,5 +174,62 @@ describe("seoResponse", () => {
     expect(
       await seoResponse(new Request(`${ORIGIN}/sitemap.xml`, { method: "POST" }), fakeData()),
     ).toBeNull();
+  });
+
+  it("generates a child sitemap once and serves repeats from the edge cache", async () => {
+    const data = fakeData();
+    const sitemapPage = vi.spyOn(data, "sitemapPage");
+    const first = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), data);
+    await Promise.all(background);
+    // A HEAD and a query-string variant hit the same GET-keyed entry.
+    const head = await seoResponse(
+      new Request(`${ORIGIN}/sitemaps/series.xml`, { method: "HEAD" }),
+      data,
+    );
+    const again = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml?x=1`), data);
+    expect(sitemapPage).toHaveBeenCalledTimes(2); // the two pages, read once
+    expect(head?.status).toBe(200);
+    expect(await again!.text()).toBe(await first!.text());
+    expect([...cached.keys()]).toEqual([`${ORIGIN}/sitemaps/series.xml`]);
+  });
+
+  it("caches a sitemap generated for a HEAD request under the GET key", async () => {
+    const data = fakeData();
+    const sitemapPage = vi.spyOn(data, "sitemapPage");
+    await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`, { method: "HEAD" }), data);
+    await Promise.all(background);
+    await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), data);
+    expect(sitemapPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("still serves the sitemap when the cache read fails", async () => {
+    vi.stubGlobal("caches", {
+      default: {
+        match: async () => {
+          throw new Error("cache read failed");
+        },
+        put: async () => {},
+      },
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), fakeData());
+    expect(res?.status).toBe(200);
+    expect(await res?.text()).toContain("<urlset");
+    errors.mockRestore();
+    await Promise.all(background);
+  });
+
+  it("still serves the sitemap when the cache write fails", async () => {
+    vi.stubGlobal("caches", {
+      default: {
+        match: async () => undefined,
+        put: async () => {
+          throw new Error("cache write failed");
+        },
+      },
+    });
+    const res = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), fakeData());
+    expect(res?.status).toBe(200);
+    await Promise.all(background);
   });
 });

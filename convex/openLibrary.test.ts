@@ -198,6 +198,55 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     });
   });
 
+  // B20: an unmarked trailing number ("Chainsaw Man 22") is a provisional
+  // split — an existing base Series claims it as that Volume.
+  it("fills an ISBN-less Release from a bare trailing volume number the existing Series claims", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    stubDump([{ ...CHAINSAW_22, title: "Chainsaw Man 22" }]);
+    expect(await sync(t)).toMatchObject({ recordsSeen: 1, recordsChanged: 1 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.isbn13).toBe("9781974766512");
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.recordRef).toEqual({ type: "release", id: releaseId });
+    });
+  });
+
+  it("keeps a trailing number that is part of an existing Series' name", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: false });
+    // "Chainsaw Man 21" is its own Series here (no Volume split), so the
+    // bare split onto "Chainsaw Man" Vol. 21 must never happen.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("series", {
+        status: "active",
+        publicId: 2,
+        title: "Chainsaw Man 21",
+        altTitles: [],
+        searchText: "Chainsaw Man 21",
+      });
+    });
+    stubDump([{ ...CHAINSAW_22, title: "Chainsaw Man 21", isbn_13: ["9781974700035"] }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+    });
+  });
+
+  it("offers a bare split only to an existing Series, never as new structure", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: false });
+    stubDump([{ ...CHAINSAW_22, title: "Omega Nobody 6", isbn_13: ["9781974700042"] }]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(0);
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+    });
+  });
+
   it("a weak date never displaces a standard-authority one — recorded on the observation only", async () => {
     const t = makeT();
     await seedRegistry(t);
@@ -433,6 +482,218 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
       expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 3 });
       const releases = await ctx.db.query("releases").collect();
       expect(releases[0]!.isbn13).toBe("9781974766512");
+    });
+  });
+});
+
+describe("openLibrary.sync — Binding reaches the matching ladder (B14)", () => {
+  it("a paperback record never fills an ISBN-less hardcover", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    await t.run((ctx) => ctx.db.patch(releaseId!, { binding: "hardcover" }));
+    stubDump([CHAINSAW_22]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.isbn13).toBeUndefined();
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.recordRef).toBeUndefined();
+    });
+  });
+});
+
+describe("openLibrary.sync — a linked record never gives its Release another's ISBN (B08)", () => {
+  it("a changed ISBN another Release holds leaves the linked Release as it was", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    stubDump([CHAINSAW_22]);
+    await sync(t);
+    const heldIsbn = "9781974766529";
+    const holderId = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...fields } = (await ctx.db.get(releaseId!))!;
+      return await ctx.db.insert("releases", { ...fields, isbn13: heldIsbn, binding: "hardcover" });
+    });
+
+    vi.unstubAllGlobals();
+    stubDump([{ ...CHAINSAW_22, isbn_13: [heldIsbn], publish_date: "Oct 20, 2026" }]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(releaseId!)).toMatchObject({
+        isbn13: "9781974766512",
+        pubDate: { sort: 20261013 },
+      });
+      const holders = (await ctx.db.query("releases").collect()).filter(
+        (r) => r.isbn13 === heldIsbn,
+      );
+      expect(holders.map((r) => r._id)).toEqual([holderId]);
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs!.conflicts).toEqual([
+        expect.objectContaining({ field: "isbn13", offered: heldIsbn }),
+      ]);
+    });
+  });
+});
+
+describe("openLibrary.sync — a volume title split across title + subtitle keeps its identity (W10)", () => {
+  const SEQUEL_ISBN = "9781646516544";
+
+  /** Kodansha with the parent "Kingdom Hearts" (Volume 2) and/or its sequel
+   * "Kingdom Hearts II" (one unlabeled Volume), each with an ISBN-less
+   * physical paperback Release. */
+  async function buildKingdomHearts(t: TestT, opts: { parent: boolean; sequel: boolean }) {
+    return await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Kodansha",
+        slug: "kodansha",
+      });
+      const addSeries = async (publicId: number, title: string, label?: string) => {
+        const seriesId = await ctx.db.insert("series", {
+          status: "active",
+          publicId,
+          title,
+          altTitles: [],
+          searchText: title,
+        });
+        const volumeId = await ctx.db.insert("volumes", {
+          status: "active",
+          publicId,
+          seriesId,
+          position: label !== undefined ? Number(label) : 1,
+          ...(label !== undefined ? { label } : {}),
+        });
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId,
+          publisherId,
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId,
+          order: 1,
+          extent: "complete",
+        });
+        return await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format: "physical",
+          binding: "paperback",
+          language: "en",
+          publisherId,
+          seriesIds: [seriesId],
+        });
+      };
+      return {
+        parentReleaseId: opts.parent ? await addSeries(101, "Kingdom Hearts", "2") : null,
+        sequelReleaseId: opts.sequel ? await addSeries(102, "Kingdom Hearts II") : null,
+      };
+    });
+  }
+
+  const record = {
+    key: "/books/OL999M",
+    isbn_13: [SEQUEL_ISBN],
+    languages: [{ key: "/languages/eng" }],
+    publishers: ["Kodansha"],
+    physical_format: "Paperback",
+  };
+  const splits = [
+    { title: "Kingdom", subtitle: "Hearts II" },
+    { title: "Kingdom Hearts", subtitle: "II" },
+  ];
+
+  it.each(splits)(
+    "$title + $subtitle: the sequel claims the book over the parent's Volume 2",
+    async (split) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const { parentReleaseId, sequelReleaseId } = await buildKingdomHearts(t, {
+        parent: true,
+        sequel: true,
+      });
+      stubDump([{ ...record, ...split }]);
+      await sync(t);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(parentReleaseId!))!.isbn13).toBeUndefined();
+        expect((await ctx.db.get(sequelReleaseId!))!.isbn13).toBe(SEQUEL_ISBN);
+        const observations = await ctx.db.query("sourceObservations").collect();
+        expect(observations).toHaveLength(1);
+        expect(observations[0]!.recordRef).toEqual({
+          type: "release",
+          id: sequelReleaseId,
+        });
+        expect(await ctx.db.query("releases").collect()).toHaveLength(2);
+        expect(await ctx.db.query("series").collect()).toHaveLength(2);
+      });
+    },
+  );
+
+  it.each(splits)(
+    "$title + $subtitle: with only the parent, the roman split stands",
+    async (split) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const { parentReleaseId } = await buildKingdomHearts(t, {
+        parent: true,
+        sequel: false,
+      });
+      stubDump([{ ...record, ...split }]);
+      await sync(t);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(parentReleaseId!))!.isbn13).toBe(SEQUEL_ISBN);
+        const series = await ctx.db.query("series").collect();
+        expect(series.map((s) => s.title)).toEqual(["Kingdom Hearts"]);
+      });
+    },
+  );
+
+  it.each(splits)(
+    "$title + $subtitle: with only the sequel, the sequel claims the book",
+    async (split) => {
+      const t = makeT();
+      await seedRegistry(t);
+      const { sequelReleaseId } = await buildKingdomHearts(t, {
+        parent: false,
+        sequel: true,
+      });
+      stubDump([{ ...record, ...split }]);
+      await sync(t);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(sequelReleaseId!))!.isbn13).toBe(SEQUEL_ISBN);
+        const series = await ctx.db.query("series").collect();
+        expect(series.map((s) => s.title)).toEqual(["Kingdom Hearts II"]);
+        expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      });
+    },
+  );
+
+  it("a bare volume number split across fields fills only an existing Series' Release", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    stubDump([
+      { ...CHAINSAW_22, title: "Chainsaw", subtitle: "Man 22" },
+      {
+        ...CHAINSAW_22,
+        key: "/books/OL51694025M",
+        title: "Omega",
+        subtitle: "Nobody 6",
+        isbn_13: ["9781974700042"],
+      },
+    ]);
+    await sync(t);
+
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.isbn13).toBe("9781974766512");
+      expect(await ctx.db.query("series").collect()).toHaveLength(1);
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
     });
   });
 });

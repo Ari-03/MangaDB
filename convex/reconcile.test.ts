@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import schema from "./schema";
 
 const BASE = "https://sevenseasentertainment.com";
@@ -620,10 +620,20 @@ describe("steady-state creation boundaries", () => {
     expect(open).toHaveLength(1);
     const version = await versionOf(t, open[0]!);
     expect(version?.changeComment).toContain("Edition Line: Deluxe Edition");
-    // Pre-filled: volumes 4-6 + the Edition covering them + the Release;
-    // the Deluxe number is the line position, never a Volume.
+    // Pre-filled: volumes 4-6 + the Edition Line + the Edition covering
+    // them in that line + the Release; the Deluxe number is the line
+    // position, never a Volume.
     const tables = version?.ops.map((op) => (op.kind === "create" ? op.table : op.kind));
-    expect(tables).toEqual(["volumes", "volumes", "volumes", "editions", "releases"]);
+    expect(tables).toEqual([
+      "volumes",
+      "volumes",
+      "volumes",
+      "editionLines",
+      "editions",
+      "releases",
+    ]);
+    const line = version?.ops.find((op) => op.kind === "create" && op.table === "editionLines");
+    expect(line).toMatchObject({ tempId: "edition-line", fields: { name: "Deluxe Edition" } });
     const labels = version?.ops.flatMap((op) =>
       op.kind === "create" && op.table === "volumes"
         ? [(op.fields as { label?: string }).label]
@@ -631,10 +641,15 @@ describe("steady-state creation boundaries", () => {
     );
     expect(labels).toEqual(["4", "5", "6"]);
     const edition = version?.ops.find((op) => op.kind === "create" && op.table === "editions");
-    expect(edition).toMatchObject({ fields: { linePosition: "2" } });
+    expect(edition).toMatchObject({
+      fields: { editionLineId: "edition-line", linePosition: "2" },
+    });
   });
 
-  it("packaging whose coverage the title never states stays on its observation", async () => {
+  // In Bootstrap Mode a named line's member with no coverage signal becomes
+  // Unmapped Packaging under its line (CONTEXT.md); outside Bootstrap Mode
+  // it stays on its observation (sevenSeas.test.ts covers that case).
+  it("packaging whose coverage the title never states is never a Volume", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     stubSite([
@@ -657,8 +672,12 @@ describe("steady-state creation boundaries", () => {
       const obs = (await ctx.db.query("sourceObservations").collect()).find(
         (o) => o.sourceRecordId === "502",
       );
-      expect(obs?.recordRef).toBeUndefined();
-      expect(obs?.conflicts?.[0]).toMatchObject({ field: "placement" });
+      expect(obs?.recordRef?.type).toBe("release");
+      expect(obs?.conflicts ?? []).toHaveLength(0);
+      const release = await ctx.db.get(obs!.recordRef!.id as Id<"releases">);
+      const edition = await ctx.db.get(release!.editionId);
+      expect(edition).toMatchObject({ coverageUnmapped: true, linePosition: "5" });
+      expect(await ctx.db.get(edition!.editionLineId!)).toMatchObject({ name: "Deluxe Edition" });
     });
     expect(await inReviewProposals(t)).toHaveLength(0);
   });

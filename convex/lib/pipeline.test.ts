@@ -477,6 +477,357 @@ describe("createReleaseBundle", () => {
   });
 });
 
+/** A creator of single-Volume Kodansha Releases in one Series; returns the Release. */
+function volumeCreator(ctx: MutationCtx, seriesId: Id<"series">) {
+  return async (label: string, isbn13: string, format: "physical" | "digital" = "physical") =>
+    (
+      await createCanonicalRecords(ctx, {
+        sourceKey: "prh",
+        observation: await observation(ctx, `vol-${isbn13}`),
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        seriesTitle: "Fire Force",
+        labels: [label],
+        release: { format, isbn13, publisher: { name: "Kodansha", slug: "kodansha" } },
+        tagBootstrapUnreviewed: false,
+        now: 1,
+      })
+    ).releaseId!;
+}
+
+/** A Kodansha physical box of these Volume labels. */
+const fireForceBox = (seriesId: Id<"series">, labels: string[]) => ({
+  sourceKey: "prh",
+  citation: CITATION,
+  importComment: "test",
+  seriesId,
+  name: `Fire Force Box Set 1 (Vol. ${labels[0]}-${labels.at(-1)})`,
+  labels,
+  publisher: { name: "Kodansha", slug: "kodansha" },
+  release: { format: "physical" as const, isbn13: "9798888772584" },
+  tagBootstrapUnreviewed: true,
+  now: 1,
+});
+
+/** A bundle's memberships in page order (by order, then creation). */
+const membershipsOf = (ctx: MutationCtx, bundleId: Id<"releaseBundles">) =>
+  ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+    .collect();
+
+describe("createReleaseBundle — members that arrive later (B15)", () => {
+  it("a box imported before its books picks them up when retried", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const box = {
+        sourceKey: "prh",
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        name: "Fire Force Manga Box Set 1 (Vol. 1-3)",
+        labels: ["1", "2", "3"],
+        publisher: { name: "Kodansha", slug: "kodansha" },
+        release: { format: "physical" as const, isbn13: "9798888772584" },
+        tagBootstrapUnreviewed: true,
+        now: 1,
+      };
+      const early = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      expect(early).toMatchObject({ created: true, members: 0 });
+
+      // The books arrive after the box, volume 2 and 3 out of order.
+      const releaseIds: Record<string, Id<"releases">> = {};
+      for (const [label, isbn13] of [
+        ["3", "9780000000033"],
+        ["2", "9780000000026"],
+      ] as const) {
+        const result = await createCanonicalRecords(ctx, {
+          sourceKey: "prh",
+          observation: await observation(ctx, `vol-${label}`),
+          citation: CITATION,
+          importComment: "test",
+          seriesId,
+          seriesTitle: "Fire Force",
+          labels: [label],
+          release: {
+            format: "physical",
+            isbn13,
+            publisher: { name: "Kodansha", slug: "kodansha" },
+          },
+          tagBootstrapUnreviewed: false,
+          now: 1,
+        });
+        releaseIds[label] = result.releaseId!;
+      }
+
+      const retry = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      expect(retry).toMatchObject({ created: false, bundleId: early.bundleId, members: 2 });
+      const memberships = await ctx.db
+        .query("bundleMemberships")
+        .withIndex("by_bundle", (q) => q.eq("bundleId", early.bundleId))
+        .collect();
+      // Ordered by the box's own volume sequence, not by arrival.
+      expect(memberships.map((m) => [m.releaseId, m.order])).toEqual([
+        [releaseIds["2"], 2],
+        [releaseIds["3"], 3],
+      ]);
+      // The added members are public history on the bundle.
+      const revisions = await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) =>
+          q.eq("ref.type", "releaseBundle").eq("ref.id", early.bundleId),
+        )
+        .collect();
+      expect(revisions.map((r) => r.seq)).toEqual([1, 2]);
+      expect(revisions[1]!.changes).toEqual([
+        { field: "members", before: [], after: [releaseIds["2"], releaseIds["3"]] },
+      ]);
+
+      // A second retry with nothing new writes nothing.
+      await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+      expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(2);
+      expect(
+        await ctx.db
+          .query("revisions")
+          .withIndex("by_record", (q) =>
+            q.eq("ref.type", "releaseBundle").eq("ref.id", early.bundleId),
+          )
+          .collect(),
+      ).toHaveLength(2);
+    });
+  });
+
+  it("never edits a hidden or locked bundle's membership", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const box = {
+        sourceKey: "prh",
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        name: "Fire Force Box",
+        labels: ["1"],
+        publisher: { name: "Kodansha", slug: "kodansha" },
+        release: { format: "physical" as const, isbn13: "9798888772584" },
+        tagBootstrapUnreviewed: true,
+        now: 1,
+      };
+      const early = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      await createCanonicalRecords(ctx, {
+        sourceKey: "prh",
+        observation: await observation(ctx, "vol-1"),
+        citation: CITATION,
+        importComment: "test",
+        seriesId,
+        seriesTitle: "Fire Force",
+        labels: ["1"],
+        release: {
+          format: "physical",
+          isbn13: "9780000000019",
+          publisher: { name: "Kodansha", slug: "kodansha" },
+        },
+        tagBootstrapUnreviewed: false,
+        now: 1,
+      });
+      for (const patch of [{ status: "hidden" as const }, { status: "active" as const, locked: true }]) {
+        await ctx.db.patch(early.bundleId, patch);
+        await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+        expect(await ctx.db.query("bundleMemberships").collect()).toHaveLength(0);
+      }
+    });
+  });
+
+  // W09: the original importer ordered a bundle's members compactly (1, 2,
+  // …) over whichever books existed, so a Vol. 1–3 box made with only
+  // Vol. 2 stored it at order 1. Filling the late Volumes renumbers such
+  // generated orders by label position instead of colliding with them.
+  it("renumbers a legacy bundle's compact order when late members arrive", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const vol = volumeCreator(ctx, seriesId);
+      const two = await vol("2", "9780000000026");
+      const box = fireForceBox(seriesId, ["1", "2", "3"]);
+      const early = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      // The baseline importer's compact order for its sole member.
+      const [legacy] = await membershipsOf(ctx, early.bundleId);
+      await ctx.db.patch(legacy!._id, { order: 1 });
+
+      const one = await vol("1", "9780000000019");
+      const three = await vol("3", "9780000000033");
+      await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+      expect(
+        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
+      ).toEqual([
+        [one, 1],
+        [two, 2],
+        [three, 3],
+      ]);
+    });
+  });
+
+  it("never seats a book that holds only part of a Volume as the box's member", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const vol = volumeCreator(ctx, seriesId);
+      const one = await vol("1", "9780000000019");
+      const two = await vol("2", "9780000000026");
+      // Volume 2's only book is a split one: it holds part of the Volume.
+      const split = (await ctx.db.get(two))!;
+      const [coverage] = await ctx.db
+        .query("volumeCoverages")
+        .withIndex("by_edition", (q) => q.eq("editionId", split.editionId))
+        .collect();
+      await ctx.db.patch(coverage!._id, { extent: "partial" });
+
+      const made = await createReleaseBundle(ctx, {
+        ...fireForceBox(seriesId, ["1", "2"]),
+        observation: await observation(ctx, "box"),
+      });
+      expect((await membershipsOf(ctx, made.bundleId)).map((m) => m.releaseId)).toEqual([one]);
+    });
+  });
+
+  it("keeps a deliberately reordered bundle's order, appending late members", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const vol = volumeCreator(ctx, seriesId);
+      const two = await vol("2", "9780000000026");
+      const three = await vol("3", "9780000000033");
+      const box = fireForceBox(seriesId, ["1", "2", "3"]);
+      const early = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      // An Editor put Vol. 3 before Vol. 2.
+      const rows = await membershipsOf(ctx, early.bundleId);
+      await ctx.db.patch(rows.find((m) => m.releaseId === three)!._id, { order: 1 });
+      await ctx.db.patch(rows.find((m) => m.releaseId === two)!._id, { order: 2 });
+
+      const one = await vol("1", "9780000000019");
+      await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+      expect(
+        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
+      ).toEqual([
+        [three, 1],
+        [two, 2],
+        [one, 3],
+      ]);
+    });
+  });
+
+  it("keeps a member an Editor added outside the box's Volumes", async () => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const kodansha = await publisher(ctx, "Kodansha", "kodansha");
+      const seriesId = await series(ctx, "Fire Force", []);
+      const vol = volumeCreator(ctx, seriesId);
+      const two = await vol("2", "9780000000026");
+      const box = fireForceBox(seriesId, ["1", "2"]);
+      const early = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      // An Editor added a bonus book (outside the box's Volumes) first.
+      const bonus = await ctx.db.insert("releases", {
+        status: "active",
+        editionId: (await ctx.db.get(two))!.editionId,
+        format: "physical",
+        language: "en",
+        publisherId: kodansha,
+        seriesIds: [seriesId],
+      });
+      const [member] = await membershipsOf(ctx, early.bundleId);
+      await ctx.db.patch(member!._id, { order: 2 });
+      await ctx.db.insert("bundleMemberships", {
+        bundleId: early.bundleId,
+        releaseId: bonus,
+        order: 1,
+      });
+
+      const one = await vol("1", "9780000000019");
+      await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
+      expect(
+        (await membershipsOf(ctx, early.bundleId)).map((m) => [m.releaseId, m.order]),
+      ).toEqual([
+        [bonus, 1],
+        [two, 2],
+        [one, 3],
+      ]);
+    });
+  });
+});
+
+// W08: a bundle is filled only from its own canonical identity — its
+// Format and the Series its members already belong to. Another source's
+// observation of the same box ISBN that places it elsewhere adds nothing
+// and leaves the conflict on the observation for review.
+describe("createReleaseBundle — an existing bundle keeps its identity (W08)", () => {
+  it.each([
+    ["another Series", "series"],
+    ["another Format", "format"],
+  ] as const)("links but adds nothing when the box names %s", async (_, change) => {
+    const t = makeT();
+    await t.run(async (ctx) => {
+      await publisher(ctx, "Kodansha", "kodansha");
+      const alpha = await series(ctx, "Alpha", []);
+      const beta = await series(ctx, "Beta", []);
+      const alphaOne = await volumeCreator(ctx, alpha)("1", "9780000000019");
+      await volumeCreator(ctx, alpha)("2", "9780000000026", "digital");
+      await volumeCreator(ctx, beta)("2", "9780000000033");
+      const box = fireForceBox(alpha, ["1", "2"]);
+      const first = await createReleaseBundle(ctx, {
+        ...box,
+        observation: await observation(ctx, "box"),
+      });
+      expect(first).toMatchObject({ created: true, members: 1 });
+
+      const other = await createReleaseBundle(ctx, {
+        ...box,
+        ...(change === "series"
+          ? { seriesId: beta }
+          : { release: { ...box.release, format: "digital" as const } }),
+        observation: await observation(ctx, "other-source-box"),
+      });
+      expect(other).toMatchObject({ created: false, bundleId: first.bundleId, members: 0 });
+      expect(other.conflict).toMatch(change === "series" ? /Series/ : /Format/);
+      expect((await membershipsOf(ctx, first.bundleId)).map((m) => m.releaseId)).toEqual([
+        alphaOne,
+      ]);
+      const obs = await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "prh").eq("sourceRecordId", "other-source-box"),
+        )
+        .unique();
+      expect(obs!.recordRef).toEqual({ type: "releaseBundle", id: first.bundleId });
+      expect(obs!.conflicts?.map((c) => c.field)).toEqual(["placement"]);
+    });
+  });
+});
+
 // Catalog repairs hide and merge records; the next sync must not undo them.
 describe("createCanonicalRecords — repairs stand", () => {
   /** A Series with one Volume "1" and a Kodansha Edition + Release on it. */

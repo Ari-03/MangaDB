@@ -129,15 +129,27 @@ describe("capture", () => {
     expect(jobs.every((job) => typeof job.args.timestamp === "number")).toBe(true);
 
     // The component's actions deliver them to /batch/, branded as its own
-    // library; user events keep their person profile.
+    // library; user events keep their person profile. Each send is its own
+    // action and POST and they run concurrently, so arrival order is not
+    // the scheduling order and is not asserted.
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(posted.every((p) => p.url === "https://us.i.posthog.com/batch/")).toBe(true);
     const events = await wireEvents(posted);
-    expect(events.map((e) => e.event)).toEqual(["rating_set", "rating_set", "review_saved", "favorite_toggled"]);
-    expect(events[0]).toMatchObject({
-      distinct_id: READER,
-      properties: { kind: "series", score: 80, $lib: "posthog-convex", $is_server: true },
-    });
+    const delivered = (event: string, properties: Record<string, unknown>) =>
+      expect.objectContaining({
+        event,
+        distinct_id: READER,
+        properties: expect.objectContaining({ ...properties, $lib: "posthog-convex", $is_server: true }),
+      });
+    expect(events).toHaveLength(jobs.length);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        delivered("rating_set", { kind: "series", score: 80, cleared: false }),
+        delivered("rating_set", { kind: "series", score: null, cleared: true }),
+        delivered("review_saved", { kind: "series", spoiler: true, length_bucket: "100_499", edited: false }),
+        delivered("favorite_toggled", { kind: "series", favorite: true }),
+      ]),
+    );
     expect(events.some((e) => "$process_person_profile" in e.properties)).toBe(false);
   });
 

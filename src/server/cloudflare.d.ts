@@ -8,6 +8,8 @@ declare module "cloudflare:workers" {
   }
   interface R2Bucket {
     get(key: string): Promise<R2ObjectBody | null>;
+    /** The object's metadata without its body; null when absent. */
+    head(key: string): Promise<object | null>;
     put(
       key: string,
       value: ArrayBuffer,
@@ -17,6 +19,8 @@ declare module "cloudflare:workers" {
       },
     ): Promise<unknown>;
   }
+  /** Keeps the invocation alive until `promise` settles (ctx.waitUntil). */
+  export function waitUntil(promise: Promise<unknown>): void;
   export const env: {
     /** The cover-art bucket (wrangler.jsonc `r2_buckets`). */
     COVERS?: R2Bucket;

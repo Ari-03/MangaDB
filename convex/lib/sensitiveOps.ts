@@ -12,12 +12,28 @@
 // every losing-ID URL into a permanent 301 — no redirects table. Everything
 // a merge moved is written to a mergeManifests row, and an explicit Split
 // (the only way to reverse a mistaken merge) replays that manifest backward,
-// skipping anything the world changed since.
+// skipping anything the world changed since. Neither Merge nor Split makes
+// any User's tracking more visible on their public profile than it was just
+// before. Both find the Users concerned through one enumeration of who
+// tracks what, per record and surface (trackersOf: the records touched and
+// everything under them, as they stand). Split asks it about the loser and
+// every record its manifests moved, so tracking logged or filed there since
+// the merge counts, and then re-derives the touched Releases' Series from
+// the links it restored, so no stored Series outlives the coverage it came
+// from. Governance is read from the stored records, hidden ones included,
+// never through a display filter. Wherever tracking changes the Series it
+// answers to, those Series absorb the overrides of the Series that same
+// tracking left (absorbedFrom, stricterVisibility; a merge logs these
+// writes in its manifest, Split's are final), and Split never widens an
+// override it replays; a catalog record the User does not track narrows
+// nothing. Moving tracked Releases, Bundles or rated Editions between some
+// Series and none is refused, by merge or Split alike, since no override
+// governs tracking with no Series.
 
 import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { primaryVolumeSeries } from "../catalogPages";
+import { followMerges, primaryVolumeSeries } from "../catalogPages";
 import {
   displayInfo,
   getCanonical,
@@ -260,19 +276,17 @@ async function transferProvenance(
 }
 
 /**
- * Recompute the release denorms (`seriesIds`, `publisherId` — spec §8) for
- * every release of one Edition from its current coverage, logging changes.
+ * The Series an Edition's Releases carry (`seriesIds`, spec §8): those of
+ * its covered Volumes in coverage order, or, for Unmapped Packaging that
+ * covers nothing yet, its Edition Line's.
  */
-async function recomputeReleaseDenorms(
+async function editionSeriesIds(
   ctx: MutationCtx,
-  log: TransferLog,
-  editionId: Id<"editions">,
-): Promise<void> {
-  const edition = await ctx.db.get(editionId);
-  if (!edition) return;
+  edition: Doc<"editions">,
+): Promise<Id<"series">[]> {
   const coverage = await ctx.db
     .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
     .collect();
   const seriesIds: Id<"series">[] = [];
   for (const row of coverage) {
@@ -281,11 +295,43 @@ async function recomputeReleaseDenorms(
       seriesIds.push(volume.seriesId);
     }
   }
-  // Unmapped Packaging covers nothing yet; its line still names the Series.
   if (seriesIds.length === 0 && edition.editionLineId) {
     const line = await ctx.db.get(edition.editionLineId);
     if (line) seriesIds.push(line.seriesId);
   }
+  return seriesIds;
+}
+
+/**
+ * The Series a pass on a Release with these `seriesIds` is filed under: the
+ * first, merge-followed (reading.ts passSeriesId); none without coverage.
+ */
+async function passSeriesOf(
+  ctx: MutationCtx,
+  seriesIds: Id<"series">[],
+): Promise<Id<"series"> | undefined> {
+  const first = seriesIds[0];
+  if (!first) return undefined;
+  return (await followMerges(ctx, "series", await ctx.db.get(first)))?._id ?? first;
+}
+
+/**
+ * Recompute the release denorms (`seriesIds`, `publisherId` — spec §8) for
+ * every release of one Edition from its current coverage, and file each
+ * Release's passes under its first Series (passSeriesOf), logging changes.
+ * Every operation that re-derives a Release's Series runs through here (a
+ * merge logging to its manifest, Split to a scratch log), so a pass is
+ * never left under the Series its Release left, and Split takes it back.
+ */
+async function recomputeReleaseDenorms(
+  ctx: MutationCtx,
+  log: TransferLog,
+  editionId: Id<"editions">,
+): Promise<void> {
+  const edition = await ctx.db.get(editionId);
+  if (!edition) return;
+  const seriesIds = await editionSeriesIds(ctx, edition);
+  const passSeriesId = await passSeriesOf(ctx, seriesIds);
   const releases = await ctx.db
     .query("releases")
     .withIndex("by_edition", (q) => q.eq("editionId", editionId))
@@ -295,6 +341,612 @@ async function recomputeReleaseDenorms(
       seriesIds,
       publisherId: edition.publisherId,
     });
+    if (!passSeriesId) continue;
+    const passes = await ctx.db
+      .query("releaseProgress")
+      .withIndex("by_release", (q) => q.eq("releaseId", release._id))
+      .collect();
+    for (const pass of passes) {
+      await repoint(ctx, log, "releaseProgress", pass, { seriesId: passSeriesId });
+    }
+  }
+}
+
+// ---------- Tracking Visibility across canonical operations ----------
+
+/** The two per-Series override fields of a userSeriesStates row (spec §3). */
+const VISIBILITY_FIELDS = ["ownershipVisibility", "readingVisibility"] as const;
+export type VisibilityField = (typeof VISIBILITY_FIELDS)[number];
+/** A state row's overrides; an unset one follows the User's account default. */
+export type VisibilityOverrides = Partial<Pick<Doc<"userSeriesStates">, VisibilityField>>;
+
+/**
+ * The override patch that keeps the `kept` Series from showing more than it
+ * or any of the `others` did, both now and after any later change of the
+ * User's account defaults. The one rule every canonical operation (merge,
+ * Split, the data repair) applies whenever tracking changes the Series it
+ * answers to. Per surface: an explicit private on any side stays private;
+ * otherwise, if any side followed the default (no override, or no state
+ * row: `null`), the result follows the default; public survives only where
+ * every side was explicitly public. Returns just the fields that change (an
+ * override going back to the default as `undefined`), limited to `fields`.
+ */
+export function stricterVisibility(
+  kept: VisibilityOverrides | null,
+  others: Array<VisibilityOverrides | null>,
+  fields: readonly VisibilityField[] = VISIBILITY_FIELDS,
+): VisibilityOverrides {
+  const patch: VisibilityOverrides = {};
+  for (const field of fields) {
+    const sides = [kept, ...others].map((side) => side?.[field]);
+    const combined = sides.includes("private")
+      ? "private"
+      : sides.includes(undefined)
+        ? undefined
+        : "public";
+    if (combined !== kept?.[field]) patch[field] = combined;
+  }
+  return patch;
+}
+
+export const OWNERSHIP = ["ownershipVisibility"] as const;
+export const READING = ["readingVisibility"] as const;
+
+async function seriesStateOf(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  seriesId: Id<"series">,
+): Promise<Doc<"userSeriesStates"> | null> {
+  return await ctx.db
+    .query("userSeriesStates")
+    .withIndex("by_user_series", (q) => q.eq("userId", userId).eq("seriesId", seriesId))
+    .unique();
+}
+
+/**
+ * The Series whose overrides govern tracking stored against these ids, as
+ * the public profile resolves them (sharing.ts resolvedSeriesIds): merged
+ * ones followed to their survivor, hidden ones kept as stored.
+ */
+async function governingSeries(
+  ctx: MutationCtx,
+  ids: Array<Id<"series">>,
+): Promise<Array<Id<"series">>> {
+  const out = new Set<Id<"series">>();
+  for (const id of ids) {
+    out.add((await followMerges(ctx, "series", await ctx.db.get(id)))?._id ?? id);
+  }
+  return [...out];
+}
+
+/**
+ * Where a canonical operation writes the overrides it narrows (`state` is
+ * the User's row on that Series, null for none yet), and whether it can be
+ * reversed. A merge logs them in its manifest (manifestSink) and may be
+ * Split, which moves tracking back; the data repair (repair/ops.ts) logs
+ * them on its Proposal trail and is never reversed.
+ */
+export type OverrideSink = {
+  reversible: boolean;
+  write: (
+    userId: Id<"users">,
+    seriesId: Id<"series">,
+    state: Doc<"userSeriesStates"> | null,
+    patch: VisibilityOverrides,
+  ) => Promise<void>;
+};
+
+/**
+ * A merge's sink: a new state row is inserted bare, then gets its overrides
+ * through `repoint`, so the manifest holds both (Split passes a scratch log;
+ * what it writes is final).
+ */
+function manifestSink(ctx: MutationCtx, log: TransferLog): OverrideSink {
+  return {
+    reversible: true,
+    write: async (userId, seriesId, state, patch) => {
+      let row = state;
+      if (!row) {
+        const docId = await ctx.db.insert("userSeriesStates", {
+          userId,
+          seriesId,
+          following: false,
+          followPromptDismissed: false,
+        });
+        log.inserted.push({ table: "userSeriesStates", docId });
+        row = await ctx.db.get(docId);
+      }
+      if (row) await repoint(ctx, log, "userSeriesStates", row, patch);
+    },
+  };
+}
+
+/**
+ * How the profile gates tracking by its Series: "all" (a Release or Bundle,
+ * sharing.ts seriesAllPublic: every Series must be public) or "one" (an
+ * omnibus Rating, which follows whichever of its Edition's covered Series
+ * the profile can show first, so hiding a record shifts which one).
+ */
+type Gate = "all" | "one";
+
+/**
+ * Whose overrides the `to` Series must absorb when tracking gated by `gate`
+ * moves from the `from` Series (both merge-followed): null when nothing
+ * needs narrowing (no Series to narrow, or no gate the tracking left), []
+ * when it had none (the account default governed it), else the Series it
+ * left: under "all" those `to` dropped, under "one" every candidate of
+ * `from` unless the candidates are unchanged. Merges (carryVisibility, on
+ * live state rows) and Split (keepSplitVisibility, on its snapshot) share it.
+ */
+function absorbedFrom(
+  from: Array<Id<"series">>,
+  to: Array<Id<"series">>,
+  gate: Gate,
+): Array<Id<"series">> | null {
+  if (to.length === 0) return null;
+  if (from.length === 0) return [];
+  if (gate === "one") return sameValue(from, to) ? null : from;
+  const dropped = from.filter((id) => !to.includes(id));
+  return dropped.length > 0 ? dropped : null;
+}
+
+/**
+ * One User's tracking on some surfaces answered to the `from` Series and now
+ * answers to the `to` Series (a cross-Series merge moved it, or re-derived
+ * its Release's Series; a repair re-parented its Volume). Every `to` Series
+ * absorbs the overrides of the Series the tracking left (absorbedFrom under
+ * `gate`, stricterVisibility), on a new state row where the User had none;
+ * tracking with no Series followed the default alone. A merge's
+ * synthesized rows are undone by Split only once bare again, and Split
+ * never widens them back (keepSplitVisibility). Merges refuse to move
+ * tracked Releases between some Series and none (refuseSeriesChange), and
+ * Split refuses to leave them with none; a carry to no Series is a no-op
+ * here.
+ */
+export async function carryVisibility(
+  ctx: MutationCtx,
+  sink: OverrideSink,
+  userId: Id<"users">,
+  fields: readonly VisibilityField[],
+  from: Array<Id<"series">>,
+  to: Array<Id<"series">>,
+  gate: Gate = "all",
+): Promise<void> {
+  const toIds = await governingSeries(ctx, to);
+  const absorbed = absorbedFrom(await governingSeries(ctx, from), toIds, gate);
+  if (!absorbed) return;
+  const sources =
+    absorbed.length === 0
+      ? [null]
+      : await Promise.all(absorbed.map((id) => seriesStateOf(ctx, userId, id)));
+  for (const seriesId of toIds) await narrowState(ctx, sink, userId, seriesId, sources, fields);
+}
+
+/** Narrow one User's state row on a Series to stricterVisibility against `sources`, through `sink`. */
+async function narrowState(
+  ctx: MutationCtx,
+  sink: OverrideSink,
+  userId: Id<"users">,
+  seriesId: Id<"series">,
+  sources: Array<VisibilityOverrides | null>,
+  fields: readonly VisibilityField[] = VISIBILITY_FIELDS,
+): Promise<void> {
+  const state = await seriesStateOf(ctx, userId, seriesId);
+  const patch = stricterVisibility(state, sources, fields);
+  if (Object.keys(patch).length > 0) await sink.write(userId, seriesId, state, patch);
+}
+
+/**
+ * Refuse a merge that moves a Release, Bundle or rated Edition from some
+ * Series to none, or a tracked one (`tracked`, asked only then) from none
+ * to some. With no
+ * Series the account default alone governs its tracking, which no override
+ * can narrow: losing its Series would drop an explicit private choice, and
+ * gaining one would let the Split back to none drop any private choice the
+ * User made on the new Series in between (an operation nothing reverses
+ * passes `tracked` = null: gaining a Series only narrows it then). One
+ * tracked only since the merge is caught by the Split (keepSplitVisibility).
+ */
+async function refuseSeriesChange(
+  from: Array<Id<"series">>,
+  to: Array<Id<"series">>,
+  tracked: (() => Promise<boolean>) | null,
+): Promise<void> {
+  if (from.length > 0 && to.length === 0) {
+    fail(
+      "badMerge",
+      "This merge would leave a Release or rated Edition with no Series. Map the surviving Edition's Volume Coverage first, or merge the other way.",
+    );
+  }
+  if (from.length === 0 && to.length > 0 && tracked && (await tracked())) {
+    fail(
+      "badMerge",
+      "This merge would give tracked Releases or Bundles that have no Series one, which a later Split could not keep private. Map their Volume Coverage or Bundle members first.",
+    );
+  }
+}
+
+/** Whether any User has a collection entry on a Bundle. */
+async function bundleTracked(ctx: MutationCtx, bundleId: Id<"releaseBundles">) {
+  return (
+    (await ctx.db
+      .query("collectionEntries")
+      .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+      .first()) !== null
+  );
+}
+
+/** Whether any User tracks a Release: an entry or pass on it, or an entry on a Bundle holding it. */
+async function releaseTracked(ctx: MutationCtx, releaseId: Id<"releases">) {
+  const entry = await ctx.db
+    .query("collectionEntries")
+    .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
+    .first();
+  const pass = await ctx.db
+    .query("releaseProgress")
+    .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
+    .first();
+  if (entry || pass) return true;
+  for (const bundleId of await bundlesOf(ctx, releaseId)) {
+    if (await bundleTracked(ctx, bundleId)) return true;
+  }
+  return false;
+}
+
+/**
+ * The Series a Bundle's ownership answers to on the profile: its member
+ * Releases' (merge-followed) Series, as sharing.ts publicProfile reads them.
+ */
+export async function bundleSeries(ctx: MutationCtx, bundleId: Id<"releaseBundles">) {
+  const memberships = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+    .collect();
+  const out = new Set<Id<"series">>();
+  for (const membership of memberships) {
+    const stored = await ctx.db.get(membership.releaseId);
+    const release = (await followMerges(ctx, "releases", stored)) ?? stored;
+    for (const id of release?.seriesIds ?? []) out.add(id);
+  }
+  return [...out];
+}
+
+/** The Users owning a Bundle (profile-visible Owned entries only). */
+export async function bundleOwners(ctx: MutationCtx, bundleId: Id<"releaseBundles">) {
+  return [...(await trackersOf(ctx, { bundles: [bundleId] })).trackers.keys()];
+}
+
+/** The Bundles holding a Release. */
+async function bundlesOf(ctx: MutationCtx, releaseId: Id<"releases">) {
+  const memberships = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
+    .collect();
+  return [...new Set(memberships.map((row) => row.bundleId))];
+}
+
+// ---------- who tracks what ----------
+
+/** The catalog records whose tracking the profile gates by Series, by kind. */
+const RECORD_TABLES = {
+  series: "series",
+  lines: "editionLines",
+  volumes: "volumes",
+  editions: "editions",
+  releases: "releases",
+  bundles: "releaseBundles",
+} as const;
+type RecordKind = keyof typeof RECORD_TABLES;
+type RecordId<K extends RecordKind> = Id<(typeof RECORD_TABLES)[K]>;
+/** Catalog records by kind. */
+type Records = { [K in RecordKind]?: Iterable<RecordId<K>> };
+type RecordSets = { [K in RecordKind]: Set<RecordId<K>> };
+/**
+ * Each User with a profile surface on some records → each such record (by
+ * id) → the overrides governing the User's tracking of it.
+ */
+type Trackers = Map<Id<"users">, Map<string, Set<VisibilityField>>>;
+
+const union = <K extends RecordKind>(kind: K, all: Records[]): Set<RecordId<K>> =>
+  new Set(all.flatMap((records) => [...(records[kind] ?? [])]));
+
+/** The records of all these collections, by kind. */
+const recordSets = (...all: Records[]): RecordSets => ({
+  series: union("series", all),
+  lines: union("lines", all),
+  volumes: union("volumes", all),
+  editions: union("editions", all),
+  releases: union("releases", all),
+  bundles: union("bundles", all),
+});
+
+/**
+ * The personal tables, and the overrides deciding whether one of their rows
+ * shows on its owner's profile (sharing.ts publicProfile): Ownership for an
+ * entry (Owned only, surfacesOf), Reading for a read count, pass or Rating,
+ * and both for a state row, which holds them.
+ */
+const PERSONAL_SURFACES: Partial<Record<string, readonly VisibilityField[]>> = {
+  collectionEntries: OWNERSHIP,
+  userSeriesStates: VISIBILITY_FIELDS,
+  volumeProgress: READING,
+  releaseProgress: READING,
+  ratings: READING,
+};
+
+/** The overrides governing one row of `table` on the profile; none for Wanted/Ordered entries or other tables. */
+function surfacesOf(table: string, row: { state?: unknown }): readonly VisibilityField[] {
+  if (table === "collectionEntries" && row.state !== "owned") return [];
+  return PERSONAL_SURFACES[table] ?? [];
+}
+
+/** Record that a User tracks one record on these surfaces. */
+function addTracker(
+  trackers: Trackers,
+  userId: Id<"users">,
+  recordId: string,
+  fields: Iterable<VisibilityField>,
+) {
+  const records = trackers.get(userId) ?? new Map<string, Set<VisibilityField>>();
+  const known = records.get(recordId) ?? new Set<VisibilityField>();
+  for (const field of fields) known.add(field);
+  if (known.size === 0) return;
+  records.set(recordId, known);
+  trackers.set(userId, records);
+}
+
+/** Every surface a User tracks among their records. */
+const surfacesTracked = (tracked: Map<string, Set<VisibilityField>> | undefined) => [
+  ...new Set([...(tracked?.values() ?? [])].flatMap((fields) => [...fields])),
+];
+
+/**
+ * These records and every record whose Series derive from theirs, as the
+ * database stands: a Series' Volumes and Edition Lines, the Editions on a
+ * line or covering a Volume, an Edition's Releases (their `seriesIds` come
+ * from its coverage or line), and the Bundles holding a Release (theirs
+ * come from their members).
+ */
+async function withDependents(ctx: MutationCtx, records: Records): Promise<RecordSets> {
+  const out = recordSets(records);
+  for (const seriesId of out.series) {
+    const volumes = await ctx.db
+      .query("volumes")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .collect();
+    for (const volume of volumes) out.volumes.add(volume._id);
+    const lines = await ctx.db
+      .query("editionLines")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .collect();
+    for (const line of lines) out.lines.add(line._id);
+  }
+  for (const lineId of out.lines) {
+    const editions = await ctx.db
+      .query("editions")
+      .withIndex("by_line", (q) => q.eq("editionLineId", lineId))
+      .collect();
+    for (const edition of editions) out.editions.add(edition._id);
+  }
+  for (const volumeId of out.volumes) {
+    const coverage = await ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
+      .collect();
+    for (const row of coverage) out.editions.add(row.editionId);
+  }
+  for (const editionId of out.editions) {
+    const releases = await ctx.db
+      .query("releases")
+      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+      .collect();
+    for (const release of releases) out.releases.add(release._id);
+  }
+  for (const releaseId of out.releases) {
+    for (const bundleId of await bundlesOf(ctx, releaseId)) out.bundles.add(bundleId);
+  }
+  return out;
+}
+
+/**
+ * Who tracks what an operation touches: the one enumeration of affected
+ * Users that merges and Split share. `records`: the touched records with
+ * everything under them (withDependents); `trackers`: every User with a
+ * profile surface on any of those (trackersIn).
+ */
+async function trackersOf(ctx: MutationCtx, touched: Records): Promise<{ records: RecordSets; trackers: Trackers }> {
+  const records = await withDependents(ctx, touched);
+  return { records, trackers: await trackersIn(ctx, records) };
+}
+
+/**
+ * Every User with a profile surface on these records, per record, and the
+ * overrides governing it. A Series: state rows, Series Ratings, and the read
+ * counts and passes filed under it. A Volume: its read counts. An Edition:
+ * its omnibus Ratings. A Release: its entries and passes. A Bundle: its
+ * entries. Reviews, Volume Ratings and Favorites are no surface of Tracking
+ * Visibility: the profile lists Reviews whatever it is and never shows the
+ * other two.
+ */
+async function trackersIn(ctx: MutationCtx, records: RecordSets): Promise<Trackers> {
+  const trackers: Trackers = new Map();
+  const add = (table: TableNames, recordId: string, rows: Array<{ userId: Id<"users">; state?: unknown }>) => {
+    for (const row of rows) addTracker(trackers, row.userId, recordId, surfacesOf(table, row));
+  };
+  for (const seriesId of records.series) {
+    for (const table of ["userSeriesStates", "ratings", "volumeProgress", "releaseProgress"] as const) {
+      add(
+        table,
+        seriesId,
+        await ctx.db
+          .query(table)
+          .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+          .collect(),
+      );
+    }
+  }
+  for (const volumeId of records.volumes) {
+    add(
+      "volumeProgress",
+      volumeId,
+      await ctx.db
+        .query("volumeProgress")
+        .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
+        .collect(),
+    );
+  }
+  for (const editionId of records.editions) {
+    add("ratings", editionId, await ratingsOf(ctx, { kind: "edition", id: editionId }));
+  }
+  for (const releaseId of records.releases) {
+    for (const table of ["collectionEntries", "releaseProgress"] as const) {
+      add(
+        table,
+        releaseId,
+        await ctx.db
+          .query(table)
+          .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
+          .collect(),
+      );
+    }
+  }
+  for (const bundleId of records.bundles) {
+    add(
+      "collectionEntries",
+      bundleId,
+      await ctx.db
+        .query("collectionEntries")
+        .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+        .collect(),
+    );
+  }
+  return trackers;
+}
+
+/**
+ * The Series an Edition's omnibus Ratings may answer to on the profile, read
+ * before any display filter: every covered Series in coverage order, hidden
+ * Volumes and Series included, or its line's (editionSeriesIds); none once
+ * the Edition is gone. The profile follows the first it can show
+ * (lib/ratings.ts omnibusEdition), so any of them may govern (gate "one").
+ */
+async function editionRatedSeries(ctx: MutationCtx, editionId: Id<"editions">) {
+  const edition = await ctx.db.get(editionId);
+  return edition ? await editionSeriesIds(ctx, edition) : [];
+}
+
+/**
+ * What an Edition's tracking answers to right now: each of its Releases'
+ * stored Series (what the public profile reads) and the Series its omnibus
+ * Ratings may ride on (editionRatedSeries). Taken before an operation
+ * re-derives them, for carryEditionTracking / carryReleaseTracking.
+ */
+export async function editionGovernance(ctx: MutationCtx, editionId: Id<"editions">) {
+  const releases = await ctx.db
+    .query("releases")
+    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .collect();
+  return {
+    releaseSeries: new Map(releases.map((release) => [release._id, release.seriesIds])),
+    ratedSeries: await editionRatedSeries(ctx, editionId),
+  };
+}
+export type EditionGovernance = Awaited<ReturnType<typeof editionGovernance>>;
+
+/**
+ * A Release's Series were re-derived (`from` → its current `seriesIds`,
+ * wherever it now sits): carry the Tracking Visibility of everyone tracking
+ * it (trackersOf: Owned entries, owners of Bundles holding it, and active
+ * passes). A Release that would lose every Series, or (in a reversible
+ * operation) a tracked one that had none, is refused (refuseSeriesChange).
+ */
+async function carryReleaseTracking(
+  ctx: MutationCtx,
+  sink: OverrideSink,
+  releaseId: Id<"releases">,
+  from: Array<Id<"series">>,
+): Promise<void> {
+  const release = await ctx.db.get(releaseId);
+  if (!release || sameValue(release.seriesIds, from)) return;
+  await refuseSeriesChange(
+    from,
+    release.seriesIds,
+    sink.reversible ? () => releaseTracked(ctx, releaseId) : null,
+  );
+  for (const [userId, tracked] of (await trackersOf(ctx, { releases: [releaseId] })).trackers) {
+    await carryVisibility(ctx, sink, userId, surfacesTracked(tracked), from, release.seriesIds);
+  }
+}
+
+/**
+ * An operation re-derived an Edition's Series (`before`, from
+ * editionGovernance taken first): carry the trackers of each Release it had
+ * (carryReleaseTracking) and the Reading visibility of its omnibus Ratings,
+ * which ride on one of its covered Series rather than its Releases' all
+ * (carryEditionRatings).
+ */
+export async function carryEditionTracking(
+  ctx: MutationCtx,
+  sink: OverrideSink,
+  editionId: Id<"editions">,
+  before: EditionGovernance,
+): Promise<void> {
+  for (const [releaseId, from] of before.releaseSeries) {
+    await carryReleaseTracking(ctx, sink, releaseId, from);
+  }
+  await carryEditionRatings(ctx, sink, editionId, before.ratedSeries);
+}
+
+/**
+ * The omnibus Ratings on an Edition (of `raters`, else all of them) rode on
+ * the `from` Series (editionRatedSeries taken first) and now ride on its
+ * current ones: carry their Reading visibility under gate "one". Losing
+ * every Series is refused, as for a Release (refuseSeriesChange); so is
+ * gaining one in a reversible operation, since the Raters track it.
+ */
+async function carryEditionRatings(
+  ctx: MutationCtx,
+  sink: OverrideSink,
+  editionId: Id<"editions">,
+  from: Array<Id<"series">>,
+  raters?: Array<Id<"users">>,
+): Promise<void> {
+  const userIds = raters ?? (await ratingsOf(ctx, { kind: "edition", id: editionId })).map((row) => row.userId);
+  if (userIds.length === 0) return;
+  const to = await editionRatedSeries(ctx, editionId);
+  await refuseSeriesChange(from, to, sink.reversible ? async () => true : null);
+  for (const userId of userIds) await carryVisibility(ctx, sink, userId, READING, from, to, "one");
+}
+
+/**
+ * A Series merge's Users who keep a survivor state row but had none on the
+ * loser: their loser tracking followed the account default, so an explicit
+ * public survivor override would publish it. On each surface they track on
+ * `loser` (the loser with its dependents, read before anything moves), that
+ * override goes back to the default (stricterVisibility against a missing
+ * row), logged for Split. Users with a loser row (`handled`) are combined as
+ * their rows merge; Users with no row on either side follow the default on
+ * both, which the merge leaves as it was.
+ */
+async function guardSurvivorOverrides(
+  ctx: MutationCtx,
+  log: TransferLog,
+  loser: RecordSets,
+  survivorId: Id<"series">,
+  handled: Set<Id<"users">>,
+): Promise<void> {
+  const candidates = (
+    await ctx.db
+      .query("userSeriesStates")
+      .withIndex("by_series", (q) => q.eq("seriesId", survivorId))
+      .collect()
+  ).filter((row) => !handled.has(row.userId) && VISIBILITY_FIELDS.some((f) => row[f] === "public"));
+  if (candidates.length === 0) return;
+  const trackers = await trackersIn(ctx, loser);
+  for (const row of candidates) {
+    const surfaces = surfacesTracked(trackers.get(row.userId));
+    const fields = VISIBILITY_FIELDS.filter((f) => row[f] === "public" && surfaces.includes(f));
+    await repoint(ctx, log, "userSeriesStates", row, stricterVisibility(row, [null], fields));
   }
 }
 
@@ -471,10 +1123,33 @@ async function transferReferences(
   loserDoc: CatalogDoc,
   survivorDoc: CatalogDoc,
 ): Promise<void> {
+  const sink = manifestSink(ctx, log);
   switch (type) {
     case "publisher": {
       const loser = loserDoc as Doc<"publishers">;
       const survivor = survivorDoc as Doc<"publishers">;
+      // Imprints follow their parent company, one level deep. A survivor that
+      // was the loser's own imprint becomes top-level (it cannot parent
+      // itself); a survivor that is another company's imprint cannot take
+      // the loser's imprints, so the merge is refused until they move.
+      const imprints = (
+        await ctx.db
+          .query("publishers")
+          .withIndex("by_parent", (q) => q.eq("parentPublisherId", loser._id))
+          .collect()
+      ).filter((row) => row.status !== "merged" && row._id !== survivor._id);
+      const survivorParent =
+        survivor.parentPublisherId === loser._id ? undefined : survivor.parentPublisherId;
+      if (imprints.length > 0 && survivorParent !== undefined) {
+        fail(
+          "badMerge",
+          "The survivor is itself an imprint, and imprints nest one level only — give the loser's imprints another parent first.",
+        );
+      }
+      await repoint(ctx, log, "publishers", survivor, { parentPublisherId: survivorParent });
+      for (const imprint of imprints) {
+        await repoint(ctx, log, "publishers", imprint, { parentPublisherId: survivor._id });
+      }
       // editionLines and releaseBundles have no publisher index; both tables
       // are small enough for a rare moderator action to scan.
       for (const line of await ctx.db.query("editionLines").collect()) {
@@ -533,20 +1208,21 @@ async function transferReferences(
       const loserId = loserDoc._id as Id<"series">;
       const survivorId = survivorDoc._id as Id<"series">;
 
-      // Collect the editions whose release denorms mention the loser before
-      // the volumes move (afterwards the coverage no longer leads back).
+      // Read before anything moves (afterwards nothing leads back): the
+      // Editions whose release denorms name the loser (on its Edition Lines
+      // or covering its Volumes), and survivor overrides that would publish
+      // loser tracking (guardSurvivorOverrides).
+      const dependents = await withDependents(ctx, { series: [loserId] });
+      const affectedEditions = dependents.editions;
+      const states = await ctx.db
+        .query("userSeriesStates")
+        .withIndex("by_series", (q) => q.eq("seriesId", loserId))
+        .collect();
+      await guardSurvivorOverrides(ctx, log, dependents, survivorId, new Set(states.map((state) => state.userId)));
       const volumes = await ctx.db
         .query("volumes")
         .withIndex("by_series", (q) => q.eq("seriesId", loserId))
         .collect();
-      const affectedEditions = new Set<Id<"editions">>();
-      for (const volume of volumes) {
-        const coverage = await ctx.db
-          .query("volumeCoverages")
-          .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-          .collect();
-        for (const row of coverage) affectedEditions.add(row.editionId);
-      }
 
       // Volumes append after the survivor's reading path (positions offset
       // past its max) so the merged sequence stays unambiguous; a Moderator
@@ -614,20 +1290,20 @@ async function transferReferences(
         }
       }
 
-      // User tracking: one row per user × series — the survivor's row wins.
-      const states = await ctx.db
-        .query("userSeriesStates")
-        .withIndex("by_series", (q) => q.eq("seriesId", loserId))
-        .collect();
+      // User tracking: one row per user × series — the survivor's row wins,
+      // but never with a wider Tracking Visibility than either side had
+      // (a side without a row followed the default; guarded above).
       for (const state of states) {
-        const existing = await ctx.db
-          .query("userSeriesStates")
-          .withIndex("by_user_series", (q) =>
-            q.eq("userId", state.userId).eq("seriesId", survivorId),
-          )
-          .unique();
-        if (existing) await removeRow(ctx, log, "userSeriesStates", state);
-        else await repoint(ctx, log, "userSeriesStates", state, { seriesId: survivorId });
+        const existing = await seriesStateOf(ctx, state.userId, survivorId);
+        if (existing) {
+          await removeRow(ctx, log, "userSeriesStates", state);
+          await repoint(ctx, log, "userSeriesStates", existing, stricterVisibility(existing, [state]));
+        } else {
+          await repoint(ctx, log, "userSeriesStates", state, {
+            seriesId: survivorId,
+            ...stricterVisibility(state, [null]),
+          });
+        }
       }
       // Progress rows key on user × release / user × volume, which the merge
       // does not change — repoint the series denorm only.
@@ -704,6 +1380,16 @@ async function transferReferences(
         .withIndex("by_volume", (q) => q.eq("volumeId", loserId))
         .collect();
       const affectedEditions = new Set(coverage.map((row) => row.editionId));
+      // A cross-Series merge re-derives these Editions' Series; what the
+      // tracking answered to before is carried below (carryEditionTracking).
+      const loserSeriesId = (loserDoc as Doc<"volumes">).seriesId;
+      const crossSeries = loserSeriesId !== survivor.seriesId;
+      const governedBefore = new Map<Id<"editions">, EditionGovernance>();
+      if (crossSeries) {
+        for (const editionId of affectedEditions) {
+          governedBefore.set(editionId, await editionGovernance(ctx, editionId));
+        }
+      }
       for (const row of coverage) {
         const editionRows = await ctx.db
           .query("volumeCoverages")
@@ -733,6 +1419,9 @@ async function transferReferences(
             volumeId: survivorId,
             seriesId: survivor.seriesId,
           });
+          if (crossSeries) {
+            await carryVisibility(ctx, sink, row.userId, READING, [loserSeriesId], [survivor.seriesId]);
+          }
         }
       }
       await transferRatingsAndReviews(
@@ -774,6 +1463,8 @@ async function transferReferences(
       for (const editionId of affectedEditions) {
         await recomputeReleaseDenorms(ctx, log, editionId);
         await collapseEditionTakes(ctx, editionId, log);
+        const before = governedBefore.get(editionId);
+        if (before) await carryEditionTracking(ctx, sink, editionId, before);
       }
       return;
     }
@@ -785,10 +1476,15 @@ async function transferReferences(
           q.eq("editionLineId", loserDoc._id as Id<"editionLines">),
         )
         .collect();
+      // Unmapped Packaging takes its Releases' Series from its line, so a
+      // merge across Series re-derives them and carries their tracking.
       for (const edition of editions) {
+        const before = await editionGovernance(ctx, edition._id);
         await repoint(ctx, log, "editions", edition, {
           editionLineId: survivorDoc._id,
         });
+        await recomputeReleaseDenorms(ctx, log, edition._id);
+        await carryEditionTracking(ctx, sink, edition._id, before);
       }
       return;
     }
@@ -796,6 +1492,10 @@ async function transferReferences(
     case "edition": {
       const loserId = loserDoc._id as Id<"editions">;
       const survivorId = survivorDoc._id as Id<"editions">;
+      // What both Editions' tracking answers to before the coverage moves:
+      // their Releases' Series and the Series their omnibus Ratings may ride on.
+      const loserBefore = await editionGovernance(ctx, loserId);
+      const survivorBefore = await editionGovernance(ctx, survivorId);
 
       const survivorCoverage = await ctx.db
         .query("volumeCoverages")
@@ -825,19 +1525,35 @@ async function transferReferences(
         await repoint(ctx, log, "releases", release, { editionId: survivorId });
       }
       // Moved releases (and any the coverage change affected) get fresh
-      // seriesIds/publisherId denorms from the survivor edition.
+      // seriesIds/publisherId denorms from the survivor edition. Their
+      // Series can change either way (an Unmapped Packaging side answered
+      // to its line's Series until the other side's coverage replaced it),
+      // so every Release's trackers are carried, on both sides.
       await recomputeReleaseDenorms(ctx, log, survivorId);
+      for (const [releaseId, from] of loserBefore.releaseSeries) {
+        await carryReleaseTracking(ctx, sink, releaseId, from);
+      }
+      await carryEditionTracking(ctx, sink, survivorId, survivorBefore);
 
       // An omnibus is a rating target of its own: its Ratings, Reviews and
       // Favorites move to the survivor, the survivor's row winning a clash.
       // A moved Favorite takes the survivor's Series denorm (primaryVolumeSeries,
-      // as lib/ratings.ts reads it).
+      // as lib/ratings.ts reads it). A moved Rating now rides on one of the
+      // survivor's covered Series, which absorb the Reading visibility of
+      // the loser's (carryEditionRatings, hidden Series included).
+      const survivorRaters = new Set(
+        (await ratingsOf(ctx, { kind: "edition", id: survivorId })).map((row) => row.userId),
+      );
+      const movedRaters = (await ratingsOf(ctx, { kind: "edition", id: loserId }))
+        .map((row) => row.userId)
+        .filter((userId) => !survivorRaters.has(userId));
       await transferRatingsAndReviews(
         ctx,
         log,
         { kind: "edition", id: loserId },
         { kind: "edition", id: survivorId },
       );
+      await carryEditionRatings(ctx, sink, survivorId, loserBefore.ratedSeries, movedRaters);
       const primarySeries = await primaryVolumeSeries(ctx, survivorId);
       const seriesDenorm = primarySeries ? { seriesId: primarySeries._id } : {};
       const favorites = await ctx.db
@@ -858,6 +1574,9 @@ async function transferReferences(
     case "release": {
       const loserId = loserDoc._id as Id<"releases">;
       const survivorId = survivorDoc._id as Id<"releases">;
+      const fromSeries = (loserDoc as Doc<"releases">).seriesIds;
+      const toSeries = (survivorDoc as Doc<"releases">).seriesIds;
+      await refuseSeriesChange(fromSeries, toSeries, () => releaseTracked(ctx, loserId));
 
       const variants = await ctx.db
         .query("releaseVariants")
@@ -867,11 +1586,21 @@ async function transferReferences(
         await repoint(ctx, log, "releaseVariants", variant, { releaseId: survivorId });
       }
 
+      // A cross-Series merge files the loser's tracking under the survivor's
+      // Series, which absorb the Tracking Visibility of those it leaves
+      // (carryVisibility): moved Owned entries and passes, and every owner
+      // of a Bundle that held the loser (its member Series change whether
+      // the membership moves or folds into the survivor's). A survivor with
+      // no Series, or a tracked loser with none, was refused above.
+      const carry = (userId: Id<"users">, fields: readonly VisibilityField[]) =>
+        carryVisibility(ctx, sink, userId, fields, fromSeries, toSeries);
+
       const memberships = await ctx.db
         .query("bundleMemberships")
         .withIndex("by_release", (q) => q.eq("releaseId", loserId))
         .collect();
       for (const membership of memberships) {
+        for (const userId of await bundleOwners(ctx, membership.bundleId)) await carry(userId, OWNERSHIP);
         const bundleRows = await ctx.db
           .query("bundleMemberships")
           .withIndex("by_bundle", (q) => q.eq("bundleId", membership.bundleId))
@@ -897,9 +1626,18 @@ async function transferReferences(
           )
           .unique();
         if (existing) await removeRow(ctx, log, "collectionEntries", entry);
-        else await repoint(ctx, log, "collectionEntries", entry, { releaseId: survivorId });
+        else {
+          await repoint(ctx, log, "collectionEntries", entry, { releaseId: survivorId });
+          if (entry.state === "owned") await carry(entry.userId, OWNERSHIP);
+        }
       }
 
+      // A moved pass takes the survivor's Series denorm the way startPass
+      // derives it (passSeriesOf: the first covered Series, merge-resolved),
+      // so a cross-Series merge files it under the right work. A survivor
+      // without coverage leaves the pass's Series alone.
+      const passSeriesId = await passSeriesOf(ctx, (survivorDoc as Doc<"releases">).seriesIds);
+      const passSeries = passSeriesId ? { seriesId: passSeriesId } : {};
       const progress = await ctx.db
         .query("releaseProgress")
         .withIndex("by_release", (q) => q.eq("releaseId", loserId))
@@ -912,7 +1650,14 @@ async function transferReferences(
           )
           .unique();
         if (existing) await removeRow(ctx, log, "releaseProgress", row);
-        else await repoint(ctx, log, "releaseProgress", row, { releaseId: survivorId });
+        else {
+          await repoint(ctx, log, "releaseProgress", row, {
+            releaseId: survivorId,
+            ...passSeries,
+          });
+          // The profile gates a pass by its Release's Series and its own.
+          await carryVisibility(ctx, sink, row.userId, READING, [...fromSeries, row.seriesId], toSeries);
+        }
       }
       return;
     }
@@ -938,6 +1683,15 @@ async function transferReferences(
     case "releaseBundle": {
       const loserId = loserDoc._id as Id<"releaseBundles">;
       const survivorId = survivorDoc._id as Id<"releaseBundles">;
+      // Every member moves to the survivor, so both sides' owners end up
+      // behind the union of member Series: never wider, as a private one
+      // hides the whole Bundle. Only a side with no Series signal (the
+      // default alone governed it) could widen, and is refused if tracked.
+      const loserSeries = await bundleSeries(ctx, loserId);
+      const survivorSeries = await bundleSeries(ctx, survivorId);
+      const merged = [...new Set([...loserSeries, ...survivorSeries])];
+      await refuseSeriesChange(loserSeries, merged, () => bundleTracked(ctx, loserId));
+      await refuseSeriesChange(survivorSeries, merged, () => bundleTracked(ctx, survivorId));
 
       const survivorRows = await ctx.db
         .query("bundleMemberships")
@@ -1062,8 +1816,10 @@ export async function reversibleManifestOf(
 /**
  * Every open manifest of the latest merge of this record, newest first. A
  * merge too large for one transaction (the data repair's chunked publisher
- * merge) writes several manifests under one Proposal; Split must replay
- * them all, not just the last.
+ * merge, lib/repair/ops.ts) writes its chunk manifests before the closing
+ * merge's, each under its own repair Proposal, so the operation is not one
+ * Proposal: it is every open manifest into the latest one's survivor written
+ * since this record's previous Split. Split must replay them all.
  */
 async function reversibleManifestsOf(
   ctx: QueryCtx | MutationCtx,
@@ -1075,19 +1831,320 @@ async function reversibleManifestsOf(
       q.eq("loserRef.type", ref.type).eq("loserRef.id", ref.id as never),
     )
     .collect();
+  const lastSplit = Math.max(
+    0,
+    ...manifests.filter((m) => m.reversedAt !== undefined).map((m) => m._creationTime),
+  );
   const open = manifests
-    .filter((m) => m.reversedAt === undefined)
+    .filter((m) => m.reversedAt === undefined && m._creationTime > lastSplit)
     .sort((a, b) => b._creationTime - a._creationTime);
   const latest = open[0];
   if (!latest) return [];
-  return open.filter((m) => m.proposalId === latest.proposalId);
+  return open.filter((m) => sameValue(m.survivorRef, latest.survivorRef));
+}
+
+/**
+ * Whether a manifest snapshot may be reinserted: a personal row (one with a
+ * `userId`) only while its User still exists. Account deletion redacts these
+ * snapshots (redactUserFromManifests), and this guard covers any the
+ * redaction has not reached yet.
+ */
+async function ownerExists(ctx: MutationCtx, doc: unknown): Promise<boolean> {
+  const userId = (doc as { userId?: unknown }).userId;
+  if (typeof userId !== "string") return true;
+  const id = ctx.db.normalizeId("users", userId);
+  return id !== null && (await ctx.db.get(id)) !== null;
+}
+
+/**
+ * Personal snapshots a deleted User left in merge manifests, removed from one
+ * page of manifests at a time. The account purge (users.purgeUser) schedules
+ * internal.users.redactMergeManifests, which calls this per page; Split then
+ * has nothing of theirs to reinsert.
+ */
+export async function redactUserFromManifests(
+  ctx: MutationCtx,
+  manifests: Array<Doc<"mergeManifests">>,
+  userId: Id<"users">,
+): Promise<void> {
+  for (const manifest of manifests) {
+    const removed = manifest.removed.filter(
+      (row) => (row.doc as { userId?: unknown }).userId !== userId,
+    );
+    if (removed.length < manifest.removed.length) {
+      await ctx.db.patch(manifest._id, { removed });
+    }
+  }
+}
+
+// ---------- Split keeps Tracking Visibility ----------
+
+/** The record references a personal row carries, by field. */
+const REF_FIELDS: Array<[string, RecordKind]> = [
+  ["seriesId", "series"],
+  ["volumeId", "volumes"],
+  ["editionId", "editions"],
+  ["releaseId", "releases"],
+  ["bundleId", "bundles"],
+];
+
+/** A Split's loser as a record kind whose tracking answers to Series. */
+const LOSER_KINDS: Partial<Record<RecordRef["type"], RecordKind>> = {
+  series: "series",
+  editionLine: "lines",
+  volume: "volumes",
+  edition: "editions",
+  release: "releases",
+  releaseBundle: "bundles",
+};
+
+/** Add a manifest's untyped reference (one id or an array of them) of one kind; returns the ids added. */
+function addRefs<K extends RecordKind>(ctx: MutationCtx, into: RecordSets, kind: K, value: unknown) {
+  const values: unknown[] = Array.isArray(value) ? value : [value];
+  const added: Array<RecordId<K>> = [];
+  for (const raw of values) {
+    const id = typeof raw === "string" ? ctx.db.normalizeId(RECORD_TABLES[kind], raw) : null;
+    if (id) {
+      into[kind].add(id);
+      added.push(id);
+    }
+  }
+  return added;
+}
+
+/**
+ * What a Split touches, read before it replays anything. It touches the
+ * loser (every reference to it answers to it again, not to the survivor)
+ * and every record whose Series the replay changes: a Volume or Edition
+ * Line the manifests re-parented, an Edition whose coverage or line they
+ * changed, a Release whose Series or Edition they changed (and both
+ * Editions), a Bundle whose members they changed. `users`: everyone
+ * tracking those or anything under them (trackersOf, as the database stands
+ * now: tracking logged since the merge counts, whichever operation filed it
+ * there), and the owners of the personal rows the manifests moved, removed
+ * or inserted, each with the records they track and on which surfaces (a
+ * personal row is tracked on every record it points at, as the profile
+ * gates it: a pass on its Release and on its Series). `records`: every
+ * record trackersOf read, and every record such a personal row points at on
+ * either side of the replay.
+ */
+async function splitScope(ctx: MutationCtx, loser: RecordRef, manifests: Array<Doc<"mergeManifests">>) {
+  const users: Trackers = new Map();
+  const moved = recordSets();
+  const refs = recordSets();
+  const loserKind = LOSER_KINDS[loser.type];
+  if (loserKind) addRefs(ctx, moved, loserKind, loser.id);
+  // A personal row: its owner, and every record it points at.
+  const personal = (table: string, row: Record<string, unknown> | null) => {
+    const fields = row ? surfacesOf(table, row) : [];
+    const userId = typeof row?.userId === "string" ? ctx.db.normalizeId("users", row.userId) : null;
+    if (!row || !userId || fields.length === 0) return;
+    for (const [field, kind] of REF_FIELDS) {
+      for (const id of addRefs(ctx, refs, kind, row[field])) addTracker(users, userId, id, fields);
+    }
+  };
+  // A link row: the Edition or Bundle whose Series it changes, and what it links there.
+  const link = (table: string, row: Record<string, unknown> | null) => {
+    if (table === "volumeCoverages") {
+      addRefs(ctx, moved, "editions", row?.editionId);
+      addRefs(ctx, refs, "volumes", row?.volumeId);
+    } else if (table === "bundleMemberships") {
+      addRefs(ctx, moved, "bundles", row?.bundleId);
+      addRefs(ctx, refs, "releases", row?.releaseId);
+    }
+  };
+  // A row as it stands now, read once however many of its fields moved.
+  const rows = new Map<string, Record<string, unknown> | null>();
+  const current = async (table: string, docId: string) => {
+    if (!rows.has(docId)) {
+      const id = ctx.db.normalizeId(table as TableNames, docId);
+      rows.set(docId, id ? ((await ctx.db.get(id)) as Record<string, unknown> | null) : null);
+    }
+    return rows.get(docId) ?? null;
+  };
+  for (const manifest of manifests) {
+    for (const { table, doc } of manifest.removed) {
+      personal(table, doc as Record<string, unknown>);
+      link(table, doc as Record<string, unknown>);
+    }
+    for (const { table, docId } of manifest.inserted) personal(table, await current(table, docId));
+    for (const { table, docId, field, before, after } of manifest.repointed) {
+      if (table === "volumes" && field === "seriesId") addRefs(ctx, moved, "volumes", docId);
+      else if (table === "editionLines" && field === "seriesId") addRefs(ctx, moved, "lines", docId);
+      else if (table === "editions" && field === "editionLineId") addRefs(ctx, moved, "editions", docId);
+      else if (table === "releases" && field === "seriesIds") addRefs(ctx, moved, "releases", docId);
+      else if (table === "releases" && field === "editionId") {
+        addRefs(ctx, moved, "releases", docId);
+        addRefs(ctx, moved, "editions", [before, after]);
+      } else if (PERSONAL_SURFACES[table] || table === "volumeCoverages" || table === "bundleMemberships") {
+        // The row as it stands, and as the replay will point it (a row the
+        // world moved since stays where it is).
+        const row = await current(table, docId);
+        for (const side of row ? [row, { ...row, [field]: before }] : []) {
+          personal(table, side);
+          link(table, side);
+        }
+      }
+    }
+  }
+  const touched = await trackersOf(ctx, moved);
+  for (const [userId, tracked] of touched.trackers) {
+    for (const [recordId, fields] of tracked) addTracker(users, userId, recordId, fields);
+  }
+  return { users, records: recordSets(touched.records, refs) };
+}
+
+/** A record as the profile reads it: followed through merges, or as stored when hidden. */
+async function asShown<T extends "editionLines" | "volumes" | "editions" | "releases" | "releaseBundles">(
+  ctx: MutationCtx,
+  table: T,
+  id: Id<T>,
+) {
+  const stored = await ctx.db.get(id);
+  return (await followMerges(ctx, table, stored)) ?? stored;
+}
+
+/**
+ * Each record's Series, keyed by its id, as the profile gates its tracking
+ * (sharing.ts publicProfile) and merge-followed (governingSeries): an
+ * Edition Line's or Volume's Series, an Edition's covered Volumes' (or its
+ * line's; hidden ones included), a Release's `seriesIds`, a Bundle's
+ * members'.
+ */
+async function seriesByRecord(ctx: MutationCtx, records: RecordSets) {
+  const out = new Map<string, Array<Id<"series">>>();
+  for (const id of records.series) out.set(id, [id]);
+  for (const id of records.lines) {
+    const line = await asShown(ctx, "editionLines", id);
+    if (line) out.set(id, [line.seriesId]);
+  }
+  for (const id of records.volumes) {
+    const volume = await asShown(ctx, "volumes", id);
+    if (volume) out.set(id, [volume.seriesId]);
+  }
+  for (const id of records.editions) {
+    const edition = await asShown(ctx, "editions", id);
+    if (edition) out.set(id, await editionSeriesIds(ctx, edition));
+  }
+  for (const id of records.releases) {
+    const release = await asShown(ctx, "releases", id);
+    if (release) out.set(id, release.seriesIds);
+  }
+  for (const id of records.bundles) {
+    const bundle = await asShown(ctx, "releaseBundles", id);
+    if (bundle) out.set(id, await bundleSeries(ctx, bundle._id));
+  }
+  for (const [id, seriesIds] of out) out.set(id, await governingSeries(ctx, seriesIds));
+  return out;
+}
+
+/**
+ * Taken before a Split replays anything: what it touches and whom
+ * (splitScope), the Series each touched record answers to now (resolved
+ * before the replay reactivates the loser, which then governs itself), and
+ * each User's overrides on the Series of the records THAT User tracks
+ * (null: no row), the floor keepSplitVisibility holds the Split to. One
+ * lookup per User and Series their own tracking reaches.
+ */
+async function splitGovernance(ctx: MutationCtx, loser: RecordRef, manifests: Array<Doc<"mergeManifests">>) {
+  const { users, records } = await splitScope(ctx, loser, manifests);
+  const before = await seriesByRecord(ctx, records);
+  const snapshots = new Map<Id<"users">, Map<Id<"series">, VisibilityOverrides | null>>();
+  for (const [userId, tracked] of users) {
+    if (!(await ctx.db.get(userId))) continue;
+    const snapshot = new Map<Id<"series">, VisibilityOverrides | null>();
+    for (const recordId of tracked.keys()) {
+      for (const seriesId of before.get(recordId) ?? []) {
+        if (snapshot.has(seriesId)) continue;
+        const state = await seriesStateOf(ctx, userId, seriesId);
+        snapshot.set(
+          seriesId,
+          state && { ownershipVisibility: state.ownershipVisibility, readingVisibility: state.readingVisibility },
+        );
+      }
+    }
+    snapshots.set(userId, snapshot);
+  }
+  return { users, records, before, snapshots };
+}
+
+/**
+ * After a Split, no surface shows more than it did just before (the floor
+ * splitGovernance took), and nothing the User does not track is narrowed.
+ * For each User found: each Series their tracked records answered to gets
+ * back at most its own earlier overrides (the replay may have reverted what
+ * the merge narrowed, or taken its row back to the loser; a moved state row
+ * is itself tracked, on both surfaces), and for each tracked record whose
+ * Series changed, each Series it answers to now absorbs the earlier
+ * overrides of the Series that record left (absorbedFrom; gate "one" for an
+ * omnibus Rating's Edition), on the surfaces the User tracks it on. The
+ * sources gathered per Series and surface are applied in one write
+ * (stricterVisibility is monotone), so the work is one read, and at most
+ * one write, per User and Series their own tracking reaches: proportional
+ * to the tracking rows the Split moves or re-gates, which trackersOf reads
+ * regardless. A Release or Bundle someone tracks that the Split would leave
+ * with no Series is refused: the account default alone would govern it, and
+ * no override could keep it as private.
+ */
+async function keepSplitVisibility(
+  ctx: MutationCtx,
+  { users, records, before, snapshots }: Awaited<ReturnType<typeof splitGovernance>>,
+): Promise<void> {
+  const after = await seriesByRecord(ctx, records);
+  const losesSeries = (id: string) => (before.get(id)?.length ?? 0) > 0 && after.get(id)?.length === 0;
+  const refuse = () =>
+    fail(
+      "badSplit",
+      "This Split would leave a Release or Bundle that Users have tracked since the merge with no Series, where no override could keep that tracking private. Give it Volume Coverage or Bundle members first.",
+    );
+  for (const id of records.releases) if (losesSeries(id) && (await releaseTracked(ctx, id))) refuse();
+  for (const id of records.bundles) if (losesSeries(id) && (await bundleTracked(ctx, id))) refuse();
+  const editions = new Set<string>(records.editions);
+  const scratch = manifestSink(ctx, { repointed: [], removed: [], inserted: [] });
+  for (const [userId, snapshot] of snapshots) {
+    // Per Series, per surface: the earlier overrides it may show no more than.
+    type Sources = Array<VisibilityOverrides | null>;
+    const floors = new Map<Id<"series">, Record<VisibilityField, Sources>>();
+    const hold = (seriesId: Id<"series">, fields: Iterable<VisibilityField>, sources: Sources) => {
+      const floor = floors.get(seriesId) ?? { ownershipVisibility: [], readingVisibility: [] };
+      for (const field of fields) floor[field].push(...sources);
+      floors.set(seriesId, floor);
+    };
+    for (const [seriesId, state] of snapshot) hold(seriesId, VISIBILITY_FIELDS, [state]);
+    for (const [recordId, fields] of users.get(userId) ?? []) {
+      const to = after.get(recordId) ?? [];
+      const absorbed = absorbedFrom(before.get(recordId) ?? [], to, editions.has(recordId) ? "one" : "all");
+      if (!absorbed) continue;
+      const sources = absorbed.length === 0 ? [null] : absorbed.map((id) => snapshot.get(id) ?? null);
+      for (const seriesId of to) hold(seriesId, fields, sources);
+    }
+    for (const [seriesId, floor] of floors) {
+      const state = await seriesStateOf(ctx, userId, seriesId);
+      const patch: VisibilityOverrides = {};
+      for (const field of VISIBILITY_FIELDS) Object.assign(patch, stricterVisibility(state, floor[field], [field]));
+      if (Object.keys(patch).length > 0) await scratch.write(userId, seriesId, state, patch);
+    }
+  }
 }
 
 /**
  * Split — the only reversal of a mistaken merge: replay the merge's
- * manifest(s) backward (delete what it inserted, reinsert what it removed, repoint back
- * every reference that still points where the merge left it) and reactivate
- * the loser. References the world re-aimed since the merge are left alone.
+ * manifest(s) backward (delete what it inserted, reinsert what it removed,
+ * repoint back every reference that still points where the merge left it)
+ * and reactivate the loser. References the world re-aimed since the merge
+ * are left alone, and personal rows of a deleted User are never reinserted.
+ * The touched Editions' Release Series are then derived afresh from the
+ * coverage and lines the replay left, and their passes filed under them
+ * (recomputeReleaseDenorms), so a replayed value never outlives the links
+ * it was derived from.
+ * No profile shows anything after a Split that it did not show just before
+ * (keepSplitVisibility), for every User tracking what the Split touches
+ * (splitScope: the loser, what the manifests moved, and everything under
+ * those, with whatever was logged or filed there since the merge): an
+ * override the merge narrowed stays narrow (the User may have tracked more
+ * under it since, or another merge relied on it), and every Series a
+ * record the User tracks answers to afterwards takes on what the Series
+ * that record answered to just before hid.
  */
 export async function applySplit(
   ctx: MutationCtx,
@@ -1105,13 +2162,22 @@ export async function applySplit(
     fail("noManifest", "This merge predates manifests and cannot be split automatically.");
   }
   const survivor = latest!.survivorRef as RecordRef;
+  const governed = await splitGovernance(ctx, ref, manifests);
 
   for (const manifest of manifests) {
+    // State rows the merge synthesized (carryVisibility) wait until the
+    // replay below has reverted the overrides it set on them.
+    const synthesized: string[] = [];
     for (const row of manifest.inserted) {
+      if (row.table === "userSeriesStates") {
+        synthesized.push(row.docId);
+        continue;
+      }
       const id = ctx.db.normalizeId(row.table as TableNames, row.docId);
       if (id && (await ctx.db.get(id))) await ctx.db.delete(id);
     }
     for (const row of manifest.removed) {
+      if (!(await ownerExists(ctx, row.doc))) continue;
       await ctx.db.insert(row.table as TableNames, row.doc as never);
     }
     for (const entry of [...manifest.repointed].reverse()) {
@@ -1122,9 +2188,33 @@ export async function applySplit(
       if (!sameValue(target[entry.field], entry.after)) continue;
       await ctx.db.patch(id, { [entry.field]: entry.before } as never);
     }
+    // A synthesized state row goes once bare again (keepSplitVisibility
+    // below puts back any override the Split may not drop). One the User
+    // has since written to (a Follow, a dismissal, a status, an override)
+    // stays with what they wrote.
+    for (const docId of synthesized) {
+      const id = ctx.db.normalizeId("userSeriesStates", docId);
+      const state = id ? await ctx.db.get(id) : null;
+      if (
+        state &&
+        !state.following &&
+        !state.followPromptDismissed &&
+        !state.readingStatus &&
+        !state.ownershipVisibility &&
+        !state.readingVisibility
+      ) {
+        await ctx.db.delete(state._id);
+      }
+    }
   }
 
   await ctx.db.patch(ref.id, { status: "active", mergedIntoId: undefined } as never);
+  // Release Series, and the Series their passes are filed under, are derived
+  // from the links just restored; like every write a Split makes, the
+  // re-derivation is final (a scratch log).
+  const derived: TransferLog = { repointed: [], removed: [], inserted: [] };
+  for (const editionId of governed.records.editions) await recomputeReleaseDenorms(ctx, derived, editionId);
+  await keepSplitVisibility(ctx, governed);
   await recountMergedRatings(ctx, ref, survivor);
   for (const target of ratingTargetsIn(manifests)) await recountRatings(ctx, target);
   const reversedAt = Date.now();
@@ -1164,6 +2254,9 @@ export async function applySplit(
 
 export type ImpactRow = { label: string; count: number };
 
+/** Child Publisher rows the impact preview reads before it stops counting imprints. */
+export const IMPRINT_PREVIEW_CAP = 100;
+
 /**
  * What an operation on this record touches — shown to the Moderator before
  * every Hide/Restore/Merge/Split/Lock as the required impact preview
@@ -1192,6 +2285,22 @@ export async function impactOf(
   switch (ref.type) {
     case "publisher": {
       const id = ref.id as Id<"publishers">;
+      // A company has a handful of imprints; the read stops at the cap and
+      // says so rather than count an unbounded set.
+      const children = await ctx.db
+        .query("publishers")
+        .withIndex("by_parent", (q) => q.eq("parentPublisherId", id))
+        .take(IMPRINT_PREVIEW_CAP + 1);
+      const capped = children.length > IMPRINT_PREVIEW_CAP;
+      add(
+        "Imprints (follow the survivor on a merge)" +
+          (capped
+            ? ` — more than ${IMPRINT_PREVIEW_CAP} child rows, first ${IMPRINT_PREVIEW_CAP} counted`
+            : ""),
+        children
+          .slice(0, IMPRINT_PREVIEW_CAP)
+          .filter((row) => row.status !== "merged").length,
+      );
       add(
         "Edition lines",
         (await ctx.db.query("editionLines").collect()).filter(

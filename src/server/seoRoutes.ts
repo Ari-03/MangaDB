@@ -3,13 +3,16 @@
 // `/sitemap.xml` is an index of per-entity child sitemaps (series, volumes,
 // editions, publishers, bundles, months) containing exactly the indexable
 // canonical URLs, `lastmod` from each record's latest Revision, generated on
-// demand with cache headers — no cron (fits Workers + Convex).
+// demand with cache headers — no cron (fits Workers + Convex). Generated
+// child sitemaps are kept in the Worker's edge cache (s-maxage), so repeat
+// crawls don't re-read every backend page.
 //
 // Never-indexed surfaces are deliberately absent: filtered browser views,
 // `/search`, `/me/…`, auth pages, `/u/{username}`, and any `?page=N` form
 // (no sitemap URL ever carries a query string). Releases have no URL of
 // their own — they are rows on their Edition page.
 
+import { waitUntil } from "cloudflare:workers";
 import { ConvexHttpClient } from "convex/browser";
 
 import { api } from "../../convex/_generated/api";
@@ -243,7 +246,38 @@ export async function seoResponse(
 
   const match = /^\/sitemaps\/([a-z]+)\.xml$/.exec(pathname);
   const child = match && SITEMAP_CHILDREN.find((name) => name === match[1]);
-  if (child) return xmlResponse(await childSitemapXml(child, origin, data));
+  if (child) return cachedChildSitemap(request, child, origin, data);
 
   return null;
+}
+
+/**
+ * A child sitemap from the edge cache, generating and storing it on a miss.
+ * Keyed on a GET of the bare path, so HEADs and query strings share one
+ * entry; the write finishes in the background, and a failed read or write
+ * is only logged.
+ */
+async function cachedChildSitemap(
+  request: Request,
+  child: SitemapChild,
+  origin: string,
+  data: SitemapData | null,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const cache = (caches as unknown as { default: Cache }).default;
+  const cacheKey = new Request(`${url.origin}${url.pathname}`);
+  // A failed read is a miss, as a failed write is only logged: the cache
+  // may cost a regeneration, never the sitemap.
+  const cached = await cache.match(cacheKey).catch((error: unknown) => {
+    console.error("sitemap cache read failed", error);
+    return undefined;
+  });
+  if (cached) return cached;
+  const response = xmlResponse(await childSitemapXml(child, origin, data));
+  waitUntil(
+    cache
+      .put(cacheKey, response.clone())
+      .catch((error: unknown) => console.error("sitemap cache write failed", error)),
+  );
+  return response;
 }

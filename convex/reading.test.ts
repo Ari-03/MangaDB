@@ -465,6 +465,69 @@ describe("reading.setVolumeReadCount", () => {
   });
 });
 
+describe("reading.adjustVolumeReadCount", () => {
+  it("applies each delta to the stored count, so concurrent clicks all land", async () => {
+    const t = convexTest(schema);
+    const { v2 } = await seed(t);
+    const as = await withUser(t);
+    await Promise.all([
+      as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 }),
+      as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 }),
+      as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 }),
+    ]);
+    expect(await readCount(t, v2)).toBe(3);
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
+    expect(await readCount(t, v2)).toBe(2);
+  });
+
+  it("keeps the completion time on a take-back and stamps it on a read", async () => {
+    const t = convexTest(schema);
+    const { v2 } = await seed(t);
+    const as = await withUser(t);
+    const completedAt = async () =>
+      await t.run(async (ctx) => (await ctx.db.query("volumeProgress").first())?.lastCompletedAt);
+    await t.run(async (ctx) => {
+      const volume = (await ctx.db.get(v2))!;
+      await ctx.db.insert("volumeProgress", {
+        userId: (await ctx.db.query("users").first())!._id,
+        volumeId: v2,
+        seriesId: volume.seriesId,
+        readCount: 2,
+        lastCompletedAt: 1,
+      });
+    });
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
+    expect(await completedAt()).toBe(1);
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
+    expect(await completedAt()).toBeGreaterThan(1);
+  });
+
+  it("stops at zero, removing the row", async () => {
+    const t = convexTest(schema);
+    const { v2 } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
+    const rows = await t.run(
+      async (ctx) => await ctx.db.query("volumeProgress").collect(),
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rejects fractional deltas and requires a user", async () => {
+    const t = convexTest(schema);
+    const { v2 } = await seed(t);
+    await expect(
+      t.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 }),
+    ).rejects.toThrow(ConvexError);
+    const as = await withUser(t);
+    await expect(
+      as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 0.5 }),
+    ).rejects.toThrow(/whole number/);
+  });
+});
+
 describe("reading.passForRelease", () => {
   it("distinguishes signed out (null) from signed in without a pass", async () => {
     const t = convexTest(schema);

@@ -15,6 +15,7 @@ import {
 import { purgeUserComments } from "./comments";
 import { getUserBySubject, requireIdentity, requireUser } from "./lib/auth";
 import { applyRatingDelta, targetOfRow } from "./lib/ratings";
+import { redactUserFromManifests } from "./lib/sensitiveOps";
 import { DEFAULT_SCORE_FORMAT, scoreFormatValidator } from "./lib/scoreFormat";
 import { validateUsername } from "./lib/usernames";
 
@@ -166,7 +167,8 @@ export const deleteAccount = action({
  * (decrementing their aggregates), Favorites, Reviews, Comments and Comment
  * Reports, then the User itself. Public catalog history (Revisions, Proposals,
  * roleAudit, reviewAudit, commentAudit) is append-only and survives; it
- * renders as a deleted author.
+ * renders as a deleted author. The copies of their rows that merge manifests
+ * keep for Split are redacted afterwards by redactMergeManifests.
  */
 export const purgeUser = internalMutation({
   args: { clerkSubject: v.string() },
@@ -218,5 +220,34 @@ export const purgeUser = internalMutation({
     for (const row of reviews) await ctx.db.delete(row._id);
     await purgeUserComments(ctx, user._id);
     await ctx.db.delete(user._id);
+    await ctx.scheduler.runAfter(0, internal.users.redactMergeManifests, {
+      userId: user._id,
+      cursor: null,
+    });
+  },
+});
+
+// Manifests are read a few at a time: one can hold a large merge's log.
+const MANIFEST_PAGE = 8;
+
+/**
+ * Drop a deleted User's personal snapshots (Ratings, Reviews, tracking rows)
+ * from every merge manifest, one page per transaction, rescheduling itself
+ * until the table is walked. Scheduled by purgeUser; Split also refuses to
+ * reinsert rows of a missing User, so the walk may take its time.
+ */
+export const redactMergeManifests = internalMutation({
+  args: { userId: v.id("users"), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { userId, cursor }) => {
+    const page = await ctx.db
+      .query("mergeManifests")
+      .paginate({ cursor, numItems: MANIFEST_PAGE });
+    await redactUserFromManifests(ctx, page.page, userId);
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.users.redactMergeManifests, {
+        userId,
+        cursor: page.continueCursor,
+      });
+    }
   },
 });
