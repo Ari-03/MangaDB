@@ -3,13 +3,14 @@
 // no art (the cloth placeholder elsewhere) still has its place in the agenda,
 // the calendar, and every catalog page, just not here.
 //
-// Convex knows which ISBN a book's jacket would be fetched by, not whether
-// art exists for it; the cover store does (server/covers.ts `coversOnFile`).
+// Convex knows which ISBNs a book's jacket would be fetched by, not whether
+// art exists for them; the cover store does (server/covers.ts `coversOnFile`).
 // The route loader asks it about each shelf's candidates, and the same
-// selection runs again in the component with the answer.
+// selection runs again in the component with the answer. A book is judged
+// by its first ISBN, the one most likely to have art.
 
 /** What a shelf needs to know about a book's art (catalog rows carry both). */
-export type Jacket = { coverUrl: string | null; coverIsbn: string | null };
+export type Jacket = { coverUrl: string | null; coverIsbns: ReadonlyArray<string> };
 
 /**
  * ISBNs whose jacket the cover store holds, or null when it could not be
@@ -20,19 +21,23 @@ export type CoversOnFile = ReadonlySet<string> | null;
 
 /**
  * One shelf's question for the cover store: its books in shelf order, each
- * the ISBN its jacket would be fetched by, or null for a book that already
- * shows publisher art; and how many jacketed books the shelf seats.
+ * the first ISBN its jacket would be fetched by, or null for a book that
+ * already shows publisher art; and how many jacketed books the shelf seats.
  */
 export type CoverShelf = { need: number; candidates: Array<string | null> };
 
 /** Candidates asked about per seat: enough to fill a shelf past its misses. */
 const CANDIDATES_PER_SEAT = 4;
 
-/** True when the book shows real art: publisher art, or a jacket on file. */
+/**
+ * True when the book shows real art: publisher art, or a jacket on file for
+ * its first candidate, the one most likely to have art.
+ */
 export function hasJacket(book: Jacket, onFile: CoversOnFile): boolean {
   if (book.coverUrl !== null) return true;
-  if (book.coverIsbn === null) return false;
-  return onFile === null || onFile.has(book.coverIsbn);
+  const isbn = book.coverIsbns[0];
+  if (isbn === undefined) return false;
+  return onFile === null || onFile.has(isbn);
 }
 
 /** The first `limit` books with a real jacket, in shelf order. */
@@ -50,15 +55,16 @@ export function jacketed<Book extends Jacket>(
 }
 
 /**
- * The question to ask the cover store for a shelf of `need` seats. Books
- * with no art to try are left out, and the list is capped: a book past the
- * cap is never asked about, so it reads as jacketless and stays off.
+ * The question to ask the cover store for a shelf of `need` seats, about
+ * each book's first candidate, the one most likely to have art. Books with
+ * no art to try are left out, and the list is capped: a book past the cap
+ * is never asked about, so it reads as jacketless and stays off.
  */
 export function coverShelf(books: ReadonlyArray<Jacket>, need: number): CoverShelf {
   const candidates = books
-    .filter((book) => book.coverUrl !== null || book.coverIsbn !== null)
+    .filter((book) => book.coverUrl !== null || book.coverIsbns.length > 0)
     .slice(0, need * CANDIDATES_PER_SEAT)
-    .map((book) => (book.coverUrl !== null ? null : book.coverIsbn));
+    .map((book) => (book.coverUrl !== null ? null : (book.coverIsbns[0] ?? null)));
   return { need, candidates };
 }
 

@@ -552,7 +552,7 @@ function LibraryBookItem({
         >
           <Cover
             src={book.coverUrl}
-            isbn13={book.coverIsbn}
+            isbn13={book.coverIsbns}
             title={book.title}
             numbered={number !== null ? { series: seriesTitle, number } : undefined}
             badges={bookBadges(quick)}

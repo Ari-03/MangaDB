@@ -17,7 +17,7 @@ import { query, type QueryCtx } from "./_generated/server";
 import { PUBLISHER_SCAN_CAP } from "./catalog";
 import { followMerges } from "./catalogPages";
 import { editionTitle, releaseAnchor } from "./lib/titles";
-import { coverIsbnCache, coverIsbnForRelease, coverUrl } from "./lib/covers";
+import { jacketCache, releaseCover } from "./lib/covers";
 import { showMatureArg, visibleTo } from "./lib/mature";
 
 // A month window holds hundreds of releases across all publishers (spec §8);
@@ -82,19 +82,14 @@ export function browseCache(ctx: QueryCtx) {
       .collect(),
   );
   const edition = memoize((id: Id<"editions">) => ctx.db.get(id));
-  // ISBN-less Releases borrow by Edition; the fallback shares these reads.
-  const isbns = coverIsbnCache(ctx, coverage, edition);
+  // Edition jackets; an ISBN-less Edition's borrow shares these reads.
+  const jackets = jacketCache(ctx, coverage, edition);
   return {
-    // A Release's stored cover URL and the ISBN to fetch art by (lib/covers.ts),
-    // keyed by `_id`, so two reads of the same Release share one lookup.
+    // A Release's art (lib/covers.ts `releaseCover`): its stored cover or its
+    // Edition's, and the Edition's ISBNs to fetch art by. Keyed by `_id`, so
+    // two reads of the same Release share one lookup.
     cover: memoize(
-      async (release: Doc<"releases">) => {
-        const [url, isbn] = await Promise.all([
-          coverUrl(ctx, release.coverImage?.storageId),
-          coverIsbnForRelease(ctx, release, isbns),
-        ]);
-        return { coverUrl: url, coverIsbn: isbn };
-      },
+      (release: Doc<"releases">) => releaseCover(ctx, release, jackets),
       (release) => release._id,
     ),
     publisher: memoize((id: Id<"publishers">) => ctx.db.get(id)),
@@ -212,8 +207,10 @@ export async function joinBrowseRows(
         publisherDoc && publisherDoc.status === "active"
           ? { name: publisherDoc.name, slug: publisherDoc.slug }
           : null,
-      // `coverIsbn` is the ISBN to fetch jacket art by (own, or a sibling's —
-      // see lib/covers.ts); `isbn13` above stays the Release's own identity.
+      // The row's art (lib/covers.ts `releaseCover`): `coverUrl` is its own
+      // stored cover, else its Edition's, and `coverIsbns` the Edition's
+      // ISBNs to fetch art by, physical first, the same for every row of one
+      // Edition. `isbn13` above stays the Release's own identity.
       ...(await cache.cover(release)),
     });
   }

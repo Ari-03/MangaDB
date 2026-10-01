@@ -373,7 +373,7 @@ function UpcomingItem({ item }: { item: UpcomingData["items"][number] }) {
         >
           <Cover
             src={item.coverUrl}
-            isbn13={item.coverIsbn}
+            isbn13={item.coverIsbns}
             title={item.edition.title}
             foot={[item.volumeLabel, item.publisher?.name]}
             badges={item.state ? <CoverBadge state={item.state} /> : undefined}

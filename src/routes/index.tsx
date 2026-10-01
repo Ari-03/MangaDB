@@ -210,7 +210,7 @@ function Home() {
                           with no art on file is not shelved here. */}
                       <Cover
                         src={entry.coverUrl}
-                        isbn13={entry.coverIsbn}
+                        isbn13={entry.coverIsbns}
                         title={entry.title}
                       />
                     </Link>
@@ -275,7 +275,7 @@ function HeroShelf({ releases }: { releases: Array<BrowseRelease> }) {
             <EditionLink className="cover-link" release={release} key={release.id}>
               <Cover
                 src={release.coverUrl}
-                isbn13={release.coverIsbn}
+                isbn13={release.coverIsbns}
                 title={releaseTitle(release)}
                 foot={[release.volumeLabel, release.publisher?.name]}
                 lazy={index > 0}
@@ -403,7 +403,7 @@ function Shelf({
               <EditionLink className="cover-link" release={release}>
                 <Cover
                   src={release.coverUrl}
-                  isbn13={release.coverIsbn}
+                  isbn13={release.coverIsbns}
                   title={releaseTitle(release)}
                   foot={[release.volumeLabel, release.publisher?.name]}
                   lazy={!eager}

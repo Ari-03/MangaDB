@@ -113,7 +113,9 @@ export const toggle = mutation({
 
 /**
  * A Volume's jacket: the first stored cover among the active Releases of its
- * active Editions (what its Volume page lists), else an ISBN to look one up by.
+ * active Editions (what its Volume page lists), else an ISBN to look one up
+ * by: the first physical Release's, else the first one seen (the upstreams
+ * know print best).
  */
 async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
   const covering = await ctx.db
@@ -123,6 +125,7 @@ async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
   // Books covering the whole Volume first; an omnibus jacket is a last resort.
   covering.sort((a, b) => (a.extent === "complete" ? 0 : 1) - (b.extent === "complete" ? 0 : 1));
   let isbn: string | null = null;
+  let printIsbn: string | null = null;
   for (const row of covering) {
     const edition = await ctx.db.get(row.editionId);
     if (!edition || edition.status !== "active") continue;
@@ -135,9 +138,10 @@ async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
       const url = await coverUrl(ctx, release.coverImage?.storageId);
       if (url) return { coverUrl: url, coverIsbn: release.isbn13 ?? null };
       isbn ??= release.isbn13 ?? null;
+      if (release.format === "physical") printIsbn ??= release.isbn13 ?? null;
     }
   }
-  return { coverUrl: null, coverIsbn: isbn };
+  return { coverUrl: null, coverIsbn: printIsbn ?? isbn };
 }
 
 /**

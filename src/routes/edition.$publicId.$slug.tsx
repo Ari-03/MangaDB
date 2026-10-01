@@ -9,7 +9,7 @@ import { api } from "../../convex/_generated/api";
 import { Byline } from "~/lib/byline";
 import { catalogQuery } from "~/lib/catalogData";
 import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
-import { Cover, coverIsbns } from "~/lib/cover";
+import { Cover } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
 import { ConcealArt } from "~/lib/mature";
 import {
@@ -189,7 +189,7 @@ function ConcealedEditionPage() {
 }
 
 function EditionPage() {
-  const { edition, series, credits, coverage, releases, coverUrl, rating } =
+  const { edition, series, credits, coverage, releases, coverUrl, coverIsbns, rating } =
     Route.useLoaderData();
   const primarySeries = series[0];
   const rated = ratedAs(edition.publicId, coverage);
@@ -225,7 +225,7 @@ function EditionPage() {
           <div className="detail-cover-plate">
             <Cover
               src={coverUrl}
-              isbn13={coverIsbns([{ releases }])}
+              isbn13={coverIsbns}
               title={edition.title}
               foot={[
                 single

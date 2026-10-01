@@ -28,6 +28,7 @@ export function coverPath(isbn13: string): string {
 
 // Enough to step past a physical ISBN nobody has art for to its digital
 // twin (or the next Edition) without a long chain of misses per cover.
+// Release rows arrive capped the same way (convex/lib/covers.ts COVER_CANDIDATES).
 const MAX_CANDIDATES = 3;
 
 /**

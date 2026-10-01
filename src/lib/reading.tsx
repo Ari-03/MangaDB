@@ -590,7 +590,7 @@ function LibraryReadingInner() {
                         <span className="lib-pass-cover">
                           <Cover
                             src={pass.coverUrl}
-                            isbn13={pass.coverIsbn}
+                            isbn13={pass.coverIsbns}
                             title={pass.editionTitle}
                           />
                         </span>

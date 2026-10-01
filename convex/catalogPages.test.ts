@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { MIN_COVER_BYTES } from "./lib/covers";
 import schema from "./schema";
 
 // Fixture ISBNs (fake but distinct); checksum validity is the route's
@@ -322,6 +323,47 @@ describe("catalogPages.editionPage", () => {
     const merged = await t.query(api.catalogPages.editionPage, { publicId: 29 });
     expect(merged?.edition.publicId).toBe(21);
     expect(await t.query(api.catalogPages.editionPage, { publicId: 28 })).toBeNull();
+  });
+
+  it("wears the jacket its Release rows wear in the browser", async () => {
+    const t = convexTest(schema);
+    const { publisherId, seriesId, v1, r2 } = await seed(t);
+    const { artUrl } = await t.run(async (ctx) => {
+      // Art stored on the digital Release only.
+      const art = await ctx.storage.store(
+        new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }),
+      );
+      await ctx.db.patch(r2, { coverImage: { storageId: art } });
+      // An ISBN-less Edition of Vol 1, as a publisher's own site lists it.
+      const bare = await ctx.db.insert("editions", { status: "active", publicId: 24, publisherId });
+      await ctx.db.insert("volumeCoverages", { editionId: bare, volumeId: v1, order: 1, extent: "complete" });
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId: bare,
+        format: "physical",
+        language: "en",
+        pubDate: { year: 2015, month: 6, day: 20, sort: 20150620 },
+        publisherId,
+        seriesIds: [seriesId],
+      });
+      return { artUrl: await ctx.storage.getUrl(art) };
+    });
+
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
+    expect(page).toMatchObject({ coverUrl: artUrl, coverIsbns: [R1_ISBN13] });
+    const june = await t.query(api.releases.monthBrowse, { year: 2015, month: 6 });
+    const january = await t.query(api.releases.monthBrowse, { year: 2016, month: 1 });
+    const rows = [...june.releases, ...january.releases].filter((r) => r.edition.publicId === 21);
+    expect(rows.map((r) => [r.format, r.coverUrl, r.coverIsbns])).toEqual([
+      ["physical", page!.coverUrl, page!.coverIsbns],
+      ["digital", page!.coverUrl, page!.coverIsbns],
+    ]);
+
+    // The ISBN-less Edition borrows the same Volume's ISBN on its page as on its row.
+    const barePage = await t.query(api.catalogPages.editionPage, { publicId: 24 });
+    expect(barePage).toMatchObject({ coverUrl: null, coverIsbns: [R1_ISBN13] });
+    const bareRow = june.releases.find((r) => r.edition.publicId === 24);
+    expect(bareRow).toMatchObject({ coverUrl: null, coverIsbns: [R1_ISBN13] });
   });
 });
 

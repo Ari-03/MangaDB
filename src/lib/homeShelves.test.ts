@@ -11,17 +11,19 @@ import {
 } from "./homeShelves";
 
 const ART = "https://files.example/art.jpg";
+const isbnOf = (id: number) => `97800000000${String(id).padStart(2, "0")}`;
 /** A book by its id: publisher art, an ISBN to try, or neither. */
 const book = (id: number, art: "url" | "isbn" | "none", sort = 20261006) => ({
   id,
   coverUrl: art === "url" ? ART : null,
-  coverIsbn: art === "isbn" ? `97800000000${String(id).padStart(2, "0")}` : null,
+  coverIsbns: art === "isbn" ? [isbnOf(id)] : [],
   day: sort % 100 === 0 ? null : sort % 100,
   sort,
   series: [{ publicId: id }],
   edition: { publicId: id },
 });
-const isbnOf = (id: number) => book(id, "isbn").coverIsbn!;
+/** A book with a second ISBN to try after its first (an ebook twin). */
+const twin = (id: number) => ({ ...book(id, "isbn"), coverIsbns: [isbnOf(id), isbnOf(id + 50)] });
 const ids = (books: ReadonlyArray<{ id: number }>) => books.map((entry) => entry.id);
 
 describe("hasJacket", () => {
@@ -36,6 +38,11 @@ describe("hasJacket", () => {
   test("an unanswered check trusts an ISBN, but never a book with no art to try", () => {
     expect(hasJacket(book(3, "isbn"), null)).toBe(true);
     expect(hasJacket(book(4, "none"), null)).toBe(false);
+  });
+
+  test("judges a book by its first candidate only", () => {
+    expect(hasJacket(twin(1), new Set([isbnOf(1)]))).toBe(true);
+    expect(hasJacket(twin(1), new Set([isbnOf(51)]))).toBe(false);
   });
 });
 
@@ -52,6 +59,10 @@ describe("coverShelf", () => {
   test("asks about ISBNs, marks publisher art null, and leaves out cloth", () => {
     const shelf = [book(1, "isbn"), book(2, "none"), book(3, "url")];
     expect(coverShelf(shelf, 2)).toEqual({ need: 2, candidates: [isbnOf(1), null] });
+  });
+
+  test("asks about each book's first candidate", () => {
+    expect(coverShelf([twin(1), book(2, "isbn")], 1).candidates).toEqual([isbnOf(1), isbnOf(2)]);
   });
 
   test("caps the candidates at four per seat", () => {

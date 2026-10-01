@@ -12,7 +12,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
-import { coverIsbnForRelease, coverUrl } from "./lib/covers";
+import { coverUrl, jacketCache } from "./lib/covers";
 import { creditsFor } from "./people";
 
 // ---------- shared resolution & joins ----------
@@ -224,16 +224,16 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     price: release.price ?? null,
     description: release.description ?? null,
     coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
-    coverIsbn: await coverIsbnForRelease(ctx, release),
     variants,
     bundles,
   };
 }
 
 /**
- * The page's representative cover (spec §8: picked at query time), fronting
- * the cover-led OG/Twitter card (spec §11): the first date-sorted Release
- * row carrying one.
+ * The Volume page's representative cover (spec §8: picked at query time),
+ * fronting the cover-led OG/Twitter card (spec §11): the first date-sorted
+ * Release row carrying one. The Edition page's is its jacket's `coverUrl`
+ * (lib/covers.ts), picked by the same rule.
  */
 function representativeCover(rows: Array<{ coverUrl: string | null }>) {
   return rows.find((row) => row.coverUrl !== null)?.coverUrl ?? null;
@@ -245,8 +245,9 @@ const COVER_RELEASES = 10;
 /**
  * An Edition's jacket without its full Release rows (the library's
  * Favorites): among its first COVER_RELEASES Releases, the earliest dated
- * one carrying a cover, else the first dated ISBN to look one up by. Past
- * ten Releases this can differ from the Edition page's representative cover.
+ * one carrying a cover, else an ISBN to look one up by: the first dated
+ * physical Release's, else the first dated one's (the upstreams know print
+ * best). Past ten Releases this can differ from the Edition page's jacket.
  */
 export async function editionCover(ctx: QueryCtx, editionId: Id<"editions">) {
   const releases = (
@@ -261,7 +262,9 @@ export async function editionCover(ctx: QueryCtx, editionId: Id<"editions">) {
     const url = await coverUrl(ctx, release.coverImage?.storageId);
     if (url) return { coverUrl: url, coverIsbn: release.isbn13 ?? null };
   }
-  return { coverUrl: null, coverIsbn: releases.find((r) => r.isbn13)?.isbn13 ?? null };
+  const isbn =
+    releases.find((r) => r.format === "physical" && r.isbn13) ?? releases.find((r) => r.isbn13);
+  return { coverUrl: null, coverIsbn: isbn?.isbn13 ?? null };
 }
 
 type ReleaseRow = Awaited<ReturnType<typeof releaseRow>>;
@@ -413,7 +416,10 @@ export const editionPage = query({
       credits: series[0] ? await creditsForPublicId(ctx, series[0].publicId) : [],
       coverage,
       releases,
-      coverUrl: representativeCover(releases),
+      // The Edition's jacket (lib/covers.ts), the art its Release rows wear
+      // elsewhere: `coverUrl` is the representative cover, and `coverIsbns`
+      // the ISBNs to look art up by when there is none.
+      ...(await jacketCache(ctx).jacket(edition._id)),
     };
   },
 });

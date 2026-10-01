@@ -650,7 +650,7 @@ function ReleaseRow({
       >
         <Cover
           src={release.coverUrl}
-          isbn13={release.coverIsbn}
+          isbn13={release.coverIsbns}
           title={`${title} ${volumeLabel}`.trim()}
           foot={[release.volumeLabel, release.publisher?.name]}
         />
@@ -874,7 +874,7 @@ function CoverStrip({
           >
             <Cover
               src={release.coverUrl}
-              isbn13={release.coverIsbn}
+              isbn13={release.coverIsbns}
               title={full}
               foot={[release.volumeLabel, release.publisher?.name]}
               followed={isFollowed(release, followedSeries)}

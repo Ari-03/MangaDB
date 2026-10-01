@@ -508,7 +508,7 @@ describe("publisher.monthBoard", () => {
     // The debut with an ISBN leads the cover strip.
     expect(cards[0]!.covers[0]).toMatchObject({
       series: [{ title: "New Thing" }],
-      coverIsbn: "9780000000001",
+      coverIsbns: ["9780000000001"],
     });
   });
 

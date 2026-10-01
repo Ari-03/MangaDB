@@ -147,7 +147,7 @@ export const recentSeries = query({
       publicId: number;
       title: string;
       coverUrl: string | null;
-      coverIsbn: string | null;
+      coverIsbns: string[];
     };
     const jacketed: Array<Shelved> = [];
     const cloth: Array<Shelved> = [];
@@ -156,7 +156,7 @@ export const recentSeries = query({
       // Mature Series only for a viewer who opted in.
       if (!listed(doc, showMature)) continue;
       const entry = { publicId: doc.publicId, title: doc.title, ...(await seriesCover(ctx, doc._id)) };
-      (entry.coverUrl || entry.coverIsbn ? jacketed : cloth).push(entry);
+      (entry.coverUrl || entry.coverIsbns.length > 0 ? jacketed : cloth).push(entry);
       if (jacketed.length === take) break;
     }
     return [...jacketed, ...cloth]

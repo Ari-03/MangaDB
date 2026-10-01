@@ -289,7 +289,7 @@ function BoardCardItem({ card, anchor }: { card: BoardCard; anchor: YearMonth })
             >
               <Cover
                 src={release.coverUrl}
-                isbn13={release.coverIsbn}
+                isbn13={release.coverIsbns}
                 title={title}
                 foot={[release.volumeLabel, publisher.name]}
               />

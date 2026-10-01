@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { api } from "./_generated/api";
 import { joinBrowseRows } from "./releases";
 import type { Id } from "./_generated/dataModel";
+import { MIN_COVER_BYTES } from "./lib/covers";
 import schema from "./schema";
 
 // Shared fixture: two publishers, two series, releases spread across July,
@@ -374,6 +375,86 @@ describe("releases.monthBrowse", () => {
   });
 });
 
+describe("releases.monthBrowse jackets", () => {
+  // To Your Eternity Vol 25: the ebook's own ISBN has no art upstream, its
+  // print sibling's does. Every row of the Edition tries print first.
+  it("gives a digital row and its print sibling the same ISBNs, print first, across months", async () => {
+    const t = convexTest(schema);
+    const { artUrl } = await t.run(async (ctx) => {
+      const publisherId = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Kodansha",
+        slug: "kodansha",
+      });
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 1,
+        title: "To Your Eternity",
+        altTitles: [],
+        searchText: "To Your Eternity",
+      });
+      const edition = async (position: number) => {
+        const volumeId = await ctx.db.insert("volumes", {
+          status: "active",
+          publicId: position,
+          seriesId,
+          position,
+          label: String(position),
+        });
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: position,
+          publisherId,
+        });
+        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+        return editionId;
+      };
+      const release = async (
+        editionId: Id<"editions">,
+        format: "physical" | "digital",
+        isbn13: string,
+        month: number,
+        storageId?: Id<"_storage">,
+      ) =>
+        await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format,
+          language: "en",
+          isbn13,
+          pubDate: { year: 2026, month, day: 7, sort: 20260007 + month * 100 },
+          ...(storageId ? { coverImage: { storageId } } : {}),
+          publisherId,
+          seriesIds: [seriesId],
+        });
+      // Vol 25: both formats in October.
+      const v25 = await edition(25);
+      await release(v25, "digital", "9798898302498", 10);
+      await release(v25, "physical", "9798888778661", 10);
+      // Vol 26: the ebook in October, print (with stored art) in November.
+      const art = await ctx.storage.store(new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }));
+      const v26 = await edition(26);
+      await release(v26, "digital", "9780000000026", 10);
+      await release(v26, "physical", "9780000000126", 11, art);
+      return { artUrl: await ctx.storage.getUrl(art) };
+    });
+
+    const october = await t.query(api.releases.monthBrowse, { year: 2026, month: 10 });
+    const covers = october.releases.map((r) => [r.volumeLabel, r.format, r.coverUrl, r.coverIsbns]);
+    expect(covers).toEqual([
+      ["Vol. 25", "digital", null, ["9798888778661", "9798898302498"]],
+      ["Vol. 25", "physical", null, ["9798888778661", "9798898302498"]],
+      // The ebook wears its print sibling's stored cover and ISBN though
+      // print is a month later.
+      ["Vol. 26", "digital", artUrl, ["9780000000126", "9780000000026"]],
+    ]);
+    const november = await t.query(api.releases.monthBrowse, { year: 2026, month: 11 });
+    expect(november.releases.map((r) => [r.coverUrl, r.coverIsbns])).toEqual([
+      [artUrl, ["9780000000126", "9780000000026"]],
+    ]);
+  });
+});
+
 // Audit E05: a Release without an ISBN borrows one from a sibling Release or
 // an alternative Edition. The borrowed ISBN depends only on the Edition, so a
 // window of ISBN-less rows must read each Edition's Releases and Coverage once.
@@ -464,8 +545,8 @@ describe("joinBrowseRows cover fallback", () => {
     });
 
     expect(rows).toHaveLength(14);
-    expect(rows.filter((r) => r.coverIsbn === "9780000000001")).toHaveLength(11);
-    expect(rows.filter((r) => r.coverIsbn === "9780000000002")).toHaveLength(3);
+    expect(rows.filter((r) => r.coverIsbns.join() === "9780000000001")).toHaveLength(11);
+    expect(rows.filter((r) => r.coverIsbns.join() === "9780000000002")).toHaveLength(3);
     // One Releases scan per Edition consulted: the crowded one, the bare one,
     // and the alternative Edition the bare one borrows from.
     expect(counts.releases).toBe(3);
@@ -543,7 +624,7 @@ describe("joinBrowseRows cover fallback", () => {
     });
 
     expect(rows).toHaveLength(13);
-    expect(rows.every((r) => r.coverIsbn === "9780000000001")).toBe(true);
+    expect(rows.every((r) => r.coverIsbns.join() === "9780000000001")).toBe(true);
     // One Releases scan per Edition consulted.
     expect(counts.releases).toBe(13);
     // Thirteen by-Edition Coverage reads, plus one by-Volume scan shared by all twelve borrowers.
