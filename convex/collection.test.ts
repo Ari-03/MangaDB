@@ -1,12 +1,23 @@
-import { convexTest } from "convex-test";
 import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
+import {
+  insertBundle,
+  insertBundleMember,
+  insertCoverage,
+  insertEdition,
+  insertEditionLine,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVariant,
+  insertVolume,
+} from "./test.factories";
+import { makeT, signedIn, withUser, type TestT } from "./test.helpers";
 
-const SUBJECT = "user_2collector";
+const COLLECTOR = { subject: "user_2collector", username: "collector" };
 
 /**
  * One catalog exercising ticket #27's corners: a Series of 2 Volumes, an
@@ -15,123 +26,62 @@ const SUBJECT = "user_2collector";
  * Ownership, variant pinning (direct and bundle-pinned), and coexistence
  * with direct entries are all reachable.
  */
-async function seed(t: ReturnType<typeof convexTest>) {
+async function seed(t: TestT) {
   return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas",
-      slug: "seven-seas",
-    });
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Witch Hat Atelier",
-      altTitles: [],
-      searchText: "Witch Hat Atelier",
-    });
-    const volumes: Array<Id<"volumes">> = [];
-    for (const position of [1, 2]) {
-      volumes.push(
-        await ctx.db.insert("volumes", {
-          status: "active",
-          publicId: 10 + position,
-          seriesId,
-          position,
-          label: String(position),
-        }),
-      );
-    }
-    const [v1, v2] = volumes as [Id<"volumes">, Id<"volumes">];
+    const publisherId = await insertPublisher(ctx, { name: "Seven Seas", slug: "seven-seas" });
+    const seriesId = await insertSeries(ctx, { publicId: 1, title: "Witch Hat Atelier" });
+    const v1 = await insertVolume(ctx, { seriesId, publicId: 11, position: 1 });
+    const v2 = await insertVolume(ctx, { seriesId, publicId: 12, position: 2 });
 
     const releases: Array<Id<"releases">> = [];
     for (const [i, volumeId] of [v1, v2].entries()) {
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 21 + i,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId,
-        order: 1,
-        extent: "complete",
-      });
+      const editionId = await insertEdition(ctx, { publicId: 21 + i, publisherId });
+      await insertCoverage(ctx, { editionId, volumeId });
       releases.push(
-        await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          binding: "paperback",
-          language: "en",
-          publisherId,
-          seriesIds: [seriesId],
-        }),
+        await insertRelease(ctx, { editionId, binding: "paperback", publisherId, seriesIds: [seriesId] }),
       );
     }
     const [r1, r2] = releases as [Id<"releases">, Id<"releases">];
 
-    const variantId = await ctx.db.insert("releaseVariants", {
-      status: "active",
-      releaseId: r1,
-      name: "Bookstore exclusive",
-    });
+    const variantId = await insertVariant(ctx, { releaseId: r1, name: "Bookstore exclusive" });
 
-    const bundleId = await ctx.db.insert("releaseBundles", {
-      status: "active",
+    const bundleId = await insertBundle(ctx, {
       publicId: 41,
       name: "Witch Hat Atelier Box Set",
       publisherId,
       format: "physical",
     });
-    await ctx.db.insert("bundleMemberships", {
-      bundleId,
-      releaseId: r1,
-      variantId, // the box set ships the exclusive cover
-      order: 1,
-    });
-    await ctx.db.insert("bundleMemberships", {
-      bundleId,
-      releaseId: r2,
-      order: 2,
-    });
+    // The box set ships the exclusive cover.
+    await insertBundleMember(ctx, { bundleId, releaseId: r1, variantId, order: 1 });
+    await insertBundleMember(ctx, { bundleId, releaseId: r2, order: 2 });
 
     return { seriesId, v1, v2, r1, r2, variantId, bundleId };
   });
 }
 
-function signedIn(t: ReturnType<typeof convexTest>, subject = SUBJECT) {
-  return t.withIdentity({ subject });
-}
-
-async function withUser(t: ReturnType<typeof convexTest>, username = "collector") {
-  const as = signedIn(t);
-  await as.mutation(api.users.claimUsername, { username });
-  return as;
-}
-
-async function entryRows(t: ReturnType<typeof convexTest>) {
+async function entryRows(t: TestT) {
   return await t.run(async (ctx) => await ctx.db.query("collectionEntries").collect());
 }
 
 describe("collection.entryForRelease", () => {
   it("is null signed out — public rows just omit the controls", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1 } = await seed(t);
     expect(await t.query(api.collection.entryForRelease, { releaseId: r1 })).toBeNull();
   });
 
   it("is null while the username claim is pending", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1 } = await seed(t);
     expect(
-      await signedIn(t).query(api.collection.entryForRelease, { releaseId: r1 }),
+      await signedIn(t, COLLECTOR).query(api.collection.entryForRelease, { releaseId: r1 }),
     ).toBeNull();
   });
 
   it("lists the release's active variants for the picker", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2, variantId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     const forR1 = await as.query(api.collection.entryForRelease, { releaseId: r1 });
     expect(forR1?.entry).toBeNull();
     expect(forR1?.variants).toEqual([
@@ -144,9 +94,9 @@ describe("collection.entryForRelease", () => {
 
 describe("collection.setReleaseEntry", () => {
   it("holds exactly one state — each transition replaces, never accumulates", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     for (const state of ["wanted", "ordered", "owned"] as const) {
       await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state });
@@ -157,9 +107,9 @@ describe("collection.setReleaseEntry", () => {
   });
 
   it("omitting state removes the entry", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "owned" });
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1 });
     const data = await as.query(api.collection.entryForRelease, { releaseId: r1 });
@@ -168,9 +118,9 @@ describe("collection.setReleaseEntry", () => {
   });
 
   it("pins and clears an owned variant", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, variantId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -187,9 +137,9 @@ describe("collection.setReleaseEntry", () => {
   });
 
   it("rejects a variant that belongs to another release", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r2, variantId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await expect(
       as.mutation(api.collection.setReleaseEntry, {
         releaseId: r2,
@@ -200,13 +150,13 @@ describe("collection.setReleaseEntry", () => {
   });
 
   it("requires a signed-in user with a claimed username", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1 } = await seed(t);
     await expect(
       t.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" }),
     ).rejects.toThrow(ConvexError);
     await expect(
-      signedIn(t).mutation(api.collection.setReleaseEntry, {
+      signedIn(t, COLLECTOR).mutation(api.collection.setReleaseEntry, {
         releaseId: r1,
         state: "wanted",
       }),
@@ -216,9 +166,9 @@ describe("collection.setReleaseEntry", () => {
 
 describe("collection.setBundleEntry & derived ownership", () => {
   it("an owned bundle derives ownership on members, with the pinned variant", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2, bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
 
@@ -239,18 +189,18 @@ describe("collection.setBundleEntry & derived ownership", () => {
   });
 
   it("a wanted/ordered bundle derives nothing", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "ordered" });
     const forR1 = await as.query(api.collection.entryForRelease, { releaseId: r1 });
     expect(forR1?.derived).toEqual([]);
   });
 
   it("derived ownership coexists with a direct entry; removing the bundle never erases it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "owned" });
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
@@ -270,9 +220,9 @@ describe("collection.setBundleEntry & derived ownership", () => {
 
 describe("collection.volumeOwnership", () => {
   it("shows a volume as owned only through owned covering releases", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     // Nothing owned yet.
     let v1Own = await as.query(api.collection.volumeOwnership, { volumePublicId: 11 });
@@ -306,9 +256,9 @@ describe("collection.volumeOwnership", () => {
 
 describe("collection follow suggestions (#29)", () => {
   it("a first entry in a series suggests a follow — a suggestion only", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { seriesId, r1 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     const result = await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -323,9 +273,9 @@ describe("collection follow suggestions (#29)", () => {
   });
 
   it("appears once per series: later entries and state changes never suggest", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" });
     // State change on the existing entry: not a first entry.
@@ -343,9 +293,9 @@ describe("collection follow suggestions (#29)", () => {
   });
 
   it("dismissal suppresses the prompt permanently", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { seriesId, r1 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     await as.mutation(api.follows.dismissFollowPrompt, { seriesId });
     // Even a genuine first entry stays quiet after dismissal…
@@ -364,9 +314,9 @@ describe("collection follow suggestions (#29)", () => {
   });
 
   it("an already-followed series never prompts", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { seriesId, r1 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.follows.setSeriesFollow, { seriesId, following: true });
     const result = await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -376,9 +326,9 @@ describe("collection follow suggestions (#29)", () => {
   });
 
   it("a bundle entry suggests through its member releases' series", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { seriesId, bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     const result = await as.mutation(api.collection.setBundleEntry, {
       bundleId,
       state: "wanted",
@@ -391,9 +341,9 @@ describe("collection follow suggestions (#29)", () => {
 
 describe("collection.myLibrary", () => {
   it("shelves every entry under its series and reading path", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2, variantId, bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
 
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -442,9 +392,9 @@ describe("collection.myLibrary", () => {
   });
 
   it("an owned box set alone shelves its members as derived ownership", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
     const library = await as.query(api.collection.myLibrary, {});
     const books = library!.series[0]!.paths[0]!.books;
@@ -457,9 +407,9 @@ describe("collection.myLibrary", () => {
   });
 
   it("an ordered box set is listed but shelves nothing", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "ordered" });
     const library = await as.query(api.collection.myLibrary, {});
     expect(library?.series).toEqual([]);
@@ -467,33 +417,27 @@ describe("collection.myLibrary", () => {
   });
 
   it("sizes an edition line by its active editions", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { seriesId, v1, r1 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     // Move r1's edition into a line of three editions (one hidden).
     await t.run(async (ctx) => {
       const release = (await ctx.db.get(r1))!;
-      const lineId = await ctx.db.insert("editionLines", {
-        status: "active",
+      const lineId = await insertEditionLine(ctx, {
         seriesId,
         publisherId: release.publisherId,
         name: "Deluxe Edition",
       });
       await ctx.db.patch(release.editionId, { editionLineId: lineId, linePosition: "1" });
       for (const [i, status] of (["active", "hidden"] as const).entries()) {
-        const editionId = await ctx.db.insert("editions", {
+        const editionId = await insertEdition(ctx, {
           status,
           publicId: 31 + i,
           publisherId: release.publisherId,
           editionLineId: lineId,
           linePosition: String(2 + i),
         });
-        await ctx.db.insert("volumeCoverages", {
-          editionId,
-          volumeId: v1,
-          order: 1,
-          extent: "complete",
-        });
+        await insertCoverage(ctx, { editionId, volumeId: v1 });
       }
     });
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "owned" });
@@ -508,7 +452,7 @@ describe("collection.myLibrary", () => {
   });
 
   it("is null signed out", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     expect(await t.query(api.collection.myLibrary, {})).toBeNull();
   });
@@ -516,9 +460,9 @@ describe("collection.myLibrary", () => {
 
 describe("collection.seriesEntries", () => {
   it("returns the viewer's entries and derived ownership within one series", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2, variantId, bundleId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
       state: "wanted",
@@ -533,9 +477,9 @@ describe("collection.seriesEntries", () => {
   });
 
   it("is null signed out or for an unknown series", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     expect(await t.query(api.collection.seriesEntries, { seriesPublicId: 1 })).toBeNull();
     expect(await as.query(api.collection.seriesEntries, { seriesPublicId: 9 })).toBeNull();
   });
@@ -543,9 +487,9 @@ describe("collection.seriesEntries", () => {
 
 describe("collection.setManyReleaseEntries", () => {
   it("sets one state on every release, keeping pinned variants, prompting once", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2, variantId } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
       state: "wanted",
@@ -569,9 +513,9 @@ describe("collection.setManyReleaseEntries", () => {
   });
 
   it("a first entry in a series prompts once for the batch", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     const result = await as.mutation(api.collection.setManyReleaseEntries, {
       releaseIds: [r1, r2],
       state: "owned",
@@ -582,9 +526,9 @@ describe("collection.setManyReleaseEntries", () => {
   });
 
   it("omitting the state removes every entry, and the cap holds", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2 } = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.collection.setManyReleaseEntries, {
       releaseIds: [r1, r2],
       state: "ordered",
@@ -601,9 +545,9 @@ describe("collection.setManyReleaseEntries", () => {
 });
 
 describe("collection pinned variants that were hidden later (B27)", () => {
-  async function pinThenHide(t: ReturnType<typeof convexTest>) {
+  async function pinThenHide(t: TestT) {
     const seeded = await seed(t);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: seeded.r1,
       state: "wanted",
@@ -616,7 +560,7 @@ describe("collection pinned variants that were hidden later (B27)", () => {
   }
 
   it("a batch state change keeps the hidden pin instead of aborting the batch", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2, variantId, as } = await pinThenHide(t);
     const result = await as.mutation(api.collection.setManyReleaseEntries, {
       releaseIds: [r1, r2],
@@ -633,7 +577,7 @@ describe("collection pinned variants that were hidden later (B27)", () => {
   });
 
   it("a single state change resending the unchanged pin keeps it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, variantId, as } = await pinThenHide(t);
     // The release row resends the current pin with every state change.
     await as.mutation(api.collection.setReleaseEntry, {
@@ -648,7 +592,7 @@ describe("collection pinned variants that were hidden later (B27)", () => {
   });
 
   it("selecting a hidden variant as a new pin is still refused", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { r1, r2, variantId, as } = await pinThenHide(t);
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1 });
     await expect(
@@ -671,37 +615,14 @@ describe("collection pinned variants that were hidden later (B27)", () => {
 
 describe("collection batch cost (E01)", () => {
   /** One Series with `count` Editions, each with one active Release. */
-  async function seedShelf(t: ReturnType<typeof convexTest>, count: number) {
+  async function seedShelf(t: TestT, count: number) {
     return await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Kodansha",
-        slug: "kodansha",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Long Runner",
-        altTitles: [],
-        searchText: "Long Runner",
-      });
+      const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+      const seriesId = await insertSeries(ctx, { publicId: 1, title: "Long Runner" });
       const releaseIds: Array<Id<"releases">> = [];
       for (let i = 0; i < count; i++) {
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: 100 + i,
-          publisherId,
-        });
-        releaseIds.push(
-          await ctx.db.insert("releases", {
-            status: "active",
-            editionId,
-            format: "physical",
-            language: "en",
-            publisherId,
-            seriesIds: [seriesId],
-          }),
-        );
+        const editionId = await insertEdition(ctx, { publicId: 100 + i, publisherId });
+        releaseIds.push(await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] }));
       }
       return releaseIds;
     });
@@ -709,9 +630,9 @@ describe("collection batch cost (E01)", () => {
 
   it("marks a full batch of new books within the deployed transaction limits", async () => {
     // Enforce Convex's real per-transaction limits (32,000 documents read).
-    const t = convexTest({ schema, transactionLimits: true });
+    const t = makeT({ transactionLimits: true });
     const releaseIds = await seedShelf(t, 200);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     const result = await as.mutation(api.collection.setManyReleaseEntries, {
       releaseIds,
       state: "owned",
@@ -727,9 +648,9 @@ describe("collection batch cost (E01)", () => {
     // The same batch against a budget a per-insert collection rescan blows
     // through (tens of thousands of reads for 200 books) but one final pass
     // over the collection fits easily.
-    const t = convexTest({ schema, transactionLimits: { documentsRead: 3_000 } });
+    const t = makeT({ transactionLimits: { documentsRead: 3_000 } });
     const releaseIds = await seedShelf(t, 200);
-    const as = await withUser(t);
+    const as = await withUser(t, COLLECTOR);
     // A collection already on the shelf joins the final pass exactly once.
     await as.mutation(api.collection.setManyReleaseEntries, {
       releaseIds: releaseIds.slice(0, 100),

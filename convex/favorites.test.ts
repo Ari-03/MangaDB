@@ -2,15 +2,22 @@
 // Volume, or omnibus Edition, toggled on and off; the library list; and upkeep through hidden
 // and merged targets, account purge, and merge / split.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { TargetId } from "./lib/ratings";
-import schema from "./schema";
+import {
+  insertCoverage,
+  insertEdition,
+  insertEditionLine,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+} from "./test.factories";
+import { ADMIN, alice, makeT, seedTeam, type TestT } from "./test.helpers";
 
-const ADMIN = "user_admin";
 const READER = "user_a";
 const OTHER = "user_b";
 
@@ -19,43 +26,23 @@ const volume = (publicId: number) => ({ kind: "volume" as const, publicId });
 
 /** Two Series (publicIds 1 and 2), each with one Volume (11 and 21), an admin, and two readers. */
 async function seed() {
-  const t = convexTest(schema);
-  for (const [subject, username] of [
-    [ADMIN, "alice"],
-    [READER, "carol"],
-    [OTHER, "dave"],
-  ] as const) {
-    await t.withIdentity({ subject }).mutation(api.users.claimUsername, { username });
-  }
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
+  const t = makeT();
+  await seedTeam(t, [alice, { subject: READER, username: "carol" }, { subject: OTHER, username: "dave" }]);
   const ids = await t.run(async (ctx) => {
     const mk = async (publicId: number, title: string) => {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId,
-        title,
-        altTitles: [],
-        searchText: title,
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: publicId * 10 + 1,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
+      const seriesId = await insertSeries(ctx, { publicId, title });
+      const volumeId = await insertVolume(ctx, { seriesId, publicId: publicId * 10 + 1 });
       return { seriesId, volumeId };
     };
     return { one: await mk(1, "Frieren"), two: await mk(2, "Frieren (duplicate)") };
   });
   return { t, ids };
 }
-type T = Awaited<ReturnType<typeof seed>>["t"];
 type Target = TargetId;
 
-const toggle = (t: T, subject: string, target: Target) =>
+const toggle = (t: TestT, subject: string, target: Target) =>
   t.withIdentity({ subject }).mutation(api.favorites.toggle, { target });
-const rows = (t: T) => t.run((ctx) => ctx.db.query("favorites").collect());
+const rows = (t: TestT) => t.run((ctx) => ctx.db.query("favorites").collect());
 
 describe("favorites.isFavorite", () => {
   it("is null signed out and for unknown targets; false before any toggle", async () => {
@@ -202,34 +189,25 @@ describe("favorite upkeep", () => {
  * Vol 1-2 (901, with a Release, and 904), a single-volume book of Vol 1
  * (902), and an Unmapped Packaging line member (903).
  */
-async function seedEditions(t: T, ids: Awaited<ReturnType<typeof seed>>["ids"]) {
+async function seedEditions(t: TestT, ids: Awaited<ReturnType<typeof seed>>["ids"]) {
   return await t.run(async (ctx) => {
     const seriesId = ids.one.seriesId;
-    const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
-    const vol2 = await ctx.db.insert("volumes", { status: "active", publicId: 12, seriesId, position: 2, label: "2" });
+    const publisherId = await insertPublisher(ctx, { name: "VIZ", slug: "viz" });
+    const vol2 = await insertVolume(ctx, { seriesId, publicId: 12, position: 2 });
     const book = async (publicId: number, volumes: Array<Id<"volumes">>) => {
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
+      const editionId = await insertEdition(ctx, { publicId, publisherId });
       for (const [order, volumeId] of volumes.entries()) {
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order, extent: "complete" });
+        await insertCoverage(ctx, { editionId, volumeId, order });
       }
       return editionId;
     };
     const omnibus = await book(901, [ids.one.volumeId, vol2]);
-    await ctx.db.insert("releases", {
-      status: "active",
-      editionId: omnibus,
-      publisherId,
-      seriesIds: [seriesId],
-      format: "physical",
-      language: "en",
-      isbn13: "9781974700001",
-    });
-    const lineId = await ctx.db.insert("editionLines", { status: "active", seriesId, publisherId, name: "3-in-1" });
+    await insertRelease(ctx, { editionId: omnibus, publisherId, seriesIds: [seriesId], isbn13: "9781974700001" });
+    const lineId = await insertEditionLine(ctx, { seriesId, publisherId, name: "3-in-1" });
     return {
       omnibus,
       single: await book(902, [ids.one.volumeId]),
-      unmapped: await ctx.db.insert("editions", {
-        status: "active",
+      unmapped: await insertEdition(ctx, {
         publicId: 903,
         publisherId,
         editionLineId: lineId,
@@ -317,13 +295,11 @@ describe("Favorites of an omnibus Edition", () => {
     await t.run(async (ctx) => {
       const twin = (await ctx.db.get(books.twin))!;
       const release = (format: "physical" | "digital", isbn13: string, sort: number) =>
-        ctx.db.insert("releases", {
-          status: "active",
+        insertRelease(ctx, {
           editionId: books.twin,
           publisherId: twin.publisherId,
           seriesIds: [ids.one.seriesId],
           format,
-          language: "en",
           isbn13,
           pubDate: { year: Math.floor(sort / 10000), sort },
         });
@@ -338,27 +314,14 @@ describe("Favorites of an omnibus Edition", () => {
   it("looks a favorited Volume's jacket up by a print ISBN before an ebook one", async () => {
     const { t, ids } = await seed();
     await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 905, publisherId });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId: ids.two.volumeId,
-        order: 0,
-        extent: "complete",
-      });
+      const publisherId = await insertPublisher(ctx, { name: "VIZ", slug: "viz" });
+      const editionId = await insertEdition(ctx, { publicId: 905, publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: ids.two.volumeId, order: 0 });
       for (const [format, isbn13] of [
         ["digital", "9781974700952"],
         ["physical", "9781974700951"],
       ] as const) {
-        await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          publisherId,
-          seriesIds: [ids.two.seriesId],
-          format,
-          language: "en",
-          isbn13,
-        });
+        await insertRelease(ctx, { editionId, publisherId, seriesIds: [ids.two.seriesId], format, isbn13 });
       }
     });
     await toggle(t, READER, { kind: "volume", id: ids.two.volumeId });

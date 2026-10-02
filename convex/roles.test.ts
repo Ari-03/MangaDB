@@ -3,43 +3,25 @@
 // suspension, the permanent audit trail, and the promise that revocation
 // never rewrites past attribution.
 
-import { convexTest } from "convex-test";
 import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
-import schema from "./schema";
+import { insertSeries } from "./test.factories";
+import { ADMIN, EDITOR, MOD, PLAIN, alice, bob, carol, dave, makeT, seedUsers, type TestT } from "./test.helpers";
 
-const ADMIN = "user_admin";
-const MOD = "user_mod";
-const EDITOR = "user_editor";
-const PLAIN = "user_plain";
+const USERS = [alice, bob, carol, dave];
 
-async function withUsers(t: ReturnType<typeof convexTest>) {
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.users.claimUsername, { username: "alice" });
-  await t
-    .withIdentity({ subject: MOD })
-    .mutation(api.users.claimUsername, { username: "bob" });
-  await t
-    .withIdentity({ subject: EDITOR })
-    .mutation(api.users.claimUsername, { username: "carol" });
-  await t
-    .withIdentity({ subject: PLAIN })
-    .mutation(api.users.claimUsername, { username: "dave" });
-}
-
-async function bootstrapAdmin(t: ReturnType<typeof convexTest>) {
-  await t.mutation(internal.roles.bootstrapAdministrator, {
-    username: "alice",
-  });
+/** All four claim their usernames; only alice holds a role, as the bootstrapped Administrator. */
+async function withAdmin(t: TestT) {
+  await seedUsers(t, USERS);
+  await t.mutation(internal.roles.bootstrapAdministrator, { username: alice.username });
 }
 
 describe("roles.bootstrapAdministrator", () => {
   it("appoints the initial Administrator with a system-actor audit row", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
+    const t = makeT();
+    await seedUsers(t, USERS);
     const result = await t.mutation(internal.roles.bootstrapAdministrator, {
       username: "alice",
     });
@@ -55,9 +37,8 @@ describe("roles.bootstrapAdministrator", () => {
   });
 
   it("refuses once any Administrator exists", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     await expect(
       t.mutation(internal.roles.bootstrapAdministrator, { username: "bob" }),
     ).rejects.toMatchObject({ data: { code: "alreadyBootstrapped" } });
@@ -66,9 +47,8 @@ describe("roles.bootstrapAdministrator", () => {
 
 describe("roles.appoint", () => {
   it("lets an Administrator appoint a Moderator, audited", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     await t
       .withIdentity({ subject: ADMIN })
       .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
@@ -88,9 +68,8 @@ describe("roles.appoint", () => {
   });
 
   it("lets a Moderator appoint an Editor but not another Moderator", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     await t
       .withIdentity({ subject: ADMIN })
       .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
@@ -106,9 +85,8 @@ describe("roles.appoint", () => {
   });
 
   it("rejects appointments from Editors and plain users", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     await t
       .withIdentity({ subject: ADMIN })
       .mutation(api.roles.appoint, { username: "carol", role: "editor" });
@@ -123,9 +101,8 @@ describe("roles.appoint", () => {
   });
 
   it("audits a role change as revocation + appointment", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     const asAdmin = t.withIdentity({ subject: ADMIN });
     await asAdmin.mutation(api.roles.appoint, { username: "bob", role: "editor" });
     await asAdmin.mutation(api.roles.appoint, {
@@ -143,9 +120,8 @@ describe("roles.appoint", () => {
 
 describe("roles.revoke", () => {
   it("removes the role and audits, leaving prior audit rows intact", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     const asAdmin = t.withIdentity({ subject: ADMIN });
     await asAdmin.mutation(api.roles.appoint, {
       username: "carol",
@@ -170,9 +146,8 @@ describe("roles.revoke", () => {
   });
 
   it("never removes the last active Administrator", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     await expect(
       t
         .withIdentity({ subject: ADMIN })
@@ -181,24 +156,15 @@ describe("roles.revoke", () => {
   });
 
   it("keeps past attribution: revisions retain the role at authorship", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     const asAdmin = t.withIdentity({ subject: ADMIN });
     await asAdmin.mutation(api.roles.appoint, {
       username: "bob",
       role: "moderator",
     });
 
-    const seriesId = await t.run((ctx) =>
-      ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Alpha",
-        altTitles: [],
-        searchText: "Alpha",
-      }),
-    );
+    const seriesId = await t.run((ctx) => insertSeries(ctx, { publicId: 1, title: "Alpha" }));
     await t.withIdentity({ subject: MOD }).mutation(
       api.moderation.submitDirectEdit,
       {
@@ -221,23 +187,14 @@ describe("roles.revoke", () => {
 
 describe("roles.suspend / reinstate", () => {
   it("suspension removes privileges immediately; reinstatement restores them", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     const asAdmin = t.withIdentity({ subject: ADMIN });
     await asAdmin.mutation(api.roles.appoint, {
       username: "bob",
       role: "moderator",
     });
-    const seriesId = await t.run((ctx) =>
-      ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Alpha",
-        altTitles: [],
-        searchText: "Alpha",
-      }),
-    );
+    const seriesId = await t.run((ctx) => insertSeries(ctx, { publicId: 1, title: "Alpha" }));
 
     await asAdmin.mutation(api.roles.suspend, {
       username: "bob",
@@ -268,9 +225,8 @@ describe("roles.suspend / reinstate", () => {
   });
 
   it("refuses self-suspension and suspending the last Administrator", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     const asAdmin = t.withIdentity({ subject: ADMIN });
     await expect(
       asAdmin.mutation(api.roles.suspend, { username: "alice", reason: "no" }),
@@ -280,9 +236,8 @@ describe("roles.suspend / reinstate", () => {
 
 describe("roles.roster & auditLog", () => {
   it("are data-team only and reflect the current holders", async () => {
-    const t = convexTest(schema);
-    await withUsers(t);
-    await bootstrapAdmin(t);
+    const t = makeT();
+    await withAdmin(t);
     await t
       .withIdentity({ subject: ADMIN })
       .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
