@@ -1616,7 +1616,7 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
   const UNMAPPED = { volumes: [], coverages: 0, unmapped: [true] };
   const NOTHING = { volumes: [], coverages: 0, unmapped: [] };
 
-  it.each([
+  const WIRING = [
     // The title.
     {
       name: "a title listing Volumes 1 & 3 never falls back to the 3-in-1 size",
@@ -1706,7 +1706,10 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
       blurb: "<p>Collects Negima! Volumes 37-38.</p>",
       expected: onlyCovering(["37", "38"]),
     },
-  ])("$name", async ({ book, blurb, expected }) => {
+  ];
+
+  it.each(WIRING.map((row) => [`${row.name}: ${row.book.title}`, row] as const))("%s", async (_, row) => {
+    const { book, blurb, expected } = row;
     const t = makeT();
     await seedRegistry(t, true);
     stubSite([{ ...book, blurb }]);

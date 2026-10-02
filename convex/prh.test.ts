@@ -1179,7 +1179,7 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
 
   // `backbone`: the Volumes of an existing "Alpha" Series; without it the
   // catalog is empty, so every Volume after the sync is one the import made.
-  it.each([
+  const WIRING = [
     // The title.
     {
       name: "a title listing Volumes 1 & 3 never falls back to the 3-in-1 size",
@@ -1313,7 +1313,10 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
       backbone: ONE_TO_THREE,
       expected: unmapped(ONE_TO_THREE),
     },
-  ])("$name: $title", async ({ title, flapcopy, keynote, backbone: volumes, expected }) => {
+  ];
+
+  it.each(WIRING.map((row) => [`${row.name}: ${row.title}`, row] as const))("%s", async (_, row) => {
+    const { title, flapcopy, keynote, backbone: volumes, expected } = row;
     const t = makeT();
     await seedRegistry(t, true);
     if (volumes) await backbone(t, "Alpha", volumes);
