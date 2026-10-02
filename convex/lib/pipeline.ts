@@ -30,7 +30,7 @@
 // creates or queues the Series/Volume backbone without any Release.
 
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
 import { canonicalLabel } from "./bookTitle";
@@ -614,6 +614,87 @@ export async function blurbOutranked(
     );
   }
   return false;
+}
+
+/**
+ * The observations behind the Release's current description when
+ * `sourceKey` wrote it: the evidence of the latest Revision touching the
+ * field. Null when anyone else wrote it (another source, a human) or
+ * nobody did.
+ */
+export async function descriptionEvidence(
+  ctx: QueryCtx | MutationCtx,
+  release: Doc<"releases">,
+  sourceKey: string,
+): Promise<string[] | null> {
+  const history = ctx.db
+    .query("revisions")
+    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
+    .order("desc");
+  for await (const revision of history) {
+    if (!revision.changes.some((change) => change.field === "description")) continue;
+    if (revision.author.kind !== "source" || revision.author.sourceKey !== sourceKey) return null;
+    const proposal = revision.proposalId ? await ctx.db.get(revision.proposalId) : null;
+    const version = proposal
+      ? await ctx.db
+          .query("proposalVersions")
+          .withIndex("by_proposal", (q) =>
+            q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
+          )
+          .unique()
+      : null;
+    return (version?.evidence ?? []).flatMap((row) =>
+      row.kind === "observation" ? [row.observationId as string] : [],
+    );
+  }
+  return null;
+}
+
+/**
+ * Rewrite a Release description a source wrote, from the observation it
+ * wrote it from: the source's own fact through reconcileFields (one
+ * approved Proposal, its version, one Revision citing the source), with
+ * `text` undefined clearing the field. Only while the Release is active or
+ * hidden, unlocked, carries no Human Override on the field, its current
+ * text differs, and `observation` is the evidence for that text — so a
+ * publisher's, another source's, or a human's text is never touched.
+ * How the ANN repair and refresh and the Open Library repair fix text
+ * their own sources wrote.
+ */
+export async function rewriteOwnDescription(
+  ctx: MutationCtx,
+  args: {
+    sourceKey: string;
+    observation: Doc<"sourceObservations">;
+    release: Doc<"releases">;
+    text: string | undefined;
+    citation: { sourceName: string; url: string };
+    now: number;
+  },
+): Promise<"updated" | "cleared" | null> {
+  const { release, text } = args;
+  if (
+    (release.status !== "active" && release.status !== "hidden") ||
+    release.locked ||
+    release.overriddenFields?.includes("description") ||
+    typeof release.description !== "string" ||
+    release.description === text
+  ) {
+    return null;
+  }
+  const evidence = await descriptionEvidence(ctx, release, args.sourceKey);
+  if (evidence === null || !evidence.includes(args.observation._id)) return null;
+  const result = await reconcileFields(ctx, {
+    sourceKey: args.sourceKey,
+    ref: { type: "release", id: release._id },
+    doc: release,
+    offered: { description: text },
+    observation: args.observation,
+    citation: args.citation,
+    now: args.now,
+  });
+  if (!result.applied.includes("description")) return null;
+  return text === undefined ? "cleared" : "updated";
 }
 
 type PublisherRef = { name: string; slug: string; parentSlug?: string };

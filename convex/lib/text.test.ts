@@ -7,6 +7,8 @@ import {
   cleanBlurb,
   cleanTitleText,
   decodeEntities,
+  decodeUtf8OrWindows1252,
+  mapC1Controls,
   MAX_BLURB,
   repairMojibake,
   stripHtml,
@@ -135,5 +137,33 @@ describe("repairMojibake", () => {
   it("is not part of cleanBlurb, which every source shares", () => {
     expect(cleanBlurb("<p>a quiet café…” she said</p>")).toBe("a quiet café…” she said");
     expect(cleanBlurb("<p>Tsukasaâ€™s day</p>")).toBe("Tsukasaâ€™s day");
+  });
+});
+
+describe("mapC1Controls", () => {
+  it("reads C1 code points as the Windows-1252 characters of their byte", () => {
+    expect(mapC1Controls("Schneider\u0092s \u0093quote\u0094 \u0085 \u0080")).toBe("Schneider’s “quote” … €");
+    // Windows-1252's undefined slots carry nothing.
+    expect(mapC1Controls("a\u0081b\u008Dc")).toBe("abc");
+    expect(mapC1Controls("plain — text’s fine")).toBe("plain — text’s fine");
+  });
+});
+
+describe("decodeUtf8OrWindows1252", () => {
+  const bytes = (...parts: Array<string | number[]>) =>
+    new Uint8Array(parts.flatMap((p) => (typeof p === "string" ? [...new TextEncoder().encode(p)] : p)));
+
+  it("decodes well-formed UTF-8 exactly as before", () => {
+    const text = "Berühren — Pokémon’s café …";
+    expect(decodeUtf8OrWindows1252(new TextEncoder().encode(text))).toBe(text);
+  });
+
+  it("reads a legacy byte inside a UTF-8 page as Windows-1252, not U+FFFD", () => {
+    // "Schneider" 0x92 "s" (a Windows-1252 apostrophe) next to real UTF-8.
+    expect(decodeUtf8OrWindows1252(bytes("Schneider", [0x92], "s — Ber", [0xfc], "hren"))).toBe(
+      "Schneider’s — Berühren",
+    );
+    // A cut-off UTF-8 sequence at the end is one legacy byte too.
+    expect(decodeUtf8OrWindows1252(bytes("caf", [0xc3]))).toBe("cafÃ");
   });
 });

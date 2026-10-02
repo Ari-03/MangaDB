@@ -1210,14 +1210,26 @@ operator backfill (1 req/s, continues itself, ignores the enabled flag):
 to start while an ANN Import Run is running (one older than 12 hours counts
 as stranded and is ignored), stops after 5 failed fetches in a row across
 its continuations, logs why it stopped, and never touches a withdrawn line.
-Every ANN description goes through one cleaner (`cleanAnnDescription`):
-ANN's review link, its "Notes:" section, mojibake, and the trailing credit
-("Story by X and Art by Y.", shown by the byline already) are removed.
-Text stored before the cleaner changed is fixed without any fetch by
-`npx convex run ann:repairDescriptions '{}'`, which updates or clears a
-Release only when ANN wrote its current text from that line, and logs its
-counts (lines scanned, snapshots fixed, Releases updated and cleared,
-errors) at every hand-off and at the end. Seven Seas re-reads a book
+Every ANN description goes through one cleaner (`cleanAnnDescription`).
+It removes ANN's review link, its "Notes:" section, mojibake and C1
+control characters, stray entities, and the credit ANN appends ("Story by
+X and Art by Y.", already shown by the byline). A credit is removed only
+when it opens a sentence, or is the fused "Story and art by" glued to the
+text, so "…based on the series created by X and written by Y." stays
+whole. A text that is only retail or listing junk ("Book is in like-new
+condition.", "Book by Buronson") becomes no description. The page fetch
+decodes bytes itself, so a Windows-1252 byte in ANN's UTF-8 page becomes
+its character rather than U+FFFD. Text stored before the cleaner changed
+is fixed without any fetch by `npx convex run ann:repairDescriptions
+'{}'`, which updates or clears a Release only when ANN wrote its current
+text from that line, and logs its counts (lines scanned, snapshots fixed,
+Releases updated and cleared, errors) at every hand-off and at the end.
+Text a past cleaner cut short cannot be repaired offline: `npx convex run
+ann:listRefreshCandidates '{}'` lists the ANN ids by reason (`danglingEnd`,
+`replacementChar`, `c1Control`), and `npx convex run
+ann:backfillDescriptions '{"annIds": [...], "refresh": true}'` refetches
+exactly those pages and replaces or clears the text ANN wrote (never a
+publisher's, Open Library's or a human's). Seven Seas re-reads a book
 whose description an aggregator wrote, so its own blurb still replaces
 ANN's or Open Library's.
 
@@ -1306,6 +1318,13 @@ first all the same: the first weak text to fill a blank keeps it, and ANN's
 is the publisher's back-cover copy while Open Library's is contributor-written
 and uneven (on staging, One Piece Vol 1 got the Open Library text because the
 replay ran first).
+
+Open Library descriptions go through `cleanOlDescription`: a cataloguer's
+physical description ("1 volume (unpaged) : 19 cm") is no description,
+and a trailing citation (`"--P. [4] of cover.`, `"--Back cover.`) is
+dropped with the quote it closed. Stored text is fixed with no network by
+`npx convex run openLibrary:repairDescriptions '{}'`, which rewrites a
+Release only when Open Library wrote its current text from that edition.
 
 **Yen Press** (`convex/yenPress.ts`, parsers `convex/lib/yenPress.ts`;
 daily; post-v1). Yen is Hachette-distributed, so PRH never carried it.

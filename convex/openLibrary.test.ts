@@ -974,3 +974,78 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
     });
   });
 });
+
+describe("openLibrary.repairDescriptions — stored catalogue text, no network", () => {
+  it("re-cleans stored descriptions and fixes the Releases Open Library wrote", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    stubDump([
+      { ...CHAINSAW_22, description: "Denji is back." },
+      { ...CHAINSAW_22, key: "/books/OL2M", isbn_13: ["9781974766529"], description: "Edition two." },
+    ]);
+    await sync(t);
+    const { releaseId, publisherId, seriesId } = await buildSkeleton(t, { withRelease: true });
+    const second = await t.run(async (ctx) => {
+      const first = (await ctx.db.get(releaseId!))!;
+      await ctx.db.patch(first._id, { isbn13: "9781974766512" });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId: first.editionId,
+        format: "digital",
+        language: "en",
+        isbn13: "9781974766529",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+    });
+    await t.action(internal.openLibrary.replayDescriptions, {});
+    // What production stored before the cleaner: a citation and a collation.
+    const storeOld = (key: string, release: Id<"releases">, text: string) =>
+      t.run(async (ctx) => {
+        const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === key)!;
+        await ctx.db.patch(obs._id, { snapshot: { ...(obs.snapshot as object), description: text } });
+        await ctx.db.patch(release, { description: text });
+      });
+    await storeOld(CHAINSAW_22.key, releaseId!, '"Denji is back."--P. [4] of cover.');
+    await storeOld("/books/OL2M", second, "1 volume (unpaged) : 19 cm");
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("the repair never touches the network");
+    });
+
+    const repair = () => t.action(internal.openLibrary.repairDescriptions, {});
+    expect(await repair()).toEqual({
+      scanned: 2,
+      snapshotFixed: 2,
+      releaseUpdated: 1,
+      releaseCleared: 1,
+      errors: 0,
+      continued: false,
+    });
+    const description = (id: Id<"releases">) =>
+      t.run(async (ctx) => (await ctx.db.get(id))!.description ?? null);
+    expect(await description(releaseId!)).toBe("Denji is back.");
+    expect(await description(second)).toBeNull();
+    // Rerun: nothing left.
+    expect(await repair()).toMatchObject({ snapshotFixed: 0, releaseUpdated: 0, releaseCleared: 0 });
+
+    // A publisher's text is never Open Library's to repair.
+    await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "sevenseas" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: releaseId! },
+        seq: 99,
+        proposalId,
+        author: { kind: "source", sourceKey: "sevenseas" },
+        changes: [{ field: "description", after: '"Ours."--Back cover.' }],
+        comment: "Imported from Seven Seas Entertainment.",
+      });
+      await ctx.db.patch(releaseId!, { description: '"Ours."--Back cover.' });
+    });
+    expect(await repair()).toMatchObject({ releaseUpdated: 0 });
+    expect(await description(releaseId!)).toBe('"Ours."--Back cover.');
+  });
+});
