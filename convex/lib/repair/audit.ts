@@ -10,6 +10,7 @@ import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { revisionsOf } from "../../moderation";
 import type { evidence, recordRef } from "../../schema";
+import { coverageOf, editionSeriesIds, releasesOf } from "../editionRows";
 import { allocatePublicId } from "../publicIds";
 import { collapseEditionTakes, type OpMeta } from "../sensitiveOps";
 import { sameValue } from "../values";
@@ -251,19 +252,8 @@ export async function ensureVolume(
 
 // ---------- editions, coverage, releases ----------
 
-export async function coverageOf(ctx: MutationCtx, editionId: Id<"editions">) {
-  return await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-}
-
-export async function releasesOf(ctx: MutationCtx, editionId: Id<"editions">) {
-  return await ctx.db
-    .query("releases")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-}
+// Re-exported for ./ops.ts, which reads them from here with the rest.
+export { coverageOf, releasesOf };
 
 /** Active Editions covering a Volume. */
 export async function activeEditionsCovering(ctx: MutationCtx, volumeId: Id<"volumes">) {
@@ -286,16 +276,7 @@ export async function activeEditionsCovering(ctx: MutationCtx, volumeId: Id<"vol
 export async function refreshReleaseDenorms(ctx: MutationCtx, editionId: Id<"editions">) {
   const edition = await ctx.db.get(editionId);
   if (!edition) return;
-  const seriesIds: Id<"series">[] = [];
-  for (const row of await coverageOf(ctx, editionId)) {
-    const volume = await ctx.db.get(row.volumeId);
-    if (volume && !seriesIds.includes(volume.seriesId)) seriesIds.push(volume.seriesId);
-  }
-  // Unmapped Packaging covers nothing yet; its line still names the Series.
-  if (seriesIds.length === 0 && edition.editionLineId) {
-    const line = await ctx.db.get(edition.editionLineId);
-    if (line) seriesIds.push(line.seriesId);
-  }
+  const seriesIds = await editionSeriesIds(ctx, edition);
   for (const release of await releasesOf(ctx, editionId)) {
     if (sameValue(release.seriesIds, seriesIds) && release.publisherId === edition.publisherId) continue;
     await ctx.db.patch(release._id, { seriesIds, publisherId: edition.publisherId });

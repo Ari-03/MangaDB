@@ -48,6 +48,7 @@ import {
   targetOfRow,
   type TargetId,
 } from "./ratings";
+import { coverageOf, editionSeriesIds, releasesOf } from "./editionRows";
 import { fail } from "./errors";
 import { sameValue } from "./values";
 
@@ -272,33 +273,6 @@ async function transferProvenance(
 }
 
 /**
- * The Series an Edition's Releases carry (`seriesIds`, spec §8): those of
- * its covered Volumes in coverage order, or, for Unmapped Packaging that
- * covers nothing yet, its Edition Line's.
- */
-async function editionSeriesIds(
-  ctx: MutationCtx,
-  edition: Doc<"editions">,
-): Promise<Id<"series">[]> {
-  const coverage = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-    .collect();
-  const seriesIds: Id<"series">[] = [];
-  for (const row of coverage) {
-    const volume = await ctx.db.get(row.volumeId);
-    if (volume && !seriesIds.includes(volume.seriesId)) {
-      seriesIds.push(volume.seriesId);
-    }
-  }
-  if (seriesIds.length === 0 && edition.editionLineId) {
-    const line = await ctx.db.get(edition.editionLineId);
-    if (line) seriesIds.push(line.seriesId);
-  }
-  return seriesIds;
-}
-
-/**
  * The Series a pass on a Release with these `seriesIds` is filed under: the
  * first, merge-followed (reading.ts passSeriesId); none without coverage.
  */
@@ -328,11 +302,7 @@ async function recomputeReleaseDenorms(
   if (!edition) return;
   const seriesIds = await editionSeriesIds(ctx, edition);
   const passSeriesId = await passSeriesOf(ctx, seriesIds);
-  const releases = await ctx.db
-    .query("releases")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-  for (const release of releases) {
+  for (const release of await releasesOf(ctx, editionId)) {
     await repoint(ctx, log, "releases", release, {
       seriesIds,
       publisherId: edition.publisherId,
@@ -732,11 +702,7 @@ async function withDependents(ctx: MutationCtx, records: Records): Promise<Recor
     for (const row of coverage) out.editions.add(row.editionId);
   }
   for (const editionId of out.editions) {
-    const releases = await ctx.db
-      .query("releases")
-      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-      .collect();
-    for (const release of releases) out.releases.add(release._id);
+    for (const release of await releasesOf(ctx, editionId)) out.releases.add(release._id);
   }
   for (const releaseId of out.releases) {
     for (const bundleId of await bundlesOf(ctx, releaseId)) out.bundles.add(bundleId);
@@ -838,10 +804,7 @@ async function editionRatedSeries(ctx: MutationCtx, editionId: Id<"editions">) {
  * re-derives them, for carryEditionTracking / carryReleaseTracking.
  */
 export async function editionGovernance(ctx: MutationCtx, editionId: Id<"editions">) {
-  const releases = await ctx.db
-    .query("releases")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
+  const releases = await releasesOf(ctx, editionId);
   return {
     releaseSeries: new Map(releases.map((release) => [release._id, release.seriesIds])),
     ratedSeries: await editionRatedSeries(ctx, editionId),
@@ -996,10 +959,7 @@ export async function collapseEditionTakes(
   editionId: Id<"editions">,
   log: TransferLog = { repointed: [], removed: [], inserted: [] },
 ): Promise<number> {
-  const coverage = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
+  const coverage = await coverageOf(ctx, editionId);
   const volumeIds = [...new Set(coverage.map((row) => row.volumeId))];
   const volume = volumeIds.length === 1 ? await ctx.db.get(volumeIds[0]!) : null;
   if (!volume) return 0;
@@ -1045,10 +1005,7 @@ async function collapsibleTakes(ctx: QueryCtx, volumeId: Id<"volumes">): Promise
     .collect();
   let count = 0;
   for (const editionId of new Set(covering.map((row) => row.editionId))) {
-    const rows = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-      .collect();
+    const rows = await coverageOf(ctx, editionId);
     if (new Set(rows.map((row) => row.volumeId)).size !== 2) continue;
     const target: TargetId = { kind: "edition", id: editionId };
     count += (await ratingsOf(ctx, target)).length + (await reviewsOf(ctx, target)).length;
@@ -1387,10 +1344,7 @@ async function transferReferences(
         }
       }
       for (const row of coverage) {
-        const editionRows = await ctx.db
-          .query("volumeCoverages")
-          .withIndex("by_edition", (q) => q.eq("editionId", row.editionId))
-          .collect();
+        const editionRows = await coverageOf(ctx, row.editionId);
         if (editionRows.some((r) => r.volumeId === survivorId)) {
           await removeRow(ctx, log, "volumeCoverages", row);
         } else {
@@ -1493,15 +1447,9 @@ async function transferReferences(
       const loserBefore = await editionGovernance(ctx, loserId);
       const survivorBefore = await editionGovernance(ctx, survivorId);
 
-      const survivorCoverage = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", survivorId))
-        .collect();
+      const survivorCoverage = await coverageOf(ctx, survivorId);
       const maxOrder = survivorCoverage.reduce((max, r) => Math.max(max, r.order), 0);
-      const loserCoverage = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", loserId))
-        .collect();
+      const loserCoverage = await coverageOf(ctx, loserId);
       for (const row of [...loserCoverage].sort((a, b) => a.order - b.order)) {
         if (survivorCoverage.some((r) => r.volumeId === row.volumeId)) {
           await removeRow(ctx, log, "volumeCoverages", row);
@@ -1513,11 +1461,7 @@ async function transferReferences(
         }
       }
 
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", loserId))
-        .collect();
-      for (const release of releases) {
+      for (const release of await releasesOf(ctx, loserId)) {
         await repoint(ctx, log, "releases", release, { editionId: survivorId });
       }
       // Moved releases (and any the coverage change affected) get fresh
@@ -2389,11 +2333,8 @@ export async function impactOf(
     }
     case "edition": {
       const id = ref.id;
-      await count(
-        "Coverage rows",
-        ctx.db.query("volumeCoverages").withIndex("by_edition", (q) => q.eq("editionId", id)),
-      );
-      await count("Releases", ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", id)));
+      add("Coverage rows", (await coverageOf(ctx, id)).length);
+      add("Releases", (await releasesOf(ctx, id)).length);
       add("Ratings", (await ratingsOf(ctx, { kind: "edition", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "edition", id })).length);
       await count("Favorites", ctx.db.query("favorites").withIndex("by_edition", (q) => q.eq("editionId", id)));

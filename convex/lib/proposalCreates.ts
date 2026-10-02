@@ -25,6 +25,7 @@
 
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { editionSeriesIds } from "./editionRows";
 import { fail } from "./errors";
 import { volumePositionFor } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
@@ -829,22 +830,7 @@ export async function applyCreatePlan(
       const edition = await ctx.db.get(editionId);
       if (!edition) return bad("New release's edition vanished mid-apply.");
       // Denorms maintained by the shared write path (spec §8).
-      const seriesIds: Id<"series">[] = [];
-      const coverageRows = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-        .collect();
-      for (const row of coverageRows) {
-        const volume = await ctx.db.get(row.volumeId);
-        if (volume && !seriesIds.includes(volume.seriesId)) {
-          seriesIds.push(volume.seriesId);
-        }
-      }
-      // Unmapped Packaging covers nothing yet; its line still names the Series.
-      if (seriesIds.length === 0 && edition.editionLineId) {
-        const line = await ctx.db.get(edition.editionLineId);
-        if (line) seriesIds.push(line.seriesId);
-      }
+      const seriesIds = await editionSeriesIds(ctx, edition);
       const id = await ctx.db.insert("releases", {
         status: "active",
         editionId,
