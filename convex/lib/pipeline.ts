@@ -38,6 +38,7 @@ import { canonicalLabel } from "./bookTitle";
 import { partialDateSort, type DateParts } from "./dates";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
+import { followMerges, mergeSurvivor } from "./merges";
 import { getObservation, upsertObservation } from "./observations";
 import { applyRetrying } from "./occ";
 import { allocatePublicId } from "./publicIds";
@@ -104,21 +105,6 @@ export async function alreadyHandled(
 
 // ---------- publishers ----------
 
-/** A merged publisher row → its surviving company row (cycle-safe). */
-async function survivingPublisher(
-  ctx: MutationCtx,
-  doc: Doc<"publishers"> | null,
-): Promise<Doc<"publishers"> | null> {
-  let current = doc;
-  const visited = new Set<string>();
-  while (current && current.status === "merged" && current.mergedIntoId) {
-    if (visited.has(current._id)) return null;
-    visited.add(current._id);
-    current = await ctx.db.get(current.mergedIntoId);
-  }
-  return current;
-}
-
 /** The row a slug means today: current slug, rename redirect, then merges. */
 export async function publisherBySlug(
   ctx: MutationCtx,
@@ -136,7 +122,7 @@ export async function publisherBySlug(
       .unique();
     doc = redirect ? await ctx.db.get(redirect.publisherId) : null;
   }
-  return await survivingPublisher(ctx, doc);
+  return await mergeSurvivor(ctx, "publishers", doc);
 }
 
 /**
@@ -193,8 +179,8 @@ export async function findPublisherByName(
   // Every row's name, answered by its surviving company row.
   const rows: Array<{ doc: Doc<"publishers">; key: string }> = [];
   for (const pub of await ctx.db.query("publishers").collect()) {
-    const survivor = await survivingPublisher(ctx, pub);
-    if (survivor && survivor.status === "active") {
+    const survivor = await followMerges(ctx, "publishers", pub);
+    if (survivor) {
       rows.push({ doc: survivor, key: publisherNameKey(pub.name) });
     }
   }
