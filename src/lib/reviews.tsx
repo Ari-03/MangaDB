@@ -233,7 +233,7 @@ function ReviewPrompt({ noun }: { noun: string }) {
  * unfolded). Renders nothing signed out or before a username is claimed, so
  * the panel can hide itself.
  */
-export function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
+function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
   if (!convexClient) return null;
   return <OwnReviewInner target={target} noun={noun} />;
 }

@@ -27,7 +27,7 @@ import { slugParams } from "~/lib/slug";
 import { convexClient } from "~/providers";
 
 /** The Series page query's result; the SSR loader returns the same shape. */
-export type SeriesPage = NonNullable<FunctionReturnType<typeof api.catalog.seriesPage>>;
+type SeriesPage = NonNullable<FunctionReturnType<typeof api.catalog.seriesPage>>;
 export type Volume = SeriesPage["volumes"][number];
 export type EditionGroup = SeriesPage["editionGroups"][number];
 export type Book = EditionGroup["books"][number];
@@ -48,7 +48,7 @@ export function dateSpan(books: ReadonlyArray<Book>): string | null {
 }
 
 /** "Vol. 3", "Vol. 1–3", or null for a book with no mapped Volumes. */
-export function coveredText(
+function coveredText(
   coverage: ReadonlyArray<{ position: number; label: string | null; extent: string }>,
 ): string | null {
   const first = coverage[0];
@@ -90,7 +90,7 @@ export function bookTitle(seriesTitle: string, book: Book): string {
  * Volume this run has no book for (not on file, or never published by this
  * publisher), so gaps read as gaps instead of silently closing up.
  */
-export type Slot =
+type Slot =
   | { kind: "book"; book: Book }
   | { kind: "missing"; volume: Volume };
 
@@ -99,7 +99,7 @@ export type Slot =
  * Volume, placing each book at its first Volume and a gap marker wherever no
  * book covers one. Line paths are simply their books in line order.
  */
-export function pathSlots(group: EditionGroup, volumes: ReadonlyArray<Volume>): Slot[] {
+function pathSlots(group: EditionGroup, volumes: ReadonlyArray<Volume>): Slot[] {
   if (group.kind === "line") {
     return group.books.map((book) => ({ kind: "book", book }));
   }
@@ -209,7 +209,7 @@ function PathShelfView({
  * own number: its line position in a line, its Volume label otherwise. With
  * the overlay it wears its badges and offers the quick actions on hover.
  */
-export function BookShelfItem({
+function BookShelfItem({
   book,
   seriesTitle,
   showCoverage,

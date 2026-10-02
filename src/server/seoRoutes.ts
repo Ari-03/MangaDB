@@ -39,7 +39,7 @@ export const SITEMAP_CHILDREN = [
   "bundles",
   "months",
 ] as const;
-export type SitemapChild = (typeof SITEMAP_CHILDREN)[number];
+type SitemapChild = (typeof SITEMAP_CHILDREN)[number];
 
 // The record-backed children, mapped to convex/seo.ts's entity argument.
 const ENTITY_FOR_CHILD = {

@@ -24,7 +24,7 @@ import { useRunLock } from "~/lib/quickActions";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
-export const STATUS_LABELS = {
+const STATUS_LABELS = {
   planToRead: "Plan to Read",
   reading: "Reading",
   paused: "Paused",
@@ -34,7 +34,7 @@ export const STATUS_LABELS = {
 
 export type ReadingStatus = keyof typeof STATUS_LABELS;
 
-export const STATUS_ORDER: ReadingStatus[] = [
+const STATUS_ORDER: ReadingStatus[] = [
   "reading",
   "planToRead",
   "paused",

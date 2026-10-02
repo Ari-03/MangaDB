@@ -40,7 +40,7 @@ export type RatingSummary = NonNullable<FunctionReturnType<typeof api.ratings.su
  * "8.4 · 12 ratings" in the viewer's format (point10 when null), or null
  * with no ratings: an average is never shown without one.
  */
-export function ratingLine(
+function ratingLine(
   summary: { average: number | null; count: number },
   format: ScoreFormat | null,
 ): string | null {

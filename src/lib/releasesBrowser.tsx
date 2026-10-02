@@ -41,7 +41,7 @@ import {
 } from "~/lib/month";
 import { slugParams } from "~/lib/slug";
 
-export type ReleaseFormat = "physical" | "digital";
+type ReleaseFormat = "physical" | "digital";
 export type BrowseFilters = {
   format?: ReleaseFormat;
   publisher?: string;

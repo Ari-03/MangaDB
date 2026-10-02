@@ -22,7 +22,7 @@ const CLOTH = [
  * cover URL; the 404 for art nobody has is caught by <Cover>, which tries its
  * next candidate and ends at cloth.
  */
-export function coverPath(isbn13: string): string {
+function coverPath(isbn13: string): string {
   return `/covers/${isbn13}.jpg`;
 }
 

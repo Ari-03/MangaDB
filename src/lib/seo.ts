@@ -21,7 +21,7 @@ export function siteOrigin(): string {
 }
 
 /** Absolute canonical URL for a site path. */
-export function absoluteUrl(path: string): string {
+function absoluteUrl(path: string): string {
   return `${siteOrigin()}${path}`;
 }
 
