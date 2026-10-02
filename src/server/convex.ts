@@ -1,5 +1,7 @@
 import { ConvexHttpClient } from "convex/browser";
 
+import { convexUrl } from "~/lib/convexUrl";
+
 /**
  * Server-side Convex client for SSR loaders (spec §9: SSR reads go through
  * the Convex HTTP client). Pass the viewer's Clerk "convex"-template token —
@@ -13,8 +15,7 @@ import { ConvexHttpClient } from "convex/browser";
 export function convexServerClient(
   authToken?: string | null,
 ): ConvexHttpClient | null {
-  const url =
-    import.meta.env.VITE_CONVEX_URL ?? process.env.VITE_CONVEX_URL ?? null;
+  const url = convexUrl();
   if (!url) return null;
   const client = new ConvexHttpClient(url);
   if (authToken) client.setAuth(authToken);

@@ -6,6 +6,7 @@ import type {
 } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
+import { convexUrl } from "~/lib/convexUrl";
 import { showMature } from "~/lib/mature";
 import { timingNeedsToday, todaySortKey } from "~/lib/month";
 
@@ -30,9 +31,7 @@ export async function catalogQuery<Query extends FunctionReference<"query">>(
   args: FunctionArgs<Query>,
 ): Promise<FunctionReturnType<Query> | null> {
   if (client === undefined) {
-    const url =
-      import.meta.env.VITE_CONVEX_URL ??
-      (typeof process === "undefined" ? undefined : process.env.VITE_CONVEX_URL);
+    const url = convexUrl();
     client = url ? new ConvexHttpClient(url) : null;
   }
   return client ? await client.query(query, args) : null;

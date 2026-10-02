@@ -22,6 +22,7 @@
 import { env, waitUntil } from "cloudflare:workers";
 
 import type { CoverShelf } from "~/lib/homeShelves";
+import { readEdgeCache } from "~/server/edgeCache";
 
 const COVER_PATH = /^\/covers\/(97[89]\d{10})\.jpg$/;
 const ISBN13 = /^97[89]\d{10}$/;
@@ -60,11 +61,7 @@ export async function coverResponse(request: Request): Promise<Response | null> 
   // Edge cache first. Keyed on the bare path so query strings can't bust it.
   const cache = caches.default;
   const cacheKey = new Request(`${url.origin}${url.pathname}`);
-  // A failed read is a miss: the cache may cost a lookup, never the art.
-  const cached = await cache.match(cacheKey).catch((error: unknown) => {
-    console.error("covers: edge cache read failed", error);
-    return undefined;
-  });
+  const cached = await readEdgeCache(cacheKey, "covers: edge cache read failed");
   if (cached) {
     const hit = new Response(cached.body, cached);
     hit.headers.set("X-Cover-Cache", "hit");
