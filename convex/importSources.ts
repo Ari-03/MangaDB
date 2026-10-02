@@ -362,30 +362,6 @@ export const setBootstrapMode = mutation({
 });
 
 /**
- * Give an existing registry row authority over a field category it has none
- * for yet (seedRegistry only inserts missing rows). Never changes a category
- * that is already set, so an Administrator's edit stands.
- *   npx convex run importSources:addFieldAuthorityInternal '{"key":"ann","category":"isbn","level":"weak"}'
- */
-export const addFieldAuthorityInternal = internalMutation({
-  args: {
-    key: v.string(),
-    category: v.string(),
-    level: v.union(v.literal("authoritative"), v.literal("standard"), v.literal("weak")),
-  },
-  handler: async (ctx, { key, category, level }) => {
-    const source = await getSourceByKey(ctx, key.trim().toLowerCase());
-    if (!source) throw new Error(`No source with key "${key}".`);
-    const current: Record<string, string | undefined> = source.fieldAuthority;
-    if (current[category] !== undefined) return { changed: false };
-    await ctx.db.patch(source._id, {
-      fieldAuthority: { ...source.fieldAuthority, [category]: level },
-    });
-    return { changed: true };
-  },
-});
-
-/**
  * Backfill the categories V1_SOURCE_DEFAULTS gained after a deployment was
  * seeded (seedRegistry only inserts missing rows): each stored default row
  * gets every default category it lacks. A category already set is never

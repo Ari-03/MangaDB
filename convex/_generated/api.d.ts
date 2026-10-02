@@ -14,7 +14,6 @@ import type * as catalogPages from "../catalogPages.js";
 import type * as collection from "../collection.js";
 import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
-import type * as debugFetch from "../debugFetch.js";
 import type * as favorites from "../favorites.js";
 import type * as follows from "../follows.js";
 import type * as importSources from "../importSources.js";
@@ -106,7 +105,6 @@ declare const fullApi: ApiFromModules<{
   collection: typeof collection;
   comments: typeof comments;
   crons: typeof crons;
-  debugFetch: typeof debugFetch;
   favorites: typeof favorites;
   follows: typeof follows;
   importSources: typeof importSources;
