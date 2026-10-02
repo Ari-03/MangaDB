@@ -1,9 +1,11 @@
 // Run plumbing shared by the sync actions: the registry lookup, the cover
 // store, and the enablement gate of the chained importers (ANN, Yen Press,
 // PRH, OpenLibrary, the Kodansha backlist). A run spans many action links;
-// disabling a source must stop the runs the scheduler started, while a run
-// an operator forced on a disabled source (imports:startRun, then the sync
-// with its runId) finishes.
+// disabling a source must stop the runs the scheduler started. The gate lets
+// a run an operator forced on a disabled source (imports:startRun, then the
+// sync with its runId) through; what happens next is the source's own: ANN,
+// Open Library and the Kodansha backlist write to the end, Yen Press's
+// applies refuse every write, and PRH closes the run as failed at once.
 
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";

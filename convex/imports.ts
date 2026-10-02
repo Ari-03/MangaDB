@@ -33,7 +33,7 @@ const MAX_RUN_ERRORS = 50;
 /**
  * Open an Import Run. Syncs open their own with `automatic: true`; an
  * operator forcing a run of a disabled source calls this by hand and passes
- * the id to the sync, which then runs to completion (lib/importRuns.ts).
+ * the id to the sync; lib/importRuns.ts says what each source then does.
  */
 export const startRun = internalMutation({
   args: { sourceKey: v.string(), automatic: v.optional(v.boolean()) },

@@ -12,6 +12,7 @@ import * as catalogTitle from "./lib/catalogTitle";
 import { parseTitle } from "./lib/prh";
 import {
   type CatalogOverrides,
+  insertObservation,
   insertPublisher,
   insertSeries,
   insertSourceRevision,
@@ -966,17 +967,60 @@ describe("prh.sync — continuation links", () => {
     });
   });
 
-  it("finishes an operator-forced run on a disabled source", async () => {
+  it("finishes an operator-forced run on an enabled source", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
-    expect(await sync(t)).toEqual({ skipped: "disabled" });
     stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
     const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
-    const result = await sync(t, { runId });
-    expect(result).toMatchObject({ runId, recordsSeen: 1 });
+    expect(await sync(t, { runId })).toMatchObject({ runId, recordsSeen: 1 });
     await t.run(async (ctx) => {
-      expect((await ctx.db.get(runId))?.status).toBe("succeeded");
+      const run = await ctx.db.get(runId);
+      expect(run).toMatchObject({ status: "succeeded" });
+      expect(run?.automatic).toBeUndefined();
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519828"]);
+    });
+  });
+
+  // applyTitle refuses every write on a disabled source, so a forced run
+  // could only fetch, write nothing, and let a full sweep's withdrawal pass
+  // mark every title it never bumped. It is refused before any fetch.
+  it("refuses an operator-forced run on a disabled source", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const isbn13 = "9781646094356";
+    const observationId = await t.run(async (ctx) => {
+      const { releaseId } = await seedCatalog(ctx, {
+        series: { title: "Witch Hat Atelier" },
+        volume: { position: 15 },
+        release: { isbn13, pubDate: { year: 2099, month: 1, day: 15, sort: 20990115 } },
+      });
+      return await insertObservation(ctx, {
+        sourceKey: "prh",
+        sourceRecordId: isbn13,
+        recordRef: { type: "release", id: releaseId },
+      });
+    });
+    const proposalsBefore = await t.run(async (ctx) => (await ctx.db.query("proposals").collect()).length);
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
+    expect(await sync(t)).toEqual({ skipped: "disabled" });
+
+    // A full sweep that still lists the imported title, and one new title.
+    stubApi([
+      { isbn: isbn13, title: "Witch Hat Atelier 15", seriesNumber: 15, onsale: "2099-01-15" },
+      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
+    ]);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
+    expect(await sync(t, { runId })).toEqual({ skipped: "disabled" });
+    expect(requestedUrls).toHaveLength(0);
+    await t.run(async (ctx) => {
+      const run = await ctx.db.get(runId);
+      expect(run?.status).toBe("failed");
+      expect(run?.errors.at(-1)).toMatch(/source was disabled/);
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o._id)).toEqual([observationId]);
+      expect(observations[0]).toMatchObject({ withdrawn: false });
+      expect(await ctx.db.query("proposals").collect()).toHaveLength(proposalsBefore);
     });
   });
 

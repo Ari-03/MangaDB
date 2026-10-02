@@ -141,9 +141,22 @@ export const sync = internalAction({
       }
       const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
       // The shared gate: a scheduled run whose source is disabled between
-      // links closes as "stopped"; an operator-forced one finishes.
+      // links closes as "stopped".
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
+      // An operator-forced run on a disabled source is refused: applyTitle
+      // refuses every write, so the run would fetch, import nothing, report
+      // success, and let a full sweep withdraw every title it never bumped.
+      if (!source.enabled) {
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId,
+          status: "failed",
+          recordsSeen: args.seen ?? 0,
+          recordsChanged: args.changed ?? 0,
+          errors: [...(args.errors ?? []), "Stopped mid-run: the source was disabled."],
+        });
+        return { skipped: "disabled" as const };
+      }
       const runStartedAt = args.runStartedAt ?? linkStartedAt;
       const delay = args.politeDelayMs ?? 350;
       const maxPages = args.maxPages ?? 50;
