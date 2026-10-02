@@ -8,23 +8,27 @@
 // lands in a public Revision; bounded repairTrails records on the Proposal
 // keep the trail, and large populations move in bounded legs (Standards 1).
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
-import schema from "../../schema";
+import type { MutationCtx } from "../../_generated/server";
+import {
+  insertBundle,
+  insertBundleMember,
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVariant,
+  insertVolume,
+} from "../../test.factories";
+import { makeT, type TestT as T } from "../../test.helpers";
+import { doubtSplit, insertBook, insertDoubt } from "../../test.moderation";
 import { TRAIL_CHUNK } from "./audit";
 import type { RepairEntry } from "./entries";
 import { SWEEP_BUDGET, sweepPage } from "./ops";
-
-function makeT() {
-  const t = convexTest(schema);
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
-}
-type T = ReturnType<typeof makeT>;
 
 const READER = "reader";
 const OTHER = "other";
@@ -57,36 +61,9 @@ async function seed(t: T) {
     await user("admin", "Ari", "private", "administrator");
     const reader = await user(READER, "dave", "public");
     const other = await user(OTHER, "erin", "private");
-    const publisherId = await ctx.db.insert("publishers", { status: "active", name: "Yen Press", slug: "yen-press" });
-    const source = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 500,
-      title: "Doubt!!",
-      altTitles: [],
-      searchText: "Doubt!!",
-    });
-    const vol = (label: string | undefined, position: number, publicId: number) =>
-      ctx.db.insert("volumes", { status: "active", publicId, seriesId: source, label, position });
-    const edition = async (volumeId: Id<"volumes">, publicId: number, isbn13: string) => {
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13,
-        publisherId,
-        seriesIds: [source],
-      });
-      return { editionId, releaseId };
-    };
-    const a1 = await vol("1", 1, 501);
-    const shared2 = await vol("2", 2, 502);
-    const unlabeled = await vol(undefined, 3, 503);
-    await edition(a1, 511, "9781591169086");
-    const b2 = await edition(shared2, 512, "9780316335164");
-    const b1 = await edition(unlabeled, 513, "9780316335157");
+    const publisherId = await insertPublisher(ctx, { name: "Yen Press" });
+    const doubt = await insertDoubt(ctx, publisherId);
+    const { source, unlabeled, b1Edition: b1, b2Edition: b2 } = doubt;
 
     await ctx.db.insert("userSeriesStates", {
       userId: reader,
@@ -110,25 +87,70 @@ async function seed(t: T) {
       createdAt: 0,
     });
 
-    const entry: RepairEntry = {
-      kind: "splitSeries",
-      key: "split:doubt",
-      reason: "two works",
-      sourceSeriesId: source,
-      sourceTitle: "Doubt!!",
-      title: "Doubt",
-      altTitles: [],
-      volumes: [{ volumeId: unlabeled, label: null, newLabel: "1", editionIds: [b1.editionId] }],
-      editions: [{ editionId: b2.editionId, fromVolumeIds: [shared2], labels: ["2"], releaseIds: [b2.releaseId] }],
-      placeholderLabels: [],
-      observationIds: [],
-    };
+    const entry = doubtSplit(doubt);
     return { reader, other, publisherId, source, unlabeled, b1, b2, entry };
   });
 }
 
 const splitOff = (t: T) =>
   t.run(async (ctx) => (await ctx.db.query("series").collect()).find((row) => row.title === "Doubt")!);
+
+/** A Series `title` with a vol "1". */
+async function insertWithVol1(ctx: MutationCtx, title: string) {
+  const seriesId = await insertSeries(ctx, { title });
+  return { seriesId, volumeId: await insertVolume(ctx, { seriesId }) };
+}
+
+/**
+ * "Noragami" with a book on each of Volumes "1" and "2", and a box-set book
+ * on a "Box" Volume of `boxSeriesId` (default: Noragami itself).
+ */
+async function insertNoragamiBox(ctx: MutationCtx, publisherId: Id<"publishers">, boxSeriesId?: Id<"series">) {
+  const series = await insertSeries(ctx, { publicId: 700, title: "Noragami" });
+  const book = async (seriesId: Id<"series">, label: string, position: number, isbn13: string) => {
+    const volumeId = await insertVolume(ctx, { seriesId, label, position });
+    return { volumeId, ...(await insertBook(ctx, { publisherId, seriesId, volumeId, release: { isbn13 } })) };
+  };
+  const v1 = (await book(series, "1", 1, "9780000000011")).volumeId;
+  await book(series, "2", 2, "9780000000028");
+  const box = await book(boxSeriesId ?? series, "Box", 9, "9780000000059");
+  return { series, v1, box };
+}
+
+/** The member ISBNs of the box set: Noragami vols 1 and 2. */
+const MEMBERS = ["9780000000011", "9780000000028"];
+
+/** A releaseBundle entry turning the box set into "Noragami Box Set" of `isbns`, in order. */
+const bundleEntry = (box: { releaseId: Id<"releases"> }, isbns: string[], key = "b"): RepairEntry => ({
+  kind: "releaseBundle",
+  key,
+  reason: "box set",
+  bundleId: null,
+  box: { releaseId: box.releaseId, name: "Noragami Box Set" },
+  members: isbns.map((isbn13, i) => ({ isbn13, order: i + 1 })),
+  retireVolumeIds: [],
+});
+
+/** A remodelEdition entry turning the box set into a Bundle covering `labels` of `targetSeriesId`. */
+const remodelEntry = (
+  box: { editionId: Id<"editions">; volumeId: Id<"volumes"> },
+  targetSeriesId: Id<"series">,
+  labels: string[],
+  options: { key?: string; retire?: boolean } = {},
+): RepairEntry => ({
+  kind: "remodelEdition",
+  key: options.key ?? "b",
+  reason: "box set",
+  editionId: box.editionId,
+  volumeId: box.volumeId,
+  targetSeriesId,
+  line: null,
+  bundle: { name: "Noragami Box Set" },
+  groups: [
+    { releaseIds: null, coverage: labels.map((label) => ({ label, volumeId: null, extent: "complete" as const })), linePosition: null },
+  ],
+  retireVolumeIds: options.retire ? [box.volumeId] : [],
+});
 
 /** Every personal row the split should have re-filed, with the Series it now sits under. */
 const personalSeries = (t: T, s: Awaited<ReturnType<typeof seed>>) =>
@@ -225,14 +247,8 @@ describe("series split (B10)", () => {
     await asOther(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
     await asOther(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
     await t.run(async (ctx) => {
-      const bundleId = await ctx.db.insert("releaseBundles", {
-        status: "active",
-        publicId: 950,
-        name: "Doubt Box",
-        publisherId: s.publisherId,
-        format: "physical",
-      });
-      await ctx.db.insert("bundleMemberships", { bundleId, releaseId: s[member].releaseId, order: 1 });
+      const bundleId = await insertBundle(ctx, { name: "Doubt Box", publisherId: s.publisherId, format: "physical" });
+      await insertBundleMember(ctx, { bundleId, releaseId: s[member].releaseId });
       await ctx.db.insert("collectionEntries", { userId: s.other, bundleId, state: "owned" });
     });
     return s;
@@ -310,37 +326,19 @@ describe("series split (B10)", () => {
 });
 
 describe("box set to bundle (B11)", () => {
-  /** A box-set Release on its own Edition, the reader owning it, and two member Releases. */
-  async function seedBox(t: T) {
+  /**
+   * A box-set Release on its own Edition, which the reader (with a Variant)
+   * and the other reader own, and two member Releases on "Noragami". The
+   * box set sits on "Noragami" too, or on "Doubt!!" given `onSource`.
+   */
+  async function seedBox(t: T, onSource = false) {
     const s = await seed(t);
     return await t.run(async (ctx) => {
-      const series = await ctx.db.insert("series", { status: "active", publicId: 700, title: "Noragami", altTitles: [], searchText: "Noragami" });
-      const volume = (label: string, publicId: number) =>
-        ctx.db.insert("volumes", { status: "active", publicId, seriesId: series, label, position: Number(label) || 9 });
-      const release = async (volumeId: Id<"volumes">, publicId: number, isbn13: string) => {
-        const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId: s.publisherId });
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-        const releaseId = await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
-          isbn13,
-          publisherId: s.publisherId,
-          seriesIds: [series],
-        });
-        return { editionId, releaseId };
-      };
-      const v1 = await volume("1", 701);
-      const v2 = await volume("2", 702);
-      const boxVol = await volume("Box", 703);
-      await release(v1, 711, "9780000000011");
-      await release(v2, 712, "9780000000028");
-      const box = await release(boxVol, 713, "9780000000059");
-      const variantId = await ctx.db.insert("releaseVariants", { status: "active", releaseId: box.releaseId, name: "Exclusive" });
-      await ctx.db.insert("collectionEntries", { userId: s.reader, releaseId: box.releaseId, state: "owned", variantId });
-      await ctx.db.insert("collectionEntries", { userId: s.other, releaseId: box.releaseId, state: "owned" });
-      return { ...s, series, v1, boxVol, box };
+      const box = await insertNoragamiBox(ctx, s.publisherId, onSource ? s.source : undefined);
+      const variantId = await insertVariant(ctx, { releaseId: box.box.releaseId, name: "Exclusive" });
+      await ctx.db.insert("collectionEntries", { userId: s.reader, releaseId: box.box.releaseId, state: "owned", variantId });
+      await ctx.db.insert("collectionEntries", { userId: s.other, releaseId: box.box.releaseId, state: "owned" });
+      return { ...s, ...box };
     });
   }
 
@@ -360,9 +358,7 @@ describe("box set to bundle (B11)", () => {
     const s = await seedBox(t);
     // The other reader already marked the bundle Wanted: Owned wins the clash.
     const existing = await t.run(async (ctx) => {
-      const bundleId = await ctx.db.insert("releaseBundles", {
-        status: "active",
-        publicId: 900,
+      const bundleId = await insertBundle(ctx, {
         name: "Noragami Box Set",
         publisherId: s.publisherId,
         format: "physical",
@@ -371,18 +367,7 @@ describe("box set to bundle (B11)", () => {
       await ctx.db.insert("collectionEntries", { userId: s.other, bundleId, state: "wanted" });
       return bundleId;
     });
-    const entry: RepairEntry = {
-      kind: "releaseBundle",
-      key: "b",
-      reason: "box set",
-      bundleId: null,
-      box: { releaseId: s.box.releaseId, name: "Noragami Box Set" },
-      members: [
-        { isbn13: "9780000000011", order: 1 },
-        { isbn13: "9780000000028", order: 2 },
-      ],
-      retireVolumeIds: [],
-    };
+    const entry = bundleEntry(s.box, MEMBERS);
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
 
     const entries = await entriesOf(t);
@@ -411,20 +396,7 @@ describe("box set to bundle (B11)", () => {
   it("hands the box set's Collection Entries to the new bundle (remodelEdition)", async () => {
     const t = makeT();
     const s = await seedBox(t);
-    const entry: RepairEntry = {
-      kind: "remodelEdition",
-      key: "b",
-      reason: "box set",
-      editionId: s.box.editionId,
-      volumeId: s.boxVol,
-      targetSeriesId: s.series,
-      line: null,
-      bundle: { name: "Noragami Box Set 1" },
-      groups: [
-        { releaseIds: null, coverage: ["1", "2"].map((label) => ({ label, volumeId: null, extent: "complete" as const })), linePosition: null },
-      ],
-      retireVolumeIds: [s.boxVol],
-    };
+    const entry = remodelEntry(s.box, s.series, ["1", "2"], { retire: true });
     expect((await run(t, [entry]))[0]?.status).toBe("applied");
     const bundle = await t.run(async (ctx) => (await ctx.db.query("releaseBundles").unique())!);
     const entries = await entriesOf(t);
@@ -441,11 +413,7 @@ describe("box set to bundle (B11)", () => {
    * which follows that public default.
    */
   async function seedPrivateBox(t: T) {
-    const s = await seedBox(t);
-    await t.run(async (ctx) => {
-      await ctx.db.patch(s.boxVol, { seriesId: s.source });
-      await ctx.db.patch(s.box.releaseId, { seriesIds: [s.source] });
-    });
+    const s = await seedBox(t, true);
     await asReader(t).mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
     await asReader(t).mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
     return s;
@@ -469,37 +437,13 @@ describe("box set to bundle (B11)", () => {
   it("keeps a privately owned box set private as a Bundle of public-Series members (releaseBundle)", async () => {
     const t = makeT();
     const s = await seedPrivateBox(t);
-    await expectStaysPrivate(t, {
-      kind: "releaseBundle",
-      key: "b",
-      reason: "box set",
-      bundleId: null,
-      box: { releaseId: s.box.releaseId, name: "Noragami Box Set" },
-      members: [
-        { isbn13: "9780000000011", order: 1 },
-        { isbn13: "9780000000028", order: 2 },
-      ],
-      retireVolumeIds: [],
-    });
+    await expectStaysPrivate(t, bundleEntry(s.box, MEMBERS));
   });
 
   it("keeps a privately owned box set private as a Bundle of public-Series members (remodelEdition)", async () => {
     const t = makeT();
     const s = await seedPrivateBox(t);
-    await expectStaysPrivate(t, {
-      kind: "remodelEdition",
-      key: "b",
-      reason: "box set",
-      editionId: s.box.editionId,
-      volumeId: s.boxVol,
-      targetSeriesId: s.series,
-      line: null,
-      bundle: { name: "Noragami Box Set 1" },
-      groups: [
-        { releaseIds: null, coverage: ["1", "2"].map((label) => ({ label, volumeId: null, extent: "complete" as const })), linePosition: null },
-      ],
-      retireVolumeIds: [],
-    });
+    await expectStaysPrivate(t, remodelEntry(s.box, s.series, ["1", "2"]));
   });
 
   it("keeps an existing memberless Bundle's owner private when members join it", async () => {
@@ -513,7 +457,7 @@ describe("box set to bundle (B11)", () => {
         .withIndex("by_user_release", (q) => q.eq("userId", s.reader).eq("releaseId", s.box.releaseId))
         .unique();
       await ctx.db.delete(boxEntry!._id);
-      const id = await ctx.db.insert("releaseBundles", { status: "active", publicId: 901, name: "Empty Box", publisherId: s.publisherId, format: "physical" });
+      const id = await insertBundle(ctx, { name: "Empty Box", publisherId: s.publisherId, format: "physical" });
       await ctx.db.insert("collectionEntries", { userId: s.reader, bundleId: id, state: "owned" });
       return id;
     });
@@ -643,26 +587,10 @@ describe("bounded personal repair work (Standards 1)", () => {
     it(`hands a large box set's Collection Entries to its Bundle over several legs, keeping private owners private (${kind})`, async () => {
       const t = makeT();
       const s = await seed(t);
-      const box = await t.run(async (ctx) => {
-        const series = await ctx.db.insert("series", { status: "active", publicId: 700, title: "Noragami", altTitles: [], searchText: "Noragami" });
-        const release = async (seriesId: Id<"series">, label: string, publicId: number, isbn13: string) => {
-          const volumeId = await ctx.db.insert("volumes", { status: "active", publicId, seriesId, label, position: 1 });
-          const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId: s.publisherId });
-          await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-          const releaseId = await ctx.db.insert("releases", {
-            status: "active",
-            editionId,
-            format: "physical",
-            language: "en",
-            isbn13,
-            publisherId: s.publisherId,
-            seriesIds: [seriesId],
-          });
-          return { series, volumeId, editionId, releaseId };
-        };
-        await release(series, "1", 701, "9780000000011");
+      const { series, box } = await t.run(async (ctx) => {
         // The box set sits on "Doubt!!", which every owner keeps private.
-        const made = await release(s.source, "Box", 713, "9780000000059");
+        const made = await insertNoragamiBox(ctx, s.publisherId, s.source);
+        const releaseId = made.box.releaseId;
         for (let i = 0; i < SWEEP_BUDGET + 10; i++) {
           const userId = await ctx.db.insert("users", {
             clerkSubject: `owner${i}`,
@@ -679,7 +607,7 @@ describe("bounded personal repair work (Standards 1)", () => {
             followPromptDismissed: false,
             ownershipVisibility: "private",
           });
-          await ctx.db.insert("collectionEntries", { userId, releaseId: made.releaseId, state: "owned" });
+          await ctx.db.insert("collectionEntries", { userId, releaseId, state: "owned" });
         }
         return made;
       });
@@ -690,29 +618,10 @@ describe("bounded personal repair work (Standards 1)", () => {
         }
       };
       await privateOwnership();
-      const entry: RepairEntry =
+      const entry =
         kind === "releaseBundle"
-          ? {
-              kind,
-              key: "big-box",
-              reason: "box set",
-              bundleId: null,
-              box: { releaseId: box.releaseId, name: "Noragami Box Set" },
-              members: [{ isbn13: "9780000000011", order: 1 }],
-              retireVolumeIds: [],
-            }
-          : {
-              kind,
-              key: "big-box",
-              reason: "box set",
-              editionId: box.editionId,
-              volumeId: box.volumeId,
-              targetSeriesId: box.series,
-              line: null,
-              bundle: { name: "Noragami Box Set" },
-              groups: [{ releaseIds: null, coverage: [{ label: "1", volumeId: null, extent: "complete" }], linePosition: null }],
-              retireVolumeIds: [],
-            };
+          ? bundleEntry(box, ["9780000000011"], "big-box")
+          : remodelEntry(box, series, ["1"], { key: "big-box" });
       const boxState = () =>
         t.run(async (ctx) => ({
           release: (await ctx.db.get(box.releaseId))?.status,
@@ -739,13 +648,8 @@ describe("bounded personal repair work (Standards 1)", () => {
     });
   }
 
-  /** A Series "Else" with a vol 1, and the rows under the moved book still filed elsewhere. */
-  const addElse = (t: T) =>
-    t.run(async (ctx) => {
-      const id = await ctx.db.insert("series", { status: "active", publicId: 600, title: "Else", altTitles: [], searchText: "Else" });
-      await ctx.db.insert("volumes", { status: "active", publicId: 601, seriesId: id, label: "1", position: 1 });
-      return id;
-    });
+  const addElse = (t: T) => t.run(async (ctx) => (await insertWithVol1(ctx, "Else")).seriesId);
+  /** How many rows under the moved book are still filed outside `seriesId`. */
   const staleUnder = (t: T, s: Awaited<ReturnType<typeof seed>>, seriesId: Id<"series">, volumes: boolean) =>
     t.run(async (ctx) => {
       const passes = await ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", s.b1.releaseId)).collect();
@@ -830,12 +734,8 @@ describe("other repairs that move tracking between Series", () => {
     await asOther.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" });
     await asOther.mutation(api.sharing.setSeriesVisibility, { seriesId: s.source, kind: "ownership", visibility: "private" });
     await asOther.mutation(api.collection.setReleaseEntry, { releaseId: s.b1.releaseId, state: "owned" });
-    const other = await t.run(async (ctx) => {
-      const id = await ctx.db.insert("series", { status: "active", publicId: 600, title: "Else", altTitles: [], searchText: "Else" });
-      const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: 601, seriesId: id, label: "1", position: 1 });
-      return { id, volumeId };
-    });
-    return { ...s, else: other.id, elseVol: other.volumeId, asOther };
+    const other = await t.run((ctx) => insertWithVol1(ctx, "Else"));
+    return { ...s, else: other.seriesId, elseVol: other.volumeId, asOther };
   }
   const profileOf = async (t: T, username: string) => {
     const profile = await t.query(api.sharing.publicProfile, { username });
@@ -928,20 +828,10 @@ describe("other repairs that move tracking between Series", () => {
         .filter((v) => v.label !== undefined)
         .sort((a, b) => a.position - b.position)
         .map((v) => v._id);
-      await ctx.db.insert("volumes", { status: "active", publicId: 602, seriesId: s.else, label: "2", position: 2 });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 514, publisherId: s.publisherId });
-      for (const [i, volumeId] of labelled.entries()) {
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: i + 1, extent: "complete" });
-      }
-      await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13: "9780316335140",
-        publisherId: s.publisherId,
-        seriesIds: [s.source],
-      });
+      await insertVolume(ctx, { seriesId: s.else, position: 2 });
+      const editionId = await insertEdition(ctx, { publisherId: s.publisherId });
+      for (const [i, volumeId] of labelled.entries()) await insertCoverage(ctx, { editionId, volumeId, order: i + 1 });
+      await insertRelease(ctx, { editionId, isbn13: "9780316335140", publisherId: s.publisherId, seriesIds: [s.source] });
       const favoriteId = await ctx.db.insert("favorites", { userId: s.reader, seriesId: s.source, editionId });
       return { editionId, labelled, favoriteId };
     });
@@ -1048,11 +938,7 @@ describe("other repairs that move tracking between Series", () => {
       const t = makeT();
       const s = await seedMover(t);
       await placeIntoElse(t, s);
-      const gamma = await t.run(async (ctx) => {
-        const id = await ctx.db.insert("series", { status: "active", publicId: 700, title: "Gamma", altTitles: [], searchText: "Gamma" });
-        await ctx.db.insert("volumes", { status: "active", publicId: 701, seriesId: id, label: "1", position: 1 });
-        return id;
-      });
+      const gamma = await t.run(async (ctx) => (await insertWithVol1(ctx, "Gamma")).seriesId);
       const cover: RepairEntry = {
         kind: "setCoverage",
         key: "cover-gamma",
@@ -1080,11 +966,9 @@ describe("other repairs that move tracking between Series", () => {
     const t = makeT();
     const s = await seedMover(t);
     const second = await t.run(async (ctx) => {
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
+      const releaseId = await insertRelease(ctx, {
         editionId: s.b1.editionId,
         format: "digital",
-        language: "en",
         isbn13: "9780316335133",
         publisherId: s.publisherId,
         seriesIds: [s.source],
