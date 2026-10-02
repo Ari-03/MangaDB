@@ -278,7 +278,9 @@ export async function workMatch(
       .collect();
     const known = new Set<string>();
     for (const credit of credits) {
-      // People only a publisher names have no ANN id to compare.
+      // ANN's own credits only: a publisher row names its person by name
+      // alone, which may have matched an ANN namesake (people.ts).
+      if (credit.source !== undefined) continue;
       const person = await ctx.db.get(credit.personId);
       if (person?.annId !== undefined) known.add(person.annId);
     }

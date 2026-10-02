@@ -20,6 +20,11 @@ describe("parseAuthorCredits", () => {
       "Kazuo Koike: author",
       "Goseki Kojima: author",
     ]);
+    // A long name is fine beside labels: "Mo Xiang Tong Xiu" is one pen name.
+    expect(credits("Mo Xiang Tong Xiu; Illustrated by Luo Di Cheng Qiu")).toEqual([
+      "Mo Xiang Tong Xiu: story",
+      "Luo Di Cheng Qiu: art",
+    ]);
     // Lowercase pen names are names.
     expect(credits("coolkyousinnjya")).toEqual(["coolkyousinnjya: author"]);
     expect(credits("akabeko")).toEqual(["akabeko: author"]);
@@ -40,9 +45,9 @@ describe("parseAuthorCredits", () => {
     expect(
       credits("Written and illustrated by Shin'ichi Sakamoto. Translated by Michael Gombos."),
     ).toEqual(["Shin'ichi Sakamoto: story_art"]);
-    expect(credits("Created by Spike Chunsoft. Manga by Karin Suzuragi.")).toEqual([
-      "Spike Chunsoft: original",
-      "Karin Suzuragi: art",
+    expect(credits("Written by Kazuo Koike. Illustrated by Goseki Kojima.")).toEqual([
+      "Kazuo Koike: story",
+      "Goseki Kojima: art",
     ]);
   });
 
@@ -56,10 +61,14 @@ describe("parseAuthorCredits", () => {
     expect(credits("By Kei Urana; Graffiti designs by Hideyoshi Andou")).toEqual([
       "Kei Urana: author",
     ]);
-    // "Original ..." credits the original creators, whatever else it lists.
+    expect(credits("Original Story by Toshio Satou, Art by Hajime Fusemachi")).toEqual([
+      "Toshio Satou: original",
+      "Hajime Fusemachi: art",
+    ]);
+    // A mixed "Original ..." label can't say who wrote and who illustrated.
     expect(
-      credits("Original Story and Illustrations by Touya and Yoimachi, Art by Ren Sakuma"),
-    ).toEqual(["Touya: original", "Yoimachi: original", "Ren Sakuma: art"]);
+      credits("Original Story and Illustrations by Mayo Momoyo and Itsuki Mito, Art by Kaki Nagato"),
+    ).toEqual(["Kaki Nagato: art"]);
   });
 
   it("splits joined names and drops parenthesised studios", () => {
@@ -92,6 +101,38 @@ describe("parseAuthorCredits", () => {
     ]);
   });
 
+  it("credits nobody for several unlabelled names beside a story or art label", () => {
+    // Co-writers or original creators: the line doesn't say.
+    expect(
+      credits("Ken Ishikawa, Eiichi Shimizu, and Go Nagai; Illustrated by Tomohiro Shimoguchi"),
+    ).toEqual(["Tomohiro Shimoguchi: art"]);
+    // With no story or art label they are the authors, as on a bare line.
+    expect(
+      credits("Manatsu Suzuki and Yoshihiro Sono; Original concept by Mitsuki Nakamura"),
+    ).toEqual([
+      "Manatsu Suzuki: author",
+      "Yoshihiro Sono: author",
+      "Mitsuki Nakamura: original",
+    ]);
+  });
+
+  it("leaves organisations out, keeping the people", () => {
+    expect(credits("MiHoYo Comics")).toEqual([]);
+    expect(credits("Manta Comics")).toEqual([]);
+    // SNK's label still says someone else drew it, so Azuma is the artist.
+    expect(credits("SNK Corporation; Illustrated by Kyoutarou Azuma")).toEqual([
+      "Kyoutarou Azuma: art",
+    ]);
+    expect(credits("Jupiter Studio; Illustrated by kaltoma; Character Designs by Yunagi")).toEqual([
+      "kaltoma: art",
+    ]);
+    expect(credits("Go Nagai; Illustrated by Team Moon")).toEqual(["Go Nagai: story"]);
+    expect(credits("Created by Spike Chunsoft. Manga by Karin Suzuragi.")).toEqual([
+      "Karin Suzuragi: art",
+    ]);
+    expect(credits("Manga by Shiramine; created by TYPE-MOON")).toEqual(["Shiramine: art"]);
+  });
+
   it("makes a writer nobody draws for the role-less author", () => {
     expect(credits("Written by Yasuhiro Nightow")).toEqual(["Yasuhiro Nightow: author"]);
   });
@@ -106,6 +147,10 @@ describe("parseAuthorCredits", () => {
     expect(credits("Oku, Hiroya: creator, writer, illustrator")).toEqual([]);
     expect(credits("Reiji Miyajima with additional art by Yuka Kinami")).toEqual([]);
     expect(credits("Character designs by POP; Shun Kazakami")).toEqual([]);
+    expect(credits("Asumiko Nakamura, Ema Toyama, Banko Kuze, et al.")).toEqual([]);
+    // Two people run into one name.
+    expect(credits("Jin x Sayuki (ZOWLS); Illustrated by Sayuki")).toEqual([]);
+    expect(credits("Kazuo Koike Goseki Kojima")).toEqual([]);
     expect(
       credits("Series Creators Steven Moffat & Mark Gatiss; Written by Steven Moffat with art by Jay"),
     ).toEqual([]);

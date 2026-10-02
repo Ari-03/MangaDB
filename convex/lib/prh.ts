@@ -411,7 +411,43 @@ const LABEL = new RegExp(
 const CLAUSE_BREAK = /\s*;\s*|(?<=[^\s.]{2})\.(?:\s+|$)/;
 /** Words no name contains: a sign the line has a shape this parser does not know. */
 const NOT_A_NAME =
-  /\b(?:by|with|various|artists?|creators?|series|story|art|written|illustrated|illustrations?|designs?|translat\w*|letter\w*|based|original)\b/i;
+  /\b(?:by|with|various|artists?|creators?|series|story|art|written|illustrated|illustrations?|designs?|translat\w*|letter\w*|based|original|others|et al)\b/i;
+/** Two people run into one name: "Jin x Sayuki". */
+const FUSED = /\s[x×]\s/i;
+/** Words that make a name an organisation's: "Manta Comics", "SNK Corporation", "Team Moon". */
+const ORGANISATION =
+  /\b(?:comics|studio\w*|corporation|committee|productions?|project|projekt|team|entertainment|games)\b|\b(?:corp|inc|co|ltd)\.?$/i;
+/**
+ * Organisations the extract credits that carry no organisation word: game
+ * and anime studios named as creators (folded: lowercase, letters only).
+ */
+const KNOWN_ORGANISATIONS = new Set([
+  "spikechunsoft",
+  "typemoon",
+  "cygames",
+  "nitroplus",
+  "bandainamco",
+  "mihoyo",
+  "snk",
+]);
+/** An unlabelled name this long on a line with no labels is likely two people: "Kazuo Koike Goseki Kojima". */
+const FUSED_WORDS = 4;
+
+/** Whether a name is an organisation's rather than a person's. */
+function isOrganisation(name: string): boolean {
+  return ORGANISATION.test(name) || KNOWN_ORGANISATIONS.has(name.toLowerCase().replace(/[^a-z]/g, ""));
+}
+
+/**
+ * Whether a creator name is plainly one person's: not empty, no task words
+ * ("Various", "et al"), not two people joined by "x", not an organisation.
+ * The PRH parser's own guard, shared so people.ts holds Kodansha's and
+ * Seven Seas' `creators` lists to the same bar.
+ */
+export function isPersonName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed !== "" && !NOT_A_NAME.test(trimmed) && !FUSED.test(trimmed) && !isOrganisation(trimmed);
+}
 
 /**
  * The credits in PRH's free-text `author` line, or none when the line has a
@@ -422,28 +458,37 @@ const NOT_A_NAME =
  *   "Story by A; Art by B", "Written and illustrated by A. Translated by
  *   B.", "Original concept by A; Story by B; Art by C". Tasks map to roles
  *   (`TASKS`); a label with only dropped tasks (character design,
- *   translation, compilation, adaptation) credits nobody, "By A" is a
- *   role-less author, and a label naming an "Original ..." credits the
- *   original creator whatever follows ("Original Story and Illustrations").
- * - Unlabelled names opening a labelled line take the role the labels
+ *   translation, compilation, adaptation) credits nobody, and "By A" is a
+ *   role-less author. An "Original ..." label credits the original
+ *   creator, but a mixed one ("Original Story and Illustrations by A and
+ *   B") credits nobody, since it can't say who wrote and who illustrated.
+ * - One unlabelled name opening a labelled line takes the role the labels
  *   leave open: "A; Illustrated by B" → A wrote it, "A; Story by B" → A
  *   drew it, "A; created by B" → A is the author, and with both story and
- *   art labelled A is the original creator.
+ *   art labelled A is the original creator. Several unlabelled names
+ *   beside a story or art label ("A, B, and C; Illustrated by D") credit
+ *   nobody: they may be co-writers or the original creators.
  * - A line crediting a writer but nobody for the art ("Written by A")
  *   makes the writer the role-less author.
+ * - Organisations are left out ("SNK Corporation; Illustrated by A" gives
+ *   only A's art), though their label still counts toward the role an
+ *   unlabelled name takes.
  *
  * Refused: a single-word name beside a comma ("Fushimi, Tsukasa" is Last,
  * First), colons, an unlabelled name after the first clause, a label this
- * does not know, and names holding task words ("Various Artists").
- * Parenthesised studios and labels are dropped first ("POPO (Friendly
- * Land)"); a "based on ..." clause names the source, not a credit. A
- * person may appear twice with two roles; people.ts merges them.
+ * does not know, names holding task words ("Various Artists", "et al"),
+ * names joined by "x", and a bare line's name of four or more words
+ * ("Kazuo Koike Goseki Kojima"). Parenthesised studios and labels are
+ * dropped first ("POPO (Friendly Land)"); a "based on ..." clause names the
+ * source, not a credit. A person may appear twice with two roles; people.ts
+ * merges them.
  */
 export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
   const text = (author ?? "").replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim();
   if (text === "" || /[:/()[\]]/.test(text)) return [];
   const labeled: AuthorCredit[] = [];
   let lead: string[] = [];
+  let labels = 0;
   let first = true;
   for (const clause of text.split(CLAUSE_BREAK)) {
     if (clause === "") continue;
@@ -452,6 +497,7 @@ export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
       continue;
     }
     const marks = [...clause.matchAll(LABEL)];
+    labels += marks.length;
     const opening = marks[0]?.index ?? clause.length;
     if (opening > 0) {
       const names = first ? splitNames(clause.slice(0, opening)) : null;
@@ -468,24 +514,33 @@ export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
       if (role) labeled.push(...names.map((name) => ({ name, role })));
     }
   }
+  if (labels === 0 && lead.some((name) => name.split(" ").length >= FUSED_WORDS)) return [];
   const has = (task: "story" | "art") =>
     labeled.some((credit) => credit.role === task || credit.role === "story_art");
   const story = has("story");
   const art = has("art");
   const leadRole: AuthorCredit["role"] =
     story && art ? "original" : art ? "story" : story ? "art" : "author";
-  const credits: AuthorCredit[] = [...lead.map((name) => ({ name, role: leadRole })), ...labeled];
-  if (credits.some((credit) => credit.role === "art" || credit.role === "story_art")) return credits;
-  return credits.map((credit): AuthorCredit =>
-    credit.role === "story" ? { ...credit, role: "author" } : credit,
-  );
+  const leads = lead.length > 1 && (story || art) ? [] : lead;
+  const credits: AuthorCredit[] = [...leads.map((name) => ({ name, role: leadRole })), ...labeled];
+  const drawn = credits.some((credit) => credit.role === "art" || credit.role === "story_art");
+  return credits
+    .filter((credit) => !isOrganisation(credit.name))
+    .map((credit): AuthorCredit =>
+      !drawn && credit.role === "story" ? { ...credit, role: "author" } : credit,
+    );
 }
 
-/** A label's role: writing and drawing are Story & Art; null when it credits no maker or source. */
+/**
+ * A label's role: writing and drawing are Story & Art; null when it
+ * credits no maker or source, or is a mixed "Original ... and ..." label.
+ */
 function labelRole(label: string): AuthorCredit["role"] | null {
   const tasks = label.toLowerCase().split(TASK_JOIN);
-  const original = tasks[0]?.startsWith("original ") === true;
-  const found = new Set(tasks.map((task) => (original && TASKS[task] ? "original" : TASKS[task])));
+  if (tasks[0]?.startsWith("original ")) {
+    return tasks.length === 1 && TASKS[tasks[0]] ? "original" : null;
+  }
+  const found = new Set(tasks.map((task) => TASKS[task]));
   if (found.has("story") && found.has("art")) return "story_art";
   if (found.has("story")) return "story";
   if (found.has("art")) return "art";
@@ -495,12 +550,12 @@ function labelRole(label: string): AuthorCredit["role"] | null {
 
 /**
  * The names in "A, B, and C" / "A and B" / "A & B", or null when one is
- * not plainly a name: empty, holding a task word, or a single word in a
- * comma list (a "Last, First" name).
+ * not plainly a name: empty, holding a task word, two people joined by
+ * "x", or a single word in a comma list (a "Last, First" name).
  */
 function splitNames(text: string): string[] | null {
   const names = text.split(/\s*,\s*(?:and\s+)?|\s+(?:and|&)\s+/i).map((name) => name.trim());
-  if (names.some((name) => name === "" || NOT_A_NAME.test(name))) return null;
+  if (names.some((name) => name === "" || NOT_A_NAME.test(name) || FUSED.test(name))) return null;
   if (text.includes(",") && names.some((name) => !name.includes(" "))) return null;
   return names;
 }

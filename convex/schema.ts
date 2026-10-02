@@ -322,14 +322,18 @@ export default defineSchema({
       v.literal("original"),
       v.literal("author"),
     ),
-    // "publisher" for the fallback rows the rebuild's publisher pass
-    // writes; absent for rows derived from ANN.
-    source: v.optional(v.literal("publisher")),
+    // Which publisher fallback wrote the row: "prh" for PRH's parsed author
+    // line, "creators" for Kodansha's and Seven Seas' role-less creator
+    // lists (used only where PRH credits nothing). Absent for rows derived
+    // from ANN.
+    source: v.optional(v.union(v.literal("prh"), v.literal("creators"))),
     rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])
     .index("by_person", ["personId"])
-    .index("by_rebuiltAt", ["rebuiltAt"]),
+    .index("by_rebuiltAt", ["rebuiltAt"])
+    // The sweep of ANN's rows alone, when a rebuild's publisher pass failed.
+    .index("by_source_and_rebuiltAt", ["source", "rebuiltAt"]),
 
   // The Publishers board precomputed (publisher.ts rebuildBoards): monthBoard's
   // result for each month in the rolling window, as JSON, so paging months is
