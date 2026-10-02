@@ -157,7 +157,8 @@ do. When ANN starts crediting a Series, its publisher-derived rows go, and
 ANN adopts a publisher-named person with a matching name key. Publisher
 credits never count as evidence in `workMatch`.
 
-The rebuild runs in phases (ANN, publishers, sweep, settle roles, stats)
+The rebuild runs in phases (rekey, ANN, publishers, sweep, settle roles,
+prune, stats)
 and hands off to a fresh action after five minutes. `npx convex run
 people:rebuild` returns after the first action. For ANN observations stored
 before credits were kept, `npx convex run people:backfillAnnCredits`
