@@ -206,9 +206,18 @@ const DIGITAL_FORMAT = /e-?book|electronic|kindle|digital/i;
 const COLLATION = /^(?:\d+\s*(?:volumes?|v\.|p\.|pages)|v\.)[^a-z]*(?:[a-z.]+[^a-z]*)?\b\d+\s*cm\.?$/i;
 // The source a cataloguer cites after quoting the blurb: `"…"--P. [4] of
 // cover.`, `"…"--Back cover.`, `"…" -- from publisher's web site.`, or a
-// bare `"--`.
-const CITATION =
-  /\s*["”]?\s*--\s*(?:(?:vol\.\s*\d+,\s*)?(?:p\.|pg\.|page)\s*\[?\d+\]?\s*of\s*(?:cover|jacket)(?:,\s*v(?:ol)?\.\s*\d+)?|(?:back\s+)?cover(?:,\s*v\.\s*\d+,\s*p\.\s*\[\d+\])?|jacket|container|provided by (?:the )?publisher|(?:from )?publisher'?s web ?site|publisher'?s description|amazon\.com)?\.?\s*$/i;
+// bare `"--`. After a closing quote any of these; after a sentence's
+// closing stop a named source ("…Yukihime?--Amazon.com"); otherwise only a
+// page-of-cover reference ("… -- p.4 of cover."), so prose dashes stay
+// ("and then--", "They ran for--cover.").
+const PAGE_OF_COVER =
+  "(?:vol\\.\\s*\\d+,\\s*)?(?:p\\.|pg\\.|page)\\s*\\[?\\d+\\]?\\s*of\\s*(?:cover|jacket)(?:,\\s*v(?:ol)?\\.\\s*\\d+)?";
+const QUOTED_SOURCE =
+  "(?:back\\s+)?cover(?:,\\s*v\\.\\s*\\d+,\\s*p\\.\\s*\\[\\d+\\])?|jacket|container|provided by (?:the )?publisher|(?:from )?publisher'?s web ?site|publisher'?s description|amazon\\.com";
+const CITATION = new RegExp(
+  `(?:\\s*["”]\\s*--\\s*(?:${PAGE_OF_COVER}|${QUOTED_SOURCE})?|(?<=[.!?])\\s*--\\s*(?:${PAGE_OF_COVER}|${QUOTED_SOURCE})|\\s*--\\s*${PAGE_OF_COVER})\\.?\\s*$`,
+  "i",
+);
 
 /**
  * An Open Library description as a Release Description: a cataloguer's
@@ -219,9 +228,11 @@ const CITATION =
 export function cleanOlDescription(text: string): string | undefined {
   let out = text.trim();
   if (out.length <= 80 && COLLATION.test(out)) return undefined;
-  const cited = out.replace(CITATION, "");
+  // Stacked citations ("…"--Back cover."--P. [4] of cover.) go in one call.
+  let cited = out;
+  for (let pass = 0; pass < 3; pass++) cited = cited.replace(CITATION, "").trim();
   if (cited !== out) {
-    out = cited.trim();
+    out = cited;
     // The quote the citation closed: unwrap `"…"`, or drop a lone opener.
     const quotes = (out.match(/["“”]/g) ?? []).length;
     if (quotes === 1 && /^["“]/.test(out)) out = out.slice(1).trim();

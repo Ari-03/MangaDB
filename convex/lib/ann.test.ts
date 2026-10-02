@@ -508,6 +508,14 @@ describe("cleanAnnDescription", () => {
       "Can she win him over? Story and Art by Rie Takada - creator of Wild Act.",
       "Exciting adventures! Story and art by Kanan and others.",
       "A tale for all. Story and art by everyone.",
+      // Constructed prose with lower-case "names": only the known name
+      // words (`LOWERCASE_NAME_WORDS`) pass.
+      "It began. Story by committee, art by accident.",
+      "It began. Script by day, art by night.",
+      "It began. Created by pure accident.",
+      "It began. Adapted by popular demand.",
+      "It began. Written by hand and illustrated by candlelight.",
+      "It began. Story and art by everyone involved.",
       "A thriller . . .",
     ]) {
       expect(cleanAnnDescription(text)).toBe(text);
@@ -602,6 +610,39 @@ describe("cleanAnnDescription: ANN's notes, C1 controls, entities and listing ju
     expect(page.isbn13).toBe("9781569317693");
   });
 
+  // Bold-label paragraphs inside the copy are copy; only ANN's own
+  // `<p class="easyread-width"><b>Notes:</b>` field ends the Description.
+  const notesField = '<p class="easyread-width"><b>Notes:</b><br>Published in left-to-right "flipped" format.</p>';
+  const withField = (description: string, after = "") =>
+    NOTES_FIELD_PAGE.replace(
+      /<p class="easyread-width"><b>Description:<\/b>[\s\S]*?(?=<p><small>)/,
+      `<p class="easyread-width"><b>Description:</b>${description}${after}`,
+    );
+
+  it("keeps the copy's own bold-label paragraphs, inline and in a div", () => {
+    expect(
+      parseReleasePage(withField("<br>A story.</p><p><b>Bonus Features:</b> Sketches and an interview.</p>"))
+        ?.description,
+    ).toBe("A story. Bonus Features: Sketches and an interview.");
+    expect(
+      parseReleasePage(
+        withField('<br></p><div class="simple-html"><p>A story.</p><p><b>Bonus Features:</b> Sketches.</p></div><p></p>'),
+      )?.description,
+    ).toBe("A story. Bonus Features: Sketches.");
+    expect(parseReleasePage(withField("<br>A story.</p><p><b>Note:</b> Reads right to left.</p>"))?.description).toBe(
+      "A story. Note: Reads right to left.",
+    );
+  });
+
+  it("keeps a nested div and stops at ANN's Notes field after it", () => {
+    expect(
+      parseReleasePage(
+        withField('<br></p><div class="simple-html"><div>Part one.</div> Part two.</div><p></p>', notesField),
+      )?.description,
+    ).toBe("Part one. Part two.");
+    expect(parseReleasePage(withField("<br>A story.</p>", notesField))?.description).toBe("A story.");
+  });
+
   it("drops stored format notes", () => {
     expect(cleanAnnDescription('The wizard wakes. Notes: Published in left-to-right "flipped" format.')).toBe(
       "The wizard wakes.",
@@ -626,11 +667,11 @@ describe("cleanAnnDescription: ANN's notes, C1 controls, entities and listing ju
   it("rejects a description that is only retail or listing junk", () => {
     for (const junk of [
       "Book is in like-new condition.",
-      "Book is in excellent condition..It may has been previously used. All orders ship with tracking.",
+      "Book is in excellent condition..It may has been previously used but well cared coz it doesn't show any marks/highlights..clean and crisp...glossy dust jacket..All orders ship with tracking for your convenience. Please do not hesitate to email us with any questions.",
       "Will ship out as soon as we stock th",
-      "Find, shop, and buy computers, laptops, books, dvd, videos, games, and dvd players at Buy.com",
-      "Retail Price: $14.95 No Longer Available For Purchase Free Canadian Shipping @ $250",
-      "Publisher - SEVEN SEAS Genre - Action/Comedy Media - Printed Material Age Rating - 16+",
+      "Find, shop, and buy computers, laptops, books, dvd, videos, games, video games, music, sporting goods, software, electronics, digital cameras, camcorders, toys, luggage, and dvd players at Buy.com",
+      "Retail Price: $14.95 No Longer Available For Purchase Free Canadian Shipping @ $250 Free US Economy Shipping @ $49",
+      "Publisher - SEVEN SEAS Genre - Action/Comedy Media - Printed Material Age Rating - 16+ (More Information) Page Count - 180 Date Available - Jun 9 2015 Product Availability - Pre-Order, Not Yet Shipping (More Information)",
       "Book by Buronson",
       "Book by Takaya, Yoshiki",
       "Language:English.Pink Innocent 3",
@@ -651,6 +692,10 @@ describe("cleanAnnDescription: ANN's notes, C1 controls, entities and listing ju
       "I want to save the world with rice!",
       "Ash is alarmed by Eiji's condition. Book is in his hands.",
       "A Book by its cover.",
+      // Starting like the junk is not enough.
+      "Book by book, the legend grows.",
+      "Book is in mint condition, but the story inside is falling apart.",
+      "Will ship out his men at dawn.",
     ]) {
       expect(cleanAnnDescription(text)).toBe(text);
     }

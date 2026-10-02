@@ -393,8 +393,12 @@ function pageField(html: string, label: string): string | undefined {
   return new RegExp(`<b>${escaped}:</b>([\\s\\S]*?)(?:<br\\s*/?>|</p>|<p\\b)`, "i").exec(html)?.[1];
 }
 
-/** A labelled field paragraph after the Description ("Notes:"). */
-const NEXT_FIELD = /<p\b[^>]*>\s*<b>[^<]{1,40}:<\/b>/i;
+/**
+ * ANN's own next field after the Description (`<p class="easyread-width">
+ * <b>Notes:</b>`). Only that class: a description's own bold-label
+ * paragraph (`<p><b>Bonus Features:</b> …`) is copy, not a field.
+ */
+const NEXT_FIELD = /<p class="easyread-width">\s*<b>[^<]{1,40}:<\/b>/i;
 /** The `<p><small>(added on …, modified on …)</small></p>` after a page's fields. */
 const ADDED_ON = /<p>\s*<small>\s*\(added on\b/i;
 const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
@@ -410,12 +414,15 @@ const CHROME = ["Submit your own review of this item."];
 // each seen in the 2026-10 production export. Only a description that is
 // wholly one of these is rejected; nothing judges blurb quality otherwise.
 const NOT_A_BLURB = [
-  /^Book is in [\w -]+ condition\b/i, // a seller's condition note
-  /^Will ship out as soon as we stock\b/i,
+  // A seller's condition notes, whole.
+  /^Book is in like-new condition\.$/,
+  /^Book is in excellent condition\.\.It may has been previously used\b[\s\S]*\bAll orders ship with tracking\b[\s\S]*$/,
+  /^Will ship out as soon as we stock th$/,
   /^Find, shop, and buy\b[\s\S]*\bat Buy\.com\.?$/i,
-  /^Retail Price: \$[\d.]+ No Longer Available For Purchase\b/i,
-  /^Publisher - [^-]+ Genre - [\s\S]+ Media - Printed Material\b/,
-  /^Book by [\p{L}\p{M} ,.'-]{1,40}$/u, // "Book by Buronson", "Book by Takaya, Yoshiki"
+  /^Retail Price: \$[\d.]+ No Longer Available For Purchase(?: Free [\w ]+ Shipping @ \$\d+)*$/,
+  /^Publisher - [^-]+ Genre - [\s\S]+ Media - Printed Material\b[\s\S]*\bProduct Availability - [\s\S]*$/,
+  // "Book by Buronson", "Book by Takaya, Yoshiki": capitalized names only.
+  /^Book by \p{Lu}[\p{L}'-]*(?:,? \p{Lu}[\p{L}'-]*){0,2}$/u,
   /^Language:English\./,
   /^No further information has been provided for this title\.?$/i,
   /^(?:science fiction|fantasy|horror|romance|comedy|drama|action|mystery)\.?$/i,
@@ -465,18 +472,15 @@ const CREDIT_ROLES = [
 /** A name word: it starts with a capital or digit ("Oh!Great", "Sho-u", "RAN", "(Studio"). */
 const NAME_WORD = /^\(?[\p{Lu}\d]\S*$/u;
 /**
- * A name word in a credit that is a sentence of its own, where ANN's
- * contributors also write names in lower case ("est em", "ufotable",
- * "tartan check", "atsushi Suzumi"): letters only, and never one of the
- * words prose uses to go on after the names ("and is created by Atlus").
+ * Lower-case name words ANN's contributors wrote in a credit that is a
+ * sentence of its own ("Story by ufotable and Art by tartan check.",
+ * "Story and art by est em.", "atsushi Suzumi", "Oh! great", "Girls und
+ * Panzer Projekt"). An explicit list, from the 30 such credits in the
+ * 2026-10 export: no rule tells "tartan check" from "pure accident", and
+ * a constructed sentence ("Created by pure accident.", "Script by day, art
+ * by night.") must stay. New pages are rare; extend the list if one shows.
  */
-const LOOSE_NAME_WORD = /^[\p{L}\p{M}][\p{L}\p{M}'’.-]*$/u;
-const NOT_A_NAME = new Set([
-  "a", "an", "the", "of", "in", "on", "at", "for", "to", "from", "by", "is", "are", "was",
-  "were", "be", "been", "has", "have", "had", "who", "which", "that", "this", "it", "its",
-  "his", "her", "their", "features", "featuring", "presented", "based", "includes", "including",
-  "creator", "author", "artist", "others", "more",
-]);
+const LOWERCASE_NAME_WORDS = new Set(["atsushi", "check", "em", "est", "great", "tartan", "ufotable", "und"]);
 const MAX_LOOSE_NAME_WORDS = 5;
 const NAME_JOINERS = new Set(["and", "&", "with", "/"]);
 const SENTENCE_END = /[.!?…"”’)]$/;
@@ -510,8 +514,8 @@ type CreditClause = {
 /**
  * The clauses of words[start..] when it is nothing but credit clauses:
  * ROLE by NAMES (and ROLE by NAMES)*; null otherwise. `loose` (a credit
- * that is a sentence of its own) also takes lower-case names
- * (`LOOSE_NAME_WORD`), at most MAX_LOOSE_NAME_WORDS a clause.
+ * that is a sentence of its own) also takes the known lower-case name
+ * words (`LOWERCASE_NAME_WORDS`), at most MAX_LOOSE_NAME_WORDS a clause.
  */
 function creditTail(words: string[], start: number, loose = false): CreditClause[] | null {
   const clauses: CreditClause[] = [];
@@ -529,7 +533,7 @@ function creditTail(words: string[], start: number, loose = false): CreditClause
       if (word === undefined) return null;
       const bare = word.replace(/[.,;:!?]+$/, "");
       const strict = NAME_WORD.test(bare);
-      const lax = loose && LOOSE_NAME_WORD.test(bare) && !NOT_A_NAME.has(bare.toLowerCase());
+      const lax = loose && LOWERCASE_NAME_WORDS.has(bare);
       if (!strict && !lax) return null;
       if (!strict) current.lower = true;
       if (++current.names > (current.lower ? MAX_LOOSE_NAME_WORDS : MAX_NAME_WORDS)) return null;
@@ -689,29 +693,29 @@ export function cleanAnnDescription(text: string): string | undefined {
  * (2026-10-02) in two shapes: older pages run the text inline
  * (`<b>Description:</b><br>Text<br>\n<br>More</p>`), newer ones close the
  * paragraph and carry it in `<div class="simple-html">Text</div>`. The
- * field ends at the "added on" trailer, so markup inside the text (a list,
- * an inline `<small>`, a bold "Note:") never cuts it short: the div runs to
- * its last `</div>`, inline text to its closing `</p>`. Without a trailer
- * both stop at the first close. The review link ANN puts in an empty field
+ * field ends at ANN's next field (`NEXT_FIELD`, its Notes) or the "added
+ * on" trailer, so markup inside the text (a list, an inline `<small>`, a
+ * bold "Note:" or "Bonus Features:" paragraph, a nested div) never cuts it
+ * short: the div runs to its last `</div>`, inline text to its closing
+ * `</p>`. Without either bound both stop at the first close. The review link ANN puts in an empty field
  * is dropped, and the text goes through `cleanAnnDescription`.
  */
 function pageDescription(html: string): string | undefined {
   const label = /<b>Description:<\/b>/i.exec(html);
   if (!label) return undefined;
-  let rest = html.slice(label.index + label[0].length);
-  // ANN's next field (`<p class="easyread-width"><b>Notes:</b>`) is not
-  // the description.
-  const nextField = rest.search(NEXT_FIELD);
-  if (nextField >= 0) rest = rest.slice(0, nextField);
-  const trailer = rest.search(ADDED_ON);
-  const field = (trailer >= 0 ? rest.slice(0, trailer) : rest).replace(REVIEW_LINK, "");
+  const rest = html.slice(label.index + label[0].length);
+  // The field ends at ANN's next field (Notes:) or at the "added on"
+  // trailer, whichever comes first; inside that bound any markup is copy.
+  const ends = [rest.search(NEXT_FIELD), rest.search(ADDED_ON)].filter((at) => at >= 0);
+  const bounded = ends.length > 0;
+  const field = (bounded ? rest.slice(0, Math.min(...ends)) : rest).replace(REVIEW_LINK, "");
   const div = (
-    trailer >= 0
+    bounded
       ? /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*)<\/div>/i
       : /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*?)<\/div>/i
   ).exec(field)?.[1];
   const inline =
-    trailer >= 0 ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
+    bounded ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
   const text = cleanBlurb(div ?? inline);
   return text !== undefined ? cleanAnnDescription(text) : undefined;
 }

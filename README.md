@@ -1228,8 +1228,10 @@ Text a past cleaner cut short cannot be repaired offline: `npx convex run
 ann:listRefreshCandidates '{}'` lists the ANN ids by reason (`danglingEnd`,
 `replacementChar`, `c1Control`), and `npx convex run
 ann:backfillDescriptions '{"annIds": [...], "refresh": true}'` refetches
-exactly those pages and replaces or clears the text ANN wrote (never a
-publisher's, Open Library's or a human's). Seven Seas re-reads a book
+exactly those pages and replaces the text ANN wrote (never a publisher's,
+Open Library's or a human's). It only replaces: a page with no
+description, or text under half as long, is counted as `held` and left
+alone unless `"allowClear": true` is also passed, which clears or shrinks it. Seven Seas re-reads a book
 whose description an aggregator wrote, so its own blurb still replaces
 ANN's or Open Library's.
 

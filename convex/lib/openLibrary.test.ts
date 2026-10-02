@@ -378,6 +378,11 @@ describe("cleanOlDescription", () => {
       expect(cleanOlDescription(`"Denji is back.${citation}`)).toBe("Denji is back.");
     }
     expect(cleanOlDescription("Denji is back. -- p.4 of cover.")).toBe("Denji is back.");
+    expect(cleanOlDescription("Why does she know so much?--Amazon.com")).toBe("Why does she know so much?");
+    // Stacked citations go in one call.
+    const stacked = '"Denji is back."--Back cover."--P. [4] of cover.';
+    expect(cleanOlDescription(stacked)).toBe("Denji is back.");
+    expect(cleanOlDescription(cleanOlDescription(stacked)!)).toBe("Denji is back.");
     expect(parseEditionJson({ ...EDITION, description: '"Denji is back."--P. [4] of cover.' })?.description).toBe(
       "Denji is back.",
     );
@@ -391,6 +396,9 @@ describe("cleanOlDescription", () => {
       "First Printing, August 2011 (English)",
       "A story told across 146 pages.",
       '"I am the scum of the earth!" he cries.',
+      "And then--",
+      "They ran for--cover.",
+      "She said--back cover the bet.",
     ]) {
       expect(cleanOlDescription(text)).toBe(text);
     }
