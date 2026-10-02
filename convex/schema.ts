@@ -75,6 +75,16 @@ const dataRole = v.union(
 // revisions, and suppressions all target one of these. Volume-coverage rows
 // are deliberately absent: coverage is edited as the pseudo-field
 // "volumeCoverage" of its Edition, so revision history lands on the Edition.
+// A Series credit's role (people.ts ROLE_ORDER): "author" is the role-less
+// credit ("By") a publisher gives when it names someone without a task.
+const creditRole = v.union(
+  v.literal("story_art"),
+  v.literal("story"),
+  v.literal("art"),
+  v.literal("original"),
+  v.literal("author"),
+);
+
 // Exported for the moderation write path (moderation.ts), which takes and
 // stores these refs.
 export const recordRef = v.union(
@@ -272,16 +282,25 @@ export default defineSchema({
     .index("by_rating", ["ratingRank", "publicId"])
     .index("by_rebuiltAt", ["rebuiltAt"]),
 
-  // Authors (people.ts): the creators ANN credits on each Series, derived by
-  // `people.rebuild` from the stored ANN manga observations, like
-  // seriesStats. ANN's person id is the identity, so one author keeps one
-  // row across entries and spellings. `seriesCount` (Series they wrote or
-  // drew), `originalCount` (Series they are only the original creator of),
-  // and the jacket (their biggest Series') are derived for the Authors tab.
+  // Authors (people.ts): the creators credited on each Series, derived by
+  // `people.rebuild` from the stored ANN manga observations and, for Series
+  // ANN does not credit, the publishers' release observations, like
+  // seriesStats. ANN's person id is the identity when there is one, so one
+  // author keeps one row across entries and spellings; a person only a
+  // publisher names has no `annId` and is matched by `nameKey`.
+  // `seriesCount` (Series they wrote or drew), `originalCount` (Series they
+  // are only the original creator of), and the jacket (their biggest
+  // Series') are derived for the Authors tab.
   people: defineTable({
     publicId: v.number(),
     name: v.string(),
-    annId: v.string(),
+    // Absent for a person only a publisher names; ANN adopts the row (sets
+    // this) when it later credits someone of the same `nameKey`.
+    annId: v.optional(v.string()),
+    // people.ts nameKey(name): lowercased, accents stripped, spaces
+    // collapsed. Optional only until the rebuild's ANN pass has touched the
+    // row (it sets it lazily); publisher-named rows always have it.
+    nameKey: v.optional(v.string()),
     seriesCount: v.number(),
     // Optional only until the first rebuild after it arrived; readers read 0.
     originalCount: v.optional(v.number()),
@@ -295,24 +314,35 @@ export default defineSchema({
   })
     .index("by_publicId", ["publicId"])
     .index("by_annId", ["annId"])
+    .index("by_nameKey", ["nameKey"])
     .index("by_seriesCount", ["seriesCount"])
     .searchIndex("search_name", { searchField: "name" }),
 
-  // One Series–author–role link, from ANN's staff tasks (people.ts roleFor).
+  // One Series–author–role link, from ANN's staff tasks (people.ts roleFor)
+  // or, for a Series ANN does not credit, a publisher's creator names.
+  // "author" is the role-less credit ("By"): a publisher named the person
+  // without saying what they did.
   seriesCredits: defineTable({
     seriesId: v.id("series"),
     personId: v.id("people"),
-    role: v.union(
-      v.literal("story_art"),
-      v.literal("story"),
-      v.literal("art"),
-      v.literal("original"),
-    ),
+    role: creditRole,
+    // Which publisher fallback wrote the row: "prh" for PRH's parsed author
+    // line, "creators" for Kodansha's and Seven Seas' role-less creator
+    // lists (used only where PRH credits nothing). Absent for rows derived
+    // from ANN.
+    source: v.optional(v.union(v.literal("prh"), v.literal("creators"))),
+    // Publisher rows only: the role the observations of the rebuild that
+    // last stamped the row gave it. `role` may show a fuller role from an
+    // earlier run until that rebuild settles (people.ts settleRoles), so a
+    // role the run has yet to reach doesn't flicker away and back.
+    runRole: v.optional(creditRole),
     rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])
     .index("by_person", ["personId"])
-    .index("by_rebuiltAt", ["rebuiltAt"]),
+    .index("by_rebuiltAt", ["rebuiltAt"])
+    // The sweep of ANN's rows alone, when a rebuild's publisher pass failed.
+    .index("by_source_and_rebuiltAt", ["source", "rebuiltAt"]),
 
   // The Publishers board precomputed (publisher.ts rebuildBoards): monthBoard's
   // result for each month in the rolling window, as JSON, so paging months is

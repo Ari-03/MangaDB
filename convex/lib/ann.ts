@@ -19,8 +19,8 @@
 // 2026-09-25), which links lines to canonical Releases exactly. The API has
 // no publisher, so creating a Release needs the per-release Encyclopedia
 // page — `releases.php?id=NNN` — whose Distributor, ISBN-10/13, release
-// date, and suggested retail price `parseReleasePage` reads (see ann.ts's
-// release-page pass).
+// date, suggested retail price, and Description (the book's blurb)
+// `parseReleasePage` reads (see ann.ts's release-page pass).
 
 import { v, type Infer } from "convex/values";
 import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
@@ -359,8 +359,9 @@ export function parseApiResponse(xml: string): AnnManga[] {
 /**
  * What one Encyclopedia release page (`releases.php?id=NNN`) adds to its
  * API line: the Distributor — the publisher a Release needs — plus the
- * page's own ISBNs, date, and suggested retail price. Stored on the line's
- * observation as `page` (the fetch state that keeps the pass incremental).
+ * page's own ISBNs, date, suggested retail price, and Description. Stored
+ * on the line's observation as `page` (the fetch state that keeps the pass
+ * incremental).
  */
 export type AnnReleasePage = {
   title?: string;
@@ -375,12 +376,50 @@ export type AnnReleasePage = {
   priceCents?: number;
   /** The manga entry the page belongs to. */
   mangaId?: string;
+  /** The book's blurb (publisher copy an ANN contributor entered), cleaned. */
+  description?: string;
 };
 
 /** One labelled field's raw HTML: `<b>Label:</b> …` up to the next break. */
 function pageField(html: string, label: string): string | undefined {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`<b>${escaped}:</b>([\\s\\S]*?)(?:<br\\s*/?>|</p>|<p\\b)`, "i").exec(html)?.[1];
+}
+
+/** The `<p><small>(added on …, modified on …)</small></p>` after a page's fields. */
+const ADDED_ON = /<p>\s*<small>\s*\(added on\b/i;
+const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
+
+/**
+ * The page's Description, cleaned to one paragraph. It opens with a `<br>`
+ * and spans paragraphs, so `pageField` cannot read it. Seen live
+ * (2026-10-02) in two shapes: older pages run the text inline
+ * (`<b>Description:</b><br>Text<br>\n<br>More</p>`), newer ones close the
+ * paragraph and carry it in `<div class="simple-html">Text</div>`. The
+ * field ends at the "added on" trailer, so markup inside the text (a list,
+ * an inline `<small>`, a bold "Note:") never cuts it short: the div runs to
+ * its last `</div>`, inline text to its closing `</p>`. Without a trailer
+ * both stop at the first close. ANN's newer copy sprinkles zero-width
+ * spaces after punctuation, sometimes as entities: they go after decoding.
+ */
+function pageDescription(html: string): string | undefined {
+  const label = /<b>Description:<\/b>/i.exec(html);
+  if (!label) return undefined;
+  const rest = html.slice(label.index + label[0].length);
+  const trailer = rest.search(ADDED_ON);
+  const field = trailer >= 0 ? rest.slice(0, trailer) : rest;
+  const div = (
+    trailer >= 0
+      ? /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*)<\/div>/i
+      : /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*?)<\/div>/i
+  ).exec(field)?.[1];
+  const inline =
+    trailer >= 0 ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
+  const text = cleanBlurb(div ?? inline)
+    ?.replace(ZERO_WIDTH, "")
+    .replace(/ {2,}/g, " ")
+    .trim();
+  return text || undefined;
 }
 
 /**
@@ -422,6 +461,7 @@ export function parseReleasePage(html: string): AnnReleasePage | null {
     // The entry link under the release ("Encyclopedia information about"),
     // not whatever manga the site chrome happens to link.
     mangaId: /Encyclopedia information about[\s\S]{0,200}?manga\.php\?id=(\d+)/.exec(html)?.[1],
+    description: pageDescription(html),
   };
 }
 

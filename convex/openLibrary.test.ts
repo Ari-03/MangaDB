@@ -697,3 +697,280 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
     });
   });
 });
+
+describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
+  const proposalsInReview = (t: TestT) =>
+    t.run(async (ctx) => (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview").length);
+
+  /** Unlinked editions first, then ANN's Releases carrying their ISBNs. */
+  async function lateReleases(t: TestT, editions: Array<Record<string, unknown>>) {
+    await seedRegistry(t);
+    stubDump(editions);
+    await sync(t);
+    const { releaseId, publisherId, seriesId } = await buildSkeleton(t, { withRelease: true });
+    const isbns = editions.map((e) => (e.isbn_13 as string[])[0]!);
+    const ids: Id<"releases">[] = [releaseId!];
+    await t.run(async (ctx) => {
+      const first = (await ctx.db.get(releaseId!))!;
+      await ctx.db.patch(first._id, { isbn13: isbns[0] });
+      for (const isbn13 of isbns.slice(1)) {
+        ids.push(
+          await ctx.db.insert("releases", {
+            status: "active",
+            editionId: first.editionId,
+            format: "digital",
+            language: "en",
+            isbn13,
+            publisherId,
+            seriesIds: [seriesId],
+          }),
+        );
+      }
+    });
+    return ids;
+  }
+
+  it("never queues a review against text another weak source (ANN) wrote first", async () => {
+    const t = makeT();
+    const [releaseId] = await lateReleases(t, [{ ...CHAINSAW_22, description: "OL's blurb." }]);
+    // ANN's release page described the book first (weak, like OL).
+    await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "ann" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: releaseId! },
+        seq: 1,
+        proposalId,
+        author: { kind: "source", sourceKey: "ann" },
+        changes: [{ field: "description", before: undefined, after: "ANN's text." }],
+        comment: "Imported from Anime News Network Encyclopedia.",
+      });
+      await ctx.db.patch(releaseId!, { description: "ANN's text." });
+    });
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({ linked: 1 });
+    expect(await proposalsInReview(t)).toBe(0);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.description).toBe("ANN's text.");
+      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
+      expect(obs.conflicts?.find((c) => c.field === "description")).toMatchObject({
+        offered: "OL's blurb.",
+        reason: expect.stringContaining("another weak record"),
+      });
+    });
+  });
+
+  it("hands off during a long scan that finds nothing", async () => {
+    const t = makeT();
+    const ids = await lateReleases(t, [{ ...CHAINSAW_22, description: "Late." }]);
+    // 200+ observations sorting before the edition, none worth a replay.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 205; i++) {
+        await ctx.db.insert("sourceObservations", {
+          sourceKey: "openlibrary",
+          sourceRecordId: `/books/OL0${String(i).padStart(4, "0")}M`,
+          snapshot: { kind: "olEdition", key: `/books/OL0${i}M` },
+          lastSeenAt: 0,
+          withdrawn: false,
+        });
+      }
+    });
+    // Each clock read is past the budget: the first scan alone ends the link.
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 6 * 60_000));
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      replayed: 0,
+      continued: true,
+    });
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(ids[0]!))!.description).toBe("Late.");
+    });
+  });
+
+  it("skips an edition whose ISBN the matcher already declined", async () => {
+    const t = makeT();
+    const [releaseId] = await lateReleases(t, [
+      { ...CHAINSAW_22, title: "Something Else Entirely, Vol. 22", description: "Elsewhere." },
+    ]);
+    const replay = () => t.action(internal.openLibrary.replayDescriptions, {});
+    expect(await replay()).toMatchObject({ replayed: 1, linked: 0 });
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
+      expect(obs.recordRef).toBeUndefined();
+      expect(obs.conflicts?.[0]?.reason).toContain("unmatched (rung 2)");
+      expect((await ctx.db.get(releaseId!))!.description).toBeUndefined();
+    });
+    expect(await replay()).toMatchObject({ replayed: 0 });
+  });
+
+  it("two editions of one ISBN never queue over their blurbs; an edition updates its own", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    const OTHER = { ...CHAINSAW_22, key: "/books/OL2M", description: "Edition two's blurb." };
+    stubDump([{ ...CHAINSAW_22, description: "Edition one's blurb." }, OTHER]);
+    await sync(t);
+    const description = () => t.run(async (ctx) => (await ctx.db.get(releaseId!))!.description);
+    expect(await description()).toBe("Edition one's blurb.");
+    expect(await proposalsInReview(t)).toBe(0);
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === OTHER.key)!;
+      expect(obs.conflicts?.find((c) => c.field === "description")?.reason).toContain("another weak record");
+    });
+    // The edition that wrote the text revises it: an own fact, applied.
+    stubDump([{ ...CHAINSAW_22, description: "Edition one, revised." }]);
+    await sync(t);
+    expect(await description()).toBe("Edition one, revised.");
+    expect(await proposalsInReview(t)).toBe(0);
+  });
+
+  it("continues in a fresh action after its time budget", async () => {
+    const t = makeT();
+    const ids = await lateReleases(t, [
+      { ...CHAINSAW_22, description: "One." },
+      { ...CHAINSAW_22, key: "/books/OL2M", isbn_13: ["9781974766529"], description: "Two." },
+      { ...CHAINSAW_22, key: "/books/OL3M", isbn_13: ["9781974766536"], description: "Three." },
+    ]);
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 61_000));
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      replayed: 1,
+      continued: true,
+    });
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      const texts = await Promise.all(ids.map(async (id) => (await ctx.db.get(id))!.description));
+      expect(texts.sort()).toEqual(["One.", "Three.", "Two."]);
+    });
+    expect(await proposalsInReview(t)).toBe(0);
+  });
+
+  it("fills a Release created after its edition was observed, keeps existing text, creates nothing", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    // Observed before the catalog had this Series: all three stay unlinked.
+    const LATE = { ...CHAINSAW_22, description: "Denji's back." };
+    const COPY = {
+      ...CHAINSAW_22,
+      key: "/books/OL2M",
+      isbn_13: ["9781974766529"],
+      description: "An OL blurb.",
+    };
+    // No Release holds its ISBN; a dump pass would now create a leaf for it.
+    const LEAF = {
+      ...CHAINSAW_22,
+      key: "/books/OL3M",
+      title: "Chainsaw Man, Vol. 21",
+      isbn_13: ["9781974766505"],
+      description: "Volume 21.",
+    };
+    stubDump([LATE, COPY, LEAF]);
+    await sync(t);
+    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("the replay never touches the network");
+    });
+
+    // ANN later created the books: one blank, one a publisher already described.
+    const { releaseId, publisherId, seriesId } = await buildSkeleton(t, { withRelease: true });
+    const described = await t.run(async (ctx) => {
+      const late = (await ctx.db.get(releaseId!))!;
+      await ctx.db.patch(late._id, { isbn13: "9781974766512" });
+      const id = await ctx.db.insert("releases", {
+        status: "active",
+        editionId: late.editionId,
+        format: "digital",
+        language: "en",
+        isbn13: "9781974766529",
+        description: "The publisher's copy.",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "sevenseas" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id } as never,
+        seq: 1,
+        proposalId,
+        author: { kind: "source", sourceKey: "sevenseas" },
+        changes: [{ field: "description", after: "The publisher's copy." }],
+        comment: "Imported from Seven Seas Entertainment.",
+      });
+      return id;
+    });
+    const counts = () =>
+      t.run(async (ctx) => ({
+        series: (await ctx.db.query("series").collect()).length,
+        editions: (await ctx.db.query("editions").collect()).length,
+        releases: (await ctx.db.query("releases").collect()).length,
+      }));
+    const before = await counts();
+
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toEqual({
+      replayed: 2,
+      linked: 2,
+      errors: [],
+      continued: false,
+    });
+    expect(await counts()).toEqual(before);
+    expect(await proposalsInReview(t)).toBe(0);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.description).toBe("Denji's back.");
+      expect((await ctx.db.get(described))!.description).toBe("The publisher's copy.");
+      const obs = await ctx.db.query("sourceObservations").collect();
+      const byKey = new Map(obs.map((o) => [o.sourceRecordId, o]));
+      expect(byKey.get(LATE.key)!.recordRef).toEqual({ type: "release", id: releaseId });
+      expect(byKey.get(COPY.key)!.recordRef).toEqual({ type: "release", id: described });
+      expect(byKey.get(LEAF.key)!.recordRef).toBeUndefined();
+    });
+
+    // Linked now: a rerun has nothing left to replay.
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      replayed: 0,
+    });
+  });
+
+  it("stops at its limit", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    stubDump([
+      { ...CHAINSAW_22, description: "One." },
+      { ...CHAINSAW_22, key: "/books/OL2M", isbn_13: ["9781974766529"], description: "Two." },
+    ]);
+    await sync(t);
+    const { releaseId, publisherId, seriesId } = await buildSkeleton(t, { withRelease: true });
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.get(releaseId!))!;
+      await ctx.db.patch(release._id, { isbn13: "9781974766512" });
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId: release.editionId,
+        format: "digital",
+        language: "en",
+        isbn13: "9781974766529",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+    });
+    expect(await t.action(internal.openLibrary.replayDescriptions, { limit: 1 })).toMatchObject({
+      replayed: 1,
+      linked: 1,
+    });
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      replayed: 1,
+      linked: 1,
+    });
+  });
+});

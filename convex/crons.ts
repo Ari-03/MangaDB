@@ -15,8 +15,8 @@ crons.interval("import cadence tick", { hours: 1 }, internal.imports.runSchedule
 // at most this long.
 crons.interval("series browse stats", { hours: 6 }, internal.seriesBrowse.rebuild, {});
 
-// Authors and their Series credits, derived from the stored ANN observations
-// (people.ts); they follow ANN's weekly sync within six hours.
+// Authors and their Series credits, derived from the stored ANN and publisher
+// observations (people.ts); they follow each import within six hours.
 crons.interval("author credits", { hours: 6 }, internal.people.rebuild, {});
 
 // The Publishers board serves precomputed months (publisher.ts): the months

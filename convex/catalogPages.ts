@@ -7,12 +7,18 @@
 // their public ID and point at the winner, spec §8) so the routes can 301,
 // and reads hidden records as absent. Maturity is the exception: it is the
 // content's, so hidden parts of a book or box set still count toward it.
+//
+// The Edition and Volume pages each resolve one description (CONTEXT.md:
+// Edition Description, Volume Synopsis) instead of printing every Release's
+// stored Release Description on its row.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
 import { coverUrl, jacketCache } from "./lib/covers";
+import { representativeDescription } from "./lib/descriptions";
+import { isWholeSingleVolume } from "./lib/matching";
 import { creditsFor } from "./people";
 
 // ---------- shared resolution & joins ----------
@@ -189,7 +195,8 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
  * One Release row as the Edition and Volume pages render it: publication
  * facts with both ISBNs, Variants beneath their Release, and containing
  * Bundles cross-linked (spec §2/§10). `anchor` is the row's fragment on the
- * Edition page — ISBN when present, else document ID (spec §8).
+ * Edition page — ISBN when present, else document ID (spec §8). No Release
+ * Description: the page shows one resolved description instead.
  */
 async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
   const variants = (
@@ -222,7 +229,6 @@ async function releaseRow(ctx: QueryCtx, release: Doc<"releases">) {
     isbn10: release.isbn10 ?? null,
     pubDate: release.pubDate ?? null,
     price: release.price ?? null,
-    description: release.description ?? null,
     coverUrl: await coverUrl(ctx, release.coverImage?.storageId),
     variants,
     bundles,
@@ -272,7 +278,10 @@ type ReleaseRow = Awaited<ReturnType<typeof releaseRow>>;
 const byDate = (a: ReleaseRow, b: ReleaseRow) =>
   (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity);
 
-/** Active Releases of an Edition, joined and date-sorted. */
+/**
+ * Active Releases of an Edition: the docs (for representativeDescription,
+ * lib/descriptions.ts) and their joined rows, date-sorted.
+ */
 async function editionReleases(ctx: QueryCtx, editionId: Id<"editions">) {
   const docs = (
     await ctx.db
@@ -282,7 +291,56 @@ async function editionReleases(ctx: QueryCtx, editionId: Id<"editions">) {
   ).filter((doc) => doc.status === "active");
   const rows = [];
   for (const doc of docs) rows.push(await releaseRow(ctx, doc));
-  return rows.sort(byDate);
+  return { docs, rows: rows.sort(byDate) };
+}
+
+/**
+ * The Series synopsis as a page's last-resort description, flagged
+ * `source: "series"` and naming the Series so the page labels it "About
+ * {title}" rather than passing it off as the book's.
+ */
+function seriesSynopsis(series: Doc<"series"> | null) {
+  const text = series?.synopsis?.trim();
+  return series && text
+    ? {
+        source: "series" as const,
+        text,
+        series: { publicId: series.publicId, title: series.title },
+      }
+    : null;
+}
+
+/**
+ * The Edition Description (CONTEXT.md): its own Releases' representative
+ * Release Description; else, when it covers exactly one Volume and that
+ * one completely, the Volume Synopsis (an omnibus never borrows one
+ * Volume's); else its Series' synopsis, flagged as such.
+ */
+async function editionDescription(
+  ctx: QueryCtx,
+  releases: Array<Doc<"releases">>,
+  covered: Pick<Awaited<ReturnType<typeof editionCoverage>>, "coverage" | "volumeCount" | "series">,
+) {
+  const own = representativeDescription(releases);
+  if (own) return { source: "release" as const, text: own.text };
+
+  const only = covered.volumeCount === 1 ? covered.coverage[0] : undefined;
+  if (only?.extent === "complete") {
+    const volume = await ctx.db
+      .query("volumes")
+      .withIndex("by_publicId", (q) => q.eq("publicId", only.volumePublicId))
+      .unique();
+    const synopsis = volume?.synopsis?.trim();
+    if (synopsis) return { source: "volume" as const, text: synopsis };
+  }
+
+  if (!covered.series) return null;
+  const { publicId } = covered.series;
+  const series = await ctx.db
+    .query("series")
+    .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
+    .unique();
+  return seriesSynopsis(series);
 }
 
 // ---------- Volume page ----------
@@ -295,6 +353,13 @@ async function editionReleases(ctx: QueryCtx, editionId: Id<"editions">) {
  * ordered Coverage shows what else the Edition contains. Canonical Volume
  * numbering (`position`) arrives separately from any Edition Line numbering
  * (`linePosition`); Release rows carry their containing Bundles.
+ *
+ * `description` is the Volume Synopsis; else the representative Release
+ * Description among Editions that are ordinary books of this one whole
+ * Volume (isWholeSingleVolume: no omnibus, split part or Edition Line
+ * packaging lends its blurb; a publishing Publisher's Editions rank ahead
+ * of a defunct one's), naming the Edition it came from; else the Series
+ * synopsis, flagged as such.
  */
 export const volumePage = query({
   args: { publicId: v.number() },
@@ -313,19 +378,37 @@ export const volumePage = query({
       .query("volumeCoverages")
       .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
       .collect();
+    const synopsis = volume.synopsis?.trim();
     const editions = [];
+    // Releases of whole single-volume Editions, the borrowable blurbs when
+    // there is no Volume Synopsis (each marked with whether its Publisher is
+    // defunct, so the current licensee's blurb leads), and the Editions they
+    // belong to.
+    const lendingReleases = [];
+    const lenders = new Map<Id<"editions">, { publicId: number; title: string; publisherName: string | null }>();
     for (const row of coveringRows) {
       const edition = await ctx.db.get(row.editionId);
       if (!edition || edition.status !== "active") continue;
       const publisher = await ctx.db.get(edition.publisherId);
+      const activePublisher =
+        publisher && publisher.status === "active"
+          ? { name: publisher.name, slug: publisher.slug }
+          : null;
       const { title, lineName, coverage } = await editionCoverage(ctx, edition);
+      const { docs, rows } = await editionReleases(ctx, edition._id);
+      if (!synopsis && (await isWholeSingleVolume(ctx, edition))) {
+        const publisherDefunct = publisher?.defunct === true;
+        lendingReleases.push(...docs.map((doc) => ({ ...doc, publisherDefunct })));
+        lenders.set(edition._id, {
+          publicId: edition.publicId,
+          title,
+          publisherName: activePublisher?.name ?? null,
+        });
+      }
       editions.push({
         publicId: edition.publicId,
         title,
-        publisher:
-          publisher && publisher.status === "active"
-            ? { name: publisher.name, slug: publisher.slug }
-            : null,
+        publisher: activePublisher,
         lineName,
         linePosition: edition.linePosition ?? null,
         // This Edition's extent for the page's Volume — the complete/partial
@@ -333,23 +416,31 @@ export const volumePage = query({
         extentForVolume: row.extent,
         extentNote: row.note ?? null,
         coverage,
-        releases: await editionReleases(ctx, edition._id),
+        releases: rows,
       });
     }
     editions.sort((a, b) => a.publicId - b.publicId);
+
+    const borrowed = representativeDescription(lendingReleases);
+    const lender = borrowed ? lenders.get(borrowed.release.editionId) : undefined;
+    const description = synopsis
+      ? { source: "volume" as const, text: synopsis }
+      : borrowed && lender
+        ? { source: "edition" as const, text: borrowed.text, edition: lender }
+        : seriesSynopsis(series);
 
     return {
       volume: {
         publicId: volume.publicId,
         position: volume.position,
         label: volume.label ?? null,
-        synopsis: volume.synopsis ?? null,
         title: volumeTitle(series.title, volume.label ?? null),
       },
       series: { publicId: series.publicId, title: series.title },
       /** A Mature Series' Volume (lib/mature.ts): art hidden from viewers who have not opted in. */
       mature: series.mature === true,
       credits: await creditsFor(ctx, series._id),
+      description,
       editions,
       coverUrl: representativeCover(editions.flatMap((e) => e.releases)),
     };
@@ -361,9 +452,11 @@ export const volumePage = query({
 /**
  * The book detail page (spec §2/§10, ticket #23): the Edition's identity
  * (composed title, Publisher, Edition Line membership + Edition Line
- * Position, ordered Volume Coverage with canonical positions kept separate)
- * and its Release rows — differing only in Format/Binding — each with ISBNs,
- * date, Release Description, Variants beneath, and bundle-membership links.
+ * Position, ordered Volume Coverage with canonical positions kept separate),
+ * its one Edition Description (`editionDescription`: `source` says whether
+ * it is the book's own or its Series'), and its Release rows — differing
+ * only in Format/Binding — each with ISBNs, date, Variants beneath, and
+ * bundle-membership links.
  */
 export const editionPage = query({
   args: { publicId: v.number() },
@@ -376,15 +469,9 @@ export const editionPage = query({
     if (!edition) return null;
 
     const publisher = await ctx.db.get(edition.publisherId);
-    const {
-      title,
-      lineName,
-      coverage,
-      series: lineSeries,
-      mature,
-      coverageUnmapped,
-    } = await editionCoverage(ctx, edition);
-    const releases = await editionReleases(ctx, edition._id);
+    const covered = await editionCoverage(ctx, edition);
+    const { title, lineName, coverage, series: lineSeries, mature, coverageUnmapped } = covered;
+    const { docs, rows: releases } = await editionReleases(ctx, edition._id);
 
     // Distinct Series of the covered Volumes, for breadcrumbs/backlinks;
     // Unmapped Packaging falls back to its line's Series.
@@ -415,6 +502,7 @@ export const editionPage = query({
       // The authors of the (first) Series it collects.
       credits: series[0] ? await creditsForPublicId(ctx, series[0].publicId) : [],
       coverage,
+      description: await editionDescription(ctx, docs, covered),
       releases,
       // The Edition's jacket (lib/covers.ts), the art its Release rows wear
       // elsewhere: `coverUrl` is the representative cover, and `coverIsbns`

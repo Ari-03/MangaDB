@@ -26,7 +26,7 @@ export function absoluteUrl(path: string): string {
 }
 
 /**
- * Truncate free text (Volume Synopsis, Release Description) to meta-
+ * Truncate free text (Volume Synopsis, Edition Description) to meta-
  * description length at a word boundary, with an ellipsis when cut.
  */
 export function truncateDescription(text: string, max = 160): string {
@@ -213,14 +213,17 @@ export function organizationJsonLd(args: {
   };
 }
 
-/** Person — on author pages; `sameAs` is their ANN Encyclopedia page. */
-export function personJsonLd(args: { name: string; path: string; sameAs: string }) {
+/**
+ * Person — on author pages; `sameAs` is their ANN Encyclopedia page, null
+ * for a person only publishers name.
+ */
+export function personJsonLd(args: { name: string; path: string; sameAs: string | null }) {
   return {
     "@context": "https://schema.org",
     "@type": "Person",
     name: args.name,
     url: absoluteUrl(args.path),
-    sameAs: [args.sameAs],
+    ...(args.sameAs ? { sameAs: [args.sameAs] } : {}),
   };
 }
 
@@ -249,6 +252,8 @@ export function schemaBookFormat(
 /**
  * Book — one per Release row on Edition pages (a Release has no page of its
  * own; its URL is the Edition page anchored at the row, spec §11).
+ * `description` is the Edition Description only when it is the book's own,
+ * never the Series synopsis fallback.
  */
 export function bookJsonLd(args: {
   name: string;
@@ -261,6 +266,7 @@ export function bookJsonLd(args: {
   pubDate: { year: number; month?: number | null; day?: number | null } | null;
   language: string;
   publisherName: string | null;
+  description?: string | null;
   coverUrl?: string | null;
 }) {
   const datePublished = isoPartialDate(args.pubDate);
@@ -277,6 +283,7 @@ export function bookJsonLd(args: {
     ...(args.publisherName
       ? { publisher: { "@type": "Organization", name: args.publisherName } }
       : {}),
+    ...(args.description ? { description: args.description } : {}),
     ...(args.coverUrl ? { image: args.coverUrl } : {}),
   };
 }

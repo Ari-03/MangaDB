@@ -24,6 +24,12 @@
 // - Filling a field that has no canonical value is not a disagreement —
 //   any source with authority over the field may fill it (how OpenLibrary's
 //   ISBN fill works in seeding stage ④).
+// - Weak blurbs from different records disagreeing (ANN's release-page text
+//   vs OpenLibrary's, or two OpenLibrary editions of one ISBN) are not worth
+//   a reviewer's time: aggregator copy of the same book. The first text
+//   stays and the other is recorded on its observation. A record updating
+//   its own text is the own-fact rule above and still updates; every other
+//   equal-authority disagreement still queues.
 
 import { sameValue } from "./values";
 
@@ -236,6 +242,14 @@ export function decideField(args: {
   }
   if (incomingRank > incumbent.rank) {
     return auto("strictly higher authority than the current value's source");
+  }
+  // ownFact returned above: the incumbent text came from another record.
+  if (
+    incomingRank === RANK.weak &&
+    incumbent.rank === RANK.weak &&
+    FIELD_CATEGORY[args.field] === "description"
+  ) {
+    return recordOnly("another weak record's text was there first");
   }
   if (incomingRank === incumbent.rank) {
     return queue("equal authority disagreement");

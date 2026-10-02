@@ -278,8 +278,11 @@ export async function workMatch(
       .collect();
     const known = new Set<string>();
     for (const credit of credits) {
+      // ANN's own credits only: a publisher row names its person by name
+      // alone, which may have matched an ANN namesake (people.ts).
+      if (credit.source !== undefined) continue;
       const person = await ctx.db.get(credit.personId);
-      if (person) known.add(person.annId);
+      if (person?.annId !== undefined) known.add(person.annId);
     }
     // A shared creator proves nothing (a spinoff shares its author), but
     // wholly different creators are different works.

@@ -4,7 +4,7 @@ import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type VolumePageData } from "~/lib/catalogData";
-import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { AboutSeriesNote, CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
@@ -30,7 +30,8 @@ import { parsePublicId, seriesPath, slugParams, volumePath } from "~/lib/slug";
  * the omnibus case, whose full ordered Coverage shows what else it spans.
  * Canonical Volume numbering (Position + public Label, spec §2) stays
  * visibly separate from any Edition Line numbering, and Release rows link
- * their containing Bundles.
+ * their containing Bundles. One description sits under the chips, its
+ * source named when it is borrowed from an Edition or the Series.
  *
  * The hero: the cover on the left with the viewer's take under it
  * (TakePanel: Rating, Review, Favorite), then the tracking card (what they
@@ -64,20 +65,23 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
     return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // BreadcrumbList JSON-LD (spec §11, ticket #39). The description falls
-  // back to fact assembly when no Volume Synopsis exists.
+  // BreadcrumbList JSON-LD (spec §11, ticket #39). The description is the
+  // Volume's own (its Synopsis or a single-volume Edition's blurb), falling
+  // back to fact assembly; the Series synopsis fallback is not about this
+  // Volume, so it never becomes the meta description.
   head: ({ loaderData }) => {
     if (!loaderData) return {};
-    const { volume, series, editions, coverUrl, mature } = loaderData;
+    const { volume, series, editions, description, coverUrl, mature } = loaderData;
     const path = volumePath(volume.publicId, volume.title);
     const editionCount =
       editions.length === 1 ? "1 English edition" : `${editions.length} English editions`;
     return {
       ...pageHead({
         title: volumeTitleTag(series.title, volume.label),
-        description: volume.synopsis
-          ? truncateDescription(volume.synopsis)
-          : `${volume.title} in English: ${editionCount} with every release date, format, and ISBN.`,
+        description:
+          description && description.source !== "series"
+            ? truncateDescription(description.text)
+            : `${volume.title} in English: ${editionCount} with every release date, format, and ISBN.`,
         path,
         image: coverUrl,
         ogType: "book",
@@ -129,7 +133,7 @@ function ConcealedVolumePage() {
 
 function VolumePage() {
   const page = Route.useLoaderData();
-  const { volume, series, credits, editions, coverUrl } = page;
+  const { volume, series, credits, description, editions, coverUrl } = page;
   const ratingTarget = { kind: "volume" as const, publicId: volume.publicId };
   const complete = editions.filter((e) => e.extentForVolume === "complete");
   const partial = editions.filter((e) => e.extentForVolume === "partial");
@@ -241,22 +245,35 @@ function VolumePage() {
             ))}
           </div>
 
-          {volume.synopsis ? (
-            <div className="synopsis">
-              <p>{volume.synopsis}</p>
+          {/* The Volume Synopsis, else a single-volume Edition's blurb
+              naming its Edition, else the Series synopsis labelled as such
+              (convex/catalogPages.ts volumePage). */}
+          <div className="synopsis">
+            {description?.source === "edition" ? (
               <p className="note">
-                Volume synopsis curated by editors. Each release below carries
-                its publisher's own description.
+                From the{" "}
+                <Link
+                  to="/edition/$publicId/$slug"
+                  params={slugParams(
+                    description.edition.publicId,
+                    description.edition.title,
+                  )}
+                >
+                  {description.edition.publisherName ?? "English"} edition
+                </Link>
               </p>
-            </div>
-          ) : (
-            <div className="synopsis">
-              <p className="note">
-                No volume synopsis yet. The releases below carry their
-                publishers' descriptions.
-              </p>
-            </div>
-          )}
+            ) : description?.source === "series" ? (
+              <AboutSeriesNote series={description.series} />
+            ) : null}
+            {description ? (
+              <p className="blurb-text">{description.text}</p>
+            ) : (
+              <p className="note">No description on file yet.</p>
+            )}
+            {description?.source === "volume" ? (
+              <p className="note">Volume synopsis curated by editors.</p>
+            ) : null}
+          </div>
 
           <div className="section-head volume-editions-head">
             <h2 className="section-title">Editions covering this volume</h2>

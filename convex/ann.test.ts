@@ -110,6 +110,9 @@ function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // A failed test must not leak a mocked clock or console into the next.
+  vi.restoreAllMocks();
+  vi.useRealTimers();
   pageRequests.length = 0;
   reportRequests.length = 0;
 });
@@ -694,8 +697,13 @@ function releasePage(args: {
   date: string;
   isbn13: string;
   mangaId: number;
+  description?: string;
 }) {
-  return `<html><body><hr><b>Title:</b> ${args.title}<br><b>Volume:</b>  ${args.volume}<br><b>Distributor:</b> <a href="company.php?id=4552">${args.distributor}</a><p><b>Release date:</b> ${args.date}<br><b>Suggested retail price:</b> $11.99<br></p><p><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">${args.isbn13.slice(0, 3)}</span><span>${args.isbn13.slice(3)}</span></span><span style="visibility:hidden"> ${args.isbn13}</span><br></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=${args.mangaId}">x</a></b></li></ul></body></html>`;
+  const description =
+    args.description !== undefined
+      ? `<p class="easyread-width"><b>Description:</b><br>${args.description}</p><p><small>(added on 2008-01-04, modified on 2008-01-04)</small></p>`
+      : "";
+  return `<html><body><hr><b>Title:</b> ${args.title}<br><b>Volume:</b>  ${args.volume}<br><b>Distributor:</b> <a href="company.php?id=4552">${args.distributor}</a><p><b>Release date:</b> ${args.date}<br><b>Suggested retail price:</b> $11.99<br></p><p><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">${args.isbn13.slice(0, 3)}</span><span>${args.isbn13.slice(3)}</span></span><span style="visibility:hidden"> ${args.isbn13}</span><br></p>${description}<ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=${args.mangaId}">x</a></b></li></ul></body></html>`;
 }
 
 const syncPages = (t: TestT, args: object = {}) =>
@@ -1714,5 +1722,440 @@ describe("ann — a single-volume line never lands on packaging or a split part 
     await t.run(async (ctx) => {
       expect((await ctx.db.get(part))!.isbn13).toBeUndefined();
     });
+  });
+});
+
+// ANN release pages carry a Description (publisher copy entered by ANN
+// contributors): the Release Description at ANN's weak rank, filling blanks
+// only — on create, on link, and by a one-time refetch of lines linked
+// before their page was read for one.
+describe("ann — release-page descriptions", () => {
+  const BLURB = "In a world of pirates, one man wants to become the greatest of them all.";
+  const LINES: FixtureManga = {
+    id: 1223,
+    title: "One Piece",
+    releases: [
+      { annId: 10948, date: "2003-06-01", designator: "GN 1", ean: "9781569319017" },
+      { annId: 10949, date: "2003-09-01", designator: "GN 2", ean: "9781569319024" },
+      { annId: 10950, date: "2003-12-01", designator: "GN 3", ean: "9781569319031" },
+    ],
+  };
+  const pageFor = (annId: number, description?: string) => {
+    const line = LINES.releases.find((r) => r.annId === annId)!;
+    return releasePage({
+      title: "One Piece",
+      volume: line.designator,
+      distributor: "Viz Media",
+      date: line.date,
+      isbn13: line.ean!,
+      mangaId: 1223,
+      description,
+    });
+  };
+  const describedPages = {
+    10948: pageFor(10948, `${BLURB}<br>\n<br>\nStory and art by Eiichiro Oda.`),
+    10949: pageFor(10949, "Volume two."),
+    10950: pageFor(10950, "Volume three."),
+  };
+
+  /**
+   * Mirror LINES, then give each listed volume a VIZ Release carrying its
+   * line's ISBN (as a publisher feed would) and mirror again so the lines
+   * link by ISBN — with no page fetched yet.
+   */
+  async function linkedCatalog(
+    t: TestT,
+    pages: Record<number, string>,
+    books: Array<{ label: string; description?: string; overridden?: true; sevenSeas?: true }>,
+  ) {
+    await seedRegistry(t, true);
+    stubAnn([LINES], pages);
+    await sync(t, { releasePages: false });
+    const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
+    const ids = await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volumes = await ctx.db.query("volumes").collect();
+      const made: Record<string, Id<"releases">> = {};
+      for (const [i, book] of books.entries()) {
+        const volume = volumes.find((vol) => vol.label === book.label)!;
+        const editionId = await ctx.db.insert("editions", {
+          status: "active",
+          publicId: 100 + i,
+          publisherId: vizId,
+        });
+        await ctx.db.insert("volumeCoverages", {
+          editionId,
+          volumeId: volume._id,
+          order: 1,
+          extent: "complete",
+        });
+        const id = await ctx.db.insert("releases", {
+          status: "active",
+          editionId,
+          format: "physical",
+          language: "en",
+          isbn13: LINES.releases.find((r) => r.designator === `GN ${book.label}`)!.ean,
+          publisherId: vizId,
+          seriesIds: [series._id],
+          ...(book.description !== undefined ? { description: book.description } : {}),
+          ...(book.overridden ? { overriddenFields: ["description"] } : {}),
+        });
+        if (book.sevenSeas) {
+          const proposalId = await ctx.db.insert("proposals", {
+            author: { kind: "source", sourceKey: "sevenseas" },
+            state: "approved",
+            currentVersionNo: 1,
+          });
+          await ctx.db.insert("revisions", {
+            ref: { type: "release", id } as never,
+            seq: 1,
+            proposalId,
+            author: { kind: "source", sourceKey: "sevenseas" },
+            changes: [{ field: "description", after: book.description }],
+            comment: "Imported from Seven Seas Entertainment.",
+          });
+        }
+        made[book.label] = id;
+      }
+      return made;
+    });
+    await sync(t, { releasePages: false });
+    for (const r of LINES.releases.filter((line) => books.some((b) => `GN ${b.label}` === line.designator))) {
+      expect((await obsFor(t, r.annId))!.recordRef?.type).toBe("release");
+    }
+    pageRequests.length = 0;
+    return ids;
+  }
+
+  // null when blank (t.run returns undefined as null).
+  const descriptionOf = (t: TestT, id: Id<"releases">) =>
+    t.run(async (ctx) => (await ctx.db.get(id))!.description ?? null);
+
+  it("a Release created from a release page carries its Description", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([LINES], describedPages);
+    await sync(t, { releasePages: false });
+    await seedPublisher(t, "VIZ Media", "viz-media");
+    await syncPages(t);
+    const obs = (await obsFor(t, 10948))!;
+    expect(obs.snapshot).toMatchObject({
+      page: { status: "ok", descriptionChecked: true, description: `${BLURB} Story and art by Eiichiro Oda.` },
+    });
+    expect(await descriptionOf(t, obs.recordRef!.id as Id<"releases">)).toBe(
+      `${BLURB} Story and art by Eiichiro Oda.`,
+    );
+  });
+
+  it("a Release the page pass links fills a blank description", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([LINES], describedPages);
+    await sync(t, { releasePages: false });
+    const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
+    // VIZ's GN 2 without an ISBN: the page pass links it rather than creating.
+    const existing = await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "2")!;
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9, publisherId: vizId });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId: volume._id, order: 1, extent: "complete" });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        publisherId: vizId,
+        seriesIds: [series._id],
+      });
+    });
+    await syncPages(t);
+    expect((await obsFor(t, 10949))!.recordRef).toEqual({ type: "release", id: existing });
+    expect(await descriptionOf(t, existing)).toBe("Volume two.");
+  });
+
+  it("fills a linked Release with none, and keeps a publisher's text and a Human Override", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [
+      { label: "1" },
+      { label: "2", description: "The publisher's copy.", sevenSeas: true },
+      { label: "3", overridden: true },
+    ]);
+    const result = await syncPages(t);
+    expect(result).toMatchObject({ fetched: 1, continued: false, errorCount: 0 });
+    // Only the blank, override-free Release's page is worth a fetch.
+    expect(pageRequests).toEqual(["10948"]);
+    expect(await descriptionOf(t, ids["1"]!)).toBe(`${BLURB} Story and art by Eiichiro Oda.`);
+    expect(await descriptionOf(t, ids["2"]!)).toBe("The publisher's copy.");
+    expect(await descriptionOf(t, ids["3"]!)).toBeNull();
+    await t.run(async (ctx) => {
+      const revisions = await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", ids["1"]!))
+        .collect();
+      expect(revisions.at(-1)).toMatchObject({
+        author: { kind: "source", sourceKey: "ann" },
+        changes: [{ field: "description" }],
+        citation: { url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=10948" },
+      });
+    });
+    // Filled: the next pass leaves the line alone.
+    pageRequests.length = 0;
+    await syncPages(t);
+    expect(pageRequests).toEqual([]);
+  });
+
+  it("refetches a linked line's page exactly once, and not again after a page with no Description", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, { 10948: pageFor(10948) }, [{ label: "1" }]);
+    // GN 2 and 3 are unlinked: the pass fetches their (404) pages to place them.
+    const linkedFetches = () => pageRequests.filter((id) => id === "10948");
+    await syncPages(t);
+    expect(linkedFetches()).toEqual(["10948"]);
+    expect(await descriptionOf(t, ids["1"]!)).toBeNull();
+    const page = () =>
+      obsFor(t, 10948).then((obs) => (obs!.snapshot as { page?: Record<string, unknown> }).page);
+    expect(await page()).toMatchObject({ status: "ok", descriptionChecked: true });
+    expect((await page())!.description).toBeUndefined();
+
+    pageRequests.length = 0;
+    await syncPages(t);
+    expect(linkedFetches()).toEqual([]);
+
+    // A page stored before descriptions were read is fetched once more.
+    const obs = (await obsFor(t, 10948))!;
+    await t.run(async (ctx) => {
+      const snapshot = obs.snapshot as { page: Record<string, unknown> };
+      const { descriptionChecked: _, ...older } = snapshot.page;
+      await ctx.db.patch(obs._id, { snapshot: { ...snapshot, page: older } });
+    });
+    await syncPages(t);
+    expect(linkedFetches()).toEqual(["10948"]);
+    pageRequests.length = 0;
+    await syncPages(t);
+    expect(linkedFetches()).toEqual([]);
+  });
+
+  const backfill = (t: TestT, args: object = {}) =>
+    t.action(internal.ann.backfillDescriptions, { politeDelayMs: 0, ...args });
+
+  it("the backfill fetches up to its limit, finishes on rerun, and targets given ids", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    // An operator command: it runs on a disabled source too.
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "ann", enabled: false });
+
+    expect(await backfill(t, { limit: 2 })).toEqual({
+      fetched: 2,
+      filled: 2,
+      errors: [],
+      continued: false,
+    });
+    expect(pageRequests).toHaveLength(2);
+    const blanks = async () =>
+      (await Promise.all(Object.values(ids).map((id) => descriptionOf(t, id)))).filter(
+        (d) => d === null,
+      ).length;
+    expect(await blanks()).toBe(1);
+
+    pageRequests.length = 0;
+    expect(await backfill(t)).toMatchObject({ fetched: 1, filled: 1 });
+    expect(await blanks()).toBe(0);
+    pageRequests.length = 0;
+    expect(await backfill(t)).toMatchObject({ fetched: 0, filled: 0 });
+    expect(pageRequests).toEqual([]);
+
+    // Targeted: exactly the named pages, checked or not; the fill rule holds.
+    expect(await backfill(t, { annIds: ["10949", "x", "10949"] })).toMatchObject({
+      fetched: 1,
+      filled: 0,
+    });
+    expect(pageRequests).toEqual(["10949"]);
+    expect(await descriptionOf(t, ids["2"]!)).toBe("Volume two.");
+  });
+
+  /** Advance the clock a minute per read, so a link's time budget runs out. */
+  function slowClock() {
+    let now = Date.now();
+    return vi.spyOn(Date, "now").mockImplementation(() => (now += 61_000));
+  }
+  async function runScheduled(t: TestT) {
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+  }
+  const pageOf = async (t: TestT, annId: number) =>
+    ((await obsFor(t, annId))!.snapshot as { page?: Record<string, unknown> }).page;
+
+  it("a Description stored while the line was unlinked reaches the Release linked later", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([LINES], describedPages);
+    await sync(t, { releasePages: false });
+    // No publisher row yet: the pages are read and held, text stored.
+    await syncPages(t);
+    expect(await pageOf(t, 10949)).toMatchObject({ description: "Volume two.", descriptionChecked: true });
+    expect((await obsFor(t, 10949))!.recordRef).toBeUndefined();
+
+    // Another source creates the book; the next mirror links it by ISBN.
+    const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
+    const releaseId = await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "2")!;
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9, publisherId: vizId });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId: volume._id, order: 1, extent: "complete" });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        isbn13: "9781569319024",
+        publisherId: vizId,
+        seriesIds: [series._id],
+      });
+    });
+    pageRequests.length = 0;
+    await sync(t, { releasePages: false });
+    expect((await obsFor(t, 10949))!.recordRef).toEqual({ type: "release", id: releaseId });
+    expect(await descriptionOf(t, releaseId)).toBe("Volume two.");
+
+    // Blank again (an override cleared, say): the backfill offers the
+    // stored text without a fetch.
+    await t.run(async (ctx) => ctx.db.patch(releaseId, { description: undefined }));
+    expect(await backfill(t)).toMatchObject({ fetched: 0, filled: 1 });
+    expect(pageRequests).toEqual([]);
+    expect(await descriptionOf(t, releaseId)).toBe("Volume two.");
+  });
+
+  it("caps description refetches per page-pass run", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    await syncPages(t, { maxRefetches: 2, maxFetches: 1 });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    // Across the run's links: two refetches, the third waits for the next run.
+    expect(pageRequests).toHaveLength(2);
+    const blank = async () =>
+      (await Promise.all(Object.values(ids).map((id) => descriptionOf(t, id)))).filter((d) => d === null);
+    expect(await blank()).toHaveLength(1);
+    pageRequests.length = 0;
+    await syncPages(t, { maxRefetches: 2 });
+    expect(pageRequests).toHaveLength(1);
+    expect(await blank()).toHaveLength(0);
+  });
+
+  it("the page pass hands off when a link runs out of time", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    slowClock();
+    expect(await syncPages(t)).toMatchObject({ continued: true, fetched: 1 });
+    await runScheduled(t);
+    expect([...pageRequests].sort()).toEqual(["10948", "10949", "10950"]);
+    for (const id of Object.values(ids)) expect(await descriptionOf(t, id)).not.toBeNull();
+  });
+
+  it("the backfill continues after its time budget without repeating a page", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    slowClock();
+    expect(await backfill(t)).toMatchObject({ fetched: 1, filled: 1, continued: true });
+    await runScheduled(t);
+    expect([...pageRequests].sort()).toEqual(["10948", "10949", "10950"]);
+    for (const id of Object.values(ids)) expect(await descriptionOf(t, id)).not.toBeNull();
+  });
+
+  it("the backfill refuses to run beside an ANN Import Run", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const result = await backfill(t);
+    expect(result).toMatchObject({ fetched: 0, filled: 0, continued: false });
+    expect(result.stopped).toMatch(/ANN Import Run .*started \d+ min ago\) is running/);
+    expect(pageRequests).toEqual([]);
+  });
+
+  it("the backfill treats a run older than 12 hours as stranded", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const later = Date.now() + 13 * 60 * 60 * 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => later);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await backfill(t);
+    expect(result).toMatchObject({ fetched: 1, filled: 1 });
+    expect(result.stopped).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ignoring stranded ANN Import Run .* \(started 13 h 0 min ago\)/));
+    vi.restoreAllMocks();
+  });
+
+  it("the backfill's breaker counts failures across hand-offs and logs its stop", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      pageRequests.push(String(input));
+      return new Response("Forbidden", { status: 403 });
+    });
+    const clock = slowClock();
+    expect(await backfill(t, { annIds: ["1", "2", "3", "4", "5", "6", "7"] })).toMatchObject({
+      fetched: 1,
+      continued: true,
+    });
+    clock.mockRestore();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    // One failure in the first link, four in the next: five in a row, stop.
+    expect(pageRequests).toHaveLength(5);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/backfillDescriptions\] stopped: ANN looks down: 5 page fetches/),
+    );
+    warn.mockRestore();
+  });
+
+  it("the backfill keeps stored pages on failed fetches and stops when ANN is down", async () => {
+    const t = makeT();
+    const plain = { 10948: pageFor(10948), 10949: pageFor(10949), 10950: pageFor(10950) };
+    await linkedCatalog(t, plain, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    // Pages read before descriptions were: ok, never checked.
+    await syncPages(t);
+    for (const annId of [10948, 10949, 10950]) {
+      const obs = (await obsFor(t, annId))!;
+      const snapshot = obs.snapshot as { page: Record<string, unknown> };
+      const { descriptionChecked: _, ...older } = snapshot.page;
+      await t.run(async (ctx) => ctx.db.patch(obs._id, { snapshot: { ...snapshot, page: older } }));
+    }
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      pageRequests.push(String(input));
+      return new Response("Forbidden", { status: 403 });
+    });
+    pageRequests.length = 0;
+    const walk = await backfill(t);
+    expect(walk).toMatchObject({ fetched: 3, filled: 0 });
+    expect(walk.stopped).toBeUndefined();
+    expect(await pageOf(t, 10948)).toMatchObject({
+      status: "ok",
+      isbn13: "9781569319017",
+      refetchFailed: { status: "error" },
+    });
+    // The failed refetch waits out its retry window.
+    expect(await backfill(t)).toMatchObject({ fetched: 0 });
+
+    const many = ["10948", "10949", "10950", "1", "2", "3", "4"];
+    const result = await backfill(t, { annIds: many });
+    expect(result).toMatchObject({ fetched: 5, continued: false });
+    expect(result.stopped).toMatch(/ANN looks down/);
+  });
+
+  it("the backfill never un-withdraws a line", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    const obs = (await obsFor(t, 10948))!;
+    await t.run(async (ctx) => ctx.db.patch(obs._id, { withdrawn: true }));
+    await backfill(t, { annIds: ["10948"] });
+    const after = (await obsFor(t, 10948))!;
+    expect(after.withdrawn).toBe(true);
+    expect(after.snapshot).toEqual(obs.snapshot);
   });
 });

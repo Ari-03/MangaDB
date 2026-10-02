@@ -35,17 +35,26 @@
 //
 // The release-page pass (`syncReleasePages`): the API has no publisher, so
 // for every still-unlinked line it fetches the line's Encyclopedia page
-// once (Distributor, ISBNs, date, SRP — stored on the observation as
-// `page`, the fetch state that keeps the pass incremental) and places it
-// through the pipeline: an existing Release with the ISBN links; otherwise
-// a LEAF Release (Edition + Release) is created under the linked Series'
-// existing Volume when the Distributor resolves to an existing publisher
-// row — the OpenLibrary rung-⑤ boundary. ANN never creates a Series or
+// once (Distributor, ISBNs, date, SRP, Description — stored on the
+// observation as `page`, the fetch state that keeps the pass incremental)
+// and places it through the pipeline: an existing Release with the ISBN
+// links; otherwise a LEAF Release (Edition + Release) is created under the
+// linked Series' existing Volume when the Distributor resolves to an
+// existing publisher row — the OpenLibrary rung-⑤ boundary. ANN never creates a Series or
 // Volume this way, never a publisher, never packaging (omnibus/box-set
 // lines link by ISBN only), and never a second same-format Release of one
 // Volume from one publisher (reprints/variants stay on the observation).
 // Authority is unchanged: PRH and publisher feeds stay authoritative for
 // ISBN and date and overwrite what ANN created.
+//
+// The page's Description (publisher copy an ANN contributor entered) is the
+// Release Description at ANN's weak rank: it fills a Release created or
+// linked with none, and never touches one with text or a Human Override.
+// A stored page's Description reaches a Release the mirror links later. A
+// line linked before its page was read for one is refetched once by the
+// page pass (at most DESCRIPTION_REFETCHES_PER_RUN a run), or in bulk by
+// the operator's `backfillDescriptions`. A failed refetch never replaces a
+// stored page.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -80,6 +89,7 @@ import { getObservation, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
+  blurbWanted,
   findPublisherByName,
   queueCreationProposal,
   recordUnplaced,
@@ -384,13 +394,43 @@ const pageStateValidator = v.object({
   isbn10: v.optional(v.string()),
   priceCents: v.optional(v.number()),
   mangaId: v.optional(v.string()),
+  description: v.optional(v.string()),
+  /**
+   * The page was parsed by a reader that looks for its Description: set on
+   * every ok fetch since descriptions were imported, so a page without one
+   * is not refetched for it again. Older ok pages lack it.
+   */
+  descriptionChecked: v.optional(v.literal(true)),
+  /**
+   * A refetch of this ok page failed: the page is kept (a failure never
+   * replaces a good page) and the refetch waits out the usual retry window.
+   */
+  refetchFailed: v.optional(
+    v.object({
+      status: v.union(v.literal("notFound"), v.literal("unparsed"), v.literal("error")),
+      at: v.number(),
+    }),
+  ),
 });
 
+type FailedStatus = "notFound" | "unparsed" | "error";
+
 type PageState = AnnReleasePage & {
-  status: "ok" | "notFound" | "unparsed" | "error";
+  status: "ok" | FailedStatus;
   fetchedAt: number;
   error?: string;
+  descriptionChecked?: true;
+  refetchFailed?: { status: FailedStatus; at: number };
 };
+
+/**
+ * The page state to store after a fetch: the fresh one, except that a
+ * failed refetch of an ok page keeps the ok page and notes the failure.
+ */
+function keptPage(prior: PageState | undefined, fetched: PageState): PageState {
+  if (fetched.status === "ok" || prior?.status !== "ok") return fetched;
+  return { ...prior, refetchFailed: { status: fetched.status, at: fetched.fetchedAt } };
+}
 
 /** One release line's observation snapshot (`release:NNN`). */
 export type AnnReleaseSnapshot = AnnMangaSnapshot["releases"][number] & {
@@ -799,8 +839,12 @@ export const applyManga = internalMutation({
 
       // The line's date, and its ISBN when the linked Release has none yet
       // (a volume+format link made before ANN lines carried ISBNs) and no
-      // other Release already holds that ISBN.
-      const offered: Record<string, unknown> = {};
+      // other Release already holds that ISBN. A page read while the line
+      // was unlinked offers its stored Description to a blank Release.
+      const storedPage = (releaseObs.snapshot as AnnReleaseSnapshot).page;
+      const offered: Record<string, unknown> = canonical
+        ? { ...descriptionOffer(storedPage, canonical) }
+        : {};
       if (release.date) offered.pubDate = toPartialDate(release.date);
       if (canonical && canonical.isbn13 === undefined && release.isbn13 !== undefined) {
         if (!(await isbnTaken(ctx, release.isbn13))) offered.isbn13 = release.isbn13;
@@ -838,6 +882,19 @@ const GONE_RETRY_MS = 90 * 24 * 60 * 60 * 1000;
 const CANDIDATE_PAGE = 25;
 /** Page fetches per action link before it hands off (~1.1 s each). */
 const DEFAULT_MAX_FETCHES = 300;
+/**
+ * Description refetches of linked lines per page-pass RUN: the weekly pass
+ * works the backlog down over a couple of months; `backfillDescriptions`
+ * does the bulk by hand.
+ */
+const DESCRIPTION_REFETCHES_PER_RUN = 2000;
+/**
+ * Wall-clock work per action link before it hands off (actions run ≤10
+ * min): during an ANN outage one rate-limited fetch can back off for up to
+ * ~4 minutes, so the fetch count alone cannot keep a link under the
+ * ceiling, and the budget leaves room for one such fetch after it.
+ */
+const LINK_BUDGET_MS = 5 * 60 * 1000;
 
 // Distributor strings that are prose imprints: their lines never create
 // manga Releases, whatever their designator says.
@@ -885,16 +942,41 @@ function needsFetch(page: PageState | undefined, now: number): boolean {
 }
 
 /**
+ * Whether a LINKED line's page is worth a fetch for its Release's missing
+ * description (`blurbWanted`): an ok page never read for a Description (the
+ * mirror linked the line by ISBN before any fetch stored one, or it was
+ * fetched before descriptions were imported), or a missing/failed page —
+ * or a failed refetch — once its retry window has passed. A page checked
+ * and found without a Description is never refetched for it.
+ */
+function descriptionRefetch(
+  page: PageState | undefined,
+  release: Doc<"releases"> | null,
+  now: number,
+): boolean {
+  if (release === null || !blurbWanted(release)) return false;
+  if (page?.status !== "ok") return needsFetch(page, now);
+  if (page.descriptionChecked) return false;
+  const failed = page.refetchFailed;
+  return failed === undefined || needsFetch({ status: failed.status, fetchedAt: failed.at }, now);
+}
+
+/**
  * One page of unlinked release lines, in source-record-id order. Linked
- * lines drop out, so a later pass only touches new or still-unplaced ones.
+ * lines drop out, so a later pass only touches new or still-unplaced ones —
+ * except a linked line whose Release still lacks a description and whose
+ * page has never been read for one (`descriptionRefetch`), which comes
+ * back once for a fetch.
  */
 export const releasePageCandidates = internalQuery({
   args: {
     cursor: v.union(v.string(), v.null()),
     numItems: v.number(),
     now: v.number(),
+    /** False once the run has spent its description refetches. */
+    refetches: v.boolean(),
   },
-  handler: async (ctx, { cursor, numItems, now }) => {
+  handler: async (ctx, { cursor, numItems, now, refetches }) => {
     const result = await ctx.db
       .query("sourceObservations")
       .withIndex("by_source_record", (q) =>
@@ -904,13 +986,21 @@ export const releasePageCandidates = internalQuery({
           .lt("sourceRecordId", "release;"),
       )
       .paginate({ cursor, numItems });
-    const candidates = result.page.flatMap((obs) => {
-      if (obs.recordRef !== undefined || obs.withdrawn) return [];
+    const candidates: Array<{ annId: string; fetch: boolean; refetch?: true }> = [];
+    for (const obs of result.page) {
+      if (obs.withdrawn) continue;
       const snapshot = obs.snapshot as AnnReleaseSnapshot;
       // Content-derived ids (a line without an href) have no page.
-      if (!/^\d+$/.test(snapshot.annId)) return [];
-      return [{ annId: snapshot.annId, fetch: needsFetch(snapshot.page, now) }];
-    });
+      if (!/^\d+$/.test(snapshot.annId)) continue;
+      if (obs.recordRef === undefined) {
+        candidates.push({ annId: snapshot.annId, fetch: needsFetch(snapshot.page, now) });
+      } else if (refetches && obs.recordRef.type === "release") {
+        const release = await ctx.db.get(obs.recordRef.id);
+        if (descriptionRefetch(snapshot.page, release, now)) {
+          candidates.push({ annId: snapshot.annId, fetch: true, refetch: true });
+        }
+      }
+    }
     return {
       candidates,
       continueCursor: result.continueCursor,
@@ -957,9 +1047,11 @@ export const chainReleasePages = internalMutation({
  * The release-page pass: walks every unlinked release line, fetches its
  * Encyclopedia page once (1 req/s), and places it (`applyReleasePage`).
  * Lines whose page is already stored are re-placed without a fetch — a
- * newly seeded publisher or Volume can unblock them. Chained after each
- * finished mirror, complete or errored; self-continues across the action
- * time limit.
+ * newly seeded publisher or Volume can unblock them. A linked line whose
+ * Release lacks a description is fetched once more to offer the page's
+ * (`descriptionRefetch`), at most DESCRIPTION_REFETCHES_PER_RUN per run.
+ * Chained after each finished mirror, complete or errored; self-continues
+ * after `maxFetches` fetches or LINK_BUDGET_MS, whichever comes first.
  *
  *   npx convex run ann:syncReleasePages '{}'
  */
@@ -968,8 +1060,11 @@ export const syncReleasePages = internalAction({
     politeDelayMs: v.optional(v.number()),
     /** Page fetches per invocation before continuing. */
     maxFetches: v.optional(v.number()),
+    /** Description refetches per run (default DESCRIPTION_REFETCHES_PER_RUN). */
+    maxRefetches: v.optional(v.number()),
     // ----- continuation state (never passed by callers) -----
     cursor: v.optional(v.union(v.string(), v.null())),
+    refetched: v.optional(v.number()),
     runId: v.optional(v.id("importRuns")),
     seen: v.optional(v.number()),
     changed: v.optional(v.number()),
@@ -987,28 +1082,39 @@ export const syncReleasePages = internalAction({
       if (!source) return { skipped: "disabled" as const };
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
+      const started = Date.now();
       const delay = args.politeDelayMs ?? ANN_DELAY_MS;
       const maxFetches = args.maxFetches ?? DEFAULT_MAX_FETCHES;
+      const maxRefetches = args.maxRefetches ?? DESCRIPTION_REFETCHES_PER_RUN;
       const errors = [...(args.errors ?? [])];
       let seen = args.seen ?? 0;
       let changed = args.changed ?? 0;
       let fetchedTotal = args.fetched ?? 0;
+      let refetched = args.refetched ?? 0;
       let cursor: string | null = args.cursor ?? null;
       let fetchedHere = 0;
       let done = false;
 
       try {
-        while (!done && fetchedHere < maxFetches) {
+        pages: while (!done && fetchedHere < maxFetches) {
           const page: {
-            candidates: Array<{ annId: string; fetch: boolean }>;
+            candidates: Array<{ annId: string; fetch: boolean; refetch?: true }>;
             continueCursor: string;
             isDone: boolean;
           } = await ctx.runQuery(internal.ann.releasePageCandidates, {
             cursor,
             numItems: CANDIDATE_PAGE,
             now: Date.now(),
+            refetches: refetched < maxRefetches,
           });
           for (const candidate of page.candidates) {
+            if (candidate.refetch && refetched >= maxRefetches) continue;
+            // Out of time (after at least one fetch, so every link makes
+            // progress): hand off from this page's start. Its lines already
+            // fetched are stored now and come back without a fetch.
+            if (candidate.fetch && fetchedHere > 0 && Date.now() - started > LINK_BUDGET_MS) {
+              break pages;
+            }
             seen++;
             let state: PageState | undefined;
             if (candidate.fetch) {
@@ -1020,6 +1126,7 @@ export const syncReleasePages = internalAction({
               }
               fetchedHere++;
               fetchedTotal++;
+              if (candidate.refetch) refetched++;
             }
             try {
               const result = await applyRetrying(ctx, internal.ann.applyReleasePage, {
@@ -1039,7 +1146,9 @@ export const syncReleasePages = internalAction({
           await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
             politeDelayMs: args.politeDelayMs,
             maxFetches: args.maxFetches,
+            maxRefetches: args.maxRefetches,
             cursor,
+            refetched,
             runId,
             seen,
             changed,
@@ -1101,7 +1210,9 @@ async function fetchReleasePage(annId: string, delay: number): Promise<PageState
   try {
     const res = await politeFetch(releaseUrl(annId), delay);
     const parsed = parseReleasePage(await res.text());
-    return parsed ? { status: "ok", fetchedAt, ...parsed } : { status: "unparsed", fetchedAt };
+    return parsed
+      ? { status: "ok", fetchedAt, ...parsed, descriptionChecked: true }
+      : { status: "unparsed", fetchedAt };
   } catch (e) {
     const message = errorMessage(e);
     return /HTTP 404\b/.test(message)
@@ -1111,31 +1222,53 @@ async function fetchReleasePage(annId: string, delay: number): Promise<PageState
 }
 
 type PlaceResult = {
-  status: "skipped" | "stored" | "linked" | "created" | "recordOnly";
+  status: "skipped" | "stored" | "filled" | "linked" | "created" | "recordOnly";
   changed: boolean;
   reason?: string;
   releaseId?: Id<"releases">;
 };
 
 /**
+ * The page's Description for a Release that has none (`blurbWanted`), as an
+ * offer for reconcileFields at ANN's registry rank (weak): it only ever
+ * fills a blank. A Release that has text (a publisher's, Open Library's, a
+ * human's) or a Human Override on the field is offered nothing: weak text
+ * could only be recorded or, against a human's, queue a review nobody needs.
+ */
+function descriptionOffer(
+  page: PageState | undefined,
+  release: Doc<"releases">,
+): { description?: string } {
+  return page?.description !== undefined && blurbWanted(release)
+    ? { description: page.description }
+    : {};
+}
+
+/**
  * Place one release line from its page (freshly fetched, or the stored
  * one): link the Release carrying its ISBN, else create a leaf Release
  * under the linked Series' existing Volume when the Distributor resolves
  * to an existing publisher row. Everything the importer will not decide
- * stays on the observation as a placement note. One atomic mutation.
+ * stays on the observation as a placement note. A freshly fetched page of
+ * an already LINKED line (the description refetch) is stored, and its
+ * Description offered to the linked Release. One atomic mutation.
  */
 export const applyReleasePage = internalMutation({
   args: { annId: v.string(), page: v.optional(pageStateValidator) },
   handler: async (ctx, { annId, page: fetched }): Promise<PlaceResult> => {
     const now = Date.now();
     let observation = await getObservation(ctx, SOURCE_KEY, `release:${annId}`);
-    if (!observation || observation.recordRef !== undefined) {
-      return { status: "skipped", changed: false };
+    // A line ANN no longer lists stays withdrawn: storing a page would
+    // mark it seen (upsertObservation) and retire its cancellation review.
+    if (!observation || observation.withdrawn) return { status: "skipped", changed: false };
+    if (observation.recordRef?.type === "release") {
+      return await fillLinked(ctx, observation, observation.recordRef.id, fetched, now);
     }
+    if (observation.recordRef !== undefined) return { status: "skipped", changed: false };
     let line = observation.snapshot as AnnReleaseSnapshot;
     let changed = false;
     if (fetched !== undefined) {
-      line = { ...line, page: fetched };
+      line = { ...line, page: keptPage(line.page, fetched) };
       ({ observation } = await upsertObservation(ctx, {
         sourceKey: SOURCE_KEY,
         sourceRecordId: observation.sourceRecordId,
@@ -1267,6 +1400,7 @@ export const applyReleasePage = internalMutation({
             page.priceCents !== undefined
               ? { amountCents: page.priceCents, currency: "USD" }
               : undefined,
+          description: page.description,
           publisher: { name: publisher.name, slug: publisher.slug },
         },
         tagBootstrapUnreviewed: true,
@@ -1329,6 +1463,7 @@ export const applyReleasePage = internalMutation({
           page.priceCents !== undefined
             ? { amountCents: page.priceCents, currency: "USD" }
             : undefined,
+        description: page.description,
         publisher: { name: publisher.name, slug: publisher.slug },
       },
       tagBootstrapUnreviewed: false,
@@ -1341,7 +1476,7 @@ export const applyReleasePage = internalMutation({
         recordRef: { type: "release", id: release._id },
       });
       const date = page!.date ?? line.date;
-      const offered: Record<string, unknown> = {};
+      const offered: Record<string, unknown> = { ...descriptionOffer(page, release) };
       if (date) offered.pubDate = toPartialDate(date);
       // The page's ISBN fills a linked Release that has none (never another's).
       if (release.isbn13 === undefined && isbn13 !== undefined && !(await isbnTaken(ctx, isbn13))) {
@@ -1360,5 +1495,290 @@ export const applyReleasePage = internalMutation({
       }
       return { status: "linked", changed: true, releaseId: release._id };
     }
+  },
+});
+
+/**
+ * Offer a linked line's page Description to its Release
+ * (`descriptionOffer`): a refetched page is stored first (`keptPage`);
+ * without one, the stored page's text is offered (read while the line was
+ * unlinked, or before an override was cleared). Nothing else is reconciled
+ * here: the line's date and ISBN reach the Release through the mirror.
+ */
+async function fillLinked(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  releaseId: Id<"releases">,
+  fetched: PageState | undefined,
+  now: number,
+): Promise<PlaceResult> {
+  const line = observation.snapshot as AnnReleaseSnapshot;
+  let stored = observation;
+  let page = line.page;
+  if (fetched !== undefined) {
+    page = keptPage(line.page, fetched);
+    ({ observation: stored } = await upsertObservation(ctx, {
+      sourceKey: SOURCE_KEY,
+      sourceRecordId: observation.sourceRecordId,
+      snapshot: { ...line, page },
+      now,
+    }));
+  }
+  const changed = fetched !== undefined;
+  const release = await ctx.db.get(releaseId);
+  const offered = release !== null ? descriptionOffer(page, release) : {};
+  if (release === null || offered.description === undefined) {
+    return { status: changed ? "stored" : "skipped", changed, releaseId };
+  }
+  const source = await getSourceByKey(ctx, SOURCE_KEY);
+  const result = await reconcileFields(ctx, {
+    sourceKey: SOURCE_KEY,
+    ref: { type: "release", id: release._id },
+    doc: release,
+    offered,
+    observation: stored,
+    citation: {
+      sourceName: source?.name ?? "Anime News Network Encyclopedia",
+      url: releaseUrl(line.annId),
+    },
+    now,
+  });
+  return {
+    status: result.applied.includes("description") ? "filled" : "stored",
+    changed: true,
+    releaseId,
+  };
+}
+
+// ---------- the description backfill ----------
+
+/** Release lines scanned per lookup for linked ones still missing a description. */
+const BACKFILL_SCAN = 200;
+/** Lines handed to the action per lookup. */
+const BACKFILL_BATCH = 25;
+/** Consecutive failed fetches that mean ANN is down: the backfill stops. */
+const BACKFILL_MAX_FAILURES = 5;
+
+/**
+ * Up to BACKFILL_BATCH linked, unwithdrawn release lines after `after`
+ * whose Release wants a description (`blurbWanted`), in source-record-id
+ * order, and where to look next (null once the range is exhausted). A line
+ * whose stored page already holds a Description needs no fetch (`fetch:
+ * false`); otherwise it is listed when its page is worth one
+ * (`descriptionRefetch`).
+ */
+export const descriptionlessLines = internalQuery({
+  args: { after: v.union(v.string(), v.null()), now: v.number() },
+  handler: async (ctx, { after, now }) => {
+    const docs = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q
+          .eq("sourceKey", SOURCE_KEY)
+          .gt("sourceRecordId", after ?? "release:")
+          .lt("sourceRecordId", "release;"),
+      )
+      .take(BACKFILL_SCAN);
+    const lines: Array<{ annId: string; sourceRecordId: string; fetch: boolean }> = [];
+    let next: string | null = null;
+    for (const doc of docs) {
+      next = doc.sourceRecordId;
+      if (doc.withdrawn || doc.recordRef?.type !== "release") continue;
+      const line = doc.snapshot as AnnReleaseSnapshot;
+      if (!/^\d+$/.test(line.annId)) continue;
+      const release = await ctx.db.get(doc.recordRef.id);
+      if (release === null || !blurbWanted(release)) continue;
+      const stored = line.page?.description !== undefined;
+      if (!stored && !descriptionRefetch(line.page, release, now)) continue;
+      lines.push({ annId: line.annId, sourceRecordId: doc.sourceRecordId, fetch: !stored });
+      if (lines.length === BACKFILL_BATCH) break;
+    }
+    const exhausted = docs.length < BACKFILL_SCAN && next === docs.at(-1)?.sourceRecordId;
+    return { lines, next: exhausted ? null : next };
+  },
+});
+
+/**
+ * A "running" ANN Import Run older than this is stranded (its chain died
+ * without closing it), not live: a full mirror plus page pass takes hours.
+ */
+const STRANDED_RUN_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * The latest ANN Import Run when it is still "running": its id and age.
+ * The backfill decides whether it blocks (`STRANDED_RUN_MS`).
+ */
+export const annRunInProgress = internalQuery({
+  args: { now: v.number() },
+  handler: async (ctx, { now }) => {
+    const latest = await ctx.db
+      .query("importRuns")
+      .withIndex("by_source", (q) => q.eq("sourceKey", SOURCE_KEY))
+      .order("desc")
+      .first();
+    return latest?.status === "running"
+      ? { runId: latest._id, ageMs: now - latest._creationTime }
+      : null;
+  },
+});
+
+/** "3 h 12 min" for a refusal message. */
+function age(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+type BackfillResult = {
+  /** Pages fetched so far, across every link of the chain. */
+  fetched: number;
+  /** Releases that received a description, across every link. */
+  filled: number;
+  /** This link's failures (fetch failures are stored on the line, not here). */
+  errors: string[];
+  continued: boolean;
+  /** Why the backfill stopped before finishing (a running sync, ANN down). */
+  stopped?: string;
+};
+
+/**
+ * Give Releases linked to ANN release lines the page Description they never
+ * got, instead of waiting for the weekly page pass to reach them: walk the
+ * linked lines whose Release has no description (`descriptionlessLines`),
+ * offer a Description the line's stored page already holds without a
+ * fetch, else fetch the page at ANN's 1 req/s, store it on the line, and
+ * offer its Description (`applyReleasePage`, at ANN's weak rank: it only
+ * fills blanks). `limit` caps the pages fetched in total; `annIds` fetches
+ * exactly those release pages instead of walking (even ones already
+ * checked; the fill rule still applies, and an unlinked line is placed as
+ * the page pass would). Continues itself in fresh actions until done or
+ * the limit is spent; safe to rerun.
+ *
+ * Polite by construction: it refuses to run while an ANN Import Run is
+ * running (the two would double the request rate) unless that run is older
+ * than STRANDED_RUN_MS (a dead chain, not a live crawl), stops after
+ * BACKFILL_MAX_FAILURES consecutive failed fetches across its links (ANN
+ * is down; a failed refetch never replaces a stored page), and never
+ * touches a withdrawn line. A stop is logged with its reason, since a
+ * continuation link's return value is seen by nobody. Like people.backfillAnnCredits this is an explicit operator
+ * command: it runs whatever the source's enabled flag says and opens no
+ * Import Run.
+ *
+ *   npx convex run ann:backfillDescriptions '{"limit": 300}'
+ *   npx convex run ann:backfillDescriptions '{"annIds": ["10948", "23227"]}'
+ */
+export const backfillDescriptions = internalAction({
+  args: {
+    limit: v.optional(v.number()),
+    annIds: v.optional(v.array(v.string())),
+    /** Pause before every request; tests pass 0. Defaults to ANN's 1 req/s. */
+    politeDelayMs: v.optional(v.number()),
+    // ----- continuation state (never passed by callers) -----
+    after: v.optional(v.string()),
+    fetched: v.optional(v.number()),
+    filled: v.optional(v.number()),
+    /** Consecutive failed fetches so far, so the breaker spans hand-offs. */
+    failures: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const started = Date.now();
+    const delay = args.politeDelayMs ?? ANN_DELAY_MS;
+    const limit = args.limit ?? Number.POSITIVE_INFINITY;
+    let fetched = args.fetched ?? 0;
+    let filled = args.filled ?? 0;
+    let failures = args.failures ?? 0;
+    let handled = 0;
+    const errors: string[] = [];
+    const result = (extra: { continued: boolean; stopped?: string }) => ({
+      fetched,
+      filled,
+      errors,
+      ...extra,
+    });
+    const stop = (stopped: string) => {
+      console.warn(`[ann.backfillDescriptions] stopped: ${stopped}`);
+      return result({ continued: false, stopped });
+    };
+
+    const running: { runId: Id<"importRuns">; ageMs: number } | null = await ctx.runQuery(
+      internal.ann.annRunInProgress,
+      { now: Date.now() },
+    );
+    if (running !== null && running.ageMs <= STRANDED_RUN_MS) {
+      return stop(
+        `An ANN Import Run (${running.runId}, started ${age(running.ageMs)} ago) is running; the backfill would double the request rate to ANN. Rerun it once the run finishes.`,
+      );
+    }
+    if (running !== null) {
+      console.warn(
+        `[ann.backfillDescriptions] ignoring stranded ANN Import Run ${running.runId} (started ${age(running.ageMs)} ago)`,
+      );
+    }
+
+    // Offer a line's Description: from a fresh fetch, or (`fetch` false)
+    // from its stored page.
+    const fill = async (annId: string, fetch: boolean) => {
+      handled++;
+      let page: PageState | undefined;
+      if (fetch) {
+        page = await fetchReleasePage(annId, delay);
+        fetched++;
+        failures = page.status === "error" || page.status === "unparsed" ? failures + 1 : 0;
+      }
+      try {
+        const applied = await applyRetrying(ctx, internal.ann.applyReleasePage, { annId, page });
+        if (applied.status === "filled") filled++;
+      } catch (e) {
+        errors.push(`release ${annId}: ${errorMessage(e)}`);
+      }
+    };
+    const down = () =>
+      failures >= BACKFILL_MAX_FAILURES
+        ? `ANN looks down: ${failures} page fetches in a row failed. Rerun the backfill later.`
+        : null;
+    // Every link handles at least one line before it may hand off.
+    const outOfTime = () => handled > 0 && Date.now() - started > LINK_BUDGET_MS;
+    const continueWith = async (rest: { after?: string; annIds?: string[] }) => {
+      await ctx.scheduler.runAfter(0, internal.ann.backfillDescriptions, {
+        limit: args.limit,
+        politeDelayMs: args.politeDelayMs,
+        fetched,
+        filled,
+        failures,
+        ...rest,
+      });
+      return result({ continued: true });
+    };
+
+    if (args.annIds !== undefined) {
+      const ids = [...new Set(args.annIds.map((id) => id.trim()).filter((id) => /^\d+$/.test(id)))];
+      for (let i = 0; i < ids.length && fetched < limit; i++) {
+        if (outOfTime()) return await continueWith({ annIds: ids.slice(i) });
+        await fill(ids[i]!, true);
+        const stopped = down();
+        if (stopped) return stop(stopped);
+      }
+      return result({ continued: false });
+    }
+
+    // `cursor` trails the last line handled, so a continuation resumes
+    // right after it.
+    let cursor: string | null = args.after ?? null;
+    while (fetched < limit) {
+      const batch: {
+        lines: Array<{ annId: string; sourceRecordId: string; fetch: boolean }>;
+        next: string | null;
+      } = await ctx.runQuery(internal.ann.descriptionlessLines, { after: cursor, now: Date.now() });
+      for (const line of batch.lines) {
+        if (line.fetch && fetched >= limit) break;
+        if (outOfTime()) return await continueWith({ after: cursor ?? undefined });
+        await fill(line.annId, line.fetch);
+        cursor = line.sourceRecordId;
+        const stopped = down();
+        if (stopped) return stop(stopped);
+      }
+      if (batch.next === null) break;
+      cursor = batch.next;
+    }
+    return result({ continued: false });
   },
 });

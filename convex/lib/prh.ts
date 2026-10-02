@@ -36,6 +36,7 @@
 // signal and is left to Editors.
 
 import { v, type Infer } from "convex/values";
+import type { Doc } from "../_generated/dataModel";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
 import { catalogTitleFields } from "./catalogTitle";
 import { cleanBlurb } from "./text";
@@ -341,4 +342,235 @@ export function parseTitleList(raw: unknown): {
     dropped.push({ ...(isbn13 !== undefined ? { isbn13 } : {}), reason: read });
   }
   return { titles, dropped, rawCount: list.length, recordCount };
+}
+
+// ---------- the author line ----------
+
+/** One credit an author line gives, in people.ts's roles. */
+export type AuthorCredit = { name: string; role: Doc<"seriesCredits">["role"] };
+
+type Task = "story" | "art" | "original";
+
+// Every task an author-line label may name, and what it credits: null for
+// tasks that make no one an author of the Series here (design, translation,
+// lettering, editing, adapting someone else's work).
+const TASKS: Record<string, Task | null> = {
+  story: "story",
+  written: "story",
+  writer: "story",
+  art: "art",
+  artwork: "art",
+  illustrated: "art",
+  illustration: "art",
+  illustrations: "art",
+  manga: "art",
+  drawn: "art",
+  created: "original",
+  creator: "original",
+  "original story": "original",
+  "original concept": "original",
+  "original work": "original",
+  "original creator": "original",
+  "original illustrations": null,
+  "original character design": null,
+  "original character designs": null,
+  "character design": null,
+  "character designs": null,
+  "graffiti designs": null,
+  translated: null,
+  translation: null,
+  lettered: null,
+  lettering: null,
+  letters: null,
+  retouch: null,
+  compiled: null,
+  storyboards: null,
+  layouts: null,
+  composition: null,
+  contributions: null,
+  supervised: null,
+  organized: null,
+  "research consulting": null,
+  adaptation: null,
+  adapted: null,
+  adaptated: null,
+  script: null,
+};
+
+const TASK = Object.keys(TASKS)
+  .sort((a, b) => b.length - a.length)
+  .join("|");
+/** Between tasks of one label: "Story & Art", "Created, written, and illustrated". */
+const TASK_JOIN = /\s*,\s*and\s+|\s*,\s*|\s*&\s*|\s+and\s+/i;
+/** A label opening a clause or following a comma: "Story by ", ", Art by ", "By ". */
+const LABEL = new RegExp(
+  `(?:^|,\\s*)(?:((?:${TASK})(?:(?:${TASK_JOIN.source})(?:${TASK}))*)\\s+)?by\\s+`,
+  "gi",
+);
+/** Clauses end at a semicolon or a sentence's full stop (not an initial's: "M. Alice"). */
+const CLAUSE_BREAK = /\s*;\s*|(?<=[^\s.]{2})\.(?:\s+|$)/;
+/** Words no name contains: a sign the line has a shape this parser does not know. */
+const NOT_A_NAME =
+  /\b(?:by|with|various|artists?|creators?|series|story|art|written|illustrated|illustrations?|designs?|translat\w*|letter\w*|based|original|others|et al)\b/i;
+/** Two people run into one name: "Jin x Sayuki". */
+const FUSED = /\s[x×]\s/i;
+/** Words that make a name an organisation's: "Manta Comics", "SNK Corporation", "Team Moon". */
+const ORGANISATION =
+  /\b(?:comics|studio\w*|corporation|committee|productions?|project|projekt|team|entertainment|games|battalion)\b|\b(?:corp|inc|co|ltd|soft)\.?$/i;
+/**
+ * Organisations the extract credits that carry no organisation word: game
+ * and anime studios named as creators (folded: lowercase, letters only).
+ */
+const KNOWN_ORGANISATIONS = new Set([
+  "spikechunsoft",
+  "typemoon",
+  "cygames",
+  "nitroplus",
+  "bandainamco",
+  "mihoyo",
+  "snk",
+  "tokyopop",
+  "khara",
+  "zag",
+  "nttsolmare",
+  "gainax",
+  "hololive",
+  "quinrose",
+  "atlus",
+  "bones",
+]);
+/** A label naming an adaptation: "Adapted and Illustrated by", "Adaptation and Artwork by". */
+const ADAPTED = /\badapt/i;
+/** An unlabelled name this long on a line with no labels is likely two people: "Kazuo Koike Goseki Kojima". */
+const FUSED_WORDS = 4;
+
+/** Whether a name is an organisation's rather than a person's. */
+function isOrganisation(name: string): boolean {
+  return ORGANISATION.test(name) || KNOWN_ORGANISATIONS.has(name.toLowerCase().replace(/[^a-z]/g, ""));
+}
+
+/**
+ * Whether a creator name is plainly one person's: not empty, no task words
+ * ("Various", "et al"), not two people joined by "x", not an organisation.
+ * The PRH parser's own guard, shared so people.ts holds Kodansha's and
+ * Seven Seas' `creators` lists to the same bar.
+ */
+export function isPersonName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed !== "" && !NOT_A_NAME.test(trimmed) && !FUSED.test(trimmed) && !isOrganisation(trimmed);
+}
+
+/**
+ * The credits in PRH's free-text `author` line, or none when the line has a
+ * shape this does not recognise (a wrong credit is worse than none):
+ *
+ * - "Yui Sakuma", "Kazuo Koike and Goseki Kojima": each a role-less author.
+ * - Labelled clauses split by ";", ", " before a label, or a full stop:
+ *   "Story by A; Art by B", "Written and illustrated by A. Translated by
+ *   B.", "Original concept by A; Story by B; Art by C". Tasks map to roles
+ *   (`TASKS`); a label with only dropped tasks (character design,
+ *   translation, compilation, adaptation) credits nobody, and "By A" is a
+ *   role-less author. An "Original ..." label credits the original
+ *   creator, but a mixed one ("Original Story and Illustrations by A and
+ *   B") credits nobody, since it can't say who wrote and who illustrated.
+ * - One unlabelled name opening a labelled line takes the role the labels
+ *   leave open: "A; Illustrated by B" → A wrote it, "A; Story by B" → A
+ *   drew it, "A; created by B" → A is the author, and with both story and
+ *   art labelled, or beside an adaptation label ("A; Adapted and
+ *   Illustrated by B"), A is the original creator. Several unlabelled names
+ *   beside a story or art label ("A, B, and C; Illustrated by D") credit
+ *   nobody: they may be co-writers or the original creators.
+ * - A line crediting a writer but nobody for the art ("Written by A")
+ *   makes the writer the role-less author.
+ * - Organisations are left out ("SNK Corporation; Illustrated by A" gives
+ *   only A's art), though their label still counts toward the role an
+ *   unlabelled name takes.
+ *
+ * Refused: a single-word name beside a comma ("Fushimi, Tsukasa" is Last,
+ * First), colons, an unlabelled name after the first clause, a label this
+ * does not know, names holding task words ("Various Artists", "et al"),
+ * names joined by "x", and a bare line's name of four or more words
+ * ("Kazuo Koike Goseki Kojima"). Parenthesised studios and labels are
+ * dropped first ("POPO (Friendly Land)"); a "based on ..." clause names the
+ * source, not a credit. A person may appear twice with two roles; people.ts
+ * merges them.
+ */
+export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
+  const text = (author ?? "").replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim();
+  if (text === "" || /[:/()[\]]/.test(text)) return [];
+  const labeled: AuthorCredit[] = [];
+  let lead: string[] = [];
+  let labels = 0;
+  let adapted = false;
+  let first = true;
+  for (const clause of text.split(CLAUSE_BREAK)) {
+    if (clause === "") continue;
+    if (/^based on\b/i.test(clause)) {
+      first = false;
+      continue;
+    }
+    const marks = [...clause.matchAll(LABEL)];
+    labels += marks.length;
+    adapted ||= marks.some((mark) => mark[1] !== undefined && ADAPTED.test(mark[1]));
+    const opening = marks[0]?.index ?? clause.length;
+    if (opening > 0) {
+      const names = first ? splitNames(clause.slice(0, opening)) : null;
+      if (!names) return [];
+      lead = names;
+    }
+    first = false;
+    for (const [i, mark] of marks.entries()) {
+      const names = splitNames(
+        clause.slice(mark.index + mark[0].length, marks[i + 1]?.index ?? clause.length),
+      );
+      if (!names) return [];
+      const role = mark[1] === undefined ? "author" : labelRole(mark[1]);
+      if (role) labeled.push(...names.map((name) => ({ name, role })));
+    }
+  }
+  if (labels === 0 && lead.some((name) => name.split(" ").length >= FUSED_WORDS)) return [];
+  const has = (task: "story" | "art") =>
+    labeled.some((credit) => credit.role === task || credit.role === "story_art");
+  const story = has("story");
+  const art = has("art");
+  // Someone else adapted it: an unlabelled name is the work's original creator.
+  const leadRole: AuthorCredit["role"] =
+    adapted || (story && art) ? "original" : art ? "story" : story ? "art" : "author";
+  const leads = lead.length > 1 && (story || art) ? [] : lead;
+  const credits: AuthorCredit[] = [...leads.map((name) => ({ name, role: leadRole })), ...labeled];
+  const drawn = credits.some((credit) => credit.role === "art" || credit.role === "story_art");
+  return credits
+    .filter((credit) => !isOrganisation(credit.name))
+    .map((credit): AuthorCredit =>
+      !drawn && credit.role === "story" ? { ...credit, role: "author" } : credit,
+    );
+}
+
+/**
+ * A label's role: writing and drawing are Story & Art; null when it
+ * credits no maker or source, or is a mixed "Original ... and ..." label.
+ */
+function labelRole(label: string): AuthorCredit["role"] | null {
+  const tasks = label.toLowerCase().split(TASK_JOIN);
+  if (tasks[0]?.startsWith("original ")) {
+    return tasks.length === 1 && TASKS[tasks[0]] ? "original" : null;
+  }
+  const found = new Set(tasks.map((task) => TASKS[task]));
+  if (found.has("story") && found.has("art")) return "story_art";
+  if (found.has("story")) return "story";
+  if (found.has("art")) return "art";
+  if (found.has("original")) return "original";
+  return null;
+}
+
+/**
+ * The names in "A, B, and C" / "A and B" / "A & B", or null when one is
+ * not plainly a name: empty, holding a task word, two people joined by
+ * "x", or a single word in a comma list (a "Last, First" name).
+ */
+function splitNames(text: string): string[] | null {
+  const names = text.split(/\s*,\s*(?:and\s+)?|\s+(?:and|&)\s+/i).map((name) => name.trim());
+  if (names.some((name) => name === "" || NOT_A_NAME.test(name) || FUSED.test(name))) return null;
+  if (text.includes(",") && names.some((name) => !name.includes(" "))) return null;
+  return names;
 }

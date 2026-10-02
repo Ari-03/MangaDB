@@ -53,6 +53,7 @@ import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } fr
 import { getObservation, markSeen, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
+  blurbOutranked,
   createCanonicalRecords,
   createReleaseBundle,
   creationGates,
@@ -399,9 +400,18 @@ export const noteListing = internalMutation({
       obs.recordRef?.type === "release" ? await ctx.db.get(obs.recordRef.id) : null;
     // Descriptions predate their import: a linked Release still without one
     // is re-read while the listing offers a blurb, paced by the detail
-    // budget, so the backfill needs no forced run. A human's cleared
-    // description is theirs to keep (`blurbPending` in applyBook agrees).
-    if (offersBlurb && release !== null && blurbWanted(release)) return { needsDetail: true };
+    // budget, so the backfill needs no forced run. So is one an aggregator
+    // (ANN, Open Library) described first, unless the stored read already
+    // says the same. A human's cleared description is theirs to keep
+    // (`blurbPending` in applyBook agrees).
+    if (
+      offersBlurb &&
+      release !== null &&
+      release.description !== stored?.description &&
+      (await blurbOutranked(ctx, release, SOURCE_KEY))
+    ) {
+      return { needsDetail: true };
+    }
     // Pending art is whatever the snapshot names that the Release does not
     // hold yet; applyBook's rung ① serves only active, unlocked Releases.
     const cover =
@@ -413,16 +423,6 @@ export const noteListing = internalMutation({
 });
 
 // ---------- applying one book ----------
-
-/** An active, unlocked Release with no description and no human override of it. */
-function blurbWanted(release: Doc<"releases">): boolean {
-  return (
-    release.status === "active" &&
-    !release.locked &&
-    release.description === undefined &&
-    !release.overriddenFields?.includes("description")
-  );
-}
 
 type ApplyResult = {
   status:
@@ -579,9 +579,13 @@ export const applyBook = internalMutation({
       }
       // An unchanged snapshot is done unless its art moved to a new URL.
       // An unchanged listing still reconciles once while it carries a blurb
-      // the Release lacks: descriptions predate their import, so the first
-      // sync after that change must not skip already-linked books.
-      const blurbPending = snapshot.description !== undefined && blurbWanted(release);
+      // the Release lacks (descriptions predate their import, so the first
+      // sync after that change must not skip already-linked books), or one
+      // that would replace an aggregator's text.
+      const blurbPending =
+        snapshot.description !== undefined &&
+        snapshot.description !== release.description &&
+        (await blurbOutranked(ctx, release, SOURCE_KEY));
       const cover = coverRequest(release, snapshot.coverUrl);
       if (!changed && !blurbPending && cover === undefined) {
         return { status: "unchanged", changed: false };

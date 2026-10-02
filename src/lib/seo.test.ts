@@ -228,6 +228,7 @@ describe("JSON-LD builders", () => {
       pubDate: { year: 2019, month: 2, day: 26 },
       language: "en",
       publisherName: "Dark Horse",
+      description: "Guts, the Black Swordsman, seeks revenge.",
       coverUrl: "https://files.example/cover.jpg",
     });
     expect(book).toEqual({
@@ -240,6 +241,7 @@ describe("JSON-LD builders", () => {
       isbn: "9781506711980",
       datePublished: "2019-02-26",
       publisher: { "@type": "Organization", name: "Dark Horse" },
+      description: "Guts, the Black Swordsman, seeks revenge.",
       image: "https://files.example/cover.jpg",
     });
   });
@@ -256,10 +258,12 @@ describe("JSON-LD builders", () => {
       pubDate: null,
       language: "en",
       publisherName: null,
+      description: null,
     });
     expect(book).not.toHaveProperty("isbn");
     expect(book).not.toHaveProperty("datePublished");
     expect(book).not.toHaveProperty("publisher");
+    expect(book).not.toHaveProperty("description");
     expect(book).not.toHaveProperty("image");
   });
 

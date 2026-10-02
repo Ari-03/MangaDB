@@ -1,7 +1,9 @@
 // Authors under a title: "Story by Gan Sunaaku · Art by Hikaru Suruga ·
 // Original work by Hajime Isayama", each name linking to the author page.
 // Shared by the Series, Volume, and Edition pages; credits come from ANN's
-// staff rows (convex/people.ts), ordered makers first.
+// staff rows or, where ANN has none, the publishers' creator names
+// (convex/people.ts), ordered makers first. A publisher name without a
+// role reads "By Peko Watanabe".
 
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
@@ -19,6 +21,7 @@ export const ROLE_LABELS: Record<CreditRole, string> = {
   story_art: "Story & Art by",
   story: "Story by",
   art: "Art by",
+  author: "By",
   original: "Original work by",
 };
 
@@ -27,6 +30,7 @@ export const ROLE_NAMES: Record<CreditRole, string> = {
   story_art: "Story & Art",
   story: "Story",
   art: "Art",
+  author: "Author",
   original: "Original creator",
 };
 

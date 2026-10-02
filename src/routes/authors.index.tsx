@@ -18,8 +18,9 @@ const authorsPage = (cursor: string | null, mature: boolean) =>
   });
 
 /**
- * `/authors` — the Authors tab: every author ANN credits on a Series in the
- * catalog, the most prolific first (people.ts `authors`), each with the
+ * `/authors` — the Authors tab: every author credited on a Series in the
+ * catalog (by ANN, or by a publisher where ANN is silent), the most
+ * prolific first (people.ts `authors`), each with the
  * jacket of their biggest Series. More load on request. Indexable.
  */
 export const Route = createFileRoute("/authors/")({
@@ -88,13 +89,13 @@ function AuthorsList({
         <a href="https://www.animenewsnetwork.com/encyclopedia/" rel="noopener" target="_blank">
           Anime News Network Encyclopedia
         </a>
-        .
+        , and from publishers' own catalogs for series it doesn't cover.
       </p>
 
       {first === null ? (
         <p className="notice">Convex is not configured, so there are no authors to show.</p>
       ) : authors.length === 0 ? (
-        <p className="notice">No author credits yet: they arrive with the next ANN sync.</p>
+        <p className="notice">No author credits yet: they arrive with the next credits rebuild.</p>
       ) : (
         <div className="shelf">
           {authors.map((author, i) => (

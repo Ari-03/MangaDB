@@ -8,7 +8,7 @@ import {
 import { api } from "../../convex/_generated/api";
 import { Byline } from "~/lib/byline";
 import { catalogQuery } from "~/lib/catalogData";
-import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { AboutSeriesNote, CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
 import { ConcealArt } from "~/lib/mature";
@@ -32,9 +32,11 @@ import { editionPath, parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 
 /**
  * The Edition page — the book detail page (ticket #23, spec §2/§10/§11):
- * `/edition/{id}/{slug}`, server-rendered from Convex. Release rows differ
- * only in Format/Binding, each carrying ISBNs, date, Release Description,
- * with Release Variants beneath their Release and bundle-membership links.
+ * `/edition/{id}/{slug}`, server-rendered from Convex. The header carries
+ * the book's one Edition Description (CONTEXT.md), labelled when it is only
+ * the Series synopsis. Release rows differ only in Format/Binding, each
+ * carrying ISBNs and date, with Release Variants beneath their Release and
+ * bundle-membership links.
  * Coverage chips link the covered Volumes (canonical numbering), kept
  * visibly separate from the Edition Line Position (publisher numbering).
  *
@@ -97,10 +99,14 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
   // JSON-LD (spec §11, ticket #39): BreadcrumbList plus one Book per Release
   // row — Releases have no page of their own, so each Book's URL is this
   // Edition page anchored at its row. The description leads with facts
-  // (publisher, date, ISBN), falling back to the Release Description blurb.
+  // (publisher, date, ISBN), falling back to the Edition Description when it
+  // is the book's own; that text, truncated, is also each Book's
+  // `description`. The
+  // Series synopsis fallback describes the series, not this book, so neither
+  // uses it.
   head: ({ loaderData }) => {
     if (!loaderData) return {};
-    const { edition, series, releases, coverUrl, mature } = loaderData;
+    const { edition, series, releases, description, coverUrl, mature } = loaderData;
     const path = editionPath(edition.publicId, edition.title);
     const primarySeries = series[0];
     const first = releases[0];
@@ -109,7 +115,9 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
       first?.pubDate ? `released ${isoPartialDate(first.pubDate)}` : null,
       first?.isbn13 ? `ISBN ${first.isbn13}` : null,
     ].filter((fact) => fact !== null);
-    const blurb = releases.find((r) => r.description)?.description;
+    const blurb = description && description.source !== "series" ? description.text : null;
+    // Repeated on every Book, so cut short: the full text is on the page.
+    const bookDescription = blurb ? truncateDescription(blurb, 500) : null;
     return {
       ...pageHead({
         title: editionTitleTag(edition.title, edition.publisher?.name ?? null),
@@ -155,6 +163,7 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
               pubDate: release.pubDate,
               language: release.language,
               publisherName: edition.publisher?.name ?? null,
+              description: bookDescription,
               // No art for crawlers on a Mature Series' page (lib/mature.tsx).
               coverUrl: mature ? null : release.coverUrl,
             }),
@@ -189,8 +198,17 @@ function ConcealedEditionPage() {
 }
 
 function EditionPage() {
-  const { edition, series, credits, coverage, releases, coverUrl, coverIsbns, rating } =
-    Route.useLoaderData();
+  const {
+    edition,
+    series,
+    credits,
+    coverage,
+    description,
+    releases,
+    coverUrl,
+    coverIsbns,
+    rating,
+  } = Route.useLoaderData();
   const primarySeries = series[0];
   const rated = ratedAs(edition.publicId, coverage);
   const ratingTarget = rated?.target ?? null;
@@ -318,10 +336,21 @@ function EditionPage() {
             </p>
           ) : null}
 
-          <p className="detail-note">
-            One publisher, one packaging of the content. Paste an ISBN into
-            search to land on its row below.
-          </p>
+          {/* One description for the book, wherever it came from; the
+              Series synopsis names the series it is about. */}
+          {description ? (
+            <div className="detail-blurb">
+              {description.source === "series" ? (
+                <AboutSeriesNote series={description.series} />
+              ) : null}
+              <p className="blurb-text">{description.text}</p>
+            </div>
+          ) : (
+            <p className="detail-note">
+              One publisher, one packaging of the content. Paste an ISBN into
+              search to land on its row below.
+            </p>
+          )}
 
           <div className="section-head detail-section-head" id="releases">
             <h2 className="section-title">Releases</h2>
