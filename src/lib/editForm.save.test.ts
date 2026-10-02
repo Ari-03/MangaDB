@@ -44,7 +44,7 @@ vi.mock("convex/react", () => ({
     getFunctionName(ref) === "users:viewer" ? { username: "mod" } : harness.form,
   useMutation: () => harness.submit,
 }));
-vi.mock("~/lib/moderation", () => ({ useIsModerator: () => true }));
+vi.mock("~/lib/viewer", () => ({ useIsModerator: () => true }));
 vi.mock("~/providers", () => ({ convexClient: {} }));
 
 const { Route } = await import("../routes/mod.edit.$type.$key");

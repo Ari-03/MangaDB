@@ -4,7 +4,8 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { mutationErrorMessage } from "~/lib/errors";
-import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
+import { CommentsQueueLink } from "~/lib/moderation";
+import { useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**

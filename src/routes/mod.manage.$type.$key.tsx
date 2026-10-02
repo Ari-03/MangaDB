@@ -8,7 +8,7 @@ import type { FunctionReturnType } from "convex/server";
 import type { RecordType } from "../../convex/lib/moderationFields";
 import { isRecordType } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
-import { useIsModerator } from "~/lib/moderation";
+import { useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**

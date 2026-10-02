@@ -2,7 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 
 import { api } from "../../convex/_generated/api";
-import { CommentsQueueLink, ProposalStateChip, useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink, ProposalStateChip } from "~/lib/moderation";
+import { useIsDataTeam } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**

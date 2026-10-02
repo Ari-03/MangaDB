@@ -1,13 +1,13 @@
 import { ClerkProvider, UserButton, useAuth } from "@clerk/tanstack-react-start";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { ConvexProvider, ConvexReactClient, useQuery } from "convex/react";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useState, type ReactNode } from "react";
 
-import { api } from "../convex/_generated/api";
 import { AnalyticsProvider } from "~/lib/analytics";
 import { MatureProvider } from "~/lib/mature";
 import { SearchCombobox } from "~/lib/searchSuggest";
+import { useIsDataTeam, useReadyViewer } from "~/lib/viewer";
 
 // Client-side wiring (spec §9): <ClerkProvider> owns the session,
 // ConvexProviderWithClerk feeds its "convex"-template JWT to the reactive
@@ -264,15 +264,9 @@ function AuthNav({ mobile = false }: { mobile?: boolean }) {
 // The viewer query runs only when signed in: it drives the avatar initial,
 // the /me link, and the review-queue entry point (#32) for data-team members.
 function SignedInNav({ mobile }: { mobile: boolean }) {
-  const viewer = useQuery(api.users.viewer, {});
-  const username = viewer && !viewer.needsUsername ? viewer.username : null;
-  const isDataTeam = Boolean(
-    viewer &&
-      !viewer.needsUsername &&
-      (viewer.role === "editor" ||
-        viewer.role === "moderator" ||
-        viewer.role === "administrator"),
-  );
+  const viewer = useReadyViewer();
+  const username = viewer ? viewer.username : null;
+  const isDataTeam = useIsDataTeam();
   if (mobile) {
     return (
       <>

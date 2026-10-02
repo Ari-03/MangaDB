@@ -29,6 +29,7 @@ import {
 } from "../../convex/lib/scoreFormat";
 import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
 import { convexClient } from "~/providers";
+import { useReadyViewer } from "~/lib/viewer";
 
 /** A rating target as pages know it: `{ kind: "series" | "volume" | "edition", publicId }`. */
 export type RatingTarget = FunctionArgs<typeof api.ratings.summary>["target"];
@@ -62,8 +63,7 @@ export function writeErrorMessage(err: unknown): string {
  * username pending. Only for components rendered under the Convex provider.
  */
 function useViewerFormat(): ScoreFormat | null {
-  const viewer = useQuery(api.users.viewer, {});
-  return viewer && !viewer.needsUsername ? viewer.scoreFormat : null;
+  return useReadyViewer()?.scoreFormat ?? null;
 }
 
 // ---------- the public aggregate ----------

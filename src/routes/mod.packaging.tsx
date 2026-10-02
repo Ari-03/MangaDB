@@ -7,7 +7,8 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
 import { plural } from "~/lib/format";
-import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
+import { CommentsQueueLink } from "~/lib/moderation";
+import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
 /**
@@ -22,6 +23,7 @@ export const Route = createFileRoute("/mod/packaging")({
 function PackagingPage() {
   const viewer = useQuery(api.users.viewer, {});
   const isModerator = useIsModerator();
+  const isDataTeam = useIsDataTeam();
   if (viewer === undefined) {
     return (
       <main className="mod-page">
@@ -29,7 +31,6 @@ function PackagingPage() {
       </main>
     );
   }
-  const isDataTeam = Boolean(viewer && !viewer.needsUsername && viewer.role !== null);
   if (!isDataTeam) {
     return (
       <main className="mod-page">

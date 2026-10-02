@@ -6,7 +6,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { PROPOSAL_WARNINGS } from "../../convex/proposals";
 import { mutationErrorMessage } from "~/lib/errors";
-import { useIsDataTeam } from "~/lib/moderation";
+import { useIsDataTeam } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**

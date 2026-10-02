@@ -1,16 +1,10 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import type { FunctionReturnType } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
+import type { ReadyViewer } from "~/lib/viewer";
 import { clerkConfigured, ssrAuth } from "~/server/auth";
 import { convexServerClient } from "~/server/convex";
-
-/** users.viewer for a signed-in viewer whose username claim is complete. */
-export type ReadyViewer = Extract<
-  NonNullable<FunctionReturnType<typeof api.users.viewer>>,
-  { needsUsername: false }
->;
 
 export type ViewerState =
   | { status: "unconfigured" }

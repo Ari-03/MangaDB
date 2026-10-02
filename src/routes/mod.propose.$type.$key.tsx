@@ -16,7 +16,7 @@ import {
   type FormState,
 } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
-import { useIsDataTeam } from "~/lib/moderation";
+import { useIsDataTeam } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**

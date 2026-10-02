@@ -20,7 +20,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { FEATURES } from "../../convex/lib/features";
-import { useIsModerator } from "~/lib/moderation";
+import { useIsModerator } from "~/lib/viewer";
 import { RatingControl, ScoreText, writeErrorMessage, type RatingTarget } from "~/lib/ratings";
 import { convexClient } from "~/providers";
 

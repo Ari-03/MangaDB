@@ -4,11 +4,12 @@ import {
   useNavigate,
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useState, type FormEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { mutationErrorMessage } from "~/lib/errors";
+import { useReadyViewer } from "~/lib/viewer";
 import { clerkEnabled, convexClient } from "~/providers";
 import { ssrAuth } from "~/server/auth";
 
@@ -54,13 +55,13 @@ function ClaimUsernamePage() {
 
 function ClaimForm() {
   const navigate = useNavigate();
-  const viewer = useQuery(api.users.viewer);
+  const viewer = useReadyViewer();
   const claimUsername = useMutation(api.users.claimUsername);
   const [username, setUsername] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const changing = viewer != null && !viewer.needsUsername;
+  const changing = viewer !== null;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

@@ -15,6 +15,7 @@ import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate, plural } from "~/lib/format";
 import { sortKeyMonth, todaySortKey } from "~/lib/month";
 import { convexClient } from "~/providers";
+import { useReadyViewer } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
 /** A Series a collection write suggests following (collection.setReleaseEntry and kin). */
@@ -189,7 +190,7 @@ function LibraryUpcomingInner() {
   const [todaySort] = useState(() => todaySortKey());
   const upcoming = useQuery(api.follows.myUpcoming, { todaySort });
   const following = useQuery(api.follows.myFollowing, {});
-  const viewer = useQuery(api.users.viewer, {});
+  const viewer = useReadyViewer();
   const setPreference = useMutation(api.users.setFormatPreference);
   const setFollow = useMutation(api.follows.setSeriesFollow);
 
@@ -275,7 +276,7 @@ function LibraryUpcomingInner() {
       <section className="lib-block">
         <div className="lib-block-head">
           <h3 className="lib-group-title">Announced releases</h3>
-          {viewer && !viewer.needsUsername ? (
+          {viewer ? (
             <label className="upcoming-preference">
               From followed series, show{" "}
               <select

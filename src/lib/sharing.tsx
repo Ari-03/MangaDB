@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { convexClient } from "~/providers";
+import { useReadyViewer } from "~/lib/viewer";
 
 type Kind = "ownership" | "reading";
 type Visibility = "public" | "private";
@@ -83,9 +84,9 @@ export function SharingSettings() {
 }
 
 function SharingSettingsInner() {
-  const viewer = useQuery(api.users.viewer, {});
+  const viewer = useReadyViewer();
   const setDefault = useMutation(api.sharing.setDefaultVisibility);
-  if (!viewer || viewer.needsUsername) return null;
+  if (!viewer) return null;
 
   const defaults: Record<Kind, Visibility> = {
     ownership: viewer.ownershipVisibility,

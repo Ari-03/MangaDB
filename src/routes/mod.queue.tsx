@@ -4,7 +4,8 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { PROPOSAL_WARNINGS } from "../../convex/proposals";
-import { CommentsQueueLink, useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink } from "~/lib/moderation";
+import { useIsDataTeam } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**

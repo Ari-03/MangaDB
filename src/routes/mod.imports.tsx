@@ -3,7 +3,8 @@ import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { CommentsQueueLink, timestamp, useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink, timestamp } from "~/lib/moderation";
+import { useIsDataTeam } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**

@@ -6,7 +6,8 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
-import { CommentsQueueLink, timestamp, useIsModerator } from "~/lib/moderation";
+import { CommentsQueueLink, timestamp } from "~/lib/moderation";
+import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
@@ -44,6 +45,7 @@ function LaunchPage() {
 function LaunchGate() {
   const viewer = useQuery(api.users.viewer, {});
   const isModerator = useIsModerator();
+  const isDataTeam = useIsDataTeam();
   if (viewer === undefined) {
     return (
       <main className="mod-page">
@@ -51,9 +53,6 @@ function LaunchGate() {
       </main>
     );
   }
-  const isDataTeam = Boolean(
-    viewer && !viewer.needsUsername && viewer.role !== null,
-  );
   if (!isDataTeam) {
     return (
       <main className="mod-page">

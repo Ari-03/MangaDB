@@ -12,6 +12,7 @@ import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
 import { convexClient } from "~/providers";
 import { formatPartialDate, formatPrice } from "~/lib/format";
+import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
 
 export type HistoryTargetType = "series" | "volume" | "edition" | "releaseBundle";
 
@@ -174,28 +175,6 @@ export const timestamp = (ms: number) =>
     hour: "2-digit",
     minute: "2-digit",
   });
-
-/** True when the viewer holds the Moderator or Administrator role. */
-export function useIsModerator(): boolean {
-  const viewer = useQuery(api.users.viewer, {});
-  return Boolean(
-    viewer &&
-      !viewer.needsUsername &&
-      (viewer.role === "moderator" || viewer.role === "administrator"),
-  );
-}
-
-/** True when the viewer holds any data-team role (Editor and up). */
-export function useIsDataTeam(): boolean {
-  const viewer = useQuery(api.users.viewer, {});
-  return Boolean(
-    viewer &&
-      !viewer.needsUsername &&
-      (viewer.role === "editor" ||
-        viewer.role === "moderator" ||
-        viewer.role === "administrator"),
-  );
-}
 
 /**
  * The Comments queue link for the `.mod-tools` navs, with the number of

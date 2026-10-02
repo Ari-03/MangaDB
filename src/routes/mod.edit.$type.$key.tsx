@@ -17,7 +17,7 @@ import {
 } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
 import { slugParams } from "~/lib/slug";
-import { useIsModerator } from "~/lib/moderation";
+import { useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**
