@@ -18,7 +18,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { todaySortKey } from "./lib/dates";
 import { fail } from "./lib/errors";
@@ -363,6 +363,37 @@ export const replaceQaSample = internalMutation({
 
 const SAMPLE_PAGE = 500;
 
+// The page shapes of seriesPage and releaseSeriesPage, written out: an
+// action cannot infer the return types of this module's own internal.*
+// functions (same pattern as the adapters).
+type SeriesPage = {
+  page: Array<{ id: Id<"series">; publicId: number; title: string; altTitles: string[] }>;
+  isDone: boolean;
+  continueCursor: string;
+};
+type ReleaseSeriesPage = { seriesIds: string[]; isDone: boolean; continueCursor: string };
+
+/**
+ * Page an internal query from an action until it is done: `next` fetches
+ * the page after `cursor` (null for the first), and `visit` reads each.
+ */
+async function eachPage<P extends { isDone: boolean; continueCursor: string }>(
+  next: (cursor: string | null) => Promise<P>,
+  visit: (page: P) => void,
+): Promise<void> {
+  let cursor: string | null = null;
+  do {
+    const page = await next(cursor);
+    visit(page);
+    cursor = page.isDone ? null : page.continueCursor;
+  } while (cursor !== null);
+}
+
+/** One SAMPLE_PAGE-sized page of active Series, after `cursor`. */
+function nextSeriesPage(ctx: ActionCtx, cursor: string | null): Promise<SeriesPage> {
+  return ctx.runQuery(internal.launch.seriesPage, { paginationOpts: { numItems: SAMPLE_PAGE, cursor } });
+}
+
 /**
  * Draw (or redraw, after a pipeline-wide fix) a quality-gate sample
  * (Moderator): "random" reservoir-samples ~50 active Series uniformly;
@@ -384,38 +415,29 @@ export const drawQaSample = action({
         publicId: number;
         title: string;
       }>(QA_SAMPLE_SIZE);
-      let cursor: string | null = null;
-      do {
-        const page: {
-          page: Array<{ id: Id<"series">; publicId: number; title: string }>;
-          isDone: boolean;
-          continueCursor: string;
-        } = await ctx.runQuery(internal.launch.seriesPage, {
-          paginationOpts: { numItems: SAMPLE_PAGE, cursor },
-        });
-        for (const s of page.page) {
-          reservoir.add({ seriesId: s.id, publicId: s.publicId, title: s.title });
-        }
-        cursor = page.isDone ? null : page.continueCursor;
-      } while (cursor !== null);
+      await eachPage(
+        (cursor) => nextSeriesPage(ctx, cursor),
+        (page) => {
+          for (const s of page.page) {
+            reservoir.add({ seriesId: s.id, publicId: s.publicId, title: s.title });
+          }
+        },
+      );
       picked = reservoir.sample();
     } else {
       // Release count per Series across the whole catalog, paged in memory.
       const counts = new Map<string, number>();
-      let cursor: string | null = null;
-      do {
-        const page: {
-          seriesIds: string[];
-          isDone: boolean;
-          continueCursor: string;
-        } = await ctx.runQuery(internal.launch.releaseSeriesPage, {
-          paginationOpts: { numItems: SAMPLE_PAGE, cursor },
-        });
-        for (const id of page.seriesIds) {
-          counts.set(id, (counts.get(id) ?? 0) + 1);
-        }
-        cursor = page.isDone ? null : page.continueCursor;
-      } while (cursor !== null);
+      await eachPage(
+        (cursor): Promise<ReleaseSeriesPage> =>
+          ctx.runQuery(internal.launch.releaseSeriesPage, {
+            paginationOpts: { numItems: SAMPLE_PAGE, cursor },
+          }),
+        (page) => {
+          for (const id of page.seriesIds) {
+            counts.set(id, (counts.get(id) ?? 0) + 1);
+          }
+        },
+      );
       const top = [...counts.entries()]
         .sort((a, b) => b[1] - a[1])
         .slice(0, QA_SAMPLE_SIZE)
@@ -548,20 +570,14 @@ export const runDuplicateSweep = action({
     await ctx.runQuery(internal.launch.assertModerator, {});
 
     const entries: SweepEntry[] = [];
-    let cursor: string | null = null;
-    do {
-      const page: {
-        page: Array<{ id: Id<"series">; title: string; altTitles: string[] }>;
-        isDone: boolean;
-        continueCursor: string;
-      } = await ctx.runQuery(internal.launch.seriesPage, {
-        paginationOpts: { numItems: SAMPLE_PAGE, cursor },
-      });
-      for (const s of page.page) {
-        entries.push({ id: s.id, title: s.title, altTitles: s.altTitles });
-      }
-      cursor = page.isDone ? null : page.continueCursor;
-    } while (cursor !== null);
+    await eachPage(
+      (cursor) => nextSeriesPage(ctx, cursor),
+      (page) => {
+        for (const s of page.page) {
+          entries.push({ id: s.id, title: s.title, altTitles: s.altTitles });
+        }
+      },
+    );
 
     const pairs = findDuplicatePairs(entries);
     let inserted = 0;
