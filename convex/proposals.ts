@@ -52,6 +52,7 @@ import {
   applyUnlock,
   type OpMeta,
 } from "./lib/sensitiveOps";
+import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
@@ -849,30 +850,14 @@ export const approveProposal = mutation({
 
 // ---------- rendering helpers (queue + detail) ----------
 
-const usernameCache = () => new Map<Id<"users">, string | null>();
-
-async function usernameLookup(
-  ctx: QueryCtx | MutationCtx,
-  cache: Map<Id<"users">, string | null>,
-  userId: Id<"users"> | undefined,
-): Promise<string | null> {
-  if (!userId) return null;
-  if (!cache.has(userId)) {
-    const user = await ctx.db.get(userId);
-    cache.set(userId, user?.username ?? null);
-  }
-  return cache.get(userId) ?? null;
-}
-
 async function authorLabelOf(
-  ctx: QueryCtx | MutationCtx,
-  cache: Map<Id<"users">, string | null>,
+  usernameOf: ReturnType<typeof usernameLookup>,
   author: Doc<"proposals">["author"],
 ) {
   return author.kind === "user"
     ? {
         kind: "user" as const,
-        username: await usernameLookup(ctx, cache, author.userId),
+        username: await usernameOf(author.userId),
         role: author.roleAtAuthorship ?? null,
       }
     : { kind: "source" as const, sourceKey: author.sourceKey };
@@ -1088,7 +1073,7 @@ export const reviewQueue = query({
       .order("asc")
       .collect();
 
-    const cache = usernameCache();
+    const usernameOf = usernameLookup(ctx);
     const now = Date.now();
     const rows = [];
     for (const proposal of proposals) {
@@ -1103,10 +1088,10 @@ export const reviewQueue = query({
         opCount: version.ops.length,
         opKinds: opKindsOf(version.ops),
         recordTypes: recordTypesOf(version.ops),
-        author: await authorLabelOf(ctx, cache, proposal.author),
+        author: await authorLabelOf(usernameOf, proposal.author),
         warnings: version.warningsAcknowledged ?? [],
         stale,
-        claimedBy: await usernameLookup(ctx, cache, proposal.claimedBy),
+        claimedBy: await usernameOf(proposal.claimedBy),
         submittedAt: proposal.submittedAt ?? proposal._creationTime,
         ageMs: now - (proposal.submittedAt ?? proposal._creationTime),
       });
@@ -1152,7 +1137,7 @@ export const proposalDetail = query({
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) return null;
 
-    const cache = usernameCache();
+    const usernameOf = usernameLookup(ctx);
     const versions = await ctx.db
       .query("proposalVersions")
       .withIndex("by_proposal", (q) => q.eq("proposalId", args.proposalId))
@@ -1182,7 +1167,7 @@ export const proposalDetail = query({
         kind: note.kind,
         text: note.text,
         versionNo: note.versionNo,
-        author: await usernameLookup(ctx, cache, note.authorId),
+        author: await usernameOf(note.authorId),
         at: note._creationTime,
       });
     }
@@ -1199,11 +1184,11 @@ export const proposalDetail = query({
       proposalId: proposal._id as string,
       state: proposal.state,
       stale,
-      author: await authorLabelOf(ctx, cache, proposal.author),
-      claimedBy: await usernameLookup(ctx, cache, proposal.claimedBy),
+      author: await authorLabelOf(usernameOf, proposal.author),
+      claimedBy: await usernameOf(proposal.claimedBy),
       submittedAt: proposal.submittedAt ?? null,
       decidedAt: proposal.decidedAt ?? null,
-      decidedBy: await usernameLookup(ctx, cache, proposal.decidedBy),
+      decidedBy: await usernameOf(proposal.decidedBy),
       currentVersionNo: proposal.currentVersionNo,
       versions: renderedVersions,
       draft: proposal.draft

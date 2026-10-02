@@ -31,6 +31,7 @@ import {
 import { seriesSearchText } from "./lib/searchMatch";
 import { syncMatureProjection } from "./seriesBrowse";
 import { volumeTitle } from "./lib/titles";
+import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue } from "./lib/values";
 
 // ---------- record refs & lookup ----------
@@ -293,6 +294,22 @@ export const submitDirectEdit = mutation({
 // ---------- the edit form (moderator/administrator) ----------
 
 /**
+ * The stored record with this public ID, merged or hidden ones included.
+ * The four tables that carry one share the by_publicId index, so one
+ * table's typing serves for all of them.
+ */
+function storedByPublicId(
+  ctx: QueryCtx,
+  table: "series" | "volumes" | "editions" | "releaseBundles",
+  publicId: number,
+) {
+  return ctx.db
+    .query(table as "volumes")
+    .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
+    .unique();
+}
+
+/**
  * Resolve an edit-form key to its doc: the public ID for entities that have
  * one, the slug for publishers, the document ID otherwise. No merge
  * following — editing a merged loser is refused, not silently redirected.
@@ -303,37 +320,13 @@ export async function resolveEditTarget(
   key: string,
 ): Promise<CatalogDoc | null> {
   switch (type) {
-    case "series": {
-      const publicId = Number(key);
-      if (!Number.isInteger(publicId)) return null;
-      return await ctx.db
-        .query("series")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-    }
-    case "volume": {
-      const publicId = Number(key);
-      if (!Number.isInteger(publicId)) return null;
-      return await ctx.db
-        .query("volumes")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-    }
-    case "edition": {
-      const publicId = Number(key);
-      if (!Number.isInteger(publicId)) return null;
-      return await ctx.db
-        .query("editions")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-    }
+    case "series":
+    case "volume":
+    case "edition":
     case "releaseBundle": {
       const publicId = Number(key);
       if (!Number.isInteger(publicId)) return null;
-      return await ctx.db
-        .query("releaseBundles")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
+      return await storedByPublicId(ctx, TABLE_FOR_TYPE[type], publicId);
     }
     case "publisher":
       return await ctx.db
@@ -581,43 +574,17 @@ const historyTargetArg = v.union(
 export const recordHistory = query({
   args: { type: historyTargetArg, publicId: v.number() },
   handler: async (ctx, { type, publicId }) => {
-    let resolved: CatalogDoc | null = null;
-    if (type === "series") {
-      const stored = await ctx.db
-        .query("series")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-      // Series merges resolve like every other record; catalog.ts's
-      // resolveActiveSeries predates the shared helper.
-      let current = stored;
-      const visited = new Set<string>();
-      while (current && current.status === "merged" && current.mergedIntoId) {
-        if (visited.has(current._id)) return null;
-        visited.add(current._id);
-        current = await ctx.db.get(current.mergedIntoId);
-      }
-      resolved = current && current.status === "active" ? current : null;
-    } else {
-      const table = TABLE_FOR_TYPE[type];
-      const stored = await ctx.db
-        .query(table as "volumes")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-      resolved = await followMerges(ctx, table as "volumes", stored);
-    }
+    const table = TABLE_FOR_TYPE[type];
+    const resolved: CatalogDoc | null = await followMerges(
+      ctx,
+      table as "volumes",
+      await storedByPublicId(ctx, table, publicId),
+    );
     if (!resolved) return null;
 
     const ref = { type, id: resolved._id } as RecordRef;
     const revisions = await revisionsOf(ctx, ref);
-
-    const usernameCache = new Map<Id<"users">, string | null>();
-    const usernameOf = async (userId: Id<"users">) => {
-      if (!usernameCache.has(userId)) {
-        const user = await ctx.db.get(userId);
-        usernameCache.set(userId, user?.username ?? null);
-      }
-      return usernameCache.get(userId) ?? null;
-    };
+    const usernameOf = usernameLookup(ctx);
 
     const entries = [];
     for (const revision of revisions) {

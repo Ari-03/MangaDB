@@ -9,7 +9,7 @@
 // authorship (authorRef.roleAtAuthorship) and are immutable.
 
 import { v } from "convex/values";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Doc } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { fail } from "./lib/errors";
 import {
@@ -19,6 +19,7 @@ import {
   requireRole,
   type DataRole,
 } from "./lib/roles";
+import { usernameLookup } from "./lib/usernameLookup";
 import { normalizeUsername } from "./lib/usernames";
 import { dataRole } from "./schema";
 
@@ -224,14 +225,7 @@ export const auditLog = query({
   handler: async (ctx) => {
     await requireModerator(ctx);
     const rows = await ctx.db.query("roleAudit").order("desc").take(AUDIT_LOG_LIMIT);
-    const usernameCache = new Map<Id<"users">, string | null>();
-    const usernameOf = async (userId: Id<"users">) => {
-      if (!usernameCache.has(userId)) {
-        const doc = await ctx.db.get(userId);
-        usernameCache.set(userId, doc?.username ?? null);
-      }
-      return usernameCache.get(userId) ?? null;
-    };
+    const usernameOf = usernameLookup(ctx);
     const entries = [];
     for (const row of rows) {
       entries.push({

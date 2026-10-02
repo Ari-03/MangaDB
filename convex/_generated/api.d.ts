@@ -64,6 +64,7 @@ import type * as lib_sensitiveOps from "../lib/sensitiveOps.js";
 import type * as lib_sevenSeas from "../lib/sevenSeas.js";
 import type * as lib_text from "../lib/text.js";
 import type * as lib_titles from "../lib/titles.js";
+import type * as lib_usernameLookup from "../lib/usernameLookup.js";
 import type * as lib_usernames from "../lib/usernames.js";
 import type * as lib_values from "../lib/values.js";
 import type * as lib_yenPress from "../lib/yenPress.js";
@@ -153,6 +154,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sevenSeas": typeof lib_sevenSeas;
   "lib/text": typeof lib_text;
   "lib/titles": typeof lib_titles;
+  "lib/usernameLookup": typeof lib_usernameLookup;
   "lib/usernames": typeof lib_usernames;
   "lib/values": typeof lib_values;
   "lib/yenPress": typeof lib_yenPress;
