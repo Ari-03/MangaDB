@@ -37,7 +37,8 @@ explicitly said the current contents are disposable.
 
 # Environments and deploy safety
 
-Three environments; see README "Environments" for the full table.
+Three environments; see README "Environments" for the table and
+`docs/deployment.md` for the details.
 
 - Production: Convex `intent-curlew-625`, Worker `mangadb` at mangadb.org.
   Read-only unless the user gives a fresh, explicit yes for that action.
@@ -53,7 +54,7 @@ touches more than docs queues a production deploy that waits for the user's
 approval in GitHub. Never approve a pending production deployment, never run
 the Deploy workflow with `environment=production`, and never weaken the
 ruleset or the environment protection without a fresh, explicit yes. See
-README "Deployment".
+`docs/deployment.md`.
 
 Wrangler environments inherit top-level `routes`. Any new `env.*` block in
 `wrangler.jsonc` must set `"routes": []` or it will take the production

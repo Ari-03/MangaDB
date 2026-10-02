@@ -71,7 +71,7 @@ A Series for adults only: rated 18+ by a source (a publisher's own age rating, o
 _Avoid_: NSFW, adult manga, explicit
 
 **Unmapped Packaging**:
-An Edition Line member whose source never stated which Volumes it collects — no title range, no blurb statement, no line name with a fixed size. It has no Volume Coverage yet, shows under its line in the publisher's own numbering, and waits in the Data Team's unmapped queue for a Moderator to map its Volumes. Ownership and reading progress follow the Volumes only once mapped.
+An Edition Line member whose source gives no usable statement of which Volumes it collects — no title range, no blurb statement, no line name with a fixed size — or whose statements are gapped or contradict each other. It has no Volume Coverage yet, shows under its line in the publisher's own numbering, and waits in the Data Team's unmapped queue for a Moderator to map its Volumes. Ownership and reading progress follow the Volumes only once mapped.
 _Avoid_: unplaced, orphan edition
 
 **Volume Coverage**:
