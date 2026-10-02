@@ -15,7 +15,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { PUBLISHER_SCAN_CAP } from "./catalog";
-import { followMerges } from "./catalogPages";
+import { followMerges } from "./lib/merges";
 import { editionTitle, releaseAnchor } from "./lib/titles";
 import { jacketCache, releaseCover } from "./lib/covers";
 import { showMatureArg, visibleTo } from "./lib/mature";

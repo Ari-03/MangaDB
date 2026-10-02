@@ -21,7 +21,8 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
-import { editionCoverage, followMerges } from "./catalogPages";
+import { editionCoverage } from "./catalogPages";
+import { followMerges, getActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { releaseAnchor } from "./lib/titles";
@@ -42,7 +43,7 @@ export async function requireActiveRelease(
   ctx: QueryCtx,
   releaseId: Id<"releases">,
 ): Promise<Doc<"releases">> {
-  const release = await followMerges(ctx, "releases", await ctx.db.get(releaseId));
+  const release = await getActive(ctx, "releases", releaseId);
   if (!release) {
     throw new ConvexError({ code: "notFound", message: "Release not found." });
   }
@@ -54,7 +55,7 @@ export async function requireActiveSeries(
   ctx: QueryCtx,
   seriesId: Id<"series">,
 ): Promise<Doc<"series">> {
-  const series = await followMerges(ctx, "series", await ctx.db.get(seriesId));
+  const series = await getActive(ctx, "series", seriesId);
   if (!series) {
     throw new ConvexError({ code: "notFound", message: "Series not found." });
   }
@@ -117,7 +118,7 @@ async function completelyCoveredVolumes(
   const volumes = new Map<Id<"volumes">, Doc<"volumes">>();
   for (const row of rows) {
     if (row.extent !== "complete") continue;
-    const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
+    const volume = await getActive(ctx, "volumes", row.volumeId);
     if (volume) volumes.set(volume._id, volume);
   }
   return [...volumes.values()];
@@ -134,7 +135,7 @@ async function passSeriesId(
 ): Promise<Id<"series">> {
   const first = release.seriesIds[0];
   if (first) {
-    const series = await followMerges(ctx, "series", await ctx.db.get(first));
+    const series = await getActive(ctx, "series", first);
     if (series) return series._id;
   }
   throw new ConvexError({
@@ -225,7 +226,7 @@ export const passForRelease = query({
   handler: async (ctx, { releaseId }) => {
     const user = await viewerOrNull(ctx);
     if (!user) return null;
-    const release = await followMerges(ctx, "releases", await ctx.db.get(releaseId));
+    const release = await getActive(ctx, "releases", releaseId);
     if (!release) return null;
     const pass = await passRowFor(ctx, user._id, release._id);
     return { pass: pass ? { percent: pass.percent ?? null } : null };
@@ -269,7 +270,7 @@ export const myReading = query({
     };
     const rows = new Map<Id<"series">, Row>();
     const rowFor = async (rawSeriesId: Id<"series">): Promise<Row | null> => {
-      const series = await followMerges(ctx, "series", await ctx.db.get(rawSeriesId));
+      const series = await getActive(ctx, "series", rawSeriesId);
       if (!series) return null;
       const existing = rows.get(series._id);
       if (existing) return existing;
@@ -317,13 +318,9 @@ export const myReading = query({
       .withIndex("by_user_release", (q) => q.eq("userId", user._id))
       .collect();
     for (const pass of passRows) {
-      const release = await followMerges(ctx, "releases", await ctx.db.get(pass.releaseId));
+      const release = await getActive(ctx, "releases", pass.releaseId);
       if (!release) continue;
-      const edition = await followMerges(
-        ctx,
-        "editions",
-        await ctx.db.get(release.editionId),
-      );
+      const edition = await getActive(ctx, "editions", release.editionId);
       if (!edition) continue;
       const row = await rowFor(pass.seriesId);
       if (!row) continue;
@@ -416,7 +413,7 @@ export const startPass = mutation({
     const suggestReading = [];
     const seen = new Set<Id<"series">>();
     for (const rawId of release.seriesIds) {
-      const series = await followMerges(ctx, "series", await ctx.db.get(rawId));
+      const series = await getActive(ctx, "series", rawId);
       if (!series || seen.has(series._id)) continue;
       seen.add(series._id);
       const state = await seriesStateRow(ctx, user._id, series._id);
@@ -575,7 +572,7 @@ async function writeVolumeReadCount(
   toCount: (current: number) => number,
 ) {
   const user = await requireUser(ctx);
-  const volume = await followMerges(ctx, "volumes", await ctx.db.get(volumeId));
+  const volume = await getActive(ctx, "volumes", volumeId);
   if (!volume) {
     throw new ConvexError({ code: "notFound", message: "Volume not found." });
   }
@@ -674,7 +671,7 @@ async function writeEditionRead(
   const covered = new Map<Id<"volumes">, Doc<"volumes">>();
   for (const row of rows) {
     if (row.extent !== "complete") continue;
-    const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
+    const volume = await getActive(ctx, "volumes", row.volumeId);
     if (volume) covered.set(volume._id, volume);
   }
 

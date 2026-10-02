@@ -20,7 +20,8 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
-import { editionCoverage, followMerges } from "./catalogPages";
+import { editionCoverage } from "./catalogPages";
+import { followMerges, getActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { editionPathKey } from "./lib/editionGroups";
@@ -44,11 +45,7 @@ async function requireActiveBundle(
   ctx: QueryCtx,
   bundleId: Id<"releaseBundles">,
 ): Promise<Doc<"releaseBundles">> {
-  const bundle = await followMerges(
-    ctx,
-    "releaseBundles",
-    await ctx.db.get(bundleId),
-  );
+  const bundle = await getActive(ctx, "releaseBundles", bundleId);
   if (!bundle) {
     throw new ConvexError({ code: "notFound", message: "Bundle not found." });
   }
@@ -95,12 +92,12 @@ async function entrySeries(
 ): Promise<Map<Id<"series">, Doc<"series">>> {
   const covered = new Map<Id<"series">, Doc<"series">>();
   const addRelease = async (releaseId: Id<"releases">) => {
-    const release = await followMerges(ctx, "releases", await ctx.db.get(releaseId));
+    const release = await getActive(ctx, "releases", releaseId);
     if (!release) return;
     for (const seriesId of release.seriesIds) {
       let series = seriesCache.get(seriesId);
       if (series === undefined) {
-        series = await followMerges(ctx, "series", await ctx.db.get(seriesId));
+        series = await getActive(ctx, "series", seriesId);
         seriesCache.set(seriesId, series);
       }
       if (series) covered.set(series._id, series);
@@ -109,11 +106,7 @@ async function entrySeries(
   if (entry.releaseId) {
     await addRelease(entry.releaseId);
   } else if (entry.bundleId) {
-    const bundle = await followMerges(
-      ctx,
-      "releaseBundles",
-      await ctx.db.get(entry.bundleId),
-    );
+    const bundle = await getActive(ctx, "releaseBundles", entry.bundleId);
     if (!bundle) return covered;
     const memberships = await ctx.db
       .query("bundleMemberships")
@@ -210,11 +203,7 @@ async function derivedOwnership(
   const derived = [];
   const seen = new Set<Id<"releaseBundles">>();
   for (const membership of memberships) {
-    const bundle = await followMerges(
-      ctx,
-      "releaseBundles",
-      await ctx.db.get(membership.bundleId),
-    );
+    const bundle = await getActive(ctx, "releaseBundles", membership.bundleId);
     if (!bundle || seen.has(bundle._id)) continue;
     seen.add(bundle._id);
     const entry = await bundleEntryRow(ctx, userId, bundle._id);
@@ -230,11 +219,7 @@ async function derivedOwnership(
 
 /** Enough joined Edition context to link a Release from personal views. */
 export async function releaseLink(ctx: QueryCtx, release: Doc<"releases">) {
-  const edition = await followMerges(
-    ctx,
-    "editions",
-    await ctx.db.get(release.editionId),
-  );
+  const edition = await getActive(ctx, "editions", release.editionId);
   if (!edition) return null;
   const { title } = await editionCoverage(ctx, edition);
   return {
@@ -260,7 +245,7 @@ export const entryForRelease = query({
   handler: async (ctx, { releaseId }) => {
     const user = await viewerOrNull(ctx);
     if (!user) return null;
-    const release = await followMerges(ctx, "releases", await ctx.db.get(releaseId));
+    const release = await getActive(ctx, "releases", releaseId);
     if (!release) return null;
 
     const entry = await releaseEntryRow(ctx, user._id, release._id);
@@ -293,11 +278,7 @@ export const entryForBundle = query({
   handler: async (ctx, { bundleId }) => {
     const user = await viewerOrNull(ctx);
     if (!user) return null;
-    const bundle = await followMerges(
-      ctx,
-      "releaseBundles",
-      await ctx.db.get(bundleId),
-    );
+    const bundle = await getActive(ctx, "releaseBundles", bundleId);
     if (!bundle) return null;
     const entry = await bundleEntryRow(ctx, user._id, bundle._id);
     return { bundleId: bundle._id, entry: entry ? { state: entry.state } : null };
@@ -330,11 +311,7 @@ export const volumeOwnership = query({
       .collect();
     const owned = [];
     for (const coverage of coverages) {
-      const edition = await followMerges(
-        ctx,
-        "editions",
-        await ctx.db.get(coverage.editionId),
-      );
+      const edition = await getActive(ctx, "editions", coverage.editionId);
       if (!edition) continue;
       const releases = (
         await ctx.db
@@ -388,7 +365,7 @@ export const seriesEntries = query({
     const inSeries = async (release: Doc<"releases">) => {
       for (const rawId of release.seriesIds) {
         if (rawId === series._id) return true;
-        const resolved = await followMerges(ctx, "series", await ctx.db.get(rawId));
+        const resolved = await getActive(ctx, "series", rawId);
         if (resolved && resolved._id === series._id) return true;
       }
       return false;
@@ -402,7 +379,7 @@ export const seriesEntries = query({
     const derivedOwned = new Set<Id<"releases">>();
     for (const row of rows) {
       if (row.releaseId) {
-        const release = await followMerges(ctx, "releases", await ctx.db.get(row.releaseId));
+        const release = await getActive(ctx, "releases", row.releaseId);
         if (!release || !(await inSeries(release))) continue;
         entries.push({
           releaseId: release._id,
@@ -410,22 +387,14 @@ export const seriesEntries = query({
           variantId: row.variantId ?? null,
         });
       } else if (row.bundleId && row.state === "owned") {
-        const bundle = await followMerges(
-          ctx,
-          "releaseBundles",
-          await ctx.db.get(row.bundleId),
-        );
+        const bundle = await getActive(ctx, "releaseBundles", row.bundleId);
         if (!bundle) continue;
         const memberships = await ctx.db
           .query("bundleMemberships")
           .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
           .collect();
         for (const membership of memberships) {
-          const release = await followMerges(
-            ctx,
-            "releases",
-            await ctx.db.get(membership.releaseId),
-          );
+          const release = await getActive(ctx, "releases", membership.releaseId);
           if (release && (await inSeries(release))) derivedOwned.add(release._id);
         }
       }
@@ -452,7 +421,7 @@ async function editionRead(
   let complete = 0;
   for (const row of rows) {
     if (row.extent !== "complete") continue;
-    const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
+    const volume = await getActive(ctx, "volumes", row.volumeId);
     if (!volume) continue;
     complete += 1;
     const progress = await ctx.db
@@ -478,7 +447,7 @@ async function libraryBook(
   userId: Id<"users">,
   release: Doc<"releases">,
 ) {
-  const edition = await followMerges(ctx, "editions", await ctx.db.get(release.editionId));
+  const edition = await getActive(ctx, "editions", release.editionId);
   if (!edition) return null;
   const { title, lineName, coverage, series } = await editionCoverage(ctx, edition);
   if (!series) return null; // nothing to shelve it under (no coverage and no line)
@@ -610,15 +579,11 @@ export const myLibrary = query({
 
     for (const row of rows) {
       if (row.releaseId) {
-        const release = await followMerges(ctx, "releases", await ctx.db.get(row.releaseId));
+        const release = await getActive(ctx, "releases", row.releaseId);
         if (!release) continue;
         await shelve(release, row.state, row.variantId, null);
       } else if (row.bundleId) {
-        const bundle = await followMerges(
-          ctx,
-          "releaseBundles",
-          await ctx.db.get(row.bundleId),
-        );
+        const bundle = await getActive(ctx, "releaseBundles", row.bundleId);
         if (!bundle) continue;
         const memberships = await ctx.db
           .query("bundleMemberships")
@@ -629,11 +594,7 @@ export const myLibrary = query({
         // Only an Owned box set confers Derived Ownership on its members.
         if (row.state === "owned") {
           for (const membership of memberships) {
-            const release = await followMerges(
-              ctx,
-              "releases",
-              await ctx.db.get(membership.releaseId),
-            );
+            const release = await getActive(ctx, "releases", membership.releaseId);
             if (!release) continue;
             await shelve(release, "owned", membership.variantId, via);
           }

@@ -25,7 +25,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { COUNT_CAP, PUBLISHER_SCAN_CAP } from "./catalog";
-import { followMerges } from "./catalogPages";
+import { followMerges, getActive } from "./lib/merges";
 import {
   browseCache,
   joinBrowseRows,
@@ -169,11 +169,7 @@ export const publisherPage = query({
 
     // Imprint family, one level deep: the parent company, or the imprints.
     const parentDoc = publisher.parentPublisherId
-      ? await followMerges(
-          ctx,
-          "publishers",
-          await ctx.db.get(publisher.parentPublisherId),
-        )
+      ? await getActive(ctx, "publishers", publisher.parentPublisherId)
       : null;
     const imprintDocs = await ctx.db
       .query("publishers")

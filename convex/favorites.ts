@@ -9,7 +9,8 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { editionCover, followMerges } from "./catalogPages";
+import { editionCover } from "./catalogPages";
+import { getActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { coverUrl } from "./lib/covers";
 import { capture } from "./lib/posthog";
@@ -167,7 +168,7 @@ export const mine = query({
       if (row.editionId) {
         // Resolve merges first, so Favorites of Editions merged into one read
         // the survivor's coverage and cover once.
-        const edition = await followMerges(ctx, "editions", await ctx.db.get(row.editionId));
+        const edition = await getActive(ctx, "editions", row.editionId);
         if (!edition || seen.has(edition._id)) continue;
         seen.add(edition._id);
         const found = await omnibusEdition(ctx, edition);
@@ -183,7 +184,7 @@ export const mine = query({
           ...(await editionCover(ctx, found.edition._id)),
         });
       } else if (row.volumeId) {
-        const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
+        const volume = await getActive(ctx, "volumes", row.volumeId);
         const series = volume ? await ctx.db.get(volume.seriesId) : null;
         if (!volume || !series || series.status !== "active" || seen.has(volume._id)) continue;
         seen.add(volume._id);
@@ -198,7 +199,7 @@ export const mine = query({
           ...(await volumeCover(ctx, volume._id)),
         });
       } else {
-        const series = await followMerges(ctx, "series", await ctx.db.get(row.seriesId));
+        const series = await getActive(ctx, "series", row.seriesId);
         if (!series || seen.has(series._id)) continue;
         seen.add(series._id);
         const stats = await ctx.db

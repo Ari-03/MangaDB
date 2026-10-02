@@ -19,7 +19,11 @@ import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
 import { coverUrl, jacketCache } from "./lib/covers";
 import { representativeDescription } from "./lib/descriptions";
 import { isWholeSingleVolume } from "./lib/matching";
+import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
 import { creditsFor } from "./people";
+
+// Many modules still import `followMerges` from here.
+export { followMerges };
 
 // ---------- shared resolution & joins ----------
 
@@ -30,52 +34,6 @@ async function creditsForPublicId(ctx: QueryCtx, publicId: number) {
     .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
     .unique();
   return series ? await creditsFor(ctx, series._id) : [];
-}
-
-type MergeableTable =
-  | "publishers"
-  | "series"
-  | "volumes"
-  | "editionLines"
-  | "editions"
-  | "releases"
-  | "releaseBundles";
-
-/**
- * The record a merge chain ends at, whatever its status (spec §4/§8),
- * cycle-guarded. Maturity reads content through this rather than
- * `followMerges`, so hiding a record never makes what it holds general.
- */
-async function mergeSurvivor<T extends MergeableTable>(
-  ctx: QueryCtx,
-  // The table name anchors T's inference — `Doc<T>` alone is an indexed
-  // access type TypeScript cannot infer backward from.
-  _table: T,
-  doc: Doc<T> | null,
-): Promise<Doc<T> | null> {
-  let current = doc;
-  const visited = new Set<string>();
-  while (current && current.status === "merged" && current.mergedIntoId) {
-    if (visited.has(current._id)) return null;
-    visited.add(current._id);
-    current = (await ctx.db.get(current.mergedIntoId as Id<T>)) as Doc<T> | null;
-  }
-  return current;
-}
-
-/**
- * Follow a merged record to its surviving record (spec §4/§8), cycle-guarded;
- * hidden records read as absent. Mirrors catalog.ts's resolveActiveSeries.
- * Exported for moderation.ts (revision history resolves the same way) and
- * reading.ts (tracking mutations follow merges before touching state).
- */
-export async function followMerges<T extends MergeableTable>(
-  ctx: QueryCtx,
-  table: T,
-  doc: Doc<T> | null,
-): Promise<Doc<T> | null> {
-  const survivor = await mergeSurvivor(ctx, table, doc);
-  return survivor && survivor.status === "active" ? survivor : null;
 }
 
 /** An Edition's Volume Coverage rows in `order` (the index sorts them). */
@@ -638,11 +596,7 @@ export const isbnLookup = query({
     for (const doc of releaseDocs) {
       const release = await followMerges(ctx, "releases", doc);
       if (!release) continue;
-      const edition = await followMerges(
-        ctx,
-        "editions",
-        await ctx.db.get(release.editionId),
-      );
+      const edition = await getActive(ctx, "editions", release.editionId);
       if (!edition) continue;
       const { title } = await editionCoverage(ctx, edition);
       return {

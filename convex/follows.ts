@@ -20,7 +20,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
-import { followMerges } from "./catalogPages";
+import { getActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { requireActiveSeries } from "./reading";
 import { joinBrowseRows } from "./releases";
@@ -80,7 +80,7 @@ export const followedSeries = query({
     const seriesPublicIds = [];
     for (const state of states) {
       if (!state.following) continue;
-      const series = await followMerges(ctx, "series", await ctx.db.get(state.seriesId));
+      const series = await getActive(ctx, "series", state.seriesId);
       if (series) seriesPublicIds.push(series.publicId);
     }
     return { seriesPublicIds };
@@ -107,7 +107,7 @@ export const myFollowing = query({
     const seen = new Set<Id<"series">>();
     for (const state of states) {
       if (!state.following) continue;
-      const doc = await followMerges(ctx, "series", await ctx.db.get(state.seriesId));
+      const doc = await getActive(ctx, "series", state.seriesId);
       if (!doc || seen.has(doc._id)) continue;
       seen.add(doc._id);
       const stats = await ctx.db
@@ -175,7 +175,7 @@ export const myUpcoming = query({
     for (const state of states) {
       if (!state.following) continue;
       followed.add(state.seriesId);
-      const series = await followMerges(ctx, "series", await ctx.db.get(state.seriesId));
+      const series = await getActive(ctx, "series", state.seriesId);
       if (series) followed.add(series._id);
     }
     const inFollowed = (doc: Doc<"releases">) =>
@@ -199,14 +199,10 @@ export const myUpcoming = query({
     >();
     for (const entry of entries) {
       if (entry.releaseId) {
-        const doc = await followMerges(ctx, "releases", await ctx.db.get(entry.releaseId));
+        const doc = await getActive(ctx, "releases", entry.releaseId);
         if (doc) releaseEntries.set(doc._id, { doc, state: entry.state });
       } else if (entry.bundleId) {
-        const doc = await followMerges(
-          ctx,
-          "releaseBundles",
-          await ctx.db.get(entry.bundleId),
-        );
+        const doc = await getActive(ctx, "releaseBundles", entry.bundleId);
         if (doc) bundleEntries.set(doc._id, { doc, state: entry.state });
       }
     }
@@ -220,11 +216,7 @@ export const myUpcoming = query({
         .withIndex("by_bundle", (q) => q.eq("bundleId", doc._id))
         .collect();
       for (const membership of memberships) {
-        const release = await followMerges(
-          ctx,
-          "releases",
-          await ctx.db.get(membership.releaseId),
-        );
+        const release = await getActive(ctx, "releases", membership.releaseId);
         if (release) derivedOwned.add(release._id);
       }
     }

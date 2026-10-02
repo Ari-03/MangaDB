@@ -23,7 +23,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
-import { followMerges } from "./catalogPages";
+import { followMerges, getActive } from "./lib/merges";
 import { releaseLink, variantName } from "./collection";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { showMatureArg, visibleTo } from "./lib/mature";
@@ -51,7 +51,7 @@ type Kind = "ownership" | "reading";
 async function profileTarget(ctx: QueryCtx, stored: TargetId) {
   switch (stored.kind) {
     case "series": {
-      const series = await followMerges(ctx, "series", await ctx.db.get(stored.id));
+      const series = await getActive(ctx, "series", stored.id);
       if (!series) return null;
       return {
         target: { kind: "series" as const, id: series._id },
@@ -61,7 +61,7 @@ async function profileTarget(ctx: QueryCtx, stored: TargetId) {
       };
     }
     case "volume": {
-      const volume = await followMerges(ctx, "volumes", await ctx.db.get(stored.id));
+      const volume = await getActive(ctx, "volumes", stored.id);
       const series = volume ? await ctx.db.get(volume.seriesId) : null;
       if (!volume || !series || series.status !== "active") return null;
       return {
@@ -127,7 +127,7 @@ async function resolvedSeriesIds(
 ): Promise<Array<Id<"series">>> {
   const out = new Set<Id<"series">>();
   for (const id of raw) {
-    const series = await followMerges(ctx, "series", await ctx.db.get(id));
+    const series = await getActive(ctx, "series", id);
     // A hidden Series keeps its override reachable under the stored id, so
     // the user's per-Series choice still governs entries that point at it.
     out.add(series ? series._id : id);
@@ -308,11 +308,7 @@ export const publicProfile = query({
       // Wanted/Ordered never appear on a profile, whatever the visibility.
       if (row.state !== "owned") continue;
       if (row.releaseId) {
-        const release = await followMerges(
-          ctx,
-          "releases",
-          await ctx.db.get(row.releaseId),
-        );
+        const release = await getActive(ctx, "releases", row.releaseId);
         if (!release || !(await ownershipPublic(release.seriesIds))) continue;
         const link = await releaseLink(ctx, release);
         if (!link) continue;
@@ -321,11 +317,7 @@ export const publicProfile = query({
           variantName: await variantName(ctx, row.variantId),
         });
       } else if (row.bundleId) {
-        const bundle = await followMerges(
-          ctx,
-          "releaseBundles",
-          await ctx.db.get(row.bundleId),
-        );
+        const bundle = await getActive(ctx, "releaseBundles", row.bundleId);
         if (!bundle) continue;
         const memberships = await ctx.db
           .query("bundleMemberships")
@@ -400,11 +392,7 @@ export const publicProfile = query({
     const readingRowFor = async (
       rawSeriesId: Id<"series">,
     ): Promise<ReadingRow | null> => {
-      const series = await followMerges(
-        ctx,
-        "series",
-        await ctx.db.get(rawSeriesId),
-      );
+      const series = await getActive(ctx, "series", rawSeriesId);
       if (!series) return null;
       if (
         effectiveVisibility(user, overrides, "reading", series._id) !== "public"
@@ -445,11 +433,7 @@ export const publicProfile = query({
       .collect();
     for (const progress of volumeRows) {
       if (progress.readCount < 1) continue;
-      const volume = await followMerges(
-        ctx,
-        "volumes",
-        await ctx.db.get(progress.volumeId),
-      );
+      const volume = await getActive(ctx, "volumes", progress.volumeId);
       if (!volume) continue;
       const row = await readingRowFor(volume.seriesId);
       if (!row) continue;
@@ -468,11 +452,7 @@ export const publicProfile = query({
       .withIndex("by_user_release", (q) => q.eq("userId", user._id))
       .collect();
     for (const pass of passRows) {
-      const release = await followMerges(
-        ctx,
-        "releases",
-        await ctx.db.get(pass.releaseId),
-      );
+      const release = await getActive(ctx, "releases", pass.releaseId);
       if (!release) continue;
       if (
         !(await seriesAllPublic(ctx, user, overrides, "reading", release.seriesIds))
