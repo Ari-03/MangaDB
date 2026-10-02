@@ -1,48 +1,33 @@
 // The Moderator direct-edit form (routes/mod.edit.$type.$key.tsx) driven as
-// plain functions: React's useState, the router and convex/react are
-// replaced by a tiny harness so a test can type, save, hold the mutation
-// open, and read what the form shows at every step.
+// plain functions: React's useState (test.react.ts), the router and
+// convex/react are replaced by a tiny harness so a test can type, save,
+// hold the mutation open, and read what the form shows at every step.
 
 import { getFunctionName } from "convex/server";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const harness = vi.hoisted(() => ({
-  slots: [] as unknown[],
-  cursor: 0,
+import { harness, resetHarness } from "./test.react";
+
+// The editForm query's answer, the save mutation and the router's navigate.
+const fakes = vi.hoisted(() => ({
   form: null as Record<string, unknown> | null,
   submit: vi.fn(),
   navigate: vi.fn(),
 }));
 
-// useState backed by slots that survive re-renders of the same component.
-vi.mock("react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react")>();
-  function useState<S>(initial: S | (() => S)) {
-    const index = harness.cursor++;
-    if (!(index in harness.slots)) {
-      harness.slots[index] = typeof initial === "function" ? (initial as () => S)() : initial;
-    }
-    const set = (next: S | ((prev: S) => S)) => {
-      harness.slots[index] =
-        typeof next === "function" ? (next as (prev: S) => S)(harness.slots[index] as S) : next;
-    };
-    return [harness.slots[index] as S, set] as const;
-  }
-  return { ...actual, useState };
-});
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: Record<string, unknown>) => ({
     options,
     useParams: () => ({ type: "publisher", key: "pub-a" }),
   }),
   Link: "a",
-  useNavigate: () => harness.navigate,
+  useNavigate: () => fakes.navigate,
 }));
 vi.mock("convex/react", () => ({
   useQuery: (ref: Parameters<typeof getFunctionName>[0]) =>
-    getFunctionName(ref) === "users:viewer" ? { username: "mod" } : harness.form,
-  useMutation: () => harness.submit,
+    getFunctionName(ref) === "users:viewer" ? { username: "mod" } : fakes.form,
+  useMutation: () => fakes.submit,
 }));
 vi.mock("~/lib/viewer", () => ({ useIsModerator: () => true }));
 vi.mock("~/providers", () => ({ convexClient: {} }));
@@ -98,18 +83,17 @@ function save() {
 }
 
 beforeEach(() => {
-  harness.slots = [];
-  harness.cursor = 0;
-  harness.form = liveForm("Original");
-  harness.submit.mockReset().mockResolvedValue({ seq: 1 });
-  harness.navigate.mockReset().mockResolvedValue(undefined);
+  resetHarness();
+  fakes.form = liveForm("Original");
+  fakes.submit.mockReset().mockResolvedValue({ seq: 1 });
+  fakes.navigate.mockReset().mockResolvedValue(undefined);
 });
 
 describe("direct edit while a save is pending (review R18)", () => {
   /** Save "First correction" and hold the mutation open; returns its resolver. */
   function pendingSave() {
     let resolve!: (value: { seq: number }) => void;
-    harness.submit.mockImplementation(() => new Promise((r) => (resolve = r)));
+    fakes.submit.mockImplementation(() => new Promise((r) => (resolve = r)));
     type("First correction");
     comment("Corrected name");
     save();
@@ -133,13 +117,13 @@ describe("direct edit while a save is pending (review R18)", () => {
     const shownName = shown.values.name;
     const shownComment = shown.comment.props.value;
 
-    harness.form = liveForm("First correction", "r1");
+    fakes.form = liveForm("First correction", "r1");
     resolve(1);
     await vi.waitFor(() => expect(render().submit.props.children).not.toBe("Saving…"));
 
     // Every value the form displayed was either saved or is still displayed.
-    expect(harness.submit).toHaveBeenCalledTimes(1);
-    expect(harness.submit).toHaveBeenCalledWith(
+    expect(fakes.submit).toHaveBeenCalledTimes(1);
+    expect(fakes.submit).toHaveBeenCalledWith(
       expect.objectContaining({ changes: [{ field: "name", value: "First correction" }] }),
     );
     const settled = render();
@@ -156,13 +140,13 @@ describe("direct edit while a save is pending (review R18)", () => {
 
   it("stays locked through the return navigation after a save with a back link", async () => {
     let arrive!: () => void;
-    harness.navigate.mockImplementation(() => new Promise<void>((r) => (arrive = r)));
+    fakes.navigate.mockImplementation(() => new Promise<void>((r) => (arrive = r)));
     const backLink = { entity: "series", publicId: 7, title: "Alpha" };
-    harness.form = { ...liveForm("Original"), backLink };
+    fakes.form = { ...liveForm("Original"), backLink };
     type("First correction");
     comment("Corrected name");
     save();
-    await vi.waitFor(() => expect(harness.navigate).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fakes.navigate).toHaveBeenCalled());
     expect(render().field.props.disabled).toBe(true);
     type("Typed on the way out");
     expect(render().values.name).not.toBe("Typed on the way out");
@@ -184,7 +168,7 @@ describe("direct edit while a save is pending (review R18)", () => {
 
   it("keeps the draft and unlocks the inputs when the save fails", async () => {
     let reject!: (err: Error) => void;
-    harness.submit.mockImplementation(() => new Promise((_, r) => (reject = r)));
+    fakes.submit.mockImplementation(() => new Promise((_, r) => (reject = r)));
     type("First correction");
     comment("Corrected name");
     save();
