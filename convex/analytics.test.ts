@@ -225,6 +225,7 @@ describe("withExceptionCapture", () => {
       credits: 0,
       publisherCredits: 0,
       swept: 0,
+      pruned: 0,
       people: 0,
       continued: false,
       ms: expect.any(Number),

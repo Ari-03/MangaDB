@@ -153,9 +153,12 @@ from stored observations every six hours, with no network access. ANN's
 staff credits come first, with roles and stable person ids. For a Series
 ANN does not credit, PRH's `author` line supplies names and roles. For a
 Series neither credits, Kodansha's and Seven Seas' role-less creator names
-do. When ANN starts crediting a Series, its publisher-derived rows go, and
-ANN adopts a publisher-named person with a matching name key. Publisher
-credits never count as evidence in `workMatch`.
+do. PRH credits are unioned across a Series' volumes, and near spellings
+of one name collapse to the most used. When ANN starts crediting a Series,
+its publisher-derived rows go, and ANN adopts a publisher-named person
+with a matching name key. A name-only person left uncredited by two
+successful rebuilds in a row is pruned. Publisher credits never count as
+evidence in `workMatch`.
 
 The rebuild runs in phases (rekey, ANN, publishers, sweep, settle roles,
 prune, stats)
@@ -239,6 +242,9 @@ npx convex run ann:sync '{}'
 npx convex run ann:sync '{"releasePages": false}'          # skip the chained page pass
 npx convex run ann:backfillDescriptions '{"limit": 300}'   # fill existing Releases now
 npx convex run ann:backfillDescriptions '{"annIds": ["10948", "23227"]}'
+npx convex run ann:repairDescriptions '{}'                  # re-clean stored text, no fetches
+npx convex run ann:listRefreshCandidates '{}'               # ids whose stored text needs a refetch
+npx convex run ann:backfillDescriptions '{"annIds": ["10948"], "refresh": true}'
 ```
 
 `ann:backfillDescriptions` fetches at one request a second, continues
@@ -246,6 +252,32 @@ itself, and runs even when the source is disabled. It refuses to start
 while an ANN Import Run is running (a run older than 12 hours counts as
 stranded and is ignored). It stops after 5 failed fetches in a row, logs
 why it stopped, and never touches a withdrawn line.
+
+Every ANN description goes through one cleaner (`cleanAnnDescription` in
+`convex/lib/ann.ts`). It removes ANN's review link, its "Notes:" section,
+mojibake and C1 control characters, stray entities, and the credit ANN
+appends ("Story by X and Art by Y."), which the byline already shows. A
+credit goes only when it opens a sentence, or is the fused "Story and art
+by" glued to the text, so "…based on the series created by X and written
+by Y." stays whole. A text that is only retail or listing junk ("Book is
+in like-new condition.", "Book by Buronson") becomes no description. The
+page fetch decodes bytes itself, so a Windows-1252 byte in ANN's UTF-8
+page becomes its character, not U+FFFD.
+
+`ann:repairDescriptions` applies today's cleaner to text stored before the
+cleaner changed. It makes no network requests, updates or clears a Release
+only when ANN wrote its current text from that line, continues itself, and
+logs its counts at every hand-off and at the end. It is safe to rerun and
+safe beside a running backfill.
+
+Text a past cleaner cut short cannot be repaired offline.
+`ann:listRefreshCandidates` lists the ANN ids by reason (`danglingEnd`,
+`replacementChar`, `c1Control`). `ann:backfillDescriptions` with those
+`annIds` and `"refresh": true` refetches exactly those pages and replaces
+the text ANN wrote, never a publisher's, Open Library's or a human's. It
+only replaces: a page with no description, or with text under half as
+long, is counted as `held` and left alone unless `"allowClear": true` is
+also passed.
 
 ### Penguin Random House
 
@@ -319,6 +351,14 @@ blank description; nothing is created. Run it after the ANN backfill:
 ```sh
 npx convex run openLibrary:replayDescriptions '{"limit": 500}'
 ```
+
+Open Library descriptions go through `cleanOlDescription`
+(`convex/lib/openLibrary.ts`). A cataloguer's physical description
+("1 volume (unpaged) : 19 cm") is no description, and a trailing citation
+(`"--P. [4] of cover.`, `"--Back cover.`) is dropped with the quote it
+closed. `npx convex run openLibrary:repairDescriptions '{}'` fixes stored
+text with no network access. It rewrites a Release only when Open Library
+wrote its current text from that edition.
 
 ### Yen Press
 
