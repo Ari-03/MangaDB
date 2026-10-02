@@ -342,11 +342,22 @@ export default defineSchema({
     // earlier run until that rebuild settles (people.ts settleRoles), so a
     // role the run has yet to reach doesn't flicker away and back.
     runRole: v.optional(creditRole),
-    // PRH rows only: the people this rebuild's observations named for this
-    // credit, near spellings of one name ("Choe Gyu-Seok", "Choi Gyu-Seok"),
-    // each with how many observations named them and the latest of those
-    // observations' lastSeenAt. `settleRoles` shows the most named one as
-    // `personId`. A handful at most.
+    // PRH rows only: the names this rebuild's observations gave this credit,
+    // one per spelling key, near spellings of one name among them ("Choe
+    // Gyu-Seok", "Choi Gyu-Seok"), each with its roles, how many
+    // observations named it, and the latest of those observations'
+    // lastSeenAt. Names, not people: a spelling that loses never needs a
+    // person. `settleRoles` decides each Series from these. A handful at most.
+    runNames: v.optional(
+      v.array(
+        v.object({ name: v.string(), role: creditRole, count: v.number(), seenAt: v.number() }),
+      ),
+    ),
+    // PRH rows only: pairs of near spelling keys ("a|b") one line of this
+    // rebuild named together, so settle keeps them two people.
+    runApart: v.optional(v.array(v.string())),
+    // Superseded by runNames; left by a staging rehearsal of the previous
+    // rule and cleared from each row the next time a rebuild stamps it.
     runVariants: v.optional(
       v.array(v.object({ personId: v.id("people"), count: v.number(), seenAt: v.number() })),
     ),

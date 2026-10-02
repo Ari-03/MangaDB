@@ -663,8 +663,16 @@ async function variantCatalog() {
     await book(berserk, "Kentaro Miura", 3, true);
     await book(berserk, "Written and Illustrated by Kentaro Miura.", 1, true);
     // Near names on one line are two people.
-    await book(twins, "Story by Yuki Sato; Art by Yuka Sato", 1);
+    await book(twins, "Art by Yuka Sato; Story by Yuki Sato", 1);
     await book(twins, "Story by Yuki Sato; Art by Yuka Sato", 1, true);
+    // Near names a later line shows to be two people: Yuka alone on three
+    // volumes, then beside Yuki.
+    const pair = await series("Pair Pens");
+    await book(pair, "Story by Yuki Sato", 1);
+    await book(pair, "Art by Yuka Sato", 1);
+    await book(pair, "Art by Yuka Sato", 1);
+    await book(pair, "Art by Yuka Sato", 1);
+    await book(pair, "Story by Yuki Sato; Art by Yuka Sato", 1, true);
     for (let i = 0; i < 200; i++) {
       await ctx.db.insert("sourceObservations", {
         sourceKey: "prh",
@@ -674,7 +682,7 @@ async function variantCatalog() {
         withdrawn: true,
       });
     }
-    return { hellbound, nomiya, sirius, dumbbells, kurosagi, berserk, twins };
+    return { hellbound, nomiya, sirius, dumbbells, kurosagi, berserk, twins, pair };
   });
   await t.action(internal.people.rebuild, {});
   return { t, ids };
@@ -755,6 +763,10 @@ describe("people.rebuild PRH lines", () => {
       "Yuka Sato: art (prh)",
       "Yuki Sato: story (prh)",
     ]);
+    expect(await creditLines(t, ids.pair)).toEqual([
+      "Yuka Sato: art (prh)",
+      "Yuki Sato: story (prh)",
+    ]);
   });
 
   it("keeps the losing spelling's person until a second run finds them still uncredited", async () => {
@@ -763,6 +775,96 @@ describe("people.rebuild PRH lines", () => {
     expect(choi?.creditlessSince).toBeDefined();
     await t.action(internal.people.rebuild, {});
     expect(await personNamed(t, "Choi Gyu-Seok")).toEqual([]);
+  });
+
+  it("settles from the second run on: same people, public ids, and credit rows", async () => {
+    const { t } = await variantCatalog();
+    const snapshot = () =>
+      t.run(async (ctx) => ({
+        people: (await ctx.db.query("people").collect()).map((p) => `${p.publicId} ${p.name}`).sort(),
+        rows: (await ctx.db.query("seriesCredits").collect())
+          .map((row) => `${row._id} ${row.personId} ${row.role}`)
+          .sort(),
+      }));
+    await t.action(internal.people.rebuild, {});
+    const second = await snapshot();
+    for (let run = 3; run <= 4; run++) {
+      await t.action(internal.people.rebuild, {});
+      expect(await snapshot()).toEqual(second);
+    }
+    // The losing spellings' people are gone and stay gone.
+    expect(second.people.some((p) => p.endsWith("Choi Gyu-Seok"))).toBe(false);
+  });
+
+  it("never puts two names from one line on one row, even mid-run", async () => {
+    const { t } = await variantCatalog();
+    // A Series credited for the first time, its one book naming both.
+    const fresh = await t.run(async (ctx) => {
+      const seriesId = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 999,
+        title: "Fresh Pens",
+        altTitles: [],
+        searchText: "Fresh Pens",
+      });
+      const release = (await ctx.db.query("releases").first())!;
+      const { _id, _creationTime, ...fields } = release;
+      const releaseId = await ctx.db.insert("releases", { ...fields, seriesIds: [seriesId] });
+      await ctx.db.insert("sourceObservations", {
+        sourceKey: "prh",
+        sourceRecordId: "9780999999999",
+        recordRef: { type: "release", id: releaseId },
+        snapshot: { kind: "prhTitle", author: "Story by Yuki Sato; Art by Yuka Sato" },
+        lastSeenAt: 1,
+        withdrawn: false,
+      });
+      return seriesId;
+    });
+    // A run's first batch, before any settling: each twin holds a row.
+    await t.mutation(internal.people.publisherBatch, {
+      sourceKey: "prh",
+      after: null,
+      rebuiltAt: Date.now() + 1000,
+    });
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query("seriesCredits")
+        .withIndex("by_series", (q) => q.eq("seriesId", fresh))
+        .collect(),
+    );
+    expect(rows.map((row) => (row.runNames ?? []).map((n) => n.name)).sort()).toEqual([
+      ["Yuka Sato"],
+      ["Yuki Sato"],
+    ]);
+  });
+
+  it("folds two rows production holds for near spellings into one", async () => {
+    const { t, ids } = await variantCatalog();
+    // As the previous rule left The Hellbound: a row for each spelling.
+    await t.run(async (ctx) => {
+      const personId = await ctx.db.insert("people", {
+        publicId: 4318,
+        name: "Choi Gyu-Seok",
+        nameKey: nameKey("Choi Gyu-Seok"),
+        seriesCount: 1,
+        originalCount: 0,
+        coverUrl: null,
+        coverIsbn: null,
+      });
+      await ctx.db.insert("seriesCredits", {
+        seriesId: ids.hellbound,
+        personId,
+        role: "art",
+        source: "prh",
+        rebuiltAt: 0,
+      });
+    });
+    expect(await creditLines(t, ids.hellbound)).toHaveLength(3);
+    await t.action(internal.people.rebuild, {});
+    expect(await creditLines(t, ids.hellbound)).toEqual([
+      "Choe Gyu-Seok: art (prh)",
+      "Yeon Sang-Ho: story (prh)",
+    ]);
   });
 
   it("keeps every row id across rebuilds", async () => {

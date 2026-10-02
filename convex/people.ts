@@ -263,8 +263,8 @@ const CREDITS_PER_SERIES = 50;
 
 /** Work per rebuild action before it continues in a fresh one (actions run ≤10 min). */
 const REBUILD_BUDGET_MS = 5 * 60 * 1000;
-/** Rows per role-settling mutation. */
-const SETTLE_BATCH = 200;
+/** Rows per settling mutation; a PRH row settles its whole Series. */
+const SETTLE_BATCH = 100;
 
 /**
  * Where a rebuild is, carried from one action to the next: the phase, its
@@ -521,12 +521,10 @@ export const pruneOrphans = internalMutation({
 
 /**
  * Settle the publisher rows a run stamped, once its whole publisher pass
- * is done: show the role this run's observations gave each (`runRole`; a
- * correction that lowers a role, "Story and Art by A" → "Story by A; Art by
- * B", lands here), and for a PRH row naming near spellings of one person
- * (`runVariants`), the spelling most observations used; ties go to the one
- * seen most recently, then the name in code-point order. A page of the
- * run's rows at a time; the next cursor, or null when done.
+ * is done. A `creators` row shows the role this run's observations gave it
+ * (`runRole`); a correction that lowers a role lands here. A Series' PRH
+ * rows are decided together (`settlePrhSeries`). A page of the run's rows
+ * at a time; the next cursor, or null when done.
  */
 export const settleRoles = internalMutation({
   args: { rebuiltAt: v.number(), cursor: v.union(v.string(), v.null()) },
@@ -535,39 +533,153 @@ export const settleRoles = internalMutation({
       .query("seriesCredits")
       .withIndex("by_rebuiltAt", (q) => q.eq("rebuiltAt", rebuiltAt))
       .paginate({ cursor, numItems: SETTLE_BATCH });
+    const memo: PublisherMemo = {
+      survivors: new Map(),
+      credits: new Map(),
+      people: new Map(),
+      keys: new Map(),
+    };
+    const settled = new Set<Id<"series">>();
     for (const row of page.page) {
-      const patch: Partial<Pick<Doc<"seriesCredits">, "role" | "personId">> = {};
-      if (row.runRole !== undefined && row.runRole !== row.role) patch.role = row.runRole;
-      const variants = row.runVariants ?? [];
-      if (variants.length > 1) {
-        const named = await Promise.all(
-          variants.map(async (variant) => ({
-            ...variant,
-            name: (await ctx.db.get(variant.personId))?.name ?? "",
-          })),
-        );
-        const winner = named.reduce((best, variant) =>
-          variant.count !== best.count
-            ? variant.count > best.count
-              ? variant
-              : best
-            : variant.seenAt !== best.seenAt
-              ? variant.seenAt > best.seenAt
-                ? variant
-                : best
-              : variant.name < best.name
-                ? variant
-                : best,
-        );
-        if (winner.personId !== row.personId) patch.personId = winner.personId;
-      } else if (variants.length === 1 && variants[0]!.personId !== row.personId) {
-        patch.personId = variants[0]!.personId;
+      if (row.source === "prh") {
+        if (settled.has(row.seriesId)) continue;
+        settled.add(row.seriesId);
+        await settlePrhSeries(ctx, row.seriesId, rebuiltAt, memo);
+      } else if (row.runRole !== undefined && row.runRole !== row.role) {
+        await ctx.db.patch(row._id, { role: row.runRole });
       }
-      if (Object.keys(patch).length > 0) await ctx.db.patch(row._id, patch);
     }
     return page.isDone ? null : page.continueCursor;
   },
 });
+
+/**
+ * Decide a Series' PRH credits from the names its rows tallied this run
+ * (`runNames`). Spellings sharing a `nameKey` are one name; near spellings
+ * (`nearKeys`) are one person too, unless a line named them together
+ * (`runApart`). Each such person shows their most used spelling (ties: the
+ * one seen most recently, then code-point order), resolved to a person
+ * only now (`personNamed`), with the roles all its spellings gave. Each
+ * person keeps one row: the one already showing them, else the one that
+ * tallied most of their names; rows left over are deleted, and a person
+ * with no row left gets one. Idempotent, so a Series spanning two settle
+ * pages settles the same twice.
+ */
+async function settlePrhSeries(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+  rebuiltAt: number,
+  memo: PublisherMemo,
+) {
+  const rows = (
+    await ctx.db
+      .query("seriesCredits")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .take(CREDITS_PER_SERIES)
+  ).filter((c) => c.source === "prh" && c.rebuiltAt === rebuiltAt);
+  type Spelling = {
+    key: string;
+    name: string;
+    best: number;
+    role: CreditRole;
+    count: number;
+    seenAt: number;
+    /** Each row's count of this spelling. */
+    rows: Map<Id<"seriesCredits">, number>;
+  };
+  const spellings = new Map<string, Spelling>();
+  for (const row of rows) {
+    for (const n of row.runNames ?? []) {
+      const key = nameKey(n.name);
+      const s = spellings.get(key) ?? {
+        key,
+        name: n.name,
+        best: 0,
+        role: n.role,
+        count: 0,
+        seenAt: 0,
+        rows: new Map(),
+      };
+      if (n.count > s.best) {
+        s.best = n.count;
+        s.name = n.name;
+      }
+      s.role = mergeRoles([s.role, n.role]);
+      s.count += n.count;
+      s.seenAt = Math.max(s.seenAt, n.seenAt);
+      s.rows.set(row._id, (s.rows.get(row._id) ?? 0) + n.count);
+      spellings.set(key, s);
+    }
+  }
+  // People: near spellings joined, unless a line named them together.
+  const apart = new Set(rows.flatMap((row) => row.runApart ?? []));
+  const isApart = (a: Spelling, b: Spelling) => apart.has([a.key, b.key].sort().join("|"));
+  const groups: Spelling[][] = [];
+  for (const s of [...spellings.values()].sort((a, b) => (a.key < b.key ? -1 : 1))) {
+    const near = groups.filter(
+      (group) => group.some((t) => nearKeys(s.key, t.key)) && !group.some((t) => isApart(s, t)),
+    );
+    // Join every near group, unless that would put a pair named together
+    // in one; then only the first.
+    const all = near.flat();
+    const joins = all.some((a) => all.some((b) => isApart(a, b))) ? near.slice(0, 1) : near;
+    for (const group of joins) groups.splice(groups.indexOf(group), 1);
+    groups.push([s, ...joins.flat()]);
+  }
+  const better = (a: Spelling, b: Spelling) =>
+    a.count !== b.count ? a.count > b.count : a.seenAt !== b.seenAt ? a.seenAt > b.seenAt : a.name < b.name;
+  const people = groups
+    .map((group) => {
+      const winner = group.reduce((best, s) => (better(s, best) ? s : best));
+      const tallies = new Map<Id<"seriesCredits">, number>();
+      for (const s of group) for (const [id, n] of s.rows) tallies.set(id, (tallies.get(id) ?? 0) + n);
+      return {
+        winner,
+        role: mergeRoles(group.map((s) => s.role)),
+        total: group.reduce((n, s) => n + s.count, 0),
+        tallies,
+      };
+    })
+    .sort((a, b) => b.total - a.total || (a.winner.name < b.winner.name ? -1 : 1));
+  const used = new Set<Id<"seriesCredits">>();
+  for (const person of people) {
+    const personId = await personNamed(ctx, person.winner.name, memo);
+    const candidates = rows
+      .filter((row) => !used.has(row._id) && person.tallies.has(row._id))
+      .sort(
+        (a, b) =>
+          Number(b.personId === personId) - Number(a.personId === personId) ||
+          person.tallies.get(b._id)! - person.tallies.get(a._id)! ||
+          a._creationTime - b._creationTime,
+      );
+    const row = candidates[0];
+    if (row) {
+      used.add(row._id);
+      if (row.personId !== personId || row.role !== person.role || row.runRole !== person.role) {
+        await ctx.db.patch(row._id, { personId, role: person.role, runRole: person.role });
+      }
+    } else {
+      await ctx.db.insert("seriesCredits", {
+        seriesId,
+        personId,
+        role: person.role,
+        runRole: person.role,
+        source: "prh",
+        rebuiltAt,
+        runNames: [
+          {
+            name: person.winner.name,
+            role: person.role,
+            count: person.total,
+            seenAt: person.winner.seenAt,
+          },
+        ],
+        runApart: [],
+      });
+    }
+  }
+  for (const row of rows) if (!used.has(row._id)) await ctx.db.delete(row._id);
+}
 
 /** Credit a batch of ANN manga observations, by source record id. */
 export const creditBatch = internalMutation({
@@ -783,13 +895,12 @@ function publisherCredits(snapshot: unknown): AuthorCredit[] {
  * (`mergeRoles`) with what earlier observations of the run gave, and
  * `settleRoles` shows that role once the pass is done.
  *
- * On a PRH row, near spellings of one name (`nearKeys`) share the row as
- * `runVariants`, counted per observation, and settle shows the most named;
+ * PRH names are tallied by spelling (`stampPrh`) and settled per Series:
  * PRH's volumes carry typos and variant romanisations ("Choe Gyu-Seok" /
- * "Choi Gyu-Seok"). Two near names on one line are two people and keep
- * their own rows. Kodansha's and Seven Seas' lists stay a plain union.
- * PRH crediting a Series deletes its `creators` rows at once, as the ANN
- * pass deletes publisher rows. Returns the credits stamped.
+ * "Choi Gyu-Seok") that settle collapses to the most used. Kodansha's and
+ * Seven Seas' lists stay a plain union (`stampCreators`). PRH crediting a
+ * Series deletes its `creators` rows at once, as the ANN pass deletes
+ * publisher rows. Returns the credits stamped.
  */
 async function creditFromPublisher(
   ctx: MutationCtx,
@@ -817,106 +928,203 @@ async function creditFromPublisher(
   }
   if (rows === null) return 0;
 
-  const incoming = new Map<Id<"people">, CreditRole[]>();
-  for (const credit of named) {
-    const personId = await personNamed(ctx, credit.name, memo);
-    incoming.set(personId, [...(incoming.get(personId) ?? []), credit.role]);
-  }
-  const keyOf = async (personId: Id<"people">) => {
-    let key = memo.keys.get(personId);
-    if (key === undefined) {
-      const person = await ctx.db.get(personId);
-      key = person ? (person.nameKey ?? nameKey(person.name)) : "";
-      memo.keys.set(personId, key);
-    }
-    return key;
-  };
-  const isStamped = (c: Doc<"seriesCredits">) => c.rebuiltAt >= rebuiltAt;
-  // Rows this observation has already credited someone on: a second near
-  // name on the same line is another person, not a variant.
-  const taken = new Set<Id<"seriesCredits">>();
-  let count = 0;
-  for (const [personId, roles] of incoming) {
-    const key = await keyOf(personId);
-    const mine: Doc<"seriesCredits">[] = [];
-    for (const c of rows) {
-      if (c.source !== marker || taken.has(c._id)) continue;
-      const variants = isStamped(c) ? (c.runVariants ?? []) : [];
-      const rowKey = await keyOf(c.personId);
-      // The person's own row, a row of another person their name now
-      // matches (a duplicate the key merged), or on PRH a near spelling's.
-      const same =
-        c.personId === personId ||
-        variants.some((variant) => variant.personId === personId) ||
-        rowKey === key ||
-        (marker === "prh" && nearKeys(key, rowKey));
-      if (same) mine.push(c);
-    }
-    const stamped = mine.find(isStamped);
-    const runRole = mergeRoles([...roles, ...(stamped ? [stamped.runRole ?? stamped.role] : [])]);
-    const covers = (c: Doc<"seriesCredits">) => mergeRoles([c.role, runRole]) === c.role;
-    // One row per person (and near spelling), keeping its id across runs:
-    // the one this run stamped, else the person's own row, else one already
-    // in the run's role, else one whose role covers it, else any.
-    const row =
-      stamped ??
-      mine.find((c) => c.personId === personId) ??
-      mine.find((c) => c.role === runRole) ??
-      mine.find(covers) ??
-      mine[0];
-    const seenAt = observation.lastSeenAt;
-    if (row) {
-      // A tally of the spellings this run's observations used (PRH only).
-      const tally = marker === "prh" ? (stamped ? [...(row.runVariants ?? [])] : []) : undefined;
-      if (tally) {
-        const at = tally.findIndex((variant) => variant.personId === personId);
-        const prior = tally[at];
-        if (prior) tally[at] = { personId, count: prior.count + 1, seenAt: Math.max(prior.seenAt, seenAt) };
-        else tally.push({ personId, count: 1, seenAt });
-      }
-      // Shown: a covering role stays until the run settles, so the row
-      // doesn't drop to "author" between the batches of "author" and "art".
-      const role = covers(row) ? row.role : runRole;
-      // A creators row passes to the person its name now means at once;
-      // a PRH row's person is settled from its tally.
-      const moved = !tally && row.personId !== personId;
-      if (tally || moved || row.rebuiltAt < rebuiltAt || row.role !== role || row.runRole !== runRole) {
-        const patch = {
-          rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt),
-          role,
-          runRole,
-          ...(tally ? { runVariants: tally } : {}),
-          ...(moved ? { personId } : {}),
-        };
-        await ctx.db.patch(row._id, patch);
-        Object.assign(row, patch);
-      }
-      taken.add(row._id);
-    } else {
-      const fields = {
-        seriesId,
-        personId,
-        role: runRole,
-        runRole,
-        source: marker,
-        rebuiltAt,
-        ...(marker === "prh" ? { runVariants: [{ personId, count: 1, seenAt }] } : {}),
-      };
-      const id = await ctx.db.insert("seriesCredits", fields);
-      rows.push({ _id: id, _creationTime: 0, ...fields });
-      taken.add(id);
-    }
-    count++;
-  }
+  const args = { seriesId, rows, named, rebuiltAt };
+  if (marker === "creators") return await stampCreators(ctx, args, memo);
+  const count = await stampPrh(ctx, { ...args, seenAt: observation.lastSeenAt }, memo);
   // PRH credits the Series now: its role-less `creators` rows go here, not
   // at the sweep, so no byline shows both meanwhile.
-  if (marker === "prh" && count > 0) {
+  if (count > 0) {
     for (const row of rows.filter((c) => c.source === "creators")) {
       await ctx.db.delete(row._id);
       rows.splice(rows.indexOf(row), 1);
     }
   }
   return count;
+}
+
+/** A person's `nameKey`, remembered for the batch. */
+async function personKey(ctx: QueryCtx, memo: PublisherMemo, personId: Id<"people">) {
+  let key = memo.keys.get(personId);
+  if (key === undefined) {
+    const person = await ctx.db.get(personId);
+    key = person ? (person.nameKey ?? nameKey(person.name)) : "";
+    memo.keys.set(personId, key);
+  }
+  return key;
+}
+
+/** The first of `items` that `test` passes, tested in order. */
+async function findFirst<T>(items: ReadonlyArray<T>, test: (item: T) => Promise<boolean>) {
+  for (const item of items) if (await test(item)) return item;
+  return undefined;
+}
+
+/** What one observation gives a Series' credits, for the stamp helpers. */
+type StampArgs = {
+  seriesId: Id<"series">;
+  /** The Series' credit rows, kept current. */
+  rows: Doc<"seriesCredits">[];
+  named: ReadonlyArray<AuthorCredit>;
+  rebuiltAt: number;
+};
+
+/**
+ * Stamp a Kodansha or Seven Seas creator list: a plain union, one row per
+ * person (its id kept across runs), its `runRole` merged (`mergeRoles`)
+ * with what earlier observations of the run gave. A row of another person
+ * whose `nameKey` the name shares (a duplicate the key merged) passes to
+ * the person the name now means. Returns the credits stamped.
+ */
+async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherMemo) {
+  const { seriesId, rows, rebuiltAt } = args;
+  const incoming = new Map<Id<"people">, CreditRole[]>();
+  for (const credit of args.named) {
+    const personId = await personNamed(ctx, credit.name, memo);
+    incoming.set(personId, [...(incoming.get(personId) ?? []), credit.role]);
+  }
+  const isStamped = (c: Doc<"seriesCredits">) => c.rebuiltAt >= rebuiltAt;
+  let count = 0;
+  for (const [personId, roles] of incoming) {
+    const key = await personKey(ctx, memo, personId);
+    const mine: Doc<"seriesCredits">[] = [];
+    for (const c of rows) {
+      if (c.source !== "creators") continue;
+      if (c.personId === personId || (await personKey(ctx, memo, c.personId)) === key) mine.push(c);
+    }
+    const stamped =
+      mine.find((c) => isStamped(c) && c.personId === personId) ?? mine.find(isStamped);
+    const runRole = mergeRoles([...roles, ...(stamped ? [stamped.runRole ?? stamped.role] : [])]);
+    const covers = (c: Doc<"seriesCredits">) => mergeRoles([c.role, runRole]) === c.role;
+    const row =
+      stamped ??
+      mine.find((c) => c.personId === personId) ??
+      mine.find((c) => c.role === runRole) ??
+      mine.find(covers) ??
+      mine[0];
+    if (row) {
+      // Shown: a covering role stays until the run settles, so the row
+      // doesn't drop to "author" between the batches of "author" and "art".
+      const role = covers(row) ? row.role : runRole;
+      if (
+        row.personId !== personId ||
+        row.rebuiltAt < rebuiltAt ||
+        row.role !== role ||
+        row.runRole !== runRole
+      ) {
+        const patch = { personId, rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt), role, runRole };
+        await ctx.db.patch(row._id, patch);
+        Object.assign(row, patch);
+      }
+    } else {
+      const fields = { seriesId, personId, role: runRole, runRole, source: "creators" as const, rebuiltAt };
+      rows.push({ _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields });
+    }
+    count++;
+  }
+  return count;
+}
+
+/**
+ * Stamp a PRH author line: the run's credits are the union of the Series'
+ * lines, tallied on its rows by name (`runNames`: roles, observations,
+ * latest lastSeenAt per spelling key), never by person, so a spelling that
+ * loses needs no person. A name goes on the row that already tallies its
+ * spelling this run, else the row of the person its key names, else a row
+ * whose person or tallied names are a near spelling (`nearKeys`); only a
+ * name with none of these looks up (or creates) its person for a new row.
+ * Two names on this line are never put on one row, and near ones among
+ * them are remembered as a pair (`runApart`), so settle keeps them two
+ * people. `settleRoles` then decides each Series' people and roles.
+ * Returns the credits stamped.
+ */
+async function stampPrh(
+  ctx: MutationCtx,
+  args: StampArgs & { seenAt: number },
+  memo: PublisherMemo,
+) {
+  const { seriesId, rows, rebuiltAt, seenAt } = args;
+  const names = new Map<string, { name: string; roles: CreditRole[] }>();
+  for (const credit of args.named) {
+    const key = nameKey(credit.name);
+    if (key === "") continue;
+    const entry = names.get(key);
+    if (entry) entry.roles.push(credit.role);
+    else names.set(key, { name: credit.name, roles: [credit.role] });
+  }
+  const isStamped = (c: Doc<"seriesCredits">) => c.rebuiltAt >= rebuiltAt;
+  const tallied = (c: Doc<"seriesCredits">) => (isStamped(c) ? (c.runNames ?? []) : []);
+  const placed = new Map<string, Doc<"seriesCredits">>();
+  for (const [key, entry] of names) {
+    const role = mergeRoles(entry.roles);
+    const taken = new Set([...placed.values()].map((c) => c._id));
+    const free = rows.filter((c) => c.source === "prh" && !taken.has(c._id));
+    const row =
+      free.find((c) => tallied(c).some((n) => nameKey(n.name) === key)) ??
+      (await findFirst(free, async (c) => (await personKey(ctx, memo, c.personId)) === key)) ??
+      (await findFirst(
+        free,
+        async (c) =>
+          nearKeys(key, await personKey(ctx, memo, c.personId)) ||
+          tallied(c).some((n) => nearKeys(key, nameKey(n.name))),
+      ));
+    if (row) {
+      const tally = [...tallied(row)];
+      const at = tally.findIndex((n) => nameKey(n.name) === key);
+      const prior = tally[at];
+      if (prior) {
+        tally[at] = {
+          name: prior.name,
+          role: mergeRoles([prior.role, role]),
+          count: prior.count + 1,
+          seenAt: Math.max(prior.seenAt, seenAt),
+        };
+      } else {
+        tally.push({ name: entry.name, role, count: 1, seenAt });
+      }
+      const runRole = mergeRoles(tally.map((n) => n.role));
+      const patch = {
+        rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt),
+        // Shown: a covering role stays until the run settles.
+        role: mergeRoles([row.role, runRole]) === row.role ? row.role : runRole,
+        runRole,
+        runNames: tally,
+        runApart: isStamped(row) ? (row.runApart ?? []) : [],
+        runVariants: undefined,
+      };
+      await ctx.db.patch(row._id, patch);
+      Object.assign(row, patch);
+      placed.set(key, row);
+    } else {
+      const fields = {
+        seriesId,
+        personId: await personNamed(ctx, entry.name, memo),
+        role,
+        runRole: role,
+        source: "prh" as const,
+        rebuiltAt,
+        runNames: [{ name: entry.name, role, count: 1, seenAt }],
+        runApart: [],
+      };
+      const doc = { _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields };
+      rows.push(doc);
+      placed.set(key, doc);
+    }
+  }
+  // Near names on one line are two people.
+  const keys = [...names.keys()];
+  for (const [i, a] of keys.entries()) {
+    for (const b of keys.slice(i + 1)) {
+      if (!nearKeys(a, b)) continue;
+      const pair = [a, b].sort().join("|");
+      for (const row of [placed.get(a), placed.get(b)]) {
+        if (!row || (row.runApart ?? []).includes(pair)) continue;
+        const runApart = [...(row.runApart ?? []), pair];
+        await ctx.db.patch(row._id, { runApart });
+        row.runApart = runApart;
+      }
+    }
+  }
+  return names.size;
 }
 
 /**
