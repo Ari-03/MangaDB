@@ -1,32 +1,15 @@
-import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery } from "~/lib/catalogData";
-import { bundlePath, parsePublicId } from "~/lib/slug";
+import { slugRedirect } from "~/lib/pageScaffold";
+import { bundlePath } from "~/lib/slug";
 
-/**
- * Slugless `/bundle/{id}` (and any merged loser's ID): permanent redirect to
- * the canonical `/bundle/{id}/{slug}` URL (spec §11). The slug is cosmetic;
- * the ID alone identifies the Bundle.
- */
-export const Route = createFileRoute("/bundle/$publicId/")({
-  loader: async ({ params }) => {
-    const publicId = parsePublicId(params.publicId);
-    if (publicId === null) throw notFound();
-    const page = await catalogQuery(api.catalogPages.bundlePage, { publicId });
-    if (!page) throw notFound();
-    throw redirect({
-      href: bundlePath(page.bundle.publicId, page.bundle.name),
-      statusCode: 301,
-    });
-  },
-  component: () => null,
-  notFoundComponent: () => (
-    <main>
-      <h1>Bundle not found</h1>
-      <p className="notice">
-        No bundle lives at this address. <Link to="/">Browse the catalog</Link>.
-      </p>
-    </main>
+/** Slugless `/bundle/{id}`: 301 to the canonical Bundle URL. */
+export const Route = createFileRoute("/bundle/$publicId/")(
+  slugRedirect(
+    (publicId) => catalogQuery(api.catalogPages.bundlePage, { publicId }),
+    (page) => bundlePath(page.bundle.publicId, page.bundle.name),
+    { noun: "Bundle" },
   ),
-});
+);
