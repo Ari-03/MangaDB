@@ -4,13 +4,13 @@
 // upsertObservation or an adapter's own last-seen bump followed by
 // reconcileFields.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import schema from "../schema";
+import { insertEdition, insertObservation, insertPublisher, insertRelease, insertSeries } from "../test.factories";
+import { makeT, seedRegistry, type TestT } from "../test.helpers";
 import { upsertObservation } from "./observations";
 import { reconcileFields } from "./reconcile";
 
@@ -19,43 +19,29 @@ const SNAPSHOT = { title: "Alpha Adventures Vol. 1" };
 
 /** A future-dated Release linked to a Seven Seas observation. */
 async function linkedRelease(ctx: MutationCtx) {
-  const publisherId = await ctx.db.insert("publishers", {
-    status: "active",
-    name: "Seven Seas Entertainment",
-    slug: "seven-seas",
-  });
-  const seriesId = await ctx.db.insert("series", {
-    status: "active",
-    publicId: 1,
-    title: "Alpha Adventures",
-    altTitles: [],
-    searchText: "alpha adventures",
-  });
-  const editionId = await ctx.db.insert("editions", { status: "active", publicId: 1, publisherId });
-  const releaseId = await ctx.db.insert("releases", {
-    status: "active",
+  const publisherId = await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+  const seriesId = await insertSeries(ctx, { title: "Alpha Adventures" });
+  const editionId = await insertEdition(ctx, { publisherId });
+  const releaseId = await insertRelease(ctx, {
     editionId,
-    format: "physical",
-    language: "en",
     isbn13: "9781999000103",
     pubDate: FUTURE,
     publisherId,
     seriesIds: [seriesId],
   });
-  const observationId = await ctx.db.insert("sourceObservations", {
+  const observationId = await insertObservation(ctx, {
     sourceKey: "sevenseas",
     sourceRecordId: "book:101",
     recordRef: { type: "release", id: releaseId },
     snapshot: SNAPSHOT,
     lastSeenAt: 1_000,
-    withdrawn: false,
   });
   return { releaseId, observationId };
 }
 
 /** Seed the registry and a linked Release, then withdraw it from a sweep. */
-async function withdrawnWithReview(t: ReturnType<typeof convexTest>) {
-  await t.mutation(internal.importSources.seedRegistry, {});
+async function withdrawnWithReview(t: TestT) {
+  await seedRegistry(t);
   const ids = await t.run(linkedRelease);
   const swept = await t.mutation(internal.imports.markWithdrawn, {
     sourceKey: "sevenseas",
@@ -66,12 +52,12 @@ async function withdrawnWithReview(t: ReturnType<typeof convexTest>) {
   return { ...ids, proposalId };
 }
 
-const stateOf = (t: ReturnType<typeof convexTest>, id: Id<"proposals">) =>
+const stateOf = (t: TestT, id: Id<"proposals">) =>
   t.run(async (ctx) => (await ctx.db.get(id))!.state);
 
 describe("relisting retires the possible-cancellation review (B17)", () => {
   it("an unchanged relist through upsertObservation withdraws the open hide review", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { observationId, proposalId } = await withdrawnWithReview(t);
     await t.run(async (ctx) => {
       const { observation } = await upsertObservation(ctx, {
@@ -94,7 +80,7 @@ describe("relisting retires the possible-cancellation review (B17)", () => {
   });
 
   it("a changed relist withdraws it too", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { proposalId } = await withdrawnWithReview(t);
     await t.run((ctx) =>
       upsertObservation(ctx, {
@@ -108,7 +94,7 @@ describe("relisting retires the possible-cancellation review (B17)", () => {
   });
 
   it("reconciling a relisted observation withdraws a review the relist skipped", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { releaseId, observationId, proposalId } = await withdrawnWithReview(t);
     await t.run(async (ctx) => {
       // An adapter's listing hit bumps last-seen without upsertObservation.
@@ -128,7 +114,7 @@ describe("relisting retires the possible-cancellation review (B17)", () => {
   });
 
   it("keeps the review while the observation stays withdrawn, and leaves other queue items alone", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { releaseId, observationId, proposalId } = await withdrawnWithReview(t);
     await t.run(async (ctx) => {
       const release = (await ctx.db.get(releaseId))!;
@@ -159,7 +145,7 @@ describe("relisting retires the possible-cancellation review (B17)", () => {
         evidence: [],
         changeComment: "guess",
       });
-      await ctx.db.insert("sourceObservations", {
+      await insertObservation(ctx, {
         sourceKey: "sevenseas",
         sourceRecordId: "book:202",
         snapshot: { title: "X" },
