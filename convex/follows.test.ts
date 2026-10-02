@@ -1,11 +1,23 @@
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
+import type { Doc, Id } from "./_generated/dataModel";
+import {
+  insertBundle,
+  insertBundleMember,
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+  seriesStatsRow,
+} from "./test.factories";
+import { makeT, withUser, type Accessor, type TestT } from "./test.helpers";
+import { describeNoViewer } from "./test.tracking";
 
-const SUBJECT = "user_2follower";
+const FOLLOWER = { subject: "user_2follower", username: "follower" };
+const OTHER = { subject: "user_2other", username: "other" };
 
 // The fixed "today" every test computes against: Aug 19, 2026 (yyyymmdd).
 const TODAY = 20260819;
@@ -17,108 +29,45 @@ const TODAY = 20260819;
  * with a future digital Release; and a future box set bundling Series A's
  * physical Release — so the preference clause, the Wanted/Ordered clause,
  * dedup, and both Owned exclusions (direct and derived) are all reachable.
+ * `as` is the follower, username claimed.
  */
-async function seed(t: ReturnType<typeof convexTest>) {
-  return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas",
-      slug: "seven-seas",
-    });
+async function setup() {
+  const t = makeT();
+  const ids = await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, { name: "Seven Seas", slug: "seven-seas" });
 
-    let nextPublicId = 1;
-    const makeSeries = async (title: string) => {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: nextPublicId++,
-        title,
-        altTitles: [],
-        searchText: title,
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 100 + nextPublicId,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
-      return { seriesId, volumeId };
+    const makeSeries = async (publicId: number, title: string) => {
+      const seriesId = await insertSeries(ctx, { publicId, title });
+      return { seriesId, volumeId: await insertVolume(ctx, { seriesId }) };
     };
-    const a = await makeSeries("Witch Hat Atelier");
-    const b = await makeSeries("Dungeon Meshi");
+    const a = await makeSeries(1, "Witch Hat Atelier");
+    const b = await makeSeries(2, "Dungeon Meshi");
 
     const makeRelease = async (
       series: { seriesId: Id<"series">; volumeId: Id<"volumes"> },
       format: "physical" | "digital",
-      pubDate: { year: number; month?: number; day?: number; sort: number },
+      pubDate: Doc<"releases">["pubDate"],
     ) => {
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 200 + nextPublicId++,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId: series.volumeId,
-        order: 1,
-        extent: "complete",
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format,
-        language: "en",
-        pubDate,
-        publisherId,
-        seriesIds: [series.seriesId],
-      });
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: series.volumeId });
+      return await insertRelease(ctx, { editionId, format, pubDate, publisherId, seriesIds: [series.seriesId] });
     };
 
-    const aFuturePhysical = await makeRelease(a, "physical", {
-      year: 2026,
-      month: 9,
-      day: 15,
-      sort: 20260915,
-    });
-    const aFutureDigital = await makeRelease(a, "digital", {
-      year: 2026,
-      month: 9,
-      day: 20,
-      sort: 20260920,
-    });
-    const aPastThisMonth = await makeRelease(a, "physical", {
-      year: 2026,
-      month: 8,
-      day: 10,
-      sort: 20260810,
-    });
-    const aTbaThisMonth = await makeRelease(a, "physical", {
-      year: 2026,
-      month: 8,
-      sort: 20260800,
-    });
-    const bFutureDigital = await makeRelease(b, "digital", {
-      year: 2026,
-      month: 10,
-      day: 1,
-      sort: 20261001,
-    });
+    const aFuturePhysical = await makeRelease(a, "physical", { year: 2026, month: 9, day: 15, sort: 20260915 });
+    const aFutureDigital = await makeRelease(a, "digital", { year: 2026, month: 9, day: 20, sort: 20260920 });
+    const aPastThisMonth = await makeRelease(a, "physical", { year: 2026, month: 8, day: 10, sort: 20260810 });
+    const aTbaThisMonth = await makeRelease(a, "physical", { year: 2026, month: 8, sort: 20260800 });
+    const bFutureDigital = await makeRelease(b, "digital", { year: 2026, month: 10, day: 1, sort: 20261001 });
 
-    const bundleId = await ctx.db.insert("releaseBundles", {
-      status: "active",
+    const bundleId = await insertBundle(ctx, {
       publicId: 41,
       name: "Witch Hat Atelier Box Set",
       publisherId,
       format: "physical",
       pubDate: { year: 2026, month: 11, day: 5, sort: 20261105 },
     });
-    await ctx.db.insert("bundleMemberships", {
-      bundleId,
-      releaseId: aFuturePhysical,
-      order: 1,
-    });
-    const undatedBundleId = await ctx.db.insert("releaseBundles", {
-      status: "active",
+    await insertBundleMember(ctx, { bundleId, releaseId: aFuturePhysical, order: 1 });
+    const undatedBundleId = await insertBundle(ctx, {
       publicId: 42,
       name: "Unannounced Box Set",
       publisherId,
@@ -136,65 +85,53 @@ async function seed(t: ReturnType<typeof convexTest>) {
       undatedBundleId,
     };
   });
+  const as = await withUser(t, FOLLOWER);
+  return { t, as, ...ids };
 }
 
-function signedIn(t: ReturnType<typeof convexTest>, subject = SUBJECT) {
-  return t.withIdentity({ subject });
+/** Follows (or, with `following: false`, unfollows) a Series as `as`. */
+async function follow(as: Accessor, seriesId: Id<"series">, following = true) {
+  await as.mutation(api.follows.setSeriesFollow, { seriesId, following });
 }
 
-async function withUser(t: ReturnType<typeof convexTest>, username = "follower") {
-  const as = signedIn(t);
-  await as.mutation(api.users.claimUsername, { username });
-  return as;
-}
-
-async function stateRows(t: ReturnType<typeof convexTest>) {
+async function stateRows(t: TestT) {
   return await t.run(async (ctx) => await ctx.db.query("userSeriesStates").collect());
 }
 
-describe("follows.seriesFollow & setSeriesFollow", () => {
-  it("is null signed out — the public page just omits the toggle", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    expect(await t.query(api.follows.seriesFollow, { seriesPublicId: 1 })).toBeNull();
-  });
+describeNoViewer(setup, {
+  queries: [
+    ["seriesFollow", (as) => as.query(api.follows.seriesFollow, { seriesPublicId: 1 })],
+    ["followedSeries", (as) => as.query(api.follows.followedSeries, {})],
+    ["myFollowing", (as) => as.query(api.follows.myFollowing, {})],
+    ["myUpcoming", (as) => as.query(api.follows.myUpcoming, { todaySort: TODAY })],
+  ],
+  mutations: [
+    ["setSeriesFollow", (as, { seriesA }) => as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: true })],
+    ["dismissFollowPrompt", (as, { seriesA }) => as.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesA })],
+  ],
+});
 
+describe("follows.seriesFollow & setSeriesFollow", () => {
   it("toggles the explicit follow on and off", async () => {
-    const t = convexTest(schema);
-    const { seriesA } = await seed(t);
-    const as = await withUser(t);
+    const { as, seriesA } = await setup();
 
     let state = await as.query(api.follows.seriesFollow, { seriesPublicId: 1 });
     expect(state?.following).toBe(false);
 
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: true,
-    });
+    await follow(as, seriesA);
     state = await as.query(api.follows.seriesFollow, { seriesPublicId: 1 });
     expect(state?.following).toBe(true);
 
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: false,
-    });
+    await follow(as, seriesA, false);
     state = await as.query(api.follows.seriesFollow, { seriesPublicId: 1 });
     expect(state?.following).toBe(false);
   });
 
   it("unfollowing never touches the prompt-dismissal flag", async () => {
-    const t = convexTest(schema);
-    const { seriesA } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, seriesA } = await setup();
     await as.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesA });
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: true,
-    });
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: false,
-    });
+    await follow(as, seriesA);
+    await follow(as, seriesA, false);
     const rows = await stateRows(t);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.followPromptDismissed).toBe(true);
@@ -203,19 +140,13 @@ describe("follows.seriesFollow & setSeriesFollow", () => {
 
 describe("follows.followedSeries", () => {
   it("lists only followed series, for the browser marker + filter", async () => {
-    const t = convexTest(schema);
-    const { seriesA, seriesB } = await seed(t);
-    const as = await withUser(t);
+    const { as, seriesA, seriesB } = await setup();
 
-    expect(await t.query(api.follows.followedSeries, {})).toBeNull();
     expect(
       (await as.query(api.follows.followedSeries, {}))?.seriesPublicIds,
     ).toEqual([]);
 
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: true,
-    });
+    await follow(as, seriesA);
     // A dismissed-prompt row without a follow must not appear.
     await as.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesB });
 
@@ -227,34 +158,22 @@ describe("follows.followedSeries", () => {
 
 describe("follows.myFollowing", () => {
   it("lists followed series with covers and next dates, announced first", async () => {
-    const t = convexTest(schema);
-    const { seriesA, seriesB } = await seed(t);
-    const as = await withUser(t);
-    await as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: true });
-    await as.mutation(api.follows.setSeriesFollow, { seriesId: seriesB, following: true });
+    const { t, as, seriesA, seriesB } = await setup();
+    await follow(as, seriesA);
+    await follow(as, seriesB);
     // A stats row for B only: A falls back to the Series document.
     await t.run(async (ctx) => {
-      await ctx.db.insert("seriesStats", {
-        seriesId: seriesB,
-        publicId: 2,
-        title: "Dungeon Meshi",
-        titleSort: "dungeon meshi",
-        letter: "d",
-        sourceStatus: "unknown",
-        publishers: [],
-        hasPhysical: false,
-        hasDigital: true,
-        volumeCount: 1,
-        releaseCount: 1,
-        firstReleaseSort: 20261001,
-        latestReleaseSort: 20261001,
-        nextReleaseSort: 20261001,
-        followers: 1,
-        collectors: 0,
-        coverUrl: null,
-        coverIsbn: "9781234567897",
-        rebuiltAt: 1,
-      });
+      await ctx.db.insert(
+        "seriesStats",
+        seriesStatsRow({
+          seriesId: seriesB,
+          publicId: 2,
+          title: "Dungeon Meshi",
+          volumeCount: 1,
+          nextReleaseSort: 20261001,
+          coverIsbn: "9781234567897",
+        }),
+      );
     });
 
     const following = await as.query(api.follows.myFollowing, {});
@@ -277,32 +196,18 @@ describe("follows.myFollowing", () => {
     });
   });
 
-  it("omits unfollowed series and is null signed out", async () => {
-    const t = convexTest(schema);
-    const { seriesA } = await seed(t);
-    const as = await withUser(t);
-    await as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: true });
-    await as.mutation(api.follows.setSeriesFollow, { seriesId: seriesA, following: false });
+  it("omits unfollowed series", async () => {
+    const { as, seriesA } = await setup();
+    await follow(as, seriesA);
+    await follow(as, seriesA, false);
     expect((await as.query(api.follows.myFollowing, {}))?.series).toEqual([]);
-    expect(await t.query(api.follows.myFollowing, {})).toBeNull();
   });
 });
 
 describe("follows.myUpcoming", () => {
-  it("is null signed out", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    expect(await t.query(api.follows.myUpcoming, { todaySort: TODAY })).toBeNull();
-  });
-
   it("followed series contribute future releases matching the preference; past and unfollowed drop", async () => {
-    const t = convexTest(schema);
-    const { seriesA } = await seed(t);
-    const as = await withUser(t);
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: true,
-    });
+    const { as, seriesA } = await setup();
+    await follow(as, seriesA);
 
     // Default preference is "both": all of A's upcoming, chronologically —
     // the current-month day-TBA release first, dated ones after; the release
@@ -317,13 +222,8 @@ describe("follows.myUpcoming", () => {
   });
 
   it("the Physical/Digital preference scopes only the followed clause", async () => {
-    const t = convexTest(schema);
-    const { seriesA, bFutureDigital } = await seed(t);
-    const as = await withUser(t);
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: true,
-    });
+    const { as, seriesA, bFutureDigital } = await setup();
+    await follow(as, seriesA);
     await as.mutation(api.users.setFormatPreference, { preference: "physical" });
     // A future Wanted digital release appears regardless of the preference.
     await as.mutation(api.collection.setReleaseEntry, {
@@ -341,13 +241,8 @@ describe("follows.myUpcoming", () => {
   });
 
   it("deduplicates: a followed release that is also Wanted appears once, with both facts", async () => {
-    const t = convexTest(schema);
-    const { seriesA, aFuturePhysical } = await seed(t);
-    const as = await withUser(t);
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: true,
-    });
+    const { as, seriesA, aFuturePhysical } = await setup();
+    await follow(as, seriesA);
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: aFuturePhysical,
       state: "wanted",
@@ -361,13 +256,8 @@ describe("follows.myUpcoming", () => {
   });
 
   it("excludes Owned — a followed release the user owns never appears", async () => {
-    const t = convexTest(schema);
-    const { seriesA, aFuturePhysical } = await seed(t);
-    const as = await withUser(t);
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: true,
-    });
+    const { as, seriesA, aFuturePhysical } = await setup();
+    await follow(as, seriesA);
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: aFuturePhysical,
       state: "owned",
@@ -378,13 +268,8 @@ describe("follows.myUpcoming", () => {
   });
 
   it("excludes Derived Ownership — an owned box set removes its members too", async () => {
-    const t = convexTest(schema);
-    const { seriesA, bundleId } = await seed(t);
-    const as = await withUser(t);
-    await as.mutation(api.follows.setSeriesFollow, {
-      seriesId: seriesA,
-      following: true,
-    });
+    const { as, seriesA, bundleId } = await setup();
+    await follow(as, seriesA);
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
 
     const upcoming = await as.query(api.follows.myUpcoming, { todaySort: TODAY });
@@ -395,9 +280,7 @@ describe("follows.myUpcoming", () => {
   });
 
   it("includes future Wanted/Ordered Bundles; an undated bundle is not announced", async () => {
-    const t = convexTest(schema);
-    const { bundleId, undatedBundleId } = await seed(t);
-    const as = await withUser(t);
+    const { as, bundleId, undatedBundleId } = await setup();
     await as.mutation(api.collection.setBundleEntry, {
       bundleId,
       state: "ordered",
@@ -416,10 +299,35 @@ describe("follows.myUpcoming", () => {
   });
 
   it("is empty with nothing followed and nothing wanted", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    const as = await withUser(t);
+    const { as } = await setup();
     const upcoming = await as.query(api.follows.myUpcoming, { todaySort: TODAY });
     expect(upcoming).toEqual({ items: [], capped: false });
+  });
+});
+
+describe("follows belong to one user", () => {
+  it("another user neither sees the follower's follows nor changes them", async () => {
+    const { t, as, seriesA, seriesB, bFutureDigital } = await setup();
+    await follow(as, seriesA);
+    await as.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesB });
+    await as.mutation(api.collection.setReleaseEntry, { releaseId: bFutureDigital, state: "wanted" });
+    const followerRows = await stateRows(t);
+    const followerUpcoming = await as.query(api.follows.myUpcoming, { todaySort: TODAY });
+    expect(followerUpcoming?.items.length).toBeGreaterThan(0);
+
+    const other = await withUser(t, OTHER);
+    expect(await other.query(api.follows.seriesFollow, { seriesPublicId: 1 })).toMatchObject({ following: false });
+    expect(await other.query(api.follows.followedSeries, {})).toEqual({ seriesPublicIds: [] });
+    expect(await other.query(api.follows.myFollowing, {})).toEqual({ series: [] });
+    expect(await other.query(api.follows.myUpcoming, { todaySort: TODAY })).toEqual({ items: [], capped: false });
+
+    // Their unfollow and dismissal write rows of their own, never the follower's.
+    await follow(other, seriesA, false);
+    await other.mutation(api.follows.dismissFollowPrompt, { seriesId: seriesA });
+    const rows = await stateRows(t);
+    expect(rows.filter((row) => followerRows.some((mine) => mine._id === row._id))).toEqual(followerRows);
+    expect(rows).toHaveLength(followerRows.length + 1);
+    expect(await as.query(api.follows.followedSeries, {})).toEqual({ seriesPublicIds: [1] });
+    expect(await as.query(api.follows.myUpcoming, { todaySort: TODAY })).toEqual(followerUpcoming);
   });
 });
