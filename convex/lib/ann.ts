@@ -19,8 +19,8 @@
 // 2026-09-25), which links lines to canonical Releases exactly. The API has
 // no publisher, so creating a Release needs the per-release Encyclopedia
 // page — `releases.php?id=NNN` — whose Distributor, ISBN-10/13, release
-// date, and suggested retail price `parseReleasePage` reads (see ann.ts's
-// release-page pass).
+// date, suggested retail price, and Description (the book's blurb)
+// `parseReleasePage` reads (see ann.ts's release-page pass).
 
 import { v, type Infer } from "convex/values";
 import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
@@ -359,8 +359,9 @@ export function parseApiResponse(xml: string): AnnManga[] {
 /**
  * What one Encyclopedia release page (`releases.php?id=NNN`) adds to its
  * API line: the Distributor — the publisher a Release needs — plus the
- * page's own ISBNs, date, and suggested retail price. Stored on the line's
- * observation as `page` (the fetch state that keeps the pass incremental).
+ * page's own ISBNs, date, suggested retail price, and Description. Stored
+ * on the line's observation as `page` (the fetch state that keeps the pass
+ * incremental).
  */
 export type AnnReleasePage = {
   title?: string;
@@ -375,12 +376,31 @@ export type AnnReleasePage = {
   priceCents?: number;
   /** The manga entry the page belongs to. */
   mangaId?: string;
+  /** The book's blurb (publisher copy an ANN contributor entered), cleaned. */
+  description?: string;
 };
 
 /** One labelled field's raw HTML: `<b>Label:</b> …` up to the next break. */
 function pageField(html: string, label: string): string | undefined {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`<b>${escaped}:</b>([\\s\\S]*?)(?:<br\\s*/?>|</p>|<p\\b)`, "i").exec(html)?.[1];
+}
+
+/**
+ * The page's Description, cleaned to one paragraph. It opens with a `<br>`
+ * and spans paragraphs, so `pageField` cannot read it. Seen live
+ * (2026-10-02) in two shapes: older pages run the text inline
+ * (`<b>Description:</b><br>Text<br>\n<br>More</p>`), newer ones close the
+ * paragraph and carry it in `<div class="simple-html">`. Either way it ends
+ * at the `<small>(added on …)</small>` trailer (or the entry link / next
+ * field when that is missing). ANN's newer copy sprinkles zero-width spaces
+ * after punctuation; they go too.
+ */
+function pageDescription(html: string): string | undefined {
+  const raw = /<b>Description:<\/b>([\s\S]*?)(?:<small\b|<ul\b|<fieldset\b|<b>[^<]{1,40}:<\/b>|$)/i.exec(
+    html,
+  )?.[1];
+  return raw !== undefined ? cleanBlurb(raw.replace(/[​-‍﻿]/g, "")) : undefined;
 }
 
 /**
@@ -422,6 +442,7 @@ export function parseReleasePage(html: string): AnnReleasePage | null {
     // The entry link under the release ("Encyclopedia information about"),
     // not whatever manga the site chrome happens to link.
     mangaId: /Encyclopedia information about[\s\S]{0,200}?manga\.php\?id=(\d+)/.exec(html)?.[1],
+    description: pageDescription(html),
   };
 }
 

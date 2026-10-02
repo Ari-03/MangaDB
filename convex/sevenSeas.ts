@@ -53,6 +53,7 @@ import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } fr
 import { getObservation, markSeen, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
+  blurbWanted,
   createCanonicalRecords,
   createReleaseBundle,
   creationGates,
@@ -413,16 +414,6 @@ export const noteListing = internalMutation({
 });
 
 // ---------- applying one book ----------
-
-/** An active, unlocked Release with no description and no human override of it. */
-function blurbWanted(release: Doc<"releases">): boolean {
-  return (
-    release.status === "active" &&
-    !release.locked &&
-    release.description === undefined &&
-    !release.overriddenFields?.includes("description")
-  );
-}
 
 type ApplyResult = {
   status:

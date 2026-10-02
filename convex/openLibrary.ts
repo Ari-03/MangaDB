@@ -27,17 +27,26 @@
 // the filtered file at OPENLIBRARY_DUMP_URL (see README). The sync action
 // streams it line by line and self-continues across Convex's action time
 // budget, carrying the Import Run.
+//
+// `replayDescriptions` re-applies stored editions, with no network: an
+// edition observed before its Release existed (ANN created most VIZ books
+// later) stayed unlinked, so its description never reached the Release.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, type MutationCtx } from "./_generated/server";
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+} from "./_generated/server";
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { runToContinue } from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
-import { labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
+import { labelsEqual, matchRelease, survivorOf, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   createCanonicalRecords,
@@ -488,5 +497,128 @@ export const applyEdition = internalMutation({
       now,
     });
     return { status: "created", changed: true, releaseId: creation.releaseId };
+  },
+});
+
+// ---------- the description replay ----------
+
+/** OpenLibrary observations scanned per lookup. */
+const REPLAY_SCAN = 200;
+/** Editions handed to the action per lookup. */
+const REPLAY_BATCH = 25;
+/** Work per action before it continues in a fresh one (actions run ≤10 min). */
+const REPLAY_BUDGET_MS = 6 * 60 * 1000;
+
+/**
+ * Up to REPLAY_BATCH stored snapshots after `after`, by edition key, that
+ * are unlinked, carry a description, and carry an ISBN some active Release
+ * (merged rows answered by their survivor) holds — and where to look next
+ * (null once exhausted). The ISBN condition keeps the replay to its
+ * purpose: applyEdition's rung ② then links or flags that Release and never
+ * reaches the rung-⑤ leaf creation.
+ */
+export const unlinkedDescribedEditions = internalQuery({
+  args: { after: v.union(v.string(), v.null()) },
+  handler: async (ctx, { after }) => {
+    const docs = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        after === null
+          ? q.eq("sourceKey", SOURCE_KEY)
+          : q.eq("sourceKey", SOURCE_KEY).gt("sourceRecordId", after),
+      )
+      .take(REPLAY_SCAN);
+    const snapshots: OlEditionSnapshot[] = [];
+    let next: string | null = null;
+    for (const doc of docs) {
+      next = doc.sourceRecordId;
+      if (doc.recordRef !== undefined) continue;
+      const snapshot = doc.snapshot as OlEditionSnapshot;
+      if (snapshot.description === undefined || snapshot.isbn13 === undefined) continue;
+      const isbn13 = snapshot.isbn13;
+      const holders = await ctx.db
+        .query("releases")
+        .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+        .collect();
+      const resolved = await Promise.all(holders.map((r) => survivorOf<"releases">(ctx, r)));
+      if (!resolved.some((release) => release?.status === "active")) continue;
+      snapshots.push(snapshot);
+      if (snapshots.length === REPLAY_BATCH) break;
+    }
+    const exhausted = docs.length < REPLAY_SCAN && next === docs.at(-1)?.sourceRecordId;
+    return { snapshots, next: exhausted ? null : next };
+  },
+});
+
+type ReplayResult = {
+  /** Editions replayed so far, across every link of the chain. */
+  replayed: number;
+  /** Replays that linked their edition to a Release. */
+  linked: number;
+  /** This link's failures (a stored snapshot the validator now rejects, …). */
+  errors: string[];
+  continued: boolean;
+};
+
+/**
+ * Replay stored, unlinked OpenLibrary editions that carry a description
+ * through `applyEdition`, exactly as the next dump pass would apply them,
+ * but without the dump: the matching ladder links each to the Release that
+ * now holds its ISBN and fills at OpenLibrary's weak rank (a blank
+ * description fills; existing text, any source's or a human's, stays). No
+ * new write path: only editions whose ISBN an active Release holds are
+ * replayed (`unlinkedDescribedEditions`), so nothing is created. One
+ * mutation per edition; `limit` caps the editions replayed in total.
+ * Continues itself until done; safe to rerun. An explicit operator command:
+ * it runs whatever the source's enabled flag says and opens no Import Run.
+ *
+ *   npx convex run openLibrary:replayDescriptions '{"limit": 500}'
+ */
+export const replayDescriptions = internalAction({
+  args: {
+    limit: v.optional(v.number()),
+    // ----- continuation state (never passed by callers) -----
+    after: v.optional(v.string()),
+    replayed: v.optional(v.number()),
+    linked: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<ReplayResult> => {
+    const started = Date.now();
+    const limit = args.limit ?? Number.POSITIVE_INFINITY;
+    let replayed = args.replayed ?? 0;
+    let linked = args.linked ?? 0;
+    const errors: string[] = [];
+    // `cursor` trails the last edition handled, so a continuation resumes
+    // right after it.
+    let cursor: string | null = args.after ?? null;
+    while (replayed < limit) {
+      const batch: { snapshots: OlEditionSnapshot[]; next: string | null } = await ctx.runQuery(
+        internal.openLibrary.unlinkedDescribedEditions,
+        { after: cursor },
+      );
+      for (const snapshot of batch.snapshots) {
+        if (replayed >= limit) break;
+        if (Date.now() - started > REPLAY_BUDGET_MS) {
+          await ctx.scheduler.runAfter(0, internal.openLibrary.replayDescriptions, {
+            limit: args.limit,
+            after: cursor ?? undefined,
+            replayed,
+            linked,
+          });
+          return { replayed, linked, errors, continued: true };
+        }
+        replayed++;
+        try {
+          const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, { snapshot });
+          if (result.status === "linked") linked++;
+        } catch (e) {
+          errors.push(`${snapshot.key}: ${errorMessage(e)}`);
+        }
+        cursor = snapshot.key;
+      }
+      if (batch.next === null) break;
+      cursor = batch.next;
+    }
+    return { replayed, linked, errors, continued: false };
   },
 });

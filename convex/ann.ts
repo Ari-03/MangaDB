@@ -35,17 +35,23 @@
 //
 // The release-page pass (`syncReleasePages`): the API has no publisher, so
 // for every still-unlinked line it fetches the line's Encyclopedia page
-// once (Distributor, ISBNs, date, SRP — stored on the observation as
-// `page`, the fetch state that keeps the pass incremental) and places it
-// through the pipeline: an existing Release with the ISBN links; otherwise
-// a LEAF Release (Edition + Release) is created under the linked Series'
-// existing Volume when the Distributor resolves to an existing publisher
-// row — the OpenLibrary rung-⑤ boundary. ANN never creates a Series or
+// once (Distributor, ISBNs, date, SRP, Description — stored on the
+// observation as `page`, the fetch state that keeps the pass incremental)
+// and places it through the pipeline: an existing Release with the ISBN
+// links; otherwise a LEAF Release (Edition + Release) is created under the
+// linked Series' existing Volume when the Distributor resolves to an
+// existing publisher row — the OpenLibrary rung-⑤ boundary. ANN never creates a Series or
 // Volume this way, never a publisher, never packaging (omnibus/box-set
 // lines link by ISBN only), and never a second same-format Release of one
 // Volume from one publisher (reprints/variants stay on the observation).
 // Authority is unchanged: PRH and publisher feeds stay authoritative for
 // ISBN and date and overwrite what ANN created.
+//
+// The page's Description (publisher copy an ANN contributor entered) is the
+// Release Description at ANN's weak rank: it fills a Release created or
+// linked with none, and never touches one with text or a Human Override.
+// A line linked before its page was read for one is refetched once by the
+// page pass, or in bulk by the operator's `backfillDescriptions`.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -80,6 +86,7 @@ import { getObservation, upsertObservation } from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
+  blurbWanted,
   findPublisherByName,
   queueCreationProposal,
   recordUnplaced,
@@ -384,12 +391,20 @@ const pageStateValidator = v.object({
   isbn10: v.optional(v.string()),
   priceCents: v.optional(v.number()),
   mangaId: v.optional(v.string()),
+  description: v.optional(v.string()),
+  /**
+   * The page was parsed by a reader that looks for its Description: set on
+   * every ok fetch since descriptions were imported, so a page without one
+   * is not refetched for it again. Older ok pages lack it.
+   */
+  descriptionChecked: v.optional(v.literal(true)),
 });
 
 type PageState = AnnReleasePage & {
   status: "ok" | "notFound" | "unparsed" | "error";
   fetchedAt: number;
   error?: string;
+  descriptionChecked?: true;
 };
 
 /** One release line's observation snapshot (`release:NNN`). */
@@ -885,8 +900,28 @@ function needsFetch(page: PageState | undefined, now: number): boolean {
 }
 
 /**
+ * Whether a LINKED line's page is worth a fetch for its Release's missing
+ * description (`blurbWanted`): an ok page never read for a Description (the
+ * mirror linked the line by ISBN before any fetch stored one, or it was
+ * fetched before descriptions were imported), or a missing/failed page
+ * once its retry window has passed. A page checked and found without a
+ * Description is never refetched for it.
+ */
+function descriptionRefetch(
+  page: PageState | undefined,
+  release: Doc<"releases"> | null,
+  now: number,
+): boolean {
+  if (release === null || !blurbWanted(release)) return false;
+  return page?.status === "ok" ? page.descriptionChecked !== true : needsFetch(page, now);
+}
+
+/**
  * One page of unlinked release lines, in source-record-id order. Linked
- * lines drop out, so a later pass only touches new or still-unplaced ones.
+ * lines drop out, so a later pass only touches new or still-unplaced ones —
+ * except a linked line whose Release still lacks a description and whose
+ * page has never been read for one (`descriptionRefetch`), which comes
+ * back once for a fetch.
  */
 export const releasePageCandidates = internalQuery({
   args: {
@@ -904,13 +939,21 @@ export const releasePageCandidates = internalQuery({
           .lt("sourceRecordId", "release;"),
       )
       .paginate({ cursor, numItems });
-    const candidates = result.page.flatMap((obs) => {
-      if (obs.recordRef !== undefined || obs.withdrawn) return [];
+    const candidates: Array<{ annId: string; fetch: boolean }> = [];
+    for (const obs of result.page) {
+      if (obs.withdrawn) continue;
       const snapshot = obs.snapshot as AnnReleaseSnapshot;
       // Content-derived ids (a line without an href) have no page.
-      if (!/^\d+$/.test(snapshot.annId)) return [];
-      return [{ annId: snapshot.annId, fetch: needsFetch(snapshot.page, now) }];
-    });
+      if (!/^\d+$/.test(snapshot.annId)) continue;
+      if (obs.recordRef === undefined) {
+        candidates.push({ annId: snapshot.annId, fetch: needsFetch(snapshot.page, now) });
+      } else if (obs.recordRef.type === "release") {
+        const release = await ctx.db.get(obs.recordRef.id);
+        if (descriptionRefetch(snapshot.page, release, now)) {
+          candidates.push({ annId: snapshot.annId, fetch: true });
+        }
+      }
+    }
     return {
       candidates,
       continueCursor: result.continueCursor,
@@ -957,9 +1000,11 @@ export const chainReleasePages = internalMutation({
  * The release-page pass: walks every unlinked release line, fetches its
  * Encyclopedia page once (1 req/s), and places it (`applyReleasePage`).
  * Lines whose page is already stored are re-placed without a fetch — a
- * newly seeded publisher or Volume can unblock them. Chained after each
- * finished mirror, complete or errored; self-continues across the action
- * time limit.
+ * newly seeded publisher or Volume can unblock them. A linked line whose
+ * Release lacks a description is fetched once more to offer the page's
+ * (`descriptionRefetch`), within the same per-link budget. Chained after
+ * each finished mirror, complete or errored; self-continues across the
+ * action time limit.
  *
  *   npx convex run ann:syncReleasePages '{}'
  */
@@ -1101,7 +1146,9 @@ async function fetchReleasePage(annId: string, delay: number): Promise<PageState
   try {
     const res = await politeFetch(releaseUrl(annId), delay);
     const parsed = parseReleasePage(await res.text());
-    return parsed ? { status: "ok", fetchedAt, ...parsed } : { status: "unparsed", fetchedAt };
+    return parsed
+      ? { status: "ok", fetchedAt, ...parsed, descriptionChecked: true }
+      : { status: "unparsed", fetchedAt };
   } catch (e) {
     const message = errorMessage(e);
     return /HTTP 404\b/.test(message)
@@ -1111,24 +1158,45 @@ async function fetchReleasePage(annId: string, delay: number): Promise<PageState
 }
 
 type PlaceResult = {
-  status: "skipped" | "stored" | "linked" | "created" | "recordOnly";
+  status: "skipped" | "stored" | "filled" | "linked" | "created" | "recordOnly";
   changed: boolean;
   reason?: string;
   releaseId?: Id<"releases">;
 };
 
 /**
+ * The page's Description for a Release that has none (`blurbWanted`), as an
+ * offer for reconcileFields at ANN's registry rank (weak): it only ever
+ * fills a blank. A Release that has text (a publisher's, Open Library's, a
+ * human's) or a Human Override on the field is offered nothing, so a weak
+ * aggregator never queues an equal-authority review against Open Library.
+ */
+function descriptionOffer(
+  page: PageState | undefined,
+  release: Doc<"releases">,
+): { description?: string } {
+  return page?.description !== undefined && blurbWanted(release)
+    ? { description: page.description }
+    : {};
+}
+
+/**
  * Place one release line from its page (freshly fetched, or the stored
  * one): link the Release carrying its ISBN, else create a leaf Release
  * under the linked Series' existing Volume when the Distributor resolves
  * to an existing publisher row. Everything the importer will not decide
- * stays on the observation as a placement note. One atomic mutation.
+ * stays on the observation as a placement note. A freshly fetched page of
+ * an already LINKED line (the description refetch) is stored, and its
+ * Description offered to the linked Release. One atomic mutation.
  */
 export const applyReleasePage = internalMutation({
   args: { annId: v.string(), page: v.optional(pageStateValidator) },
   handler: async (ctx, { annId, page: fetched }): Promise<PlaceResult> => {
     const now = Date.now();
     let observation = await getObservation(ctx, SOURCE_KEY, `release:${annId}`);
+    if (observation?.recordRef?.type === "release" && fetched !== undefined) {
+      return await fillLinked(ctx, observation, observation.recordRef.id, fetched, now);
+    }
     if (!observation || observation.recordRef !== undefined) {
       return { status: "skipped", changed: false };
     }
@@ -1267,6 +1335,7 @@ export const applyReleasePage = internalMutation({
             page.priceCents !== undefined
               ? { amountCents: page.priceCents, currency: "USD" }
               : undefined,
+          description: page.description,
           publisher: { name: publisher.name, slug: publisher.slug },
         },
         tagBootstrapUnreviewed: true,
@@ -1329,6 +1398,7 @@ export const applyReleasePage = internalMutation({
           page.priceCents !== undefined
             ? { amountCents: page.priceCents, currency: "USD" }
             : undefined,
+        description: page.description,
         publisher: { name: publisher.name, slug: publisher.slug },
       },
       tagBootstrapUnreviewed: false,
@@ -1341,7 +1411,7 @@ export const applyReleasePage = internalMutation({
         recordRef: { type: "release", id: release._id },
       });
       const date = page!.date ?? line.date;
-      const offered: Record<string, unknown> = {};
+      const offered: Record<string, unknown> = { ...descriptionOffer(page, release) };
       if (date) offered.pubDate = toPartialDate(date);
       // The page's ISBN fills a linked Release that has none (never another's).
       if (release.isbn13 === undefined && isbn13 !== undefined && !(await isbnTaken(ctx, isbn13))) {
@@ -1360,5 +1430,190 @@ export const applyReleasePage = internalMutation({
       }
       return { status: "linked", changed: true, releaseId: release._id };
     }
+  },
+});
+
+/**
+ * Store a refetched page on a linked line and offer its Description to the
+ * linked Release (`descriptionOffer`). Nothing else is reconciled here: the
+ * line's date and ISBN already reach the Release through the mirror.
+ */
+async function fillLinked(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  releaseId: Id<"releases">,
+  page: PageState,
+  now: number,
+): Promise<PlaceResult> {
+  const line = observation.snapshot as AnnReleaseSnapshot;
+  const { observation: stored } = await upsertObservation(ctx, {
+    sourceKey: SOURCE_KEY,
+    sourceRecordId: observation.sourceRecordId,
+    snapshot: { ...line, page },
+    now,
+  });
+  const release = await ctx.db.get(releaseId);
+  const offered = release !== null ? descriptionOffer(page, release) : {};
+  if (release === null || offered.description === undefined) {
+    return { status: "stored", changed: true, releaseId };
+  }
+  const source = await getSourceByKey(ctx, SOURCE_KEY);
+  const result = await reconcileFields(ctx, {
+    sourceKey: SOURCE_KEY,
+    ref: { type: "release", id: release._id },
+    doc: release,
+    offered,
+    observation: stored,
+    citation: {
+      sourceName: source?.name ?? "Anime News Network Encyclopedia",
+      url: releaseUrl(line.annId),
+    },
+    now,
+  });
+  return {
+    status: result.applied.includes("description") ? "filled" : "stored",
+    changed: true,
+    releaseId,
+  };
+}
+
+// ---------- the description backfill ----------
+
+/** Release lines scanned per lookup for linked ones still missing a description. */
+const BACKFILL_SCAN = 200;
+/** Lines handed to the action per lookup. */
+const BACKFILL_BATCH = 25;
+/** Work per action before it continues in a fresh one (actions run ≤10 min). */
+const BACKFILL_BUDGET_MS = 6 * 60 * 1000;
+
+/**
+ * Up to BACKFILL_BATCH linked, unwithdrawn release lines after `after`
+ * whose Release lacks a description and whose page is worth a fetch for it
+ * (`descriptionRefetch`), in source-record-id order, and where to look next
+ * (null once the range is exhausted).
+ */
+export const descriptionlessLines = internalQuery({
+  args: { after: v.union(v.string(), v.null()), now: v.number() },
+  handler: async (ctx, { after, now }) => {
+    const docs = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q
+          .eq("sourceKey", SOURCE_KEY)
+          .gt("sourceRecordId", after ?? "release:")
+          .lt("sourceRecordId", "release;"),
+      )
+      .take(BACKFILL_SCAN);
+    const lines: Array<{ annId: string; sourceRecordId: string }> = [];
+    let next: string | null = null;
+    for (const doc of docs) {
+      next = doc.sourceRecordId;
+      if (doc.withdrawn || doc.recordRef?.type !== "release") continue;
+      const line = doc.snapshot as AnnReleaseSnapshot;
+      if (!/^\d+$/.test(line.annId)) continue;
+      if (!descriptionRefetch(line.page, await ctx.db.get(doc.recordRef.id), now)) continue;
+      lines.push({ annId: line.annId, sourceRecordId: doc.sourceRecordId });
+      if (lines.length === BACKFILL_BATCH) break;
+    }
+    const exhausted = docs.length < BACKFILL_SCAN && next === docs.at(-1)?.sourceRecordId;
+    return { lines, next: exhausted ? null : next };
+  },
+});
+
+type BackfillResult = {
+  /** Pages fetched so far, across every link of the chain. */
+  fetched: number;
+  /** Releases that received a description, across every link. */
+  filled: number;
+  /** This link's failures (fetch failures are stored on the line, not here). */
+  errors: string[];
+  continued: boolean;
+};
+
+/**
+ * Give Releases linked to ANN release lines the page Description they never
+ * got, instead of waiting for the weekly page pass to reach them: walk the
+ * linked lines whose Release has no description (`descriptionlessLines`),
+ * fetch each page at ANN's 1 req/s, store it on the line, and offer its
+ * Description to the Release (`applyReleasePage`, at ANN's weak rank: it
+ * only fills blanks). `limit` caps the pages fetched in total; `annIds`
+ * fetches exactly those release pages instead of walking (even ones already
+ * checked; the fill rule still applies, and an unlinked line is placed as
+ * the page pass would). Continues itself in fresh actions until done or the
+ * limit is spent; safe to rerun. Like people.backfillAnnCredits this is an
+ * explicit operator command: it runs whatever the source's enabled flag
+ * says and opens no Import Run.
+ *
+ *   npx convex run ann:backfillDescriptions '{"limit": 300}'
+ *   npx convex run ann:backfillDescriptions '{"annIds": ["10948", "23227"]}'
+ */
+export const backfillDescriptions = internalAction({
+  args: {
+    limit: v.optional(v.number()),
+    annIds: v.optional(v.array(v.string())),
+    /** Pause before every request; tests pass 0. Defaults to ANN's 1 req/s. */
+    politeDelayMs: v.optional(v.number()),
+    // ----- continuation state (never passed by callers) -----
+    after: v.optional(v.string()),
+    fetched: v.optional(v.number()),
+    filled: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<BackfillResult> => {
+    const started = Date.now();
+    const delay = args.politeDelayMs ?? ANN_DELAY_MS;
+    const limit = args.limit ?? Number.POSITIVE_INFINITY;
+    let fetched = args.fetched ?? 0;
+    let filled = args.filled ?? 0;
+    const errors: string[] = [];
+
+    const fill = async (annId: string) => {
+      const page = await fetchReleasePage(annId, delay);
+      fetched++;
+      try {
+        const result = await applyRetrying(ctx, internal.ann.applyReleasePage, { annId, page });
+        if (result.status === "filled") filled++;
+      } catch (e) {
+        errors.push(`release ${annId}: ${errorMessage(e)}`);
+      }
+    };
+    const outOfTime = () => Date.now() - started > BACKFILL_BUDGET_MS;
+    const continueWith = async (rest: { after?: string; annIds?: string[] }) => {
+      await ctx.scheduler.runAfter(0, internal.ann.backfillDescriptions, {
+        limit: args.limit,
+        politeDelayMs: args.politeDelayMs,
+        fetched,
+        filled,
+        ...rest,
+      });
+      return { fetched, filled, errors, continued: true };
+    };
+
+    if (args.annIds !== undefined) {
+      const ids = [...new Set(args.annIds.map((id) => id.trim()).filter((id) => /^\d+$/.test(id)))];
+      for (let i = 0; i < ids.length && fetched < limit; i++) {
+        if (outOfTime()) return await continueWith({ annIds: ids.slice(i) });
+        await fill(ids[i]!);
+      }
+      return { fetched, filled, errors, continued: false };
+    }
+
+    // `cursor` trails the last line handled, so a continuation resumes
+    // right after it.
+    let cursor: string | null = args.after ?? null;
+    while (fetched < limit) {
+      const batch: {
+        lines: Array<{ annId: string; sourceRecordId: string }>;
+        next: string | null;
+      } = await ctx.runQuery(internal.ann.descriptionlessLines, { after: cursor, now: Date.now() });
+      for (const line of batch.lines) {
+        if (fetched >= limit) break;
+        if (outOfTime()) return await continueWith({ after: cursor ?? undefined });
+        await fill(line.annId);
+        cursor = line.sourceRecordId;
+      }
+      if (batch.next === null) break;
+      cursor = batch.next;
+    }
+    return { fetched, filled, errors, continued: false };
   },
 });

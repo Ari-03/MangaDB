@@ -274,12 +274,21 @@ describe("release lines — ISBNs, chapters, packaging in the title", () => {
   });
 });
 
-// Trimmed copies of live release pages (fetched 2026-09-25; 10045 from the
-// release-less audit's cache): the fields block and the entry link, with a
-// site-chrome manga link in front to prove the entry link is the one read.
+// Trimmed copies of live release pages (fetched 2026-09-25, 10948 and 23227
+// again on 2026-10-02 with their descriptions; 10045 from the release-less
+// audit's cache): the fields block and the entry link, with a site-chrome
+// manga link in front to prove the entry link is the one read. "…" marks a
+// description the trim left out.
 const GN_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><div id="cover_placeholder"></div><b>Title:</b> One Piece<br><b>Volume:</b>  GN 113<br><b>Pages:</b> 208<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2026-11-10<br><b>Suggested retail price:</b> $11.99<br></p><p><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">9747</span><span title="product">6670</span><span title="check digit">5</span></span><span style="visibility:hidden"> 1974766705</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">9747</span><span title="product">6670</span><span title="check digit">3</span></span><span style="visibility:hidden"> 9781974766703</span><br></p><p class="easyread-width"><b>Description:</b><br>…</p><p><small>(added on 2026-03-17, modified on 2026-03-17)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1223">One Piece (manga)</a></b></li></ul></body></html>`;
 
-const EBOOK_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/23227.jpg" align="RIGHT"><b>Title:</b> One Piece - Romance Dawn<br><b>Volume:</b>  eBook 1<br><b>Running time:</b> 210<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2013-02-19<br><b>Suggested retail price:</b> $6.99<br></p><p><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">4215</span><span title="product">4525</span><span title="check digit">7</span></span><span style="visibility:hidden"> 9781421545257</span><br></p><p class="easyread-width"><b>Description:</b><br>…</p><p><small>(added on 2013-02-27, modified on 2014-09-18)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1223">One Piece (manga)</a></b></li></ul></body></html>`;
+const EBOOK_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/23227.jpg" align="RIGHT"><b>Title:</b> One Piece - Romance Dawn<br><b>Volume:</b>  eBook 1<br><b>Running time:</b> 210<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2013-02-19<br><b>Suggested retail price:</b> $6.99<br></p><p><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">4215</span><span title="product">4525</span><span title="check digit">7</span></span><span style="visibility:hidden"> 9781421545257</span><br></p><p class="easyread-width"><b>Description:</b><br></p><div class="simple-html">A new shonen sensation in Japan,\u200b this series features Monkey D.\u200b Luffy,\u200b whose main ambition is to become a pirate.\u200b Eating the Gum-Gum Fruit gives him strange powers but also invokes the fruit's curse: anybody who consumes it can never learn to swim.\u200b Nevertheless,\u200b Monkey and his crewmate Roronoa Zoro,\u200b master of the three-sword fighting style,\u200b sail the Seven Seas of swashbuckling adventure in search of the elusive treasure "One Piece.\u200b"</div><p></p><p><small>(added on 2013-02-27, modified on 2014-09-18)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1223">One Piece (manga)</a></b></li></ul></body></html>`;
+
+// An older page: the Description runs inline, its paragraphs split by <br>s.
+const ROMANCE_DAWN_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/10948.jpg" align="RIGHT"><b>Title:</b> One Piece - Romance Dawn<br><b>Volume:</b>  GN 1<br><b>Pages:</b> 208<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2003-06-01<br><b>Suggested retail price:</b> $7.95<br><b>Age rating:</b> 13+<br></p><p><b>SKU:</b> <span class="release-ean">CTOP-01</span><br><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">56931</span><span title="product">901</span><span title="check digit">4</span></span><span style="visibility:hidden"> 1569319014</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">56931</span><span title="product">901</span><span title="check digit">7</span></span><span style="visibility:hidden"> 9781569319017</span><br></p><p class="easyread-width"><b>Description:</b><br>In a world of pirates, one man wants to become the greatest of them all: Monkey D. Luffy, who gained strange powers from eating the cursed Gum-Gum Fruit!<br>
+<br>
+As a child, Luffy was inspired to become a pirate by listening to the tales of the buccaneer "Red-Haired" Shanks. Now, Luffy is grown up and sets out to sea in a rowboat, in search of "One Piece," the greatest treasure in the world! But is Roronoa Zoro, the pirate hunter, a friend or a foe?<br>
+<br>
+Story and art by Eiichiro Oda.</p><p><small>(added on 2008-01-04, modified on 2008-01-04)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1223">One Piece (manga)</a></b></li></ul></body></html>`;
 
 const BOX_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/24124.jpg" align="RIGHT"><b>Title:</b> One Piece - East Blue and Baroque Works Box Set<br><b>Volume:</b>  GN 1-23<br><b>Pages:</b> 4720<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2013-11-05<br><b>Suggested retail price:</b> $185.99<br><b>Age rating:</b> 13+<br></p><p><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">4215</span><span title="product">6074</span><span title="check digit">7</span></span><span style="visibility:hidden"> 1421560747</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">4215</span><span title="product">6074</span><span title="check digit">8</span></span><span style="visibility:hidden"> 9781421560748</span><br></p><p class="easyread-width"><b>Description:</b><br>…</p><p><small>(added on 2013-06-18, modified on 2013-06-18)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1223">One Piece (manga)</a></b></li></ul></body></html>`;
 
@@ -305,6 +314,8 @@ describe("parseReleasePage", () => {
       isbn10: "1974766705",
       priceCents: 1199,
       mangaId: "1223",
+      // The trimmed fixture's elided text.
+      description: "…",
     });
   });
 
@@ -330,5 +341,31 @@ describe("parseReleasePage", () => {
       isbn10: "1421513749",
     });
     expect(parseReleasePage("<html><body>No such release</body></html>")).toBeNull();
+  });
+
+  it("reads the Description in both live shapes, without the added-on trailer", () => {
+    expect(parseReleasePage(ROMANCE_DAWN_PAGE)).toMatchObject({
+      title: "One Piece - Romance Dawn",
+      volume: "GN 1",
+      isbn13: "9781569319017",
+      mangaId: "1223",
+      description:
+        'In a world of pirates, one man wants to become the greatest of them all: Monkey D. Luffy, who gained strange powers from eating the cursed Gum-Gum Fruit! As a child, Luffy was inspired to become a pirate by listening to the tales of the buccaneer "Red-Haired" Shanks. Now, Luffy is grown up and sets out to sea in a rowboat, in search of "One Piece," the greatest treasure in the world! But is Roronoa Zoro, the pirate hunter, a friend or a foe? Story and art by Eiichiro Oda.',
+    });
+    // The newer layout: text in a div after the field's paragraph, with
+    // zero-width spaces after its punctuation.
+    const ebook = parseReleasePage(EBOOK_PAGE)!.description!;
+    expect(ebook).toMatch(/^A new shonen sensation in Japan, this series features Monkey D\. Luffy, /);
+    expect(ebook).toMatch(/in search of the elusive treasure "One Piece\."$/);
+    expect(ebook).not.toMatch(/[\u200B-\u200D\uFEFF]|added on/);
+  });
+
+  it("has no description when the page has none", () => {
+    const field = /<p class="easyread-width">[\s\S]*?<\/p>/;
+    expect(field.test(ROMANCE_DAWN_PAGE)).toBe(true);
+    const absent = ROMANCE_DAWN_PAGE.replace(field, "");
+    const empty = ROMANCE_DAWN_PAGE.replace(field, '<p class="easyread-width"><b>Description:</b><br></p>');
+    expect(parseReleasePage(absent)).toMatchObject({ isbn13: "9781569319017", description: undefined });
+    expect(parseReleasePage(empty)?.description).toBeUndefined();
   });
 });

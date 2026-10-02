@@ -42,7 +42,7 @@ const SOURCES: Source[] = [
   },
   {
     name: "Anime News Network Encyclopedia",
-    body: "The all-publisher series and volume backbone.",
+    body: "The all-publisher series and volume backbone, release dates, and — where a publisher's own text is missing — series summaries and book descriptions, which ANN's contributors enter from publisher copy.",
     credit: (
       <>
         Encyclopedia data provided by{" "}

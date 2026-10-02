@@ -558,6 +558,21 @@ export type ReleasePayload = {
   description?: string;
 };
 
+/**
+ * An active, unlocked Release with no description and no human override of
+ * it: one an adapter may refetch a source page for, to fill the blank (Seven
+ * Seas' detail pages, ANN's release pages). A human's cleared description is
+ * theirs to keep.
+ */
+export function blurbWanted(release: Doc<"releases">): boolean {
+  return (
+    release.status === "active" &&
+    !release.locked &&
+    release.description === undefined &&
+    !release.overriddenFields?.includes("description")
+  );
+}
+
 type PublisherRef = { name: string; slug: string; parentSlug?: string };
 
 export type CreationArgs = {

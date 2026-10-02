@@ -697,3 +697,124 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
     });
   });
 });
+
+describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
+  it("fills a Release created after its edition was observed, keeps existing text, creates nothing", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    // Observed before the catalog had this Series: all three stay unlinked.
+    const LATE = { ...CHAINSAW_22, description: "Denji's back." };
+    const COPY = {
+      ...CHAINSAW_22,
+      key: "/books/OL2M",
+      isbn_13: ["9781974766529"],
+      description: "An OL blurb.",
+    };
+    // No Release holds its ISBN; a dump pass would now create a leaf for it.
+    const LEAF = {
+      ...CHAINSAW_22,
+      key: "/books/OL3M",
+      title: "Chainsaw Man, Vol. 21",
+      isbn_13: ["9781974766505"],
+      description: "Volume 21.",
+    };
+    stubDump([LATE, COPY, LEAF]);
+    await sync(t);
+    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("the replay never touches the network");
+    });
+
+    // ANN later created the books: one blank, one a publisher already described.
+    const { releaseId, publisherId, seriesId } = await buildSkeleton(t, { withRelease: true });
+    const described = await t.run(async (ctx) => {
+      const late = (await ctx.db.get(releaseId!))!;
+      await ctx.db.patch(late._id, { isbn13: "9781974766512" });
+      const id = await ctx.db.insert("releases", {
+        status: "active",
+        editionId: late.editionId,
+        format: "digital",
+        language: "en",
+        isbn13: "9781974766529",
+        description: "The publisher's copy.",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "sevenseas" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id } as never,
+        seq: 1,
+        proposalId,
+        author: { kind: "source", sourceKey: "sevenseas" },
+        changes: [{ field: "description", after: "The publisher's copy." }],
+        comment: "Imported from Seven Seas Entertainment.",
+      });
+      return id;
+    });
+    const counts = () =>
+      t.run(async (ctx) => ({
+        series: (await ctx.db.query("series").collect()).length,
+        editions: (await ctx.db.query("editions").collect()).length,
+        releases: (await ctx.db.query("releases").collect()).length,
+      }));
+    const before = await counts();
+
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toEqual({
+      replayed: 2,
+      linked: 2,
+      errors: [],
+      continued: false,
+    });
+    expect(await counts()).toEqual(before);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.description).toBe("Denji's back.");
+      expect((await ctx.db.get(described))!.description).toBe("The publisher's copy.");
+      const obs = await ctx.db.query("sourceObservations").collect();
+      const byKey = new Map(obs.map((o) => [o.sourceRecordId, o]));
+      expect(byKey.get(LATE.key)!.recordRef).toEqual({ type: "release", id: releaseId });
+      expect(byKey.get(COPY.key)!.recordRef).toEqual({ type: "release", id: described });
+      expect(byKey.get(LEAF.key)!.recordRef).toBeUndefined();
+    });
+
+    // Linked now: a rerun has nothing left to replay.
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      replayed: 0,
+    });
+  });
+
+  it("stops at its limit", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    stubDump([
+      { ...CHAINSAW_22, description: "One." },
+      { ...CHAINSAW_22, key: "/books/OL2M", isbn_13: ["9781974766529"], description: "Two." },
+    ]);
+    await sync(t);
+    const { releaseId, publisherId, seriesId } = await buildSkeleton(t, { withRelease: true });
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.get(releaseId!))!;
+      await ctx.db.patch(release._id, { isbn13: "9781974766512" });
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId: release.editionId,
+        format: "digital",
+        language: "en",
+        isbn13: "9781974766529",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+    });
+    expect(await t.action(internal.openLibrary.replayDescriptions, { limit: 1 })).toMatchObject({
+      replayed: 1,
+      linked: 1,
+    });
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      replayed: 1,
+      linked: 1,
+    });
+  });
+});
