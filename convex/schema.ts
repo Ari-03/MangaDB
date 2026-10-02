@@ -19,19 +19,19 @@ import { scoreFormatValidator } from "./lib/scoreFormat";
 // Partial-precision publication date (#13). `sort` is yyyymmdd with zeroed
 // unknown parts (20260800 = "Aug 2026"), giving one indexable key for the
 // calendar, month pages, and upcoming queries; month grouping is a prefix range.
-const partialDate = v.object({
+export const partialDate = v.object({
   year: v.number(),
   month: v.optional(v.number()),
   day: v.optional(v.number()),
   sort: v.number(),
 });
 
-const money = v.object({
+export const money = v.object({
   amountCents: v.number(),
   currency: v.string(),
 });
 
-const cover = v.object({
+export const cover = v.object({
   // Absent when the source's art at `sourceUrl` was a placeholder: the URL is
   // remembered so it is not fetched again until it changes (lib/covers.ts).
   storageId: v.optional(v.id("_storage")),
@@ -40,6 +40,18 @@ const cover = v.object({
 });
 
 const visibility = v.union(v.literal("public"), v.literal("private"));
+
+export const releaseFormat = v.union(v.literal("physical"), v.literal("digital"));
+
+// A Series' publication status as its sources report it.
+const sourceStatus = v.union(
+  v.literal("ongoing"),
+  v.literal("completed"),
+  v.literal("hiatus"),
+  v.literal("cancelled"),
+);
+// The library's copy, where a Series no source has reported reads "unknown".
+const browseSourceStatus = v.union(...sourceStatus.members, v.literal("unknown"));
 
 // A Comment's moderation state (comments.ts): published, held for a
 // Moderator, hidden (by Moderators or 3 reports), removed (by its author
@@ -65,16 +77,12 @@ export const commentReportReason = v.union(
 // A Review's moderation state (reviews.ts mirrors it).
 export const reviewStatus = v.union(v.literal("visible"), v.literal("hidden"));
 
-const dataRole = v.union(
+export const dataRole = v.union(
   v.literal("editor"),
   v.literal("moderator"),
   v.literal("administrator"),
 );
 
-// Discriminated reference to any canonical record. Observations, proposals,
-// revisions, and suppressions all target one of these. Volume-coverage rows
-// are deliberately absent: coverage is edited as the pseudo-field
-// "volumeCoverage" of its Edition, so revision history lands on the Edition.
 // A Series credit's role (people.ts ROLE_ORDER): "author" is the role-less
 // credit ("By") a publisher gives when it names someone without a task.
 const creditRole = v.union(
@@ -85,8 +93,23 @@ const creditRole = v.union(
   v.literal("author"),
 );
 
-// Exported for the moderation write path (moderation.ts), which takes and
-// stores these refs.
+// The canonical record types, as `recordRef` below names them.
+export const recordType = v.union(
+  v.literal("publisher"),
+  v.literal("seriesFamily"),
+  v.literal("series"),
+  v.literal("volume"),
+  v.literal("editionLine"),
+  v.literal("edition"),
+  v.literal("release"),
+  v.literal("releaseVariant"),
+  v.literal("releaseBundle"),
+);
+
+// Discriminated reference to any canonical record. Observations, proposals,
+// revisions, and suppressions all target one of these. Volume-coverage rows
+// are deliberately absent: coverage is edited as the pseudo-field
+// "volumeCoverage" of its Edition, so revision history lands on the Edition.
 export const recordRef = v.union(
   v.object({ type: v.literal("publisher"), id: v.id("publishers") }),
   v.object({ type: v.literal("seriesFamily"), id: v.id("seriesFamilies") }),
@@ -230,13 +253,7 @@ export default defineSchema({
     titleSort: v.string(),
     // "a".."z" or "#" for titles that start with a digit or symbol.
     letter: v.string(),
-    sourceStatus: v.union(
-      v.literal("ongoing"),
-      v.literal("completed"),
-      v.literal("hiatus"),
-      v.literal("cancelled"),
-      v.literal("unknown"),
-    ),
+    sourceStatus: browseSourceStatus,
     publishers: v.array(v.object({ name: v.string(), slug: v.string() })),
     hasPhysical: v.boolean(),
     hasDigital: v.boolean(),
@@ -397,13 +414,7 @@ export default defineSchema({
         publicId: v.number(),
         titleSort: v.string(),
         searchKey: v.string(),
-        sourceStatus: v.union(
-          v.literal("ongoing"),
-          v.literal("completed"),
-          v.literal("hiatus"),
-          v.literal("cancelled"),
-          v.literal("unknown"),
-        ),
+        sourceStatus: browseSourceStatus,
         publishers: v.array(v.object({ name: v.string(), slug: v.string() })),
         hasPhysical: v.boolean(),
         hasDigital: v.boolean(),
@@ -441,14 +452,7 @@ export default defineSchema({
     // What the Series is about, shown under its title; absent until a source
     // or an Editor supplies one.
     synopsis: v.optional(v.string()),
-    sourceStatus: v.optional(
-      v.union(
-        v.literal("ongoing"),
-        v.literal("completed"),
-        v.literal("hiatus"),
-        v.literal("cancelled"),
-      ),
-    ),
+    sourceStatus: v.optional(sourceStatus),
     // Bookless Series (CONTEXT.md): active, but no Edition covers any of its
     // Volumes and no Edition Line member exists — a backbone a source built
     // whose books never attached. Derived by the Series library rebuild
@@ -550,7 +554,7 @@ export default defineSchema({
   releases: defineTable({
     ...canonical("releases"),
     editionId: v.id("editions"),
-    format: v.union(v.literal("physical"), v.literal("digital")),
+    format: releaseFormat,
     binding: v.optional(v.string()),
     language: v.string(),
     isbn13: v.optional(v.string()),
@@ -586,7 +590,7 @@ export default defineSchema({
     publicId: v.number(),
     name: v.string(),
     publisherId: v.id("publishers"),
-    format: v.optional(v.union(v.literal("physical"), v.literal("digital"))),
+    format: v.optional(releaseFormat),
     isbn13: v.optional(v.string()),
     isbn10: v.optional(v.string()),
     pubDate: v.optional(partialDate),

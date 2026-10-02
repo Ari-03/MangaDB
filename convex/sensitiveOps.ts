@@ -11,7 +11,6 @@ import { mutation, query, type MutationCtx } from "./_generated/server";
 import {
   displayInfo,
   getCanonical,
-  recordTypeArg,
   resolveEditTarget,
   revisionsOf,
   type RecordRef,
@@ -29,7 +28,7 @@ import {
 } from "./lib/sensitiveOps";
 import { fail } from "./lib/errors";
 import { requireModerator } from "./lib/roles";
-import { recordRef } from "./schema";
+import { recordRef, recordType } from "./schema";
 
 // ---------- the manage panel query ----------
 
@@ -41,7 +40,7 @@ import { recordRef } from "./schema";
  * merge form reuses this same query to preview its survivor target.
  */
 export const manageForm = query({
-  args: { type: recordTypeArg, key: v.string() },
+  args: { type: recordType, key: v.string() },
   handler: async (ctx, { type, key }) => {
     await requireModerator(ctx);
     const doc = await resolveEditTarget(ctx, type, key);

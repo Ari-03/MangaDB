@@ -17,7 +17,7 @@ import {
 } from "./_generated/server";
 import { editionCoverage, followMerges } from "./catalogPages";
 import { getSourceByKey } from "./importSources";
-import { recordRef } from "./schema";
+import { recordRef, recordType } from "./schema";
 import { latestTouch } from "./lib/authority";
 import { fail } from "./lib/errors";
 import { ratedByDataTeam } from "./lib/mature";
@@ -292,18 +292,6 @@ export const submitDirectEdit = mutation({
 
 // ---------- the edit form (moderator/administrator) ----------
 
-export const recordTypeArg = v.union(
-  v.literal("publisher"),
-  v.literal("seriesFamily"),
-  v.literal("series"),
-  v.literal("volume"),
-  v.literal("editionLine"),
-  v.literal("edition"),
-  v.literal("release"),
-  v.literal("releaseVariant"),
-  v.literal("releaseBundle"),
-);
-
 /**
  * Resolve an edit-form key to its doc: the public ID for entities that have
  * one, the slug for publishers, the document ID otherwise. No merge
@@ -441,7 +429,7 @@ export async function displayInfo(
  * stronger role.
  */
 export const editForm = query({
-  args: { type: recordTypeArg, key: v.string() },
+  args: { type: recordType, key: v.string() },
   handler: async (ctx, { type, key }) => {
     await requireDataTeam(ctx);
     const doc = await resolveEditTarget(ctx, type, key);

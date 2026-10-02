@@ -20,12 +20,7 @@ import {
   type DataRole,
 } from "./lib/roles";
 import { normalizeUsername } from "./lib/usernames";
-
-const dataRoleArg = v.union(
-  v.literal("editor"),
-  v.literal("moderator"),
-  v.literal("administrator"),
-);
+import { dataRole } from "./schema";
 
 async function findUserByUsername(
   ctx: MutationCtx,
@@ -98,7 +93,7 @@ async function requireGovernanceOver(
 export const appoint = mutation({
   args: {
     username: v.string(),
-    role: dataRoleArg,
+    role: dataRole,
     reason: v.optional(v.string()),
   },
   handler: async (ctx, { username, role, reason }) => {

@@ -6,21 +6,9 @@
 // each entry by the runner; the entry types are inferred from here.
 
 import { v, type Infer } from "convex/values";
+import { cover, money, partialDate, recordType, releaseFormat } from "../../schema";
 
 const nullableString = v.union(v.string(), v.null());
-
-const partialDate = v.object({
-  year: v.number(),
-  month: v.optional(v.number()),
-  day: v.optional(v.number()),
-  sort: v.number(),
-});
-
-const cover = v.object({
-  storageId: v.optional(v.id("_storage")),
-  sourceUrl: v.optional(v.string()),
-  attribution: v.optional(v.string()),
-});
 
 const base = { key: v.string(), reason: v.string() };
 
@@ -104,18 +92,6 @@ export const restoreRecordEntry = v.object({
   editionIds: v.array(v.id("editions")),
   releaseIds: v.array(v.id("releases")),
 });
-
-const recordType = v.union(
-  v.literal("publisher"),
-  v.literal("seriesFamily"),
-  v.literal("series"),
-  v.literal("volume"),
-  v.literal("editionLine"),
-  v.literal("edition"),
-  v.literal("release"),
-  v.literal("releaseVariant"),
-  v.literal("releaseBundle"),
-);
 
 /** Clear a Source Observation's link to a record it does not describe. */
 export const unlinkObservationEntry = v.object({
@@ -207,8 +183,6 @@ const seriesChange = v.union(
     after: v.array(v.string()),
   }),
 );
-
-const releaseFormat = v.union(v.literal("physical"), v.literal("digital"));
 
 const releaseChange = v.union(
   v.object({
@@ -333,8 +307,6 @@ export const hideEditionLineEntry = v.object({
   name: v.string(),
 });
 
-const money = v.object({ amountCents: v.number(), currency: v.string() });
-
 /**
  * Create a researched Release no importer has on file, on a new Edition
  * covering existing Volumes (optionally placed in an Edition Line of the
@@ -347,7 +319,7 @@ export const createReleaseEntry = v.object({
   ...base,
   isbn13: v.string(),
   isbn10: nullableString,
-  format: v.union(v.literal("physical"), v.literal("digital")),
+  format: releaseFormat,
   binding: nullableString,
   pubDate: v.union(partialDate, v.null()),
   price: v.union(money, v.null()),

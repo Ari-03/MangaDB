@@ -13,16 +13,10 @@
 // - the canonical envelope (status, locked, overriddenFields): maintained by
 //   the machinery itself, never edited as a field.
 
-export type RecordType =
-  | "publisher"
-  | "seriesFamily"
-  | "series"
-  | "volume"
-  | "editionLine"
-  | "edition"
-  | "release"
-  | "releaseVariant"
-  | "releaseBundle";
+import type { Infer } from "convex/values";
+import type { recordType } from "../schema";
+
+export type RecordType = Infer<typeof recordType>;
 
 export type FieldKind =
   | "text"
