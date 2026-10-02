@@ -108,8 +108,11 @@ export const sync = internalAction({
     dumpUrl: v.optional(v.string()),
     /** Dump lines to process per invocation before continuing. */
     maxLines: v.optional(v.number()),
-    // ----- continuation state (never passed by callers) -----
+    /** Never schedule a continuation (tests and bounded manual runs). */
+    noContinue: v.optional(v.boolean()),
+    /** First dump line (0-based) to process: where a continuation resumes, or an operator's reprocess. */
     startLine: v.optional(v.number()),
+    // ----- continuation state (never passed by callers) -----
     runId: v.optional(v.id("importRuns")),
     seen: v.optional(v.number()),
     changed: v.optional(v.number()),
@@ -202,7 +205,7 @@ export const sync = internalAction({
         }
         await reader.cancel().catch(() => undefined);
 
-        if (!done) {
+        if (!done && args.noContinue !== true) {
           await ctx.scheduler.runAfter(0, internal.openLibrary.sync, {
             dumpUrl,
             maxLines: args.maxLines,
@@ -234,6 +237,7 @@ export const sync = internalAction({
           recordsSeen: seen,
           recordsChanged: changed,
           continued: false,
+          nextLine: done ? undefined : startLine + processed,
           errorCount: errors.length,
           failed: errors.length > 0 ? true : undefined,
         };

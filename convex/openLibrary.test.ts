@@ -419,6 +419,25 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
       expect(releases[0]!.isbn13).toBe("9781974766512");
     });
   });
+
+  it("runs one bounded link with noContinue and reports where it stopped", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: true });
+    const english = { languages: [{ key: "/languages/eng" }] };
+    stubDump([
+      { key: "/books/OL1M", title: "Nothing Interesting 1", isbn_13: ["9780000000002"], ...english },
+      { key: "/books/OL2M", title: "Nothing Interesting 2", isbn_13: ["9780000000019"], ...english },
+      CHAINSAW_22,
+    ]);
+    const result = await sync(t, { maxLines: 2, noContinue: true });
+    expect(result).toMatchObject({ continued: false, nextLine: 2, recordsSeen: 2 });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.system.query("_scheduled_functions").collect()).toHaveLength(0);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases[0]!.isbn13).toBeUndefined();
+    });
+  });
 });
 
 describe("openLibrary.sync — Binding reaches the matching ladder (B14)", () => {

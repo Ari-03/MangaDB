@@ -342,6 +342,13 @@ npx convex run openLibrary:sync '{}'   # streams + self-continues to the end
 
 Without `OPENLIBRARY_DUMP_URL`, runs skip as "unconfigured".
 
+`maxLines` caps the lines one link processes. With `noContinue: true` the
+sync closes its run after that one link instead of scheduling the next, and
+its result's `nextLine` says where it stopped: a one-link probe of a new
+dump is `npx convex run openLibrary:sync '{"maxLines": 200, "noContinue":
+true}'`. `startLine` (0-based) starts at a given line, to reprocess from the
+line a run's error names (`dump line N`).
+
 An edition observed before its Release existed stays unlinked, so its
 description never reaches the Release on its own. The replay re-applies
 stored, unlinked editions that carry a description and whose ISBN an active
