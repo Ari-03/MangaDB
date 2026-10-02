@@ -295,6 +295,10 @@ Story and art by Eiichiro Oda.</p><p><small>(added on 2008-01-04, modified on 20
 // review link inside the Description field.
 const NO_DESCRIPTION_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><div id="cover_placeholder"></div><b>Title:</b> June<br><b>Volume:</b>  GN 4<br><b>Pages:</b> 200<br><b>Distributor:</b> <a href="company.php?id=7117">Netcomics</a><p><b>Release date:</b> 2007-11-30<br><b>Suggested retail price:</b> $9.99<br><b>Age rating:</b> 13+<br></p><p><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">60009</span><span title="product">143</span><span title="check digit">1</span></span><span style="visibility:hidden"> 1600091431</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">60009</span><span title="product">143</span><span title="check digit">8</span></span><span style="visibility:hidden"> 9781600091438</span><br></p><p class="easyread-width"><b>Description:</b><br><a href="0/0/reviews/new">Submit your own review of this item.</a></p><p><small>(added on 2006-12-01, modified on 2006-12-01)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=7283">June (manhwa)</a></b></li></ul></body></html>`;
 
+// A 2002 VIZ entry (fetched 2026-10-02): a U+0092 ANN serves for an
+// apostrophe, and ANN's Notes as a field of their own after the Description.
+const NOTES_FIELD_PAGE = `<html><body><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/41568.jpg" align="RIGHT"><b>Title:</b> Bastard!! - [1st Ed]<br><b>Volume:</b>  GN 2<br><b>Pages:</b> 192<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2002-11-05<br><b>Suggested retail price:</b> $9.95<br><b>Age rating:</b> 17+<br></p><p><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">56931</span><span title="product">769</span><span title="check digit">0</span></span><span style="visibility:hidden"> 1569317690</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">56931</span><span title="product">769</span><span title="check digit">3</span></span><span style="visibility:hidden"> 9781569317693</span><br></p><p class="easyread-width"><b>Description:</b><br>After making their way past giant eyeballs in the perilous dungeon, Dark Schneider and Princess Sheila face the first of the Four Divine Kings of the Rebel Armies. Meanwhile, news of Dark Schneider\u0092s resurrection reaches the bloodthirsty sorceress who was once his lover. The Bastard!! series has been adapted into a Japanese PlayStation game and a six-episode anime series.</p><p class="easyread-width"><b>Notes:</b><br>Published in left-to-right "flipped" format.</p><p><small>(added on 2021-10-09, modified on 2021-10-09)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1214">Bastard!! (manga)</a></b></li></ul></body></html>`;
+
 const BOX_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/24124.jpg" align="RIGHT"><b>Title:</b> One Piece - East Blue and Baroque Works Box Set<br><b>Volume:</b>  GN 1-23<br><b>Pages:</b> 4720<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2013-11-05<br><b>Suggested retail price:</b> $185.99<br><b>Age rating:</b> 13+<br></p><p><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">4215</span><span title="product">6074</span><span title="check digit">7</span></span><span style="visibility:hidden"> 1421560747</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">4215</span><span title="product">6074</span><span title="check digit">8</span></span><span style="visibility:hidden"> 9781421560748</span><br></p><p class="easyread-width"><b>Description:</b><br>…</p><p><small>(added on 2013-06-18, modified on 2013-06-18)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1223">One Piece (manga)</a></b></li></ul></body></html>`;
 
 const OLD_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/10045.jpg" align="RIGHT"><b>Title:</b> Fall in Love Like a Comic!<br><b>Volume:</b>  GN 2 / 2<br><b>Pages:</b> 192<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2008-01-01<br><b>Suggested retail price:</b> $8.99<br><b>Age rating:</b> 15+<br></p><p><b>SKU:</b> <span class="release-ean">CTFL-02</span><br><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">4215</span><span title="product">1374</span><span title="check digit">9</span></span><span style="visibility:hidden"> 1421513749</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">4215</span><span title="product">1374</span><span title="check digit">4</span></span><span style="visibility:hidden"> 9781421513744</span><br></p><p class="easyread-width"><b>Description:</b><br>…</p><p><small>(added on 2007-10-05, modified on 2007-10-05)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=8124">Zoku Manga Mitaina Koi Shitai!</a></b></li></ul></body></html>`;
@@ -461,12 +465,78 @@ describe("cleanAnnDescription", () => {
     expect(cleanAnnDescription(`Will they win the final battle? ${ending}`)).toBe("Will they win the final battle?");
   });
 
-  it("drops a capitalized credit glued to the copy before it", () => {
-    expect(
-      cleanAnnDescription(
-        "Insights from an E.R. physician Story by Koshun Takami and art by Masayuki Taguchi.",
-      ),
-    ).toBe("Insights from an E.R. physician");
+  it("drops only the fused credit glued to the copy before it", () => {
+    expect(cleanAnnDescription("The end of her Story and art by Akihisa Ikeda.")).toBe("The end of her");
+    // Two clauses glued mid-sentence are no longer enough: one real credit
+    // in the raw sample stays, the price of never cutting prose.
+    const glued = "Insights from an E.R. physician Story by Koshun Takami and art by Masayuki Taguchi.";
+    expect(cleanAnnDescription(glued)).toBe(glued);
+  });
+
+  it("never cuts a sentence that only contains credits (the over-cut on four live pages)", () => {
+    for (const text of [
+      "Here is the story of The Mandalorian, and his desperate quest to save the Child and himself. Based on the series created by Jon Favreau and written by Dave Filoni.",
+      "That is the desire to defeat his father! Created by Masashi Kishimoto and features story by Ukyo Kodachi and art by Mikio Ikemoto.",
+    ]) {
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
+  });
+
+  it("drops a credit sentence with lower-case or odd names, ANN's typos and doubled prefixes", () => {
+    for (const ending of [
+      "Story by ufotable and Art by tartan check.",
+      "Story and art by atsushi Suzumi.",
+      "Story and art by est em.",
+      "Story and art by Oh! great.",
+      "Story by Girls und Panzer Projekt and Art by Ryohichi Saitaniya.",
+      "Story and art by Written by Koji Kumeta.",
+      "Sotyr and art by Julietta Suzuki.",
+      "Story and and art by You Higuri.",
+      "Written and art by Minako Narita.",
+      "Story and art by Kei Toume .",
+    ]) {
+      expect(cleanAnnDescription(`Will they win? ${ending}`)).toBe("Will they win?");
+    }
+    expect(cleanAnnDescription("Teenage madness in this concluding volume.Story and art by Usamaru Furuya.")).toBe(
+      "Teenage madness in this concluding volume.",
+    );
+  });
+
+  it("keeps a credit sentence that goes on as prose", () => {
+    for (const text of [
+      "Who is the traitor? Story and art by Mizumomoto and is created by Atlus.",
+      "Can she win him over? Story and Art by Rie Takada - creator of Wild Act.",
+      "Exciting adventures! Story and art by Kanan and others.",
+      "A tale for all. Story and art by everyone.",
+      // Constructed prose with lower-case "names": only the known name
+      // words (`LOWERCASE_NAME_WORDS`) pass.
+      "It began. Story by committee, art by accident.",
+      "It began. Script by day, art by night.",
+      "It began. Created by pure accident.",
+      "It began. Adapted by popular demand.",
+      "It began. Written by hand and illustrated by candlelight.",
+      "It began. Story and art by everyone involved.",
+      "A thriller . . .",
+    ]) {
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
+  });
+
+  it("drops ANN's fused credit when it opens the text", () => {
+    expect(cleanAnnDescription("Story and art by Taeko Watanabe. Romance between swordsmen.")).toBe(
+      "Romance between swordsmen.",
+    );
+    expect(cleanAnnDescription("Story and art by Oh!Great. FEARSOME FRIEND AND FOE On their mission!")).toBe(
+      "FEARSOME FRIEND AND FOE On their mission!",
+    );
+    // Not a fused credit, an initial, or nothing after it: kept.
+    for (const text of [
+      "Story by Taeko Watanabe. Romance between swordsmen.",
+      "Story and art by J. K. Smith. A tale.",
+      "Story and art by the sea. A tale.",
+    ]) {
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
   });
 
   it("keeps prose that only looks like a credit", () => {
@@ -495,10 +565,8 @@ describe("cleanAnnDescription", () => {
     );
   });
 
-  it("keeps the endings it cannot read as names (the six leftovers in the sample)", () => {
+  it("keeps endings with other text after the credit", () => {
     for (const ending of [
-      "Story and art by atsushi Suzumi.",
-      "Story by ufotable and Art by tartan check.",
       "Story and art by Osamu Tezuka. Harcover edition limited to only 1,500 copies",
       "Story and art by Miwa Ueda. #75 - What's Hot Pick",
       "Written and drawn by Yukito Kishiro. 232 pages.",
@@ -516,7 +584,7 @@ describe("cleanAnnDescription", () => {
 
   it("keeps credits that are prose, mid-text, or not a sentence of their own", () => {
     for (const text of [
-      "Story and art by Eiichiro Oda. Now in a deluxe edition.",
+      "A tale. Story and art by Eiichiro Oda. Now in a deluxe edition.",
       "A thriller. Art by the creator of the hit series.",
       "The cover was created by hand.",
       "A gripping tale created by fans and rewritten by many hands across the years.",
@@ -530,5 +598,106 @@ describe("cleanAnnDescription", () => {
     const clean = "Luffy, Zoro, and Nami. A friend or a foe?";
     expect(cleanAnnDescription(clean)).toBe(clean);
     expect(cleanAnnDescription(cleanAnnDescription("X. Story by Y Z.")!)).toBe("X.");
+  });
+});
+
+describe("cleanAnnDescription: ANN's notes, C1 controls, entities and listing junk", () => {
+  it("reads only the Description, not the Notes field after it, and maps U+0092", () => {
+    const page = parseReleasePage(NOTES_FIELD_PAGE)!;
+    expect(page.description).toBe(
+      "After making their way past giant eyeballs in the perilous dungeon, Dark Schneider and Princess Sheila face the first of the Four Divine Kings of the Rebel Armies. Meanwhile, news of Dark Schneider’s resurrection reaches the bloodthirsty sorceress who was once his lover. The Bastard!! series has been adapted into a Japanese PlayStation game and a six-episode anime series.",
+    );
+    expect(page.isbn13).toBe("9781569317693");
+  });
+
+  // Bold-label paragraphs inside the copy are copy; only ANN's own
+  // `<p class="easyread-width"><b>Notes:</b>` field ends the Description.
+  const notesField = '<p class="easyread-width"><b>Notes:</b><br>Published in left-to-right "flipped" format.</p>';
+  const withField = (description: string, after = "") =>
+    NOTES_FIELD_PAGE.replace(
+      /<p class="easyread-width"><b>Description:<\/b>[\s\S]*?(?=<p><small>)/,
+      `<p class="easyread-width"><b>Description:</b>${description}${after}`,
+    );
+
+  it("keeps the copy's own bold-label paragraphs, inline and in a div", () => {
+    expect(
+      parseReleasePage(withField("<br>A story.</p><p><b>Bonus Features:</b> Sketches and an interview.</p>"))
+        ?.description,
+    ).toBe("A story. Bonus Features: Sketches and an interview.");
+    expect(
+      parseReleasePage(
+        withField('<br></p><div class="simple-html"><p>A story.</p><p><b>Bonus Features:</b> Sketches.</p></div><p></p>'),
+      )?.description,
+    ).toBe("A story. Bonus Features: Sketches.");
+    expect(parseReleasePage(withField("<br>A story.</p><p><b>Note:</b> Reads right to left.</p>"))?.description).toBe(
+      "A story. Note: Reads right to left.",
+    );
+  });
+
+  it("keeps a nested div and stops at ANN's Notes field after it", () => {
+    expect(
+      parseReleasePage(
+        withField('<br></p><div class="simple-html"><div>Part one.</div> Part two.</div><p></p>', notesField),
+      )?.description,
+    ).toBe("Part one. Part two.");
+    expect(parseReleasePage(withField("<br>A story.</p>", notesField))?.description).toBe("A story.");
+  });
+
+  it("drops stored format notes", () => {
+    expect(cleanAnnDescription('The wizard wakes. Notes: Published in left-to-right "flipped" format.')).toBe(
+      "The wizard wakes.",
+    );
+    expect(cleanAnnDescription("Serving the forces of good... Notes: Published in right-to-left format.")).toBe(
+      "Serving the forces of good...",
+    );
+  });
+
+  it("maps C1 controls to the Windows-1252 characters ANN meant", () => {
+    expect(cleanAnnDescription("Dark Schneider\u0092s nemesis.")).toBe("Dark Schneider’s nemesis.");
+    expect(cleanAnnDescription("But then a miracle\u0097her body rises.")).toBe("But then a miracle—her body rises.");
+  });
+
+  it("decodes stray entities and ANN's &qout; typo", () => {
+    expect(cleanAnnDescription('Who is the &qout;other" Kamui?')).toBe('Who is the "other" Kamui?');
+    expect(cleanAnnDescription("Up against the ropes. ,p&gt;Enter a lad named Gear.")).toBe(
+      "Up against the ropes. Enter a lad named Gear.",
+    );
+  });
+
+  it("rejects a description that is only retail or listing junk", () => {
+    for (const junk of [
+      "Book is in like-new condition.",
+      "Book is in excellent condition..It may has been previously used but well cared coz it doesn't show any marks/highlights..clean and crisp...glossy dust jacket..All orders ship with tracking for your convenience. Please do not hesitate to email us with any questions.",
+      "Will ship out as soon as we stock th",
+      "Find, shop, and buy computers, laptops, books, dvd, videos, games, video games, music, sporting goods, software, electronics, digital cameras, camcorders, toys, luggage, and dvd players at Buy.com",
+      "Retail Price: $14.95 No Longer Available For Purchase Free Canadian Shipping @ $250 Free US Economy Shipping @ $49",
+      "Publisher - SEVEN SEAS Genre - Action/Comedy Media - Printed Material Age Rating - 16+ (More Information) Page Count - 180 Date Available - Jun 9 2015 Product Availability - Pre-Order, Not Yet Shipping (More Information)",
+      "Book by Buronson",
+      "Book by Takaya, Yoshiki",
+      "Language:English.Pink Innocent 3",
+      "No further information has been provided for this title.",
+      "SCIENCE FICTION.",
+      "OVERSIZED GRAPHIC NOVEL",
+      "Manga trade style comic.",
+      "(2nd Ed)",
+    ]) {
+      expect(cleanAnnDescription(junk)).toBeUndefined();
+    }
+  });
+
+  it("keeps short blurbs and text that only mentions such words", () => {
+    for (const text of [
+      "Graphic novel. Cult classic.",
+      "Reads R to L (Japanese Style) for mature audiences.",
+      "I want to save the world with rice!",
+      "Ash is alarmed by Eiji's condition. Book is in his hands.",
+      "A Book by its cover.",
+      // Starting like the junk is not enough.
+      "Book by book, the legend grows.",
+      "Book is in mint condition, but the story inside is falling apart.",
+      "Will ship out his men at dawn.",
+    ]) {
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
   });
 });

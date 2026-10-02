@@ -182,6 +182,55 @@ export function repairMojibake(text: string): string {
 }
 
 /**
+ * C1 control characters (U+0080–U+009F) as the Windows-1252 characters
+ * their byte stands for: "Schneider\u0092s" → "Schneider’s". ANN serves
+ * some as real code points (a "&#146;" an editor typed). The five bytes
+ * Windows-1252 leaves undefined carry nothing and are dropped.
+ */
+export function mapC1Controls(text: string): string {
+  return text.replace(/[\u0080-\u009F]/g, (ch) => {
+    const mapped = CP1252_HIGH[ch.charCodeAt(0) - 0x80]!;
+    return mapped === ch ? "" : mapped;
+  });
+}
+
+/**
+ * Page bytes → text: strict UTF-8, or, where a byte sequence is not valid
+ * UTF-8, that sequence read as Windows-1252 (legacy bytes pasted into a
+ * UTF-8 page), instead of the U+FFFD `Response.text()` would leave.
+ * Well-formed UTF-8 decodes exactly as before.
+ */
+export function decodeUtf8OrWindows1252(bytes: Uint8Array): string {
+  try {
+    return STRICT_UTF8.decode(bytes);
+  } catch {
+    let out = "";
+    let at = 0;
+    while (at < bytes.length) {
+      const lead = bytes[at]!;
+      if (lead < 0x80) {
+        out += String.fromCharCode(lead);
+        at += 1;
+        continue;
+      }
+      const width = lead >= 0xc2 && lead <= 0xdf ? 2 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
+      if (width > 0) {
+        try {
+          out += STRICT_UTF8.decode(bytes.subarray(at, at + width));
+          at += width;
+          continue;
+        } catch {
+          // Not a whole UTF-8 sequence: fall through to one legacy byte.
+        }
+      }
+      out += lead >= 0x80 && lead <= 0x9f ? CP1252_HIGH[lead - 0x80]! : String.fromCharCode(lead);
+      at += 1;
+    }
+    return out;
+  }
+}
+
+/**
  * A source's blurb (HTML or plain text) → one clean paragraph for a Release
  * Description or Series synopsis: tags stripped, entities decoded,
  * whitespace collapsed, capped at MAX_BLURB on a word boundary so snapshots

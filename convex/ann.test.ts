@@ -2370,4 +2370,149 @@ describe("ann — release-page descriptions", () => {
     expect(done).toMatch(/^\[ann\.repairDescriptions\] done: /);
     expect(JSON.parse(done.slice(done.indexOf("{")))).toMatchObject({ scanned: 123, releaseUpdated: 1, errors: 0 });
   });
+
+  describe("refresh, page bytes and refresh candidates", () => {
+    it("refresh replaces ANN's own text, clears only with allowClear, and never touches anyone else's", async () => {
+      const t = makeT();
+      const ids = await linkedCatalog(t, describedPages, [
+        { label: "1" },
+        { label: "2", description: "The publisher's copy.", sevenSeas: true },
+        { label: "3" },
+      ]);
+      await syncPages(t);
+      // Cut by the old credit rule, as production stored it.
+      await storeOldText(t, 10948, `${BLURB} Based on the series`, ids["1"]);
+      stubAnn([LINES], {
+        10948: pageFor(10948, `${BLURB} Based on the series created by Jon Favreau and written by Dave Filoni.`),
+        10949: pageFor(10949, "ANN's text for two."),
+        10950: pageFor(10950),
+      });
+      expect(await backfill(t, { annIds: ["10948", "10949", "10950"], refresh: true })).toMatchObject({
+        fetched: 3,
+        refreshed: 1,
+        cleared: 0,
+        held: 1,
+        errors: [],
+      });
+      expect(await descriptionOf(t, ids["1"]!)).toBe(
+        `${BLURB} Based on the series created by Jon Favreau and written by Dave Filoni.`,
+      );
+      // The publisher's text stays; a page with no description is held:
+      // ANN's text stays until an operator allows clearing.
+      expect(await descriptionOf(t, ids["2"]!)).toBe("The publisher's copy.");
+      expect(await descriptionOf(t, ids["3"]!)).toBe("Volume three.");
+      expect(await backfill(t, { annIds: ["10950"], refresh: true, allowClear: true })).toMatchObject({
+        cleared: 1,
+        refreshed: 0,
+      });
+      expect(await descriptionOf(t, ids["3"]!)).toBeNull();
+      expect(await inReview(t)).toBe(0);
+
+      // A Human Override is never refreshed.
+      await t.run(async (ctx) => ctx.db.patch(ids["1"]!, { overriddenFields: ["description"] }));
+      stubAnn([LINES], { 10948: pageFor(10948, "Newer text.") });
+      expect(await backfill(t, { annIds: ["10948"], refresh: true })).toMatchObject({ refreshed: 0 });
+      expect(await descriptionOf(t, ids["1"]!)).toContain("Jon Favreau");
+    });
+
+    it("refresh needs explicit annIds, and allowClear needs refresh", async () => {
+      const t = makeT();
+      await seedRegistry(t, true);
+      await expect(backfill(t, { refresh: true })).rejects.toThrow(/refresh needs annIds/);
+      await expect(backfill(t, { annIds: ["1"], allowClear: true })).rejects.toThrow(/only applies with refresh/);
+    });
+
+    it("refresh holds much shorter text, and skips locks, other lines, failed and missing pages", async () => {
+      const t = makeT();
+      const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+      await syncPages(t);
+      const before = {
+        one: await descriptionOf(t, ids["1"]!),
+        two: await descriptionOf(t, ids["2"]!),
+        three: await descriptionOf(t, ids["3"]!),
+      };
+      // 10948: a degraded page with a stub of the text.
+      // 10949: its Release is locked.
+      // 10950: its Release's text came from another line (10948).
+      await t.run(async (ctx) => ctx.db.patch(ids["2"]!, { locked: true }));
+      const other = (await obsFor(t, 10950))!;
+      await t.run(async (ctx) => ctx.db.patch(other._id, { recordRef: { type: "release", id: ids["1"]! } }));
+      stubAnn([LINES], {
+        10948: pageFor(10948, "In a world."),
+        10949: pageFor(10949, "A newer text for volume two."),
+        10950: pageFor(10950, "A newer text for volume three, from the other line."),
+      });
+      expect(await backfill(t, { annIds: ["10948", "10949", "10950"], refresh: true })).toMatchObject({
+        refreshed: 0,
+        cleared: 0,
+        held: 1,
+      });
+      expect(await descriptionOf(t, ids["1"]!)).toBe(before.one);
+      expect(await descriptionOf(t, ids["2"]!)).toBe(before.two);
+
+      // A failed fetch keeps the stored page and the text; a 404 too.
+      await t.run(async (ctx) => ctx.db.patch(ids["2"]!, { locked: false }));
+      const storedPage = await pageOf(t, 10949);
+      vi.stubGlobal("fetch", async () => new Response("Forbidden", { status: 403 }));
+      expect(await backfill(t, { annIds: ["10949"], refresh: true, allowClear: true })).toMatchObject({
+        refreshed: 0,
+        cleared: 0,
+      });
+      expect(await pageOf(t, 10949)).toMatchObject({
+        status: "ok",
+        description: storedPage!.description,
+        refetchFailed: { status: "error" },
+      });
+      stubAnn([LINES], {});
+      expect(await backfill(t, { annIds: ["10949"], refresh: true, allowClear: true })).toMatchObject({
+        refreshed: 0,
+        cleared: 0,
+      });
+      expect(await descriptionOf(t, ids["2"]!)).toBe(before.two);
+      expect(before.three).not.toBeNull();
+    });
+
+    it("decodes a legacy Windows-1252 byte in ANN's UTF-8 page instead of storing U+FFFD", async () => {
+      const t = makeT();
+      await linkedCatalog(t, describedPages, [{ label: "1" }]);
+      const encode = (text: string) => [...new TextEncoder().encode(text)];
+      const [head, tail] = pageFor(10948, "Against Ber@hren.").split("@");
+      vi.stubGlobal("fetch", async () => new Response(new Uint8Array([...encode(head!), 0xfc, ...encode(tail!)])));
+      await backfill(t, { annIds: ["10948"] });
+      expect(await pageOf(t, 10948)).toMatchObject({ description: "Against Berühren." });
+    });
+
+    it("lists the ANN ids whose Release text a refresh could fix, by reason", async () => {
+      const t = makeT();
+      const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+      await syncPages(t);
+      await storeOldText(t, 10948, "To defeat his father! Created by Masashi Kishimoto and features", ids["1"]);
+      await storeOldText(t, 10950, "Their love cannot be fulfilled. Or will it? Originally", ids["3"]);
+      await storeOldText(t, 10949, "Pok\uFFFDmon game characters jump out.", ids["2"]);
+      expect(await t.action(internal.ann.listRefreshCandidates, {})).toMatchObject({
+        danglingEnd: ["10948", "10950"],
+      });
+      // Text ANN did not write is never listed.
+      await sourceWrote(t, ids["3"]!, "sevenseas", "A cut publisher text and");
+      expect(await t.action(internal.ann.listRefreshCandidates, {})).toEqual({
+        danglingEnd: ["10948"],
+        replacementChar: ["10949"],
+        c1Control: [],
+      });
+    });
+
+    it("the repair applies the new rules to stored text with no network", async () => {
+      const t = makeT();
+      const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }]);
+      await syncPages(t);
+      await storeOldText(t, 10948, "Book by Buronson", ids["1"]);
+      await storeOldText(t, 10949, 'Dark Schneider\u0092s foe. Notes: Published in left-to-right "flipped" format.', ids["2"]);
+      vi.stubGlobal("fetch", async () => {
+        throw new Error("the repair never touches the network");
+      });
+      expect(await repair(t)).toMatchObject({ releaseUpdated: 1, releaseCleared: 1, errors: 0 });
+      expect(await descriptionOf(t, ids["1"]!)).toBeNull();
+      expect(await descriptionOf(t, ids["2"]!)).toBe("Dark Schneider’s foe.");
+    });
+  });
 });

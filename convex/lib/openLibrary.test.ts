@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  cleanOlDescription,
   isbn10To13,
   isbnPair,
   isEnglishEdition,
@@ -350,5 +351,56 @@ describe("toIsbn13", () => {
     expect(toIsbn13("CTFL-02")).toBeUndefined();
     expect(toIsbn13("4006381333931")).toBeUndefined();
     expect(toIsbn13(undefined)).toBeUndefined();
+  });
+});
+
+// Catalogue text Open Library stores as a description (2026-10 export).
+describe("cleanOlDescription", () => {
+  it("rejects a physical description standing in for a blurb", () => {
+    for (const collation of ["1 volume (unpaged) : 19 cm", "1 volume : 19 cm", "146 p. : 19 cm", "v. : 19 cm"]) {
+      expect(cleanOlDescription(collation)).toBeUndefined();
+    }
+    expect(parseEditionJson({ ...EDITION, description: "1 volume (unpaged) : 19 cm" })?.description).toBeUndefined();
+  });
+
+  it("strips the citation after a quoted blurb, and the quote it opened", () => {
+    for (const citation of [
+      '"--P. [4] of cover.',
+      '"--Back cover.',
+      '" -- from publisher\'s web site.',
+      '"--Page 4 of cover.',
+      '"--Vol. 1, p. [4] of cover.',
+      '"--Provided by publisher.',
+      '"--Amazon.com.',
+      '"--Container.',
+      '"--',
+    ]) {
+      expect(cleanOlDescription(`"Denji is back.${citation}`)).toBe("Denji is back.");
+    }
+    expect(cleanOlDescription("Denji is back. -- p.4 of cover.")).toBe("Denji is back.");
+    expect(cleanOlDescription("Why does she know so much?--Amazon.com")).toBe("Why does she know so much?");
+    // Stacked citations go in one call.
+    const stacked = '"Denji is back."--Back cover."--P. [4] of cover.';
+    expect(cleanOlDescription(stacked)).toBe("Denji is back.");
+    expect(cleanOlDescription(cleanOlDescription(stacked)!)).toBe("Denji is back.");
+    expect(parseEditionJson({ ...EDITION, description: '"Denji is back."--P. [4] of cover.' })?.description).toBe(
+      "Denji is back.",
+    );
+  });
+
+  it("keeps blurbs that only use dashes or mention a cover", () => {
+    for (const text of [
+      "The heroes fight on--as humans.",
+      "They rob a bank--which makes up for their lack of acting talent.",
+      "Ash arrives -- can he win over the independent Pikachu?",
+      "First Printing, August 2011 (English)",
+      "A story told across 146 pages.",
+      '"I am the scum of the earth!" he cries.',
+      "And then--",
+      "They ran for--cover.",
+      "She said--back cover the bet.",
+    ]) {
+      expect(cleanOlDescription(text)).toBe(text);
+    }
   });
 });

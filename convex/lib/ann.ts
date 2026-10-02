@@ -25,7 +25,14 @@
 import { v, type Infer } from "convex/values";
 import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
 import { toIsbn13 } from "./openLibrary";
-import { cleanBlurb, cleanTitleText, decodeEntities, repairMojibake, stripHtml } from "./text";
+import {
+  cleanBlurb,
+  cleanTitleText,
+  decodeEntities,
+  mapC1Controls,
+  repairMojibake,
+  stripHtml,
+} from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -386,6 +393,12 @@ function pageField(html: string, label: string): string | undefined {
   return new RegExp(`<b>${escaped}:</b>([\\s\\S]*?)(?:<br\\s*/?>|</p>|<p\\b)`, "i").exec(html)?.[1];
 }
 
+/**
+ * ANN's own next field after the Description (`<p class="easyread-width">
+ * <b>Notes:</b>`). Only that class: a description's own bold-label
+ * paragraph (`<p><b>Bonus Features:</b> …`) is copy, not a field.
+ */
+const NEXT_FIELD = /<p class="easyread-width">\s*<b>[^<]{1,40}:<\/b>/i;
 /** The `<p><small>(added on …, modified on …)</small></p>` after a page's fields. */
 const ADDED_ON = /<p>\s*<small>\s*\(added on\b/i;
 const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
@@ -397,6 +410,27 @@ const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
 const REVIEW_LINK = /<a\b[^>]*\breviews\/new\b[^>]*>[\s\S]*?<\/a>/gi;
 const CHROME = ["Submit your own review of this item."];
 
+// Retail and listing rows ANN contributors pasted in place of a blurb,
+// each seen in the 2026-10 production export. Only a description that is
+// wholly one of these is rejected; nothing judges blurb quality otherwise.
+const NOT_A_BLURB = [
+  // A seller's condition notes, whole.
+  /^Book is in like-new condition\.$/,
+  /^Book is in excellent condition\.\.It may has been previously used\b[\s\S]*\bAll orders ship with tracking\b[\s\S]*$/,
+  /^Will ship out as soon as we stock th$/,
+  /^Find, shop, and buy\b[\s\S]*\bat Buy\.com\.?$/i,
+  /^Retail Price: \$[\d.]+ No Longer Available For Purchase(?: Free [\w ]+ Shipping @ \$\d+)*$/,
+  /^Publisher - [^-]+ Genre - [\s\S]+ Media - Printed Material\b[\s\S]*\bProduct Availability - [\s\S]*$/,
+  // "Book by Buronson", "Book by Takaya, Yoshiki": capitalized names only.
+  /^Book by \p{Lu}[\p{L}'-]*(?:,? \p{Lu}[\p{L}'-]*){0,2}$/u,
+  /^Language:English\./,
+  /^No further information has been provided for this title\.?$/i,
+  /^(?:science fiction|fantasy|horror|romance|comedy|drama|action|mystery)\.?$/i,
+  /^OVERSIZED GRAPHIC NOVEL$/,
+  /^Manga trade style comic\.?$/i,
+  /^\(\d+(?:st|nd|rd|th) Ed\)$/,
+];
+
 // The credit ANN appends to publisher copy ("… a friend or a foe? Story
 // and art by Eiichiro Oda."): the byline already shows it. In the first
 // 1,604 production descriptions it ends 87% of them, in these shapes:
@@ -406,6 +440,11 @@ const CHROME = ["Submit your own review of this item."];
 // credit tail is one or more clauses ROLE by NAMES, joined by "and", a
 // comma or a sentence break, running to the very end of the text.
 const CREDIT_ROLES = [
+  // ANN's own typos, seen in production: "Sotyr and art by", "Story and
+  // and art by", "Written and art by".
+  "sotyr and art",
+  "story and and art",
+  "written and art",
   "written and illustrated",
   "written & illustrated",
   "story and art",
@@ -432,6 +471,17 @@ const CREDIT_ROLES = [
 ].map((role) => role.split(" "));
 /** A name word: it starts with a capital or digit ("Oh!Great", "Sho-u", "RAN", "(Studio"). */
 const NAME_WORD = /^\(?[\p{Lu}\d]\S*$/u;
+/**
+ * Lower-case name words ANN's contributors wrote in a credit that is a
+ * sentence of its own ("Story by ufotable and Art by tartan check.",
+ * "Story and art by est em.", "atsushi Suzumi", "Oh! great", "Girls und
+ * Panzer Projekt"). An explicit list, from the 30 such credits in the
+ * 2026-10 export: no rule tells "tartan check" from "pure accident", and
+ * a constructed sentence ("Created by pure accident.", "Script by day, art
+ * by night.") must stay. New pages are rare; extend the list if one shows.
+ */
+const LOWERCASE_NAME_WORDS = new Set(["atsushi", "check", "em", "est", "great", "tartan", "ufotable", "und"]);
+const MAX_LOOSE_NAME_WORDS = 5;
 const NAME_JOINERS = new Set(["and", "&", "with", "/"]);
 const SENTENCE_END = /[.!?…"”’)]$/;
 const MAX_CLAUSES = 4;
@@ -454,25 +504,39 @@ function creditRoleAt(words: string[], at: number): number {
   return 0;
 }
 
-type CreditClause = { role: string; names: number };
+type CreditClause = {
+  role: string;
+  names: number;
+  /** Some name word is lower case (only in a `loose` tail). */
+  lower: boolean;
+};
 
 /**
  * The clauses of words[start..] when it is nothing but credit clauses:
- * ROLE by NAMES (and ROLE by NAMES)*; null otherwise.
+ * ROLE by NAMES (and ROLE by NAMES)*; null otherwise. `loose` (a credit
+ * that is a sentence of its own) also takes the known lower-case name
+ * words (`LOWERCASE_NAME_WORDS`), at most MAX_LOOSE_NAME_WORDS a clause.
  */
-function creditTail(words: string[], start: number): CreditClause[] | null {
+function creditTail(words: string[], start: number, loose = false): CreditClause[] | null {
   const clauses: CreditClause[] = [];
   let at = start;
   for (let clause = 0; clause < MAX_CLAUSES; clause++) {
     const role = creditRoleAt(words, at);
     if (role === 0) return null;
-    const current = { role: words.slice(at, at + role).join(" ").toLowerCase(), names: 0 };
+    const current = { role: words.slice(at, at + role).join(" ").toLowerCase(), names: 0, lower: false };
     clauses.push(current);
     at += role;
+    // ANN's doubled prefix: "Story and art by Written by Koji Kumeta."
+    for (let again = creditRoleAt(words, at); again > 0; again = creditRoleAt(words, at)) at += again;
     for (;;) {
       const word = words[at];
-      if (word === undefined || !NAME_WORD.test(word.replace(/[.,;:!?]+$/, ""))) return null;
-      if (++current.names > MAX_NAME_WORDS) return null;
+      if (word === undefined) return null;
+      const bare = word.replace(/[.,;:!?]+$/, "");
+      const strict = NAME_WORD.test(bare);
+      const lax = loose && LOWERCASE_NAME_WORDS.has(bare);
+      if (!strict && !lax) return null;
+      if (!strict) current.lower = true;
+      if (++current.names > (current.lower ? MAX_LOOSE_NAME_WORDS : MAX_NAME_WORDS)) return null;
       at++;
       if (at === words.length) return clauses;
       const next = words[at]!;
@@ -483,6 +547,13 @@ function creditTail(words: string[], start: number): CreditClause[] | null {
       }
       // "X, adapted by Y" / "X. Art by Y" / "X Art by Y".
       if (creditRoleAt(words, at) > 0) break;
+      // A sentence ended inside the names: the credit is over, and what
+      // follows is copy ("Story by X. Romance between …"). Only an initial
+      // ("J. K.") or a name with a bang before its last word ("Oh! great.")
+      // goes on.
+      if (/[.!?]$/.test(word) && !/^\p{L}\.$/u.test(word) && !(word.endsWith("!") && at === words.length - 1)) {
+        return null;
+      }
       // "X and Y", "X & Y": the list goes on.
       if (NAME_JOINERS.has(next.toLowerCase())) at++;
     }
@@ -490,9 +561,9 @@ function creditTail(words: string[], start: number): CreditClause[] | null {
   return null;
 }
 
-/** ANN's own fused role: "Story and art by", "Story & art by" (any case after "Story"). */
+/** ANN's own fused role: "Story and art by", "Story & art by" (and its typos). */
 function isStoryAndArt(clause: CreditClause): boolean {
-  return /^story (?:and|&) art by/.test(clause.role);
+  return /^(?:story|sotyr) (?:and|&)(?: and)? art by/.test(clause.role);
 }
 
 /** Whether words are a bare list of names ("Kazuo Koike", "X & Y"). */
@@ -509,11 +580,14 @@ function isNameList(words: string[]): boolean {
 const STORY_AND_TYPO = /^Story and (.+?) and Art by (.+)$/;
 
 /**
- * Drop a trailing credit tail (`creditTail`). It must start a sentence,
- * except a capitalized "Story and art by …" glued to the text before it,
- * or a tail of two or more clauses: a lone glued "Story by Moonlight" is
- * prose. A single clause naming one word ("Created by God.", "Art by
- * Committee.") is kept unless its role is ANN's fused "Story and art"
+ * Drop a trailing credit tail (`creditTail`). It must start a sentence
+ * (the start of the text, or after . ! ? … or a closing quote or bracket),
+ * except a capitalized "Story and art by …" / "Story & art by …" glued to
+ * the text before it. Anything else mid-sentence is prose, however many
+ * clauses it has: "Based on the series created by Jon Favreau and written
+ * by Dave Filoni." and "Created by Masashi Kishimoto and features story by
+ * …" stay whole. A single clause naming one word ("Created by God.", "Art
+ * by Committee.") is kept unless its role is ANN's fused "Story and art"
  * ("Story and art by CLAMP.", every one-word credit in the sample).
  */
 function stripCreditTail(text: string): string {
@@ -525,13 +599,37 @@ function stripCreditTail(text: string): string {
       return words.slice(0, at).join(" ");
     }
     if (creditRoleAt(words, at) === 0) continue;
-    const clauses = creditTail(words, at);
+    // A credit that is a sentence of its own may name people in any case.
+    const clauses = creditTail(words, at, opensSentence);
     if (clauses === null) continue;
-    const several = clauses.length >= 2;
     const glued = words[at] === "Story" && isStoryAndArt(clauses[0]!);
-    if (!opensSentence && !glued && !several) continue;
-    if (!several && clauses[0]!.names === 1 && !isStoryAndArt(clauses[0]!)) continue;
+    if (!opensSentence && !glued) continue;
+    const [first] = clauses;
+    // One name word: only ANN's fused "Story and art by CLAMP.", and only
+    // a capitalized one ("Story and art by everyone." is prose).
+    if (clauses.length === 1 && first!.names === 1 && (!isStoryAndArt(first!) || first!.lower)) continue;
     return words.slice(0, at).join(" ");
+  }
+  return text;
+}
+
+/**
+ * Drop ANN's fused credit when it opens the text instead ("Story and art
+ * by Taeko Watanabe. Romance between …"): only "Story and art by" /
+ * "Story & art by", then one to four capitalized names with no initials,
+ * the last one closing the sentence, and copy after it.
+ */
+function stripLeadingCredit(text: string): string {
+  const words = text.split(" ");
+  const role = creditRoleAt(words, 0);
+  if (role === 0 || !/^Story (?:and|&) art by$/i.test(words.slice(0, role).join(" "))) return text;
+  for (let at = role; at < role + 4 && at < words.length - 1; at++) {
+    const word = words[at]!;
+    if (!NAME_WORD.test(word.replace(/[.!]+$/, ""))) return text;
+    if (!word.endsWith(".")) continue;
+    // A one-letter initial ("J.") is not the end of the names.
+    if (/^\p{L}\.$/u.test(word)) return text;
+    return words.slice(at + 1).join(" ");
   }
   return text;
 }
@@ -539,11 +637,15 @@ function stripCreditTail(text: string): string {
 // ANN's own release notes some contributors append after the copy
 // ("… Notes: Originally scheduled for 2006-07-31."): not the publisher's.
 // Dropped when the note is about the release itself (it starts with a
-// capital and talks of ISBNs, printings, schedules, recalls, volumes) or
-// follows a credit tail; "Notes: none of this is what it seems." stays.
+// capital and talks of ISBNs, printings, schedules, recalls, volumes, or
+// its format and reading direction: "Published in left-to-right "flipped"
+// format.") or follows a credit tail; "Notes: none of this is what it
+// seems." stays. On the page the notes are a field of their own
+// (`<b>Notes:</b>`), which `pageDescription` stops before; this catches
+// text stored before it did.
 const NOTES_TAIL = /([.!?…"”’)])\s+Notes:\s([\s\S]*)$/;
 const ANN_NOTE =
-  /^[A-Z][\s\S]*\b(?:ISBN|release[sd]?|reprint(?:ed)?|printing|edition|volume|scheduled|recalled|misprint|cover)\b/i;
+  /^[A-Z][\s\S]*\b(?:ISBN|release[sd]?|reprint(?:ed)?|printing|edition|volume|scheduled|recalled|misprint|cover|format|flipped|left-to-right|right-to-left)\b/i;
 
 /** Drop ANN's trailing "Notes:" section when it is ANN's note (see NOTES_TAIL). */
 function stripNotesTail(text: string): string {
@@ -557,15 +659,31 @@ function stripNotesTail(text: string): string {
  * The cleaner every ANN release-page description goes through, at parse
  * time and again on stored text (`ann:repairDescriptions`), so it is
  * idempotent and works on already-cleaned text: zero-width spaces and
- * Windows-1252 mojibake repaired, ANN page chrome and a trailing "Notes:"
- * section rejected, and a trailing credit tail dropped (`stripCreditTail`).
- * Undefined when nothing of the publisher's copy remains.
+ * Windows-1252 mojibake and C1 controls repaired, stray entities decoded,
+ * ANN page chrome and a trailing "Notes:" section rejected, a credit tail
+ * (and a fused credit opening the text) dropped, and a text that is only
+ * retail or listing junk (`NOT_A_BLURB`) rejected. Undefined when nothing
+ * of the publisher's copy remains.
  */
 export function cleanAnnDescription(text: string): string | undefined {
-  let out = repairMojibake(text.replace(ZERO_WIDTH, ""));
+  // Mojibake first: its runs carry C1 code points ("â€\u009d") that the
+  // C1 mapping would otherwise turn into the wrong characters.
+  let out = mapC1Controls(repairMojibake(text.replace(ZERO_WIDTH, "")));
+  // Entities ANN escaped once more than the parser decodes ("&gt;"), its
+  // typo "&qout;", and a "<p>" typed as ",p>" in front of a paragraph.
+  out = decodeEntities(out.replace(/&qout;/g, "&quot;")).replace(/ ?,p>(?=\S)/g, " ");
   for (const chrome of CHROME) out = out.split(chrome).join(" ");
-  out = stripNotesTail(out.replace(/\s+/g, " ").trim());
-  out = stripCreditTail(out).trim();
+  out = out
+    .replace(/\s+/g, " ")
+    .trim()
+    // A stray space between a name and the closing stop ("Kei Toume .");
+    // a spaced ellipsis (". . .") is left alone.
+    .replace(/(\p{L}) ([.!?])$/u, "$1$2")
+    // A credit glued to the stop before it ("volume.Story and art by").
+    .replace(/([a-z][.!?])(?=Story (?:and|&) art by )/g, "$1 ");
+  out = stripNotesTail(out);
+  out = stripCreditTail(stripLeadingCredit(out)).trim();
+  if (NOT_A_BLURB.some((junk) => junk.test(out))) return undefined;
   return out === "" ? undefined : out;
 }
 
@@ -575,25 +693,29 @@ export function cleanAnnDescription(text: string): string | undefined {
  * (2026-10-02) in two shapes: older pages run the text inline
  * (`<b>Description:</b><br>Text<br>\n<br>More</p>`), newer ones close the
  * paragraph and carry it in `<div class="simple-html">Text</div>`. The
- * field ends at the "added on" trailer, so markup inside the text (a list,
- * an inline `<small>`, a bold "Note:") never cuts it short: the div runs to
- * its last `</div>`, inline text to its closing `</p>`. Without a trailer
- * both stop at the first close. The review link ANN puts in an empty field
+ * field ends at ANN's next field (`NEXT_FIELD`, its Notes) or the "added
+ * on" trailer, so markup inside the text (a list, an inline `<small>`, a
+ * bold "Note:" or "Bonus Features:" paragraph, a nested div) never cuts it
+ * short: the div runs to its last `</div>`, inline text to its closing
+ * `</p>`. Without either bound both stop at the first close. The review link ANN puts in an empty field
  * is dropped, and the text goes through `cleanAnnDescription`.
  */
 function pageDescription(html: string): string | undefined {
   const label = /<b>Description:<\/b>/i.exec(html);
   if (!label) return undefined;
   const rest = html.slice(label.index + label[0].length);
-  const trailer = rest.search(ADDED_ON);
-  const field = (trailer >= 0 ? rest.slice(0, trailer) : rest).replace(REVIEW_LINK, "");
+  // The field ends at ANN's next field (Notes:) or at the "added on"
+  // trailer, whichever comes first; inside that bound any markup is copy.
+  const ends = [rest.search(NEXT_FIELD), rest.search(ADDED_ON)].filter((at) => at >= 0);
+  const bounded = ends.length > 0;
+  const field = (bounded ? rest.slice(0, Math.min(...ends)) : rest).replace(REVIEW_LINK, "");
   const div = (
-    trailer >= 0
+    bounded
       ? /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*)<\/div>/i
       : /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*?)<\/div>/i
   ).exec(field)?.[1];
   const inline =
-    trailer >= 0 ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
+    bounded ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
   const text = cleanBlurb(div ?? inline);
   return text !== undefined ? cleanAnnDescription(text) : undefined;
 }

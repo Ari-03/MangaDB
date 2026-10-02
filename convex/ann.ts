@@ -74,6 +74,7 @@ import {
   type AnnReleasePage,
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
+import { decodeUtf8OrWindows1252 } from "./lib/text";
 import { applyRetrying } from "./lib/occ";
 import { openFollowOnRun, runToContinue } from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
@@ -91,7 +92,9 @@ import {
   alreadyHandled,
   createCanonicalRecords,
   blurbWanted,
+  descriptionEvidence,
   findPublisherByName,
+  rewriteOwnDescription,
   queueCreationProposal,
   recordUnplaced,
   removedSeriesFor,
@@ -1205,12 +1208,17 @@ export const syncReleasePages = internalAction({
     }),
 });
 
-/** Fetch + parse one release page into its stored fetch state. */
+/**
+ * Fetch + parse one release page into its stored fetch state. The bytes
+ * are decoded here (`decodeUtf8OrWindows1252`), not by `Response.text()`:
+ * a legacy Windows-1252 byte inside ANN's UTF-8 page becomes its character
+ * instead of an unrecoverable U+FFFD. Well-formed pages decode as before.
+ */
 async function fetchReleasePage(annId: string, delay: number): Promise<PageState> {
   const fetchedAt = Date.now();
   try {
     const res = await politeFetch(releaseUrl(annId), delay);
-    const parsed = parseReleasePage(await res.text());
+    const parsed = parseReleasePage(decodeUtf8OrWindows1252(new Uint8Array(await res.arrayBuffer())));
     return parsed
       ? { status: "ok", fetchedAt, ...parsed, descriptionChecked: true }
       : { status: "unparsed", fetchedAt };
@@ -1223,7 +1231,16 @@ async function fetchReleasePage(annId: string, delay: number): Promise<PageState
 }
 
 type PlaceResult = {
-  status: "skipped" | "stored" | "filled" | "linked" | "created" | "recordOnly";
+  status:
+    | "skipped"
+    | "stored"
+    | "filled"
+    | "refreshed"
+    | "cleared"
+    | "held"
+    | "linked"
+    | "created"
+    | "recordOnly";
   changed: boolean;
   reason?: string;
   releaseId?: Id<"releases">;
@@ -1263,15 +1280,25 @@ function pageDescriptionText(page: PageState | undefined): string | undefined {
  * Description offered to the linked Release. One atomic mutation.
  */
 export const applyReleasePage = internalMutation({
-  args: { annId: v.string(), page: v.optional(pageStateValidator) },
-  handler: async (ctx, { annId, page: fetched }): Promise<PlaceResult> => {
+  args: {
+    annId: v.string(),
+    page: v.optional(pageStateValidator),
+    /** Replace ANN's own text on the linked Release too (`fillLinked`). */
+    refresh: v.optional(v.boolean()),
+    /** With `refresh`: also clear it, or replace it with much shorter text. */
+    allowClear: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { annId, page: fetched, refresh, allowClear }): Promise<PlaceResult> => {
     const now = Date.now();
     let observation = await getObservation(ctx, SOURCE_KEY, `release:${annId}`);
     // A line ANN no longer lists stays withdrawn: storing a page would
     // mark it seen (upsertObservation) and retire its cancellation review.
     if (!observation || observation.withdrawn) return { status: "skipped", changed: false };
     if (observation.recordRef?.type === "release") {
-      return await fillLinked(ctx, observation, observation.recordRef.id, fetched, now);
+      return await fillLinked(ctx, observation, observation.recordRef.id, fetched, now, {
+        refresh: refresh === true,
+        allowClear: allowClear === true,
+      });
     }
     if (observation.recordRef !== undefined) return { status: "skipped", changed: false };
     let line = observation.snapshot as AnnReleaseSnapshot;
@@ -1513,6 +1540,12 @@ export const applyReleasePage = internalMutation({
  * without one, the stored page's text is offered (read while the line was
  * unlinked, or before an override was cleared). Nothing else is reconciled
  * here: the line's date and ISBN reach the Release through the mirror.
+ * With `refresh` and a freshly fetched ok page, a Release whose current
+ * text ANN wrote from this line gets the page's cleaned text instead
+ * (`rewriteOwnDescription`: never a publisher's, Open Library's or a
+ * human's text). A page with no description, or one that would leave
+ * less than half of the current text, is held (a degraded page must not
+ * blank a good blurb) unless `allowClear`, which clears or shrinks it.
  */
 async function fillLinked(
   ctx: MutationCtx,
@@ -1520,6 +1553,10 @@ async function fillLinked(
   releaseId: Id<"releases">,
   fetched: PageState | undefined,
   now: number,
+  { refresh, allowClear }: { refresh: boolean; allowClear: boolean } = {
+    refresh: false,
+    allowClear: false,
+  },
 ): Promise<PlaceResult> {
   const line = observation.snapshot as AnnReleaseSnapshot;
   let stored = observation;
@@ -1535,6 +1572,27 @@ async function fillLinked(
   }
   const changed = fetched !== undefined;
   const release = await ctx.db.get(releaseId);
+  if (refresh && fetched?.status === "ok" && release !== null && release.description !== undefined) {
+    const text = pageDescriptionText(page);
+    const shrinks = text === undefined || text.length < release.description.length / 2;
+    if (shrinks && !allowClear && text !== release.description) {
+      return { status: "held", changed, releaseId };
+    }
+    const source = await getSourceByKey(ctx, SOURCE_KEY);
+    const rewritten = await rewriteOwnDescription(ctx, {
+      sourceKey: SOURCE_KEY,
+      observation: stored,
+      release,
+      text,
+      citation: {
+        sourceName: source?.name ?? "Anime News Network Encyclopedia",
+        url: releaseUrl(line.annId),
+      },
+      now,
+    });
+    const status = rewritten === "cleared" ? "cleared" : rewritten === "updated" ? "refreshed" : "stored";
+    return { status, changed, releaseId };
+  }
   const offered = release !== null ? descriptionOffer(page, release) : {};
   if (release === null || offered.description === undefined) {
     return { status: changed ? "stored" : "skipped", changed, releaseId };
@@ -1642,6 +1700,12 @@ type BackfillResult = {
   fetched: number;
   /** Releases that received a description, across every link. */
   filled: number;
+  /** With `refresh`: Releases whose ANN text was replaced. */
+  refreshed?: number;
+  /** With `refresh` + `allowClear`: Releases whose ANN text was cleared. */
+  cleared?: number;
+  /** With `refresh`: pages with no or much shorter text, left alone (see `allowClear`). */
+  held?: number;
   /** This link's failures (fetch failures are stored on the line, not here). */
   errors: string[];
   continued: boolean;
@@ -1674,17 +1738,40 @@ type BackfillResult = {
  *
  *   npx convex run ann:backfillDescriptions '{"limit": 300}'
  *   npx convex run ann:backfillDescriptions '{"annIds": ["10948", "23227"]}'
+ *   npx convex run ann:backfillDescriptions '{"annIds": ["49313"], "refresh": true}'
+ *
+ * `refresh` (with `annIds` only) re-reads text ANN already wrote: the
+ * Release gets the page's freshly cleaned text while ANN wrote its current
+ * text from that line and no Human Override or lock stands (`fillLinked`).
+ * It only replaces: a page with no description, or text under half as
+ * long, is `held` unless `allowClear` is also passed. `ann:listRefreshCandidates`
+ * names the pages worth it.
  */
 export const backfillDescriptions = internalAction({
   args: {
     limit: v.optional(v.number()),
     annIds: v.optional(v.array(v.string())),
+    /**
+     * With `annIds`: also replace text ANN already wrote on those Releases
+     * with the freshly fetched, cleaned page text (or clear it when the
+     * page has none). Never touches anyone else's text.
+     */
+    refresh: v.optional(v.boolean()),
+    /**
+     * With `refresh`: also clear a Release whose page now has no
+     * description, or replace its text with one under half as long.
+     * Without it such pages are held and counted, never applied.
+     */
+    allowClear: v.optional(v.boolean()),
     /** Pause before every request; tests pass 0. Defaults to ANN's 1 req/s. */
     politeDelayMs: v.optional(v.number()),
     // ----- continuation state (never passed by callers) -----
     after: v.optional(v.string()),
     fetched: v.optional(v.number()),
     filled: v.optional(v.number()),
+    refreshed: v.optional(v.number()),
+    cleared: v.optional(v.number()),
+    held: v.optional(v.number()),
     /** Consecutive failed fetches so far, so the breaker spans hand-offs. */
     failures: v.optional(v.number()),
   },
@@ -1694,12 +1781,20 @@ export const backfillDescriptions = internalAction({
     const limit = args.limit ?? Number.POSITIVE_INFINITY;
     let fetched = args.fetched ?? 0;
     let filled = args.filled ?? 0;
+    let refreshed = args.refreshed ?? 0;
+    let cleared = args.cleared ?? 0;
+    let held = args.held ?? 0;
     let failures = args.failures ?? 0;
+    if (args.allowClear && !args.refresh) throw new Error("allowClear only applies with refresh.");
+    if (args.refresh && args.annIds === undefined) {
+      throw new Error("refresh needs annIds: it rewrites only the pages you name (see ann:listRefreshCandidates).");
+    }
     let handled = 0;
     const errors: string[] = [];
     const result = (extra: { continued: boolean; stopped?: string }) => ({
       fetched,
       filled,
+      ...(args.refresh ? { refreshed, cleared, held } : {}),
       errors,
       ...extra,
     });
@@ -1734,8 +1829,16 @@ export const backfillDescriptions = internalAction({
         failures = page.status === "error" || page.status === "unparsed" ? failures + 1 : 0;
       }
       try {
-        const applied = await applyRetrying(ctx, internal.ann.applyReleasePage, { annId, page });
+        const applied = await applyRetrying(ctx, internal.ann.applyReleasePage, {
+          annId,
+          page,
+          ...(args.refresh ? { refresh: true } : {}),
+          ...(args.allowClear ? { allowClear: true } : {}),
+        });
         if (applied.status === "filled") filled++;
+        if (applied.status === "refreshed") refreshed++;
+        if (applied.status === "cleared") cleared++;
+        if (applied.status === "held") held++;
       } catch (e) {
         errors.push(`release ${annId}: ${errorMessage(e)}`);
       }
@@ -1750,6 +1853,8 @@ export const backfillDescriptions = internalAction({
       await ctx.scheduler.runAfter(0, internal.ann.backfillDescriptions, {
         limit: args.limit,
         politeDelayMs: args.politeDelayMs,
+        ...(args.refresh ? { refresh: true, refreshed, cleared, held } : {}),
+        ...(args.allowClear ? { allowClear: true } : {}),
         fetched,
         filled,
         failures,
@@ -1814,37 +1919,6 @@ function stale(text: unknown): boolean {
   return text !== undefined && (typeof text !== "string" || cleanAnnDescription(text) !== text);
 }
 
-/**
- * The observations behind the Release's current description when ANN wrote
- * it: the evidence of the latest Revision touching the field. Null when
- * anyone else wrote it (a publisher, Open Library, a human) or nobody did.
- */
-async function annDescriptionEvidence(
-  ctx: MutationCtx,
-  release: Doc<"releases">,
-): Promise<string[] | null> {
-  const history = ctx.db
-    .query("revisions")
-    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
-    .order("desc");
-  for await (const revision of history) {
-    if (!revision.changes.some((change) => change.field === "description")) continue;
-    if (revision.author.kind !== "source" || revision.author.sourceKey !== SOURCE_KEY) return null;
-    const proposal = revision.proposalId ? await ctx.db.get(revision.proposalId) : null;
-    const version = proposal
-      ? await ctx.db
-          .query("proposalVersions")
-          .withIndex("by_proposal", (q) =>
-            q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
-          )
-          .unique()
-      : null;
-    return (version?.evidence ?? []).flatMap((row) =>
-      row.kind === "observation" ? [row.observationId as string] : [],
-    );
-  }
-  return null;
-}
 
 /**
  * Up to REPAIR_SCAN release lines after `after`, and the ones with work:
@@ -1912,34 +1986,22 @@ export const repairDescriptionLine = internalMutation({
 
     if (observation.recordRef?.type !== "release") return { snapshotFixed, release: null };
     const release = await ctx.db.get(observation.recordRef.id);
-    if (
-      release === null ||
-      (release.status !== "active" && release.status !== "hidden") ||
-      release.locked ||
-      release.overriddenFields?.includes("description") ||
-      typeof release.description !== "string" ||
-      !stale(release.description)
-    ) {
+    if (release === null || typeof release.description !== "string" || !stale(release.description)) {
       return { snapshotFixed, release: null };
     }
-    const evidence = await annDescriptionEvidence(ctx, release);
-    if (evidence === null || !evidence.includes(observation._id)) return { snapshotFixed, release: null };
-    const fixed = cleanAnnDescription(release.description);
     const source = await getSourceByKey(ctx, SOURCE_KEY);
-    const result = await reconcileFields(ctx, {
+    const rewritten = await rewriteOwnDescription(ctx, {
       sourceKey: SOURCE_KEY,
-      ref: { type: "release", id: release._id },
-      doc: release,
-      offered: { description: fixed },
       observation,
+      release,
+      text: cleanAnnDescription(release.description),
       citation: {
         sourceName: source?.name ?? "Anime News Network Encyclopedia",
         url: releaseUrl(line.annId),
       },
       now: Date.now(),
     });
-    if (!result.applied.includes("description")) return { snapshotFixed, release: null };
-    return { snapshotFixed, release: fixed === undefined ? "cleared" : "updated" };
+    return { snapshotFixed, release: rewritten };
   },
 });
 
@@ -2003,5 +2065,96 @@ export const repairDescriptions = internalAction({
         return { ...counts, continued: true };
       }
     }
+  },
+});
+
+// ---------- refresh candidates ----------
+
+/** Why a line's Release text is worth a refresh (`ann:listRefreshCandidates`). */
+type RefreshReason = "danglingEnd" | "replacementChar" | "c1Control";
+
+/**
+ * Text cut mid-phrase. The old rule that stripped a glued two-clause credit
+ * left exactly these endings ("…save the Child and himself. Based on the
+ * series", "Created by Masashi Kishimoto and features", "Or will it?
+ * Originally"); in the 2026-10 export it also catches 6 texts ANN itself
+ * truncated, which a refresh leaves as they are.
+ */
+const DANGLING_END =
+  /(?:\bBased on the (?:series|manga|novel|anime|game|film|movie)|\band features|\bfeaturing|\b(?:and|with|by|of|the|from|a|an|to)|[.!?…]\s+(?:Originally|Based|Created|Written|Story|Art|Adapted))$/i;
+
+/** What a refresh could fix in a Release text ANN wrote, if anything. */
+function refreshReason(text: string): RefreshReason | null {
+  if (DANGLING_END.test(text)) return "danglingEnd";
+  if (text.includes("\uFFFD")) return "replacementChar";
+  if (/[\u0080-\u009F]/.test(text)) return "c1Control";
+  return null;
+}
+
+/**
+ * Up to REPAIR_SCAN release lines after `after` whose linked Release shows
+ * text ANN wrote from that line with a `refreshReason`, and where to look
+ * next (null once exhausted).
+ */
+export const refreshCandidates = internalQuery({
+  args: { after: v.union(v.string(), v.null()) },
+  handler: async (ctx, { after }) => {
+    const docs = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q
+          .eq("sourceKey", SOURCE_KEY)
+          .gt("sourceRecordId", after ?? "release:")
+          .lt("sourceRecordId", "release;"),
+      )
+      .take(REPAIR_SCAN);
+    const lines: Array<{ annId: string; reason: RefreshReason }> = [];
+    for (const doc of docs) {
+      if (doc.withdrawn || doc.recordRef?.type !== "release") continue;
+      const line = doc.snapshot as AnnReleaseSnapshot;
+      if (!/^\d+$/.test(line.annId)) continue;
+      const release = await ctx.db.get(doc.recordRef.id);
+      if (release === null || typeof release.description !== "string") continue;
+      const reason = refreshReason(release.description);
+      if (reason === null) continue;
+      const evidence = await descriptionEvidence(ctx, release, SOURCE_KEY);
+      if (evidence?.includes(doc._id)) lines.push({ annId: line.annId, reason });
+    }
+    const last = docs.at(-1);
+    return { lines, next: docs.length < REPAIR_SCAN || !last ? null : last.sourceRecordId };
+  },
+});
+
+/**
+ * The ANN release ids whose Release text is worth a refresh, by reason, so
+ * an operator refreshes those pages and not the whole catalog. Read-only,
+ * no network. `danglingEnd`: cut mid-phrase by the old credit rule (or
+ * truncated at ANN). `replacementChar`: U+FFFD, which ANN itself served
+ * in the pages checked (2026-10-02); a refresh helps only where the page
+ * has legacy bytes the new decoder reads. `c1Control`: already fixed
+ * offline by `ann:repairDescriptions`, listed for completeness. Then:
+ *
+ *   npx convex run ann:listRefreshCandidates '{}'
+ *   npx convex run ann:backfillDescriptions '{"annIds": [...], "refresh": true}'
+ */
+export const listRefreshCandidates = internalAction({
+  args: {},
+  handler: async (ctx): Promise<Record<RefreshReason, string[]>> => {
+    const found: Record<RefreshReason, string[]> = {
+      danglingEnd: [],
+      replacementChar: [],
+      c1Control: [],
+    };
+    let cursor: string | null = null;
+    do {
+      const batch: { lines: Array<{ annId: string; reason: RefreshReason }>; next: string | null } =
+        await ctx.runQuery(internal.ann.refreshCandidates, { after: cursor });
+      for (const { annId, reason } of batch.lines) found[reason].push(annId);
+      cursor = batch.next;
+    } while (cursor !== null);
+    console.log(
+      `[ann.listRefreshCandidates] ${JSON.stringify(Object.fromEntries(Object.entries(found).map(([k, ids]) => [k, ids.length])))}`,
+    );
+    return found;
   },
 });
