@@ -197,6 +197,17 @@ export const sweepStale = internalMutation({
 });
 
 /**
+ * A Series' library row, or null before the rebuild has written one (or
+ * while it is bookless). The rebuild keeps one row per Series.
+ */
+export async function seriesStatsRow(ctx: QueryCtx, seriesId: Id<"series">) {
+  return await ctx.db
+    .query("seriesStats")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .unique();
+}
+
+/**
  * Carry a Series' new `mature` flag into its library row and pack entry at
  * once, so a Data Team rating edit (moderation.applyUpdate) shows in the
  * filtered library and its facets without waiting for the next rebuild.
@@ -205,21 +216,9 @@ export const sweepStale = internalMutation({
  */
 export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
   const flag = mature ? { mature: true as const } : { mature: undefined };
-  const row = await ctx.db
-    .query("seriesStats")
-    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-    .unique();
+  const row = await seriesStatsRow(ctx, series._id);
   if (row && (row.mature === true) !== mature) await ctx.db.patch(row._id, flag);
-  const pack = await ctx.db
-    .query("seriesStatsPacks")
-    .withIndex("by_block", (q) => q.eq("block", Math.floor(series.publicId / PACK_SPAN)))
-    .unique();
-  const at = pack?.entries.findIndex((entry) => entry.publicId === series.publicId) ?? -1;
-  if (!pack || at < 0 || (pack.entries[at]!.mature === true) === mature) return;
-  const entries = pack.entries.map((entry, i) =>
-    i === at ? { ...entry, mature: mature ? (true as const) : undefined } : entry,
-  );
-  await ctx.db.patch(pack._id, { entries });
+  await patchPackEntry(ctx, series.publicId, (entry) => (entry.mature === true) === mature, flag);
 }
 
 /**
@@ -238,10 +237,7 @@ export async function syncRatingProjection(
   seriesId: Id<"series">,
   summary: RatingSummary,
 ) {
-  const row = await ctx.db
-    .query("seriesStats")
-    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-    .unique();
+  const row = await seriesStatsRow(ctx, seriesId);
   if (!row) return;
   const ratingRank = ratingRankOf(summary);
   await ctx.db.patch(row._id, {
@@ -249,13 +245,29 @@ export async function syncRatingProjection(
     ratingCount: summary.count,
     ratingRank,
   });
+  await patchPackEntry(ctx, row.publicId, (entry) => (entry.ratingRank ?? 0) === ratingRank, {
+    ratingRank,
+  });
+}
+
+/**
+ * Rewrite one Series' entry in its pack with `change`, unless the pack or
+ * the entry is missing or `holds` says the entry already has it: a pack is
+ * a large document many Series share.
+ */
+async function patchPackEntry(
+  ctx: MutationCtx,
+  publicId: number,
+  holds: (entry: Entry) => boolean,
+  change: Partial<Entry>,
+) {
   const pack = await ctx.db
     .query("seriesStatsPacks")
-    .withIndex("by_block", (q) => q.eq("block", Math.floor(row.publicId / PACK_SPAN)))
+    .withIndex("by_block", (q) => q.eq("block", Math.floor(publicId / PACK_SPAN)))
     .unique();
-  const at = pack?.entries.findIndex((entry) => entry.publicId === row.publicId) ?? -1;
-  if (!pack || at < 0 || (pack.entries[at]!.ratingRank ?? 0) === ratingRank) return;
-  const entries = pack.entries.map((entry, i) => (i === at ? { ...entry, ratingRank } : entry));
+  const at = pack?.entries.findIndex((entry) => entry.publicId === publicId) ?? -1;
+  if (!pack || at < 0 || holds(pack.entries[at]!)) return;
+  const entries = pack.entries.map((entry, i) => (i === at ? { ...entry, ...change } : entry));
   await ctx.db.patch(pack._id, { entries });
 }
 
@@ -376,10 +388,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   if (editionIds.size === 0) {
     await settleMature();
     if (series.bookless !== true) await ctx.db.patch(series._id, { bookless: true });
-    const stale = await ctx.db
-      .query("seriesStats")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .unique();
+    const stale = await seriesStatsRow(ctx, series._id);
     if (stale) await ctx.db.delete(stale._id);
     return;
   }
@@ -484,10 +493,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     ...(mature ? { mature: true as const } : {}),
     rebuiltAt,
   };
-  const existing = await ctx.db
-    .query("seriesStats")
-    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-    .unique();
+  const existing = await seriesStatsRow(ctx, series._id);
   if (existing) {
     // Never move the stamp backwards: an overlapping older run must not
     // make a fresher row look stale to the newer run's sweep.

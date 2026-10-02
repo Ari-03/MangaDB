@@ -91,8 +91,6 @@ type Comment = Doc<"comments">;
 type Status = Comment["status"];
 type User = Doc<"users">;
 
-const isModerator = (user: User | null) =>
-  Boolean(user && !user.suspended && (user.role === "moderator" || user.role === "administrator"));
 const isDataTeam = (user: User | null) => Boolean(user && !user.suspended && user.role);
 
 const fail = (code: string, message: string): never => {

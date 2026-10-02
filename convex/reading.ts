@@ -26,6 +26,7 @@ import { getActive, requireActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { releaseAnchor } from "./lib/titles";
+import { seriesStatsRow } from "./seriesBrowse";
 
 // Mirrors the userSeriesStates.readingStatus union in schema.ts.
 const readingStatusValidator = v.union(
@@ -260,10 +261,7 @@ export const myReading = query({
         const progress = await volumeProgressRow(ctx, user._id, volume._id);
         if (progress && progress.readCount >= 1) volumesRead += 1;
       }
-      const stats = await ctx.db
-        .query("seriesStats")
-        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-        .unique();
+      const stats = await seriesStatsRow(ctx, series._id);
       const row: Row = {
         seriesId: series._id,
         seriesPublicId: series.publicId,

@@ -20,7 +20,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
-import { editionCoverage } from "./catalogPages";
+import { editionCoverage, publisherLink } from "./catalogPages";
 import { followMerges, getActive, requireActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
@@ -438,11 +438,7 @@ async function libraryBook(
   if (!edition) return null;
   const { title, lineName, coverage, series } = await editionCoverage(ctx, edition);
   if (!series) return null; // nothing to shelve it under (no coverage and no line)
-  const publisherDoc = await ctx.db.get(edition.publisherId);
-  const publisher =
-    publisherDoc && publisherDoc.status === "active"
-      ? { name: publisherDoc.name, slug: publisherDoc.slug }
-      : null;
+  const publisher = publisherLink(await ctx.db.get(edition.publisherId));
   return {
     series,
     pathKey: editionPathKey({ publisher, lineName }),

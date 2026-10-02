@@ -36,6 +36,13 @@ async function creditsForPublicId(ctx: QueryCtx, publicId: number) {
   return series ? await creditsFor(ctx, series._id) : [];
 }
 
+/** A Publisher as catalog rows link it, or null when it is hidden or gone. */
+export function publisherLink(publisher: Doc<"publishers"> | null) {
+  return publisher && publisher.status === "active"
+    ? { name: publisher.name, slug: publisher.slug }
+    : null;
+}
+
 /** An Edition's Volume Coverage rows in `order` (the index sorts them). */
 function coverageRows(ctx: QueryCtx, editionId: Id<"editions">) {
   return ctx.db
@@ -348,10 +355,7 @@ export const volumePage = query({
       const edition = await ctx.db.get(row.editionId);
       if (!edition || edition.status !== "active") continue;
       const publisher = await ctx.db.get(edition.publisherId);
-      const activePublisher =
-        publisher && publisher.status === "active"
-          ? { name: publisher.name, slug: publisher.slug }
-          : null;
+      const activePublisher = publisherLink(publisher);
       const { title, lineName, coverage } = await editionCoverage(ctx, edition);
       const { docs, rows } = await editionReleases(ctx, edition._id);
       if (!synopsis && (await isWholeSingleVolume(ctx, edition))) {
@@ -450,9 +454,7 @@ export const editionPage = query({
         linePosition: edition.linePosition ?? null,
         coverageUnmapped,
         publisher:
-          publisher && publisher.status === "active"
-            ? { name: publisher.name, slug: publisher.slug }
-            : null,
+          publisherLink(publisher),
       },
       series,
       /** Collects a Mature Series (lib/mature.ts): art hidden from viewers who have not opted in. */
@@ -557,9 +559,7 @@ export const bundlePage = query({
         price: bundle.price ?? null,
         description: bundle.description ?? null,
         publisher:
-          publisher && publisher.status === "active"
-            ? { name: publisher.name, slug: publisher.slug }
-            : null,
+          publisherLink(publisher),
         coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
       },
       /** Art hidden from viewers who have not opted in (lib/mature.ts). */

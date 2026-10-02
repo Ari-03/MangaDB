@@ -8,6 +8,8 @@ import {
   type ActionCtx,
   type QueryCtx,
 } from "./_generated/server";
+import { publisherLink } from "./catalogPages";
+import { followMerges } from "./lib/merges";
 import { coverUrl, seriesCover } from "./lib/covers";
 import { groupEditions } from "./lib/editionGroups";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
@@ -458,26 +460,19 @@ export const suggest = query({
 // ---------- Series page (ticket #22) ----------
 
 /**
- * Follow a merged Series to its surviving record (spec §4/§8): merged docs
- * keep their public ID and point at the winner, so the losing ID's URL 301s
- * without a redirects table. Cycle-guarded; hidden records read as absent.
- * Exported for reading.ts (personal tracking resolves Series the same way).
+ * The active Series a public ID names, merges followed (lib/merges.ts): a
+ * merged Series keeps its public ID, so the losing ID's URL 301s without a
+ * redirects table. Hidden records read as absent.
  */
 export async function resolveActiveSeries(
   ctx: QueryCtx,
   publicId: number,
 ): Promise<Doc<"series"> | null> {
-  let doc = await ctx.db
+  const stored = await ctx.db
     .query("series")
     .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
     .unique();
-  const visited = new Set<string>();
-  while (doc && doc.status === "merged" && doc.mergedIntoId) {
-    if (visited.has(doc._id)) return null;
-    visited.add(doc._id);
-    doc = await ctx.db.get(doc.mergedIntoId);
-  }
-  return doc && doc.status === "active" ? doc : null;
+  return await followMerges(ctx, "series", stored);
 }
 
 /**
@@ -645,9 +640,7 @@ export const seriesPage = query({
       editions.push({
         publicId: edition.publicId,
         publisher:
-          publisher && publisher.status === "active"
-            ? { name: publisher.name, slug: publisher.slug }
-            : null,
+          publisherLink(publisher),
         lineName: line && line.status === "active" ? line.name : null,
         linePosition: edition.linePosition ?? null,
         coverage,

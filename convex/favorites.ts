@@ -23,6 +23,7 @@ import {
   type TargetId,
 } from "./lib/ratings";
 import { volumeTitle } from "./lib/titles";
+import { seriesStatsRow } from "./seriesBrowse";
 
 /**
  * Favorites the library view lists; older ones past this stay stored. Sized
@@ -202,10 +203,7 @@ export const mine = query({
         const series = await getActive(ctx, "series", row.seriesId);
         if (!series || seen.has(series._id)) continue;
         seen.add(series._id);
-        const stats = await ctx.db
-          .query("seriesStats")
-          .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-          .unique();
+        const stats = await seriesStatsRow(ctx, series._id);
         items.push({
           kind: "series" as const,
           target: { kind: "series" as const, id: series._id },

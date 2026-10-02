@@ -15,6 +15,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { PUBLISHER_SCAN_CAP } from "./catalog";
+import { publisherLink } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { editionTitle, releaseAnchor } from "./lib/titles";
 import { jacketCache, releaseCover } from "./lib/covers";
@@ -204,9 +205,7 @@ export async function joinBrowseRows(
       lineName: line && line.status === "active" ? line.name : null,
       linePosition: edition.linePosition ?? null,
       publisher:
-        publisherDoc && publisherDoc.status === "active"
-          ? { name: publisherDoc.name, slug: publisherDoc.slug }
-          : null,
+        publisherLink(publisherDoc),
       // The row's art (lib/covers.ts `releaseCover`): `coverUrl` is its own
       // stored cover, else its Edition's, and `coverIsbns` the Edition's
       // ISBNs to fetch art by, physical first, the same for every row of one

@@ -35,6 +35,7 @@ import {
 } from "./releases";
 import { showMatureArg, visibleTo } from "./lib/mature";
 import { withExceptionCapture } from "./lib/posthog";
+import { seriesStatsRow } from "./seriesBrowse";
 
 // The Spotlight's months after this one are bounded (prototype #17): at most
 // LANE_CAP books within the horizon the route requests (~3 months), enough
@@ -359,10 +360,7 @@ async function buildMonthBoard(
     if (siblings.some((doc) => doc.status === "active" && earlier(doc.pubDate?.sort ?? 0))) {
       return null;
     }
-    const stats = await ctx.db
-      .query("seriesStats")
-      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-      .unique();
+    const stats = await seriesStatsRow(ctx, seriesId);
     return earlier(stats?.firstReleaseSort ?? 0) ? null : seriesId;
   });
 

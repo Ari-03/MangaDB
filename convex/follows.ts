@@ -23,6 +23,7 @@ import { resolveActiveSeries } from "./catalog";
 import { getActive, requireActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { joinBrowseRows } from "./releases";
+import { seriesStatsRow } from "./seriesBrowse";
 
 // My Upcoming scans the uncapped future horizon (spec §7) over by_date; the
 // cap guards pathology and is surfaced as `capped` so the view can say so.
@@ -109,10 +110,7 @@ export const myFollowing = query({
       const doc = await getActive(ctx, "series", state.seriesId);
       if (!doc || seen.has(doc._id)) continue;
       seen.add(doc._id);
-      const stats = await ctx.db
-        .query("seriesStats")
-        .withIndex("by_series", (q) => q.eq("seriesId", doc._id))
-        .unique();
+      const stats = await seriesStatsRow(ctx, doc._id);
       series.push({
         seriesId: doc._id,
         seriesPublicId: doc.publicId,

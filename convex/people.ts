@@ -46,6 +46,7 @@ import {
 import { annCreditValidator, parseApiResponse, type AnnCredit } from "./lib/ann";
 import { politeFetch } from "./lib/http";
 import { survivorOf } from "./lib/matching";
+import { getActive } from "./lib/merges";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { isPersonName, parseAuthorCredits, type AuthorCredit } from "./lib/prh";
 import { allocatePublicId } from "./lib/publicIds";
@@ -676,14 +677,8 @@ async function creditObservation(
   if (observation.withdrawn || observation.recordRef?.type !== "series" || !snapshot?.credits) {
     return 0;
   }
-  // Follow a merged Series to its survivor (cycle-guarded).
-  let series = await ctx.db.get(observation.recordRef.id as Id<"series">);
-  const seen = new Set<Id<"series">>();
-  while (series?.status === "merged" && series.mergedIntoId && !seen.has(series._id)) {
-    seen.add(series._id);
-    series = await ctx.db.get(series.mergedIntoId);
-  }
-  if (!series || series.status !== "active") return 0;
+  const series = await getActive(ctx, "series", observation.recordRef.id as Id<"series">);
+  if (!series) return 0;
   const existing = await ctx.db
     .query("seriesCredits")
     .withIndex("by_series", (q) => q.eq("seriesId", series._id))
