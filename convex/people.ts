@@ -1,35 +1,15 @@
-// Authors: who made each Series, and every Series an author made. Credits
-// come first from the Anime News Network Encyclopedia's staff rows (task +
-// a stable person id), which the ANN importer stores on its manga
-// observations (lib/ann.ts `credits`). ANN skips entries with no English
-// release line, so digital-only and newer Series often have no ANN entry;
-// for those, the creator names publishers print on their release
-// observations stand in: PRH's free-text `author` line (lib/prh.ts
-// parseAuthorCredits, roles where it states them, unioned across a Series'
-// volumes, near spellings of one name collapsed to the most used) and, for
-// a Series PRH does not credit either, Kodansha's and Seven Seas'
-// `creators` (names only, a role-less "author" credit, unioned across
-// volumes; Kodansha lists the original creator first, so PRH's roles are
-// the better publisher source). Publisher names find their person through
-// `nameKey` and `matchPerson`; a name-only person uncredited at the end of
-// two successful rebuilds running is pruned.
-//
-// `rebuild` derives `people` and `seriesCredits` from the stored
-// observations on a schedule, like the Series library's stats, with no
-// network, so it works where the importers are disabled: the importers'
-// write paths stay untouched, and a Series merge or split carries its
-// credits along because it relinks the observations. A Series ANN credits
-// takes only ANN's credits, though the source registry ranks Kodansha's
-// creators above ANN's: ANN gives every credit a role and a stable person
-// id, where Kodansha names only the first creator and no role. When ANN
-// starts crediting a Series, the ANN pass deletes its publisher rows; a
-// publisher-named person keeps their row (and public id), which ANN adopts
-// on matching `nameKey`. Rows from publishers never count as evidence for
-// linking ANN entries (lib/matching.ts workMatch). ANN's terms ask for
-// credit and a link to its Encyclopedia page wherever its person details
-// show (`annPersonUrl`).
+// Authors: who made each Series, and every Series an author made
+// (docs/imports.md "Author credits"). `rebuild` derives `people` and
+// `seriesCredits` from stored observations, never the network, so a Series
+// merge or split carries its credits along with the observations it
+// relinks. ANN's staff rows come first, then PRH's `author` line, then
+// Kodansha's and Seven Seas' `creators`. A Series ANN credits takes only
+// ANN's credits, though the registry ranks Kodansha's creators above ANN's:
+// ANN gives every credit a role and a stable person id, where Kodansha
+// names only the first creator and no role. ANN's terms ask for a link to
+// its Encyclopedia page wherever its person details show (`annPersonUrl`).
 
-import { paginationOptsValidator } from "convex/server";
+import { paginationOptsValidator, type WithoutSystemFields } from "convex/server";
 import { v, type Infer } from "convex/values";
 
 import { internal } from "./_generated/api";
@@ -46,8 +26,9 @@ import {
 import { annCreditValidator, parseApiResponse, type AnnCredit } from "./lib/ann";
 import { politeFetch } from "./lib/http";
 import { survivorOf } from "./lib/matching";
-import { getActive } from "./lib/merges";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
+import { getActive } from "./lib/merges";
+import { applyRetrying } from "./lib/occ";
 import { isPersonName, parseAuthorCredits, type AuthorCredit } from "./lib/prh";
 import { allocatePublicId } from "./lib/publicIds";
 import { withExceptionCapture } from "./lib/posthog";
@@ -58,7 +39,7 @@ export type CreditRole = Doc<"seriesCredits">["role"];
  * Display order of roles on a Series: the makers first (the role-less
  * "author" a publisher gives after the specific ones), the source after.
  */
-export const ROLE_ORDER: ReadonlyArray<CreditRole> = [
+const ROLE_ORDER: ReadonlyArray<CreditRole> = [
   "story_art",
   "story",
   "art",
@@ -109,14 +90,7 @@ export function mergeRoles(roles: ReadonlyArray<CreditRole>): CreditRole {
  * ANN namesakes share the key.
  */
 export function nameKey(name: string): string {
-  return name
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .normalize("NFC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]+/gu, "")
-    .split(/\s+/)
-    .filter(Boolean)
+  return nameWords(name)
     .map((word) =>
       word
         .replace(/uu/g, "u")
@@ -136,7 +110,12 @@ export function nameKey(name: string): string {
  * Kano"). `matchPerson` prefers a person whose spelling matches this way
  * over one only the looser `nameKey` finds.
  */
-export function strictNameKey(name: string): string {
+function strictNameKey(name: string): string {
+  return nameWords(name).sort().join(" ");
+}
+
+/** A name's words, lower-cased, with Latin accents and punctuation removed. */
+function nameWords(name: string): string[] {
   return name
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -144,9 +123,7 @@ export function strictNameKey(name: string): string {
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]+/gu, "")
     .split(/\s+/)
-    .filter(Boolean)
-    .sort()
-    .join(" ");
+    .filter(Boolean);
 }
 
 /**
@@ -217,7 +194,7 @@ export function roleFor(task: string): CreditRole | null {
 }
 
 /** An author's Encyclopedia page, which author pages credit and link. */
-export function annPersonUrl(annId: string): string {
+function annPersonUrl(annId: string): string {
   return `https://www.animenewsnetwork.com/encyclopedia/people.php?id=${annId}`;
 }
 
@@ -366,14 +343,17 @@ function enter(state: RebuildState, phase: RebuildState["phase"]) {
 
 /**
  * Run one function of a rebuild and move `state` past it. True once the
- * rebuild is done. A publisher batch that throws records its message and
- * skips to the sweep of ANN's rows.
+ * rebuild is done. Batches retry write conflicts (`applyRetrying`), as the
+ * importers' writes do: they read the observations and records running
+ * imports write, and one conflict must not end the run. A publisher batch
+ * that still throws records its message and skips to the sweep of ANN's
+ * rows.
  */
 async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean> {
   const rebuiltAt = state.startedAt;
   switch (state.phase) {
     case "rekey": {
-      const next: number | null = await ctx.runMutation(internal.people.rekeyPeople, {
+      const next: number | null = await applyRetrying(ctx, internal.people.rekeyPeople, {
         afterPublicId: state.afterPublicId,
       });
       state.afterPublicId = next;
@@ -381,7 +361,8 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
       return false;
     }
     case "ann": {
-      const batch: { next: string | null; credits: number } = await ctx.runMutation(
+      const batch: { next: string | null; credits: number } = await applyRetrying(
+        ctx,
         internal.people.creditBatch,
         { after: state.cursor, rebuiltAt },
       );
@@ -398,7 +379,8 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
         return false;
       }
       try {
-        const batch: { next: string | null; credits: number } = await ctx.runMutation(
+        const batch: { next: string | null; credits: number } = await applyRetrying(
+          ctx,
           internal.people.publisherBatch,
           { sourceKey: source.sourceKey, after: state.cursor, rebuiltAt },
         );
@@ -412,7 +394,7 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
       return false;
     }
     case "sweep": {
-      const n: number = await ctx.runMutation(internal.people.sweepCredits, {
+      const n: number = await applyRetrying(ctx, internal.people.sweepCredits, {
         before: rebuiltAt,
         annOnly: state.publisherError !== null,
       });
@@ -421,7 +403,7 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
       return false;
     }
     case "settle": {
-      const next: string | null = await ctx.runMutation(internal.people.settleRoles, {
+      const next: string | null = await applyRetrying(ctx, internal.people.settleRoles, {
         rebuiltAt,
         cursor: state.cursor,
       });
@@ -430,7 +412,8 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
       return false;
     }
     case "prune": {
-      const batch: { next: number | null; deleted: number } = await ctx.runMutation(
+      const batch: { next: number | null; deleted: number } = await applyRetrying(
+        ctx,
         internal.people.pruneOrphans,
         {
           afterPublicId: state.afterPublicId,
@@ -444,7 +427,8 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
       return false;
     }
     case "stats": {
-      const batch: { next: number | null; count: number } = await ctx.runMutation(
+      const batch: { next: number | null; count: number } = await applyRetrying(
+        ctx,
         internal.people.statsBatch,
         { afterPublicId: state.afterPublicId },
       );
@@ -463,20 +447,24 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
 export const rekeyPeople = internalMutation({
   args: { afterPublicId: v.union(v.number(), v.null()) },
   handler: async (ctx, { afterPublicId }) => {
-    const docs = await ctx.db
-      .query("people")
-      .withIndex("by_publicId", (q) =>
-        afterPublicId === null ? q : q.gt("publicId", afterPublicId),
-      )
-      .take(PEOPLE_BATCH);
+    const { docs, next } = await peopleAfter(ctx, afterPublicId, PEOPLE_BATCH);
     for (const person of docs) {
       const key = nameKey(person.name);
       if (person.nameKey !== key) await ctx.db.patch(person._id, { nameKey: key });
     }
-    const last = docs.at(-1);
-    return docs.length < PEOPLE_BATCH || !last ? null : last.publicId;
+    return next;
   },
 });
+
+/** Up to `size` people after `afterPublicId` by public id, and the cursor past them (null when done). */
+async function peopleAfter(ctx: QueryCtx, afterPublicId: number | null, size: number) {
+  const docs = await ctx.db
+    .query("people")
+    .withIndex("by_publicId", (q) => (afterPublicId === null ? q : q.gt("publicId", afterPublicId)))
+    .take(size);
+  const last = docs.at(-1);
+  return { docs, next: docs.length < size || !last ? null : last.publicId };
+}
 
 /**
  * A page of people only publishers named (no `annId`), at the end of a
@@ -491,12 +479,7 @@ export const rekeyPeople = internalMutation({
 export const pruneOrphans = internalMutation({
   args: { afterPublicId: v.union(v.number(), v.null()), rebuiltAt: v.number(), limit: v.number() },
   handler: async (ctx, { afterPublicId, rebuiltAt, limit }) => {
-    const docs = await ctx.db
-      .query("people")
-      .withIndex("by_publicId", (q) =>
-        afterPublicId === null ? q : q.gt("publicId", afterPublicId),
-      )
-      .take(PEOPLE_BATCH);
+    const { docs, next } = await peopleAfter(ctx, afterPublicId, PEOPLE_BATCH);
     let deleted = 0;
     for (const person of docs) {
       if (person.annId !== undefined) continue;
@@ -515,8 +498,7 @@ export const pruneOrphans = internalMutation({
         deleted++;
       }
     }
-    const last = docs.at(-1);
-    return { next: docs.length < PEOPLE_BATCH || !last ? null : last.publicId, deleted };
+    return { next, deleted };
   },
 });
 
@@ -534,12 +516,7 @@ export const settleRoles = internalMutation({
       .query("seriesCredits")
       .withIndex("by_rebuiltAt", (q) => q.eq("rebuiltAt", rebuiltAt))
       .paginate({ cursor, numItems: SETTLE_BATCH });
-    const memo: PublisherMemo = {
-      survivors: new Map(),
-      credits: new Map(),
-      people: new Map(),
-      keys: new Map(),
-    };
+    const memo = newMemo();
     const settled = new Set<Id<"series">>();
     for (const row of page.page) {
       if (row.source === "prh") {
@@ -644,15 +621,7 @@ async function settlePrhSeries(
 export const creditBatch = internalMutation({
   args: { after: v.union(v.string(), v.null()), rebuiltAt: v.number() },
   handler: async (ctx, { after, rebuiltAt }) => {
-    const docs = await ctx.db
-      .query("sourceObservations")
-      .withIndex("by_source_record", (q) =>
-        q
-          .eq("sourceKey", "ann")
-          .gt("sourceRecordId", after ?? "manga:")
-          .lt("sourceRecordId", "manga;"),
-      )
-      .take(CREDIT_BATCH);
+    const docs = await annMangaAfter(ctx, after, CREDIT_BATCH);
     let credits = 0;
     for (const observation of docs) {
       credits += await creditObservation(ctx, observation, rebuiltAt);
@@ -661,6 +630,19 @@ export const creditBatch = internalMutation({
     return { next: docs.length < CREDIT_BATCH || !last ? null : last.sourceRecordId, credits };
   },
 });
+
+/** Up to `size` ANN manga observations after `after` (a source record id), in id order. */
+async function annMangaAfter(ctx: QueryCtx, after: string | null, size: number) {
+  return await ctx.db
+    .query("sourceObservations")
+    .withIndex("by_source_record", (q) =>
+      q
+        .eq("sourceKey", "ann")
+        .gt("sourceRecordId", after ?? "manga:")
+        .lt("sourceRecordId", "manga;"),
+    )
+    .take(size);
+}
 
 /**
  * Stamp the credits one observation gives its Series (followed through any
@@ -677,7 +659,7 @@ async function creditObservation(
   if (observation.withdrawn || observation.recordRef?.type !== "series" || !snapshot?.credits) {
     return 0;
   }
-  const series = await getActive(ctx, "series", observation.recordRef.id as Id<"series">);
+  const series = await getActive(ctx, "series", observation.recordRef.id);
   if (!series) return 0;
   const existing = await ctx.db
     .query("seriesCredits")
@@ -695,13 +677,7 @@ async function creditObservation(
     if (row) {
       if (row.rebuiltAt < rebuiltAt) await ctx.db.patch(row._id, { rebuiltAt });
     } else {
-      const id = await ctx.db.insert("seriesCredits", {
-        seriesId: series._id,
-        personId,
-        role,
-        rebuiltAt,
-      });
-      existing.push({ _id: id, _creationTime: 0, seriesId: series._id, personId, role, rebuiltAt });
+      await insertCredit(ctx, existing, { seriesId: series._id, personId, role, rebuiltAt });
     }
     count++;
   }
@@ -759,16 +735,32 @@ async function upsertPerson(ctx: MutationCtx, credit: AnnCredit): Promise<Id<"pe
     });
     return nameOnly._id;
   }
+  return await insertPerson(ctx, credit.name, key, credit.personId);
+}
+
+/** A new person, credited nowhere yet; `annId` absent for a name only publishers give. */
+async function insertPerson(ctx: MutationCtx, name: string, key: string, annId?: string) {
   return await ctx.db.insert("people", {
     publicId: await allocatePublicId(ctx, "person"),
-    name: credit.name,
-    annId: credit.personId,
+    name,
+    ...(annId !== undefined ? { annId } : {}),
     nameKey: key,
     seriesCount: 0,
     originalCount: 0,
     coverUrl: null,
     coverIsbn: null,
   });
+}
+
+/** Insert a credit row and add it to `rows`, the caller's current view of its Series' credits. */
+async function insertCredit(
+  ctx: MutationCtx,
+  rows: Doc<"seriesCredits">[],
+  fields: WithoutSystemFields<Doc<"seriesCredits">>,
+) {
+  const doc = { _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields };
+  rows.push(doc);
+  return doc;
 }
 
 /** Per-batch memory, so a Series' many observations cost one look each. */
@@ -787,6 +779,10 @@ type PublisherMemo = {
   keys: Map<Id<"people">, string>;
 };
 
+function newMemo(): PublisherMemo {
+  return { survivors: new Map(), credits: new Map(), people: new Map(), keys: new Map() };
+}
+
 /**
  * Credit a batch of one publisher's observations, by source record id, to
  * the Series ANN did not credit in this run (`rebuiltAt`).
@@ -804,12 +800,7 @@ export const publisherBatch = internalMutation({
           : q.eq("sourceKey", sourceKey).gt("sourceRecordId", after),
       )
       .take(PUBLISHER_BATCH);
-    const memo: PublisherMemo = {
-      survivors: new Map(),
-      credits: new Map(),
-      people: new Map(),
-      keys: new Map(),
-    };
+    const memo = newMemo();
     let credits = 0;
     for (const observation of docs) {
       credits += await creditFromPublisher(ctx, observation, source.marker, rebuiltAt, memo);
@@ -969,8 +960,7 @@ async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherM
         Object.assign(row, patch);
       }
     } else {
-      const fields = { seriesId, personId, role: runRole, runRole, source: "creators" as const, rebuiltAt };
-      rows.push({ _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields });
+      await insertCredit(ctx, rows, { seriesId, personId, role: runRole, runRole, source: "creators", rebuiltAt });
     }
     count++;
   }
@@ -986,8 +976,9 @@ async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherM
  * whose person or tallied names are a near spelling (`nearKeys`); only a
  * name with none of these looks up (or creates) its person for a new row.
  * Two names on this line are never put on one row, and every pair of
- * them is remembered (`runApart`), so settle keeps them two people. `settleRoles` then decides each Series' people and roles.
- * Returns the credits stamped.
+ * them is remembered (`runApart`), so `settleRoles` keeps them two people
+ * when it decides the Series' people and roles. Returns the credits
+ * stamped.
  */
 async function stampPrh(
   ctx: MutationCtx,
@@ -1047,18 +1038,16 @@ async function stampPrh(
       Object.assign(row, patch);
       placed.set(key, row);
     } else {
-      const fields = {
+      const doc = await insertCredit(ctx, rows, {
         seriesId,
         personId: await personNamed(ctx, entry.name, memo),
         role,
         runRole: role,
-        source: "prh" as const,
+        source: "prh",
         rebuiltAt,
         runNames: [{ name: entry.name, role, count: 1, seenAt }],
         runApart: [],
-      };
-      const doc = { _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields };
-      rows.push(doc);
+      });
       placed.set(key, doc);
     }
   }
@@ -1125,17 +1114,7 @@ async function personNamed(
     .withIndex("by_nameKey", (q) => q.eq("nameKey", key))
     .take(NAME_ROWS);
   const match = matchPerson(name, rows);
-  const personId =
-    match?._id ??
-    (await ctx.db.insert("people", {
-      publicId: await allocatePublicId(ctx, "person"),
-      name,
-      nameKey: key,
-      seriesCount: 0,
-      originalCount: 0,
-      coverUrl: null,
-      coverIsbn: null,
-    }));
+  const personId = match?._id ?? (await insertPerson(ctx, name, key));
   memo.people.set(exact, personId);
   memo.keys.set(personId, key);
   return personId;
@@ -1174,12 +1153,7 @@ export const sweepCredits = internalMutation({
 export const statsBatch = internalMutation({
   args: { afterPublicId: v.union(v.number(), v.null()) },
   handler: async (ctx, { afterPublicId }) => {
-    const docs = await ctx.db
-      .query("people")
-      .withIndex("by_publicId", (q) =>
-        afterPublicId === null ? q : q.gt("publicId", afterPublicId),
-      )
-      .take(STATS_BATCH);
+    const { docs, next } = await peopleAfter(ctx, afterPublicId, STATS_BATCH);
     for (const person of docs) {
       const shelf = await visibleSeriesOf(ctx, person._id, true);
       const made = shelf.filter((entry) => entry.roles.some(isMaker));
@@ -1210,8 +1184,7 @@ export const statsBatch = internalMutation({
         await ctx.db.patch(person._id, facts);
       }
     }
-    const last = docs.at(-1);
-    return { next: docs.length < STATS_BATCH || !last ? null : last.publicId, count: docs.length };
+    return { next, count: docs.length };
   },
 });
 
@@ -1280,15 +1253,7 @@ export const backfillAnnCredits = internalAction({
 export const creditlessManga = internalQuery({
   args: { after: v.union(v.string(), v.null()) },
   handler: async (ctx, { after }) => {
-    const docs = await ctx.db
-      .query("sourceObservations")
-      .withIndex("by_source_record", (q) =>
-        q
-          .eq("sourceKey", "ann")
-          .gt("sourceRecordId", after ?? "manga:")
-          .lt("sourceRecordId", "manga;"),
-      )
-      .take(BACKFILL_SCAN);
+    const docs = await annMangaAfter(ctx, after, BACKFILL_SCAN);
     const ids: string[] = [];
     let next: string | null = null;
     for (const doc of docs) {
