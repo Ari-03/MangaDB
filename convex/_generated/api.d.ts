@@ -57,6 +57,7 @@ import type * as lib_ratings from "../lib/ratings.js";
 import type * as lib_reconcile from "../lib/reconcile.js";
 import type * as lib_repair_audit from "../lib/repair/audit.js";
 import type * as lib_repair_entries from "../lib/repair/entries.js";
+import type * as lib_repair_metrics from "../lib/repair/metrics.js";
 import type * as lib_repair_ops from "../lib/repair/ops.js";
 import type * as lib_roles from "../lib/roles.js";
 import type * as lib_scoreFormat from "../lib/scoreFormat.js";
@@ -149,6 +150,7 @@ declare const fullApi: ApiFromModules<{
   "lib/reconcile": typeof lib_reconcile;
   "lib/repair/audit": typeof lib_repair_audit;
   "lib/repair/entries": typeof lib_repair_entries;
+  "lib/repair/metrics": typeof lib_repair_metrics;
   "lib/repair/ops": typeof lib_repair_ops;
   "lib/roles": typeof lib_roles;
   "lib/scoreFormat": typeof lib_scoreFormat;
