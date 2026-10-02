@@ -1,164 +1,105 @@
-import { convexTest } from "convex-test";
-import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
+import {
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+} from "./test.factories";
+import { makeT, reader, withUser, type TestT } from "./test.helpers";
+import { describeNoViewer } from "./test.tracking";
 
-const SUBJECT = "user_2reader";
+const OTHER = { subject: "user_2other", username: "other" };
 
 /**
  * One catalog exercising ticket #28's corners: a Series of 3 Volumes with a
  * standard Edition of Vol 1 (one release), an omnibus Edition covering Vols
  * 1–3 completely, and a split digital Edition covering Vol 3 *partially* —
- * completing that split release must not touch any read count.
+ * completing that split release must not touch any read count. `as` is the
+ * reader, signed in with their username claimed.
  */
-async function seed(t: ReturnType<typeof convexTest>) {
-  return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Kodansha",
-      slug: "kodansha",
-    });
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Vinland Saga",
-      altTitles: [],
-      searchText: "Vinland Saga",
-    });
+async function setup() {
+  const t = makeT();
+  const ids = await t.run(async (ctx) => {
+    const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+    const seriesId = await insertSeries(ctx, { publicId: 1, title: "Vinland Saga" });
     const volumes: Array<Id<"volumes">> = [];
     for (const position of [1, 2, 3]) {
-      volumes.push(
-        await ctx.db.insert("volumes", {
-          status: "active",
-          publicId: 10 + position,
-          seriesId,
-          position,
-          label: String(position),
-        }),
-      );
+      volumes.push(await insertVolume(ctx, { seriesId, publicId: 10 + position, position }));
     }
     const [v1, v2, v3] = volumes as [Id<"volumes">, Id<"volumes">, Id<"volumes">];
+    const release = { publisherId, seriesIds: [seriesId] };
 
-    const standard = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 21,
-      publisherId,
-    });
-    await ctx.db.insert("volumeCoverages", {
-      editionId: standard,
-      volumeId: v1,
-      order: 1,
-      extent: "complete",
-    });
-    const standardRelease = await ctx.db.insert("releases", {
-      status: "active",
-      editionId: standard,
-      format: "physical",
-      binding: "paperback",
-      language: "en",
-      publisherId,
-      seriesIds: [seriesId],
-    });
+    const standard = await insertEdition(ctx, { publicId: 21, publisherId });
+    await insertCoverage(ctx, { editionId: standard, volumeId: v1 });
+    const standardRelease = await insertRelease(ctx, { ...release, editionId: standard, binding: "paperback" });
 
-    const omnibus = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 22,
-      publisherId,
-    });
+    const omnibus = await insertEdition(ctx, { publicId: 22, publisherId });
     for (const [order, volumeId] of [v1, v2, v3].entries()) {
-      await ctx.db.insert("volumeCoverages", {
-        editionId: omnibus,
-        volumeId,
-        order: order + 1,
-        extent: "complete",
-      });
+      await insertCoverage(ctx, { editionId: omnibus, volumeId, order: order + 1 });
     }
-    const omnibusRelease = await ctx.db.insert("releases", {
-      status: "active",
-      editionId: omnibus,
-      format: "physical",
-      binding: "hardcover",
-      language: "en",
-      publisherId,
-      seriesIds: [seriesId],
-    });
+    const omnibusRelease = await insertRelease(ctx, { ...release, editionId: omnibus, binding: "hardcover" });
 
     // Split digital edition: only *part* of Vol 3.
-    const split = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 23,
-      publisherId,
-    });
-    await ctx.db.insert("volumeCoverages", {
+    const split = await insertEdition(ctx, { publicId: 23, publisherId });
+    await insertCoverage(ctx, {
       editionId: split,
       volumeId: v3,
-      order: 1,
       extent: "partial",
       note: "First half of volume 3",
     });
-    const splitRelease = await ctx.db.insert("releases", {
-      status: "active",
-      editionId: split,
-      format: "digital",
-      language: "en",
-      publisherId,
-      seriesIds: [seriesId],
-    });
+    const splitRelease = await insertRelease(ctx, { ...release, editionId: split, format: "digital" });
 
-    return {
-      seriesId,
-      v1,
-      v2,
-      v3,
-      standardRelease,
-      omnibusRelease,
-      splitRelease,
-    };
+    return { seriesId, v1, v2, v3, omnibus, standardRelease, omnibusRelease, splitRelease };
   });
+  const as = await withUser(t, reader);
+  return { t, as, ...ids };
 }
 
-function signedIn(t: ReturnType<typeof convexTest>, subject = SUBJECT) {
-  return t.withIdentity({ subject });
-}
-
-async function withUser(t: ReturnType<typeof convexTest>, username = "reader") {
-  const as = signedIn(t);
-  await as.mutation(api.users.claimUsername, { username });
-  return as;
-}
-
-async function readCount(
-  t: ReturnType<typeof convexTest>,
-  volumeId: Id<"volumes">,
-): Promise<number> {
+async function readCount(t: TestT, volumeId: Id<"volumes">): Promise<number> {
   return await t.run(async (ctx) => {
     const rows = await ctx.db.query("volumeProgress").collect();
     return rows.find((row) => row.volumeId === volumeId)?.readCount ?? 0;
   });
 }
 
+describeNoViewer(setup, {
+  queries: [
+    ["seriesTracking", (as) => as.query(api.reading.seriesTracking, { seriesPublicId: 1 })],
+    ["passForRelease", (as, { standardRelease }) => as.query(api.reading.passForRelease, { releaseId: standardRelease })],
+    ["myReading", (as) => as.query(api.reading.myReading, {})],
+  ],
+  mutations: [
+    [
+      "setSeriesReadingStatus",
+      (as, { seriesId }) => as.mutation(api.reading.setSeriesReadingStatus, { seriesId, status: "reading" }),
+    ],
+    ["startPass", (as, { standardRelease }) => as.mutation(api.reading.startPass, { releaseId: standardRelease })],
+    [
+      "setPassPercent",
+      (as, { standardRelease }) => as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 50 }),
+    ],
+    ["completePass", (as, { standardRelease }) => as.mutation(api.reading.completePass, { releaseId: standardRelease })],
+    [
+      "undoCompletion",
+      (as, { standardRelease }) =>
+        as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, completedAt: 1 }),
+    ],
+    ["cancelPass", (as, { standardRelease }) => as.mutation(api.reading.cancelPass, { releaseId: standardRelease })],
+    ["setVolumeReadCount", (as, { v1 }) => as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 1 })],
+    ["adjustVolumeReadCount", (as, { v1 }) => as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v1, delta: 1 })],
+    ["setEditionRead", (as) => as.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: true })],
+    ["setEditionsRead", (as) => as.mutation(api.reading.setEditionsRead, { editionPublicIds: [21, 22], read: true })],
+  ],
+});
+
 describe("reading.seriesTracking", () => {
-  it("is null signed out — public pages just omit the overlay", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    expect(await t.query(api.reading.seriesTracking, { seriesPublicId: 1 })).toBeNull();
-  });
-
-  it("is null while the username claim is pending", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    expect(
-      await signedIn(t).query(api.reading.seriesTracking, { seriesPublicId: 1 }),
-    ).toBeNull();
-  });
-
   it("returns every active volume with zero counts before any tracking", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    const as = await withUser(t);
+    const { as } = await setup();
     const tracking = await as.query(api.reading.seriesTracking, { seriesPublicId: 1 });
     expect(tracking?.readingStatus).toBeNull();
     expect(tracking?.passes).toEqual([]);
@@ -166,12 +107,9 @@ describe("reading.seriesTracking", () => {
   });
 
   it("counts the viewer's reads per volume, never another user's", async () => {
-    const t = convexTest(schema);
-    const { v1, v2 } = await seed(t);
-    const other = signedIn(t, "user_2other");
-    await other.mutation(api.users.claimUsername, { username: "other" });
+    const { t, as, v1, v2 } = await setup();
+    const other = await withUser(t, OTHER);
     await other.mutation(api.reading.adjustVolumeReadCount, { volumeId: v1, delta: 2 });
-    const as = await withUser(t);
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
     const tracking = await as.query(api.reading.seriesTracking, { seriesPublicId: 1 });
     expect(tracking?.volumes.map((v) => v.readCount)).toEqual([0, 1, 0]);
@@ -180,9 +118,7 @@ describe("reading.seriesTracking", () => {
 
 describe("reading.setSeriesReadingStatus", () => {
   it("sets and clears the status by explicit choice", async () => {
-    const t = convexTest(schema);
-    const { seriesId } = await seed(t);
-    const as = await withUser(t);
+    const { as, seriesId } = await setup();
 
     await as.mutation(api.reading.setSeriesReadingStatus, {
       seriesId,
@@ -195,27 +131,11 @@ describe("reading.setSeriesReadingStatus", () => {
     tracking = await as.query(api.reading.seriesTracking, { seriesPublicId: 1 });
     expect(tracking?.readingStatus).toBeNull();
   });
-
-  it("requires a signed-in user with a claimed username", async () => {
-    const t = convexTest(schema);
-    const { seriesId } = await seed(t);
-    await expect(
-      t.mutation(api.reading.setSeriesReadingStatus, { seriesId, status: "reading" }),
-    ).rejects.toThrow(ConvexError);
-    await expect(
-      signedIn(t).mutation(api.reading.setSeriesReadingStatus, {
-        seriesId,
-        status: "reading",
-      }),
-    ).rejects.toThrow(/username/i);
-  });
 });
 
 describe("reading.startPass", () => {
   it("creates at most one pass per release and suggests Reading without setting it", async () => {
-    const t = convexTest(schema);
-    const { standardRelease, seriesId } = await seed(t);
-    const as = await withUser(t);
+    const { as, standardRelease, seriesId } = await setup();
 
     const first = await as.mutation(api.reading.startPass, {
       releaseId: standardRelease,
@@ -239,9 +159,7 @@ describe("reading.startPass", () => {
   });
 
   it("does not suggest Reading when the series is already being read", async () => {
-    const t = convexTest(schema);
-    const { standardRelease, seriesId } = await seed(t);
-    const as = await withUser(t);
+    const { as, standardRelease, seriesId } = await setup();
     await as.mutation(api.reading.setSeriesReadingStatus, {
       seriesId,
       status: "reading",
@@ -255,9 +173,7 @@ describe("reading.startPass", () => {
 
 describe("reading.setPassPercent", () => {
   it("stores the estimate and 100% never completes by itself", async () => {
-    const t = convexTest(schema);
-    const { standardRelease, v1 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, standardRelease, v1 } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
 
     await as.mutation(api.reading.setPassPercent, {
@@ -274,9 +190,7 @@ describe("reading.setPassPercent", () => {
   });
 
   it("rejects out-of-range estimates and percent without a pass", async () => {
-    const t = convexTest(schema);
-    const { standardRelease, omnibusRelease } = await seed(t);
-    const as = await withUser(t);
+    const { as, standardRelease, omnibusRelease } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
     await expect(
       as.mutation(api.reading.setPassPercent, {
@@ -295,9 +209,7 @@ describe("reading.setPassPercent", () => {
 
 describe("reading.completePass", () => {
   it("increments every completely covered volume and removes the pass", async () => {
-    const t = convexTest(schema);
-    const { omnibusRelease, v1, v2, v3 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, omnibusRelease, v1, v2, v3 } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: omnibusRelease });
 
     const result = await as.mutation(api.reading.completePass, {
@@ -315,9 +227,7 @@ describe("reading.completePass", () => {
   });
 
   it("leaves partially covered volumes untouched", async () => {
-    const t = convexTest(schema);
-    const { splitRelease, v3 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, splitRelease, v3 } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: splitRelease });
     const result = await as.mutation(api.reading.completePass, {
       releaseId: splitRelease,
@@ -327,9 +237,7 @@ describe("reading.completePass", () => {
   });
 
   it("does not suggest completing the series while volumes remain unread", async () => {
-    const t = convexTest(schema);
-    const { standardRelease } = await seed(t);
-    const as = await withUser(t);
+    const { as, standardRelease } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
     const result = await as.mutation(api.reading.completePass, {
       releaseId: standardRelease,
@@ -339,18 +247,14 @@ describe("reading.completePass", () => {
   });
 
   it("requires an active pass — completion is always a confirmed pass", async () => {
-    const t = convexTest(schema);
-    const { standardRelease } = await seed(t);
-    const as = await withUser(t);
+    const { as, standardRelease } = await setup();
     await expect(
       as.mutation(api.reading.completePass, { releaseId: standardRelease }),
     ).rejects.toThrow(/pass/i);
   });
 
   it("records a reread on another completed pass", async () => {
-    const t = convexTest(schema);
-    const { standardRelease, v1 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, standardRelease, v1 } = await setup();
     for (let i = 0; i < 2; i++) {
       await as.mutation(api.reading.startPass, { releaseId: standardRelease });
       await as.mutation(api.reading.completePass, { releaseId: standardRelease });
@@ -361,9 +265,7 @@ describe("reading.completePass", () => {
 
 describe("reading.undoCompletion", () => {
   it("decrements the most recent completion and restores the pass at 100%", async () => {
-    const t = convexTest(schema);
-    const { omnibusRelease, v1, v2, v3 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, omnibusRelease, v1, v2, v3 } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: omnibusRelease });
     const { completedAt } = await as.mutation(api.reading.completePass, {
       releaseId: omnibusRelease,
@@ -384,9 +286,7 @@ describe("reading.undoCompletion", () => {
   });
 
   it("decrements a reread back down without erasing earlier reads", async () => {
-    const t = convexTest(schema);
-    const { standardRelease, v1 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, standardRelease, v1 } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
     await as.mutation(api.reading.completePass, { releaseId: standardRelease });
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
@@ -402,9 +302,7 @@ describe("reading.undoCompletion", () => {
   });
 
   it("is a no-op for a stale undo once a newer completion superseded it", async () => {
-    const t = convexTest(schema);
-    const { standardRelease, v1 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, standardRelease, v1 } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
     const first = await as.mutation(api.reading.completePass, {
       releaseId: standardRelease,
@@ -433,9 +331,7 @@ describe("reading.undoCompletion", () => {
 
 describe("reading.cancelPass", () => {
   it("abandons the pass without touching any read count", async () => {
-    const t = convexTest(schema);
-    const { standardRelease, v1 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, standardRelease, v1 } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
     await as.mutation(api.reading.setPassPercent, {
       releaseId: standardRelease,
@@ -452,9 +348,7 @@ describe("reading.cancelPass", () => {
 
 describe("reading.setVolumeReadCount", () => {
   it("edits the count directly and zero removes the row", async () => {
-    const t = convexTest(schema);
-    const { v2 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, v2 } = await setup();
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 2 });
     expect(await readCount(t, v2)).toBe(2);
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 0 });
@@ -465,9 +359,7 @@ describe("reading.setVolumeReadCount", () => {
   });
 
   it("rejects negative and fractional counts", async () => {
-    const t = convexTest(schema);
-    const { v2 } = await seed(t);
-    const as = await withUser(t);
+    const { as, v2 } = await setup();
     await expect(
       as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: -1 }),
     ).rejects.toThrow(/whole number/);
@@ -479,9 +371,7 @@ describe("reading.setVolumeReadCount", () => {
 
 describe("reading.adjustVolumeReadCount", () => {
   it("applies each delta to the stored count, so concurrent clicks all land", async () => {
-    const t = convexTest(schema);
-    const { v2 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, v2 } = await setup();
     await Promise.all([
       as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 }),
       as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 }),
@@ -493,9 +383,7 @@ describe("reading.adjustVolumeReadCount", () => {
   });
 
   it("keeps the completion time on a take-back and stamps it on a read", async () => {
-    const t = convexTest(schema);
-    const { v2 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, v2 } = await setup();
     const completedAt = async () =>
       await t.run(async (ctx) => (await ctx.db.query("volumeProgress").first())?.lastCompletedAt);
     await t.run(async (ctx) => {
@@ -515,9 +403,7 @@ describe("reading.adjustVolumeReadCount", () => {
   });
 
   it("stops at zero, removing the row", async () => {
-    const t = convexTest(schema);
-    const { v2 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, v2 } = await setup();
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
@@ -528,9 +414,7 @@ describe("reading.adjustVolumeReadCount", () => {
   });
 
   it("refuses a Volume of a hidden Series, keeping reads recorded before", async () => {
-    const t = convexTest(schema);
-    const { seriesId, v2 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, seriesId, v2 } = await setup();
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
     await t.run(async (ctx) => await ctx.db.patch(seriesId, { status: "hidden" }));
     await expect(
@@ -539,13 +423,8 @@ describe("reading.adjustVolumeReadCount", () => {
     expect(await readCount(t, v2)).toBe(1);
   });
 
-  it("rejects fractional deltas and requires a user", async () => {
-    const t = convexTest(schema);
-    const { v2 } = await seed(t);
-    await expect(
-      t.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 }),
-    ).rejects.toThrow(ConvexError);
-    const as = await withUser(t);
+  it("rejects fractional deltas", async () => {
+    const { as, v2 } = await setup();
     await expect(
       as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 0.5 }),
     ).rejects.toThrow(/whole number/);
@@ -554,12 +433,10 @@ describe("reading.adjustVolumeReadCount", () => {
 
 describe("reading.passForRelease", () => {
   it("distinguishes signed out (null) from signed in without a pass", async () => {
-    const t = convexTest(schema);
-    const { standardRelease } = await seed(t);
+    const { t, as, standardRelease } = await setup();
     expect(
       await t.query(api.reading.passForRelease, { releaseId: standardRelease }),
     ).toBeNull();
-    const as = await withUser(t);
     expect(
       await as.query(api.reading.passForRelease, { releaseId: standardRelease }),
     ).toEqual({ pass: null });
@@ -568,9 +445,7 @@ describe("reading.passForRelease", () => {
 
 describe("reading.myReading", () => {
   it("lists chosen statuses with volume progress and active passes", async () => {
-    const t = convexTest(schema);
-    const { seriesId, standardRelease, omnibusRelease } = await seed(t);
-    const as = await withUser(t);
+    const { as, seriesId, standardRelease, omnibusRelease } = await setup();
     await as.mutation(api.reading.setSeriesReadingStatus, {
       seriesId,
       status: "reading",
@@ -606,9 +481,7 @@ describe("reading.myReading", () => {
   });
 
   it("a series with only a read volume still appears, with no status", async () => {
-    const t = convexTest(schema);
-    const { v2 } = await seed(t);
-    const as = await withUser(t);
+    const { as, v2 } = await setup();
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 1 });
     const overview = await as.query(api.reading.myReading, {});
     expect(overview?.series).toHaveLength(1);
@@ -619,19 +492,11 @@ describe("reading.myReading", () => {
       passes: [],
     });
   });
-
-  it("is null signed out", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    expect(await t.query(api.reading.myReading, {})).toBeNull();
-  });
 });
 
 describe("reading.setEditionRead", () => {
   it("marks every completely covered volume read once, keeping rereads", async () => {
-    const t = convexTest(schema);
-    const { v1, v2, v3 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, v1, v2, v3 } = await setup();
     // Vol 2 was already read twice; marking the omnibus read must not touch it.
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 2 });
 
@@ -657,9 +522,7 @@ describe("reading.setEditionRead", () => {
   });
 
   it("unmarking clears the read history of the covered volumes only", async () => {
-    const t = convexTest(schema);
-    const { v1, v2, v3 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, v1, v2, v3 } = await setup();
     await as.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: true });
     const result = await as.mutation(api.reading.setEditionRead, {
       editionPublicId: 21,
@@ -673,9 +536,7 @@ describe("reading.setEditionRead", () => {
   });
 
   it("partial coverage is never touched", async () => {
-    const t = convexTest(schema);
-    const { v3 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, v3 } = await setup();
     const result = await as.mutation(api.reading.setEditionRead, {
       editionPublicId: 23,
       read: true,
@@ -685,37 +546,14 @@ describe("reading.setEditionRead", () => {
   });
 
   it("leaves a hidden Series' Volumes alone, and the library's read flag agrees", async () => {
-    const t = convexTest(schema);
-    const { v1, omnibusRelease } = await seed(t);
+    const { t, as, v1, omnibus, omnibusRelease } = await setup();
     // The omnibus also collects a Volume of a second Series.
     const { otherSeries, other } = await t.run(async (ctx) => {
-      const otherSeries = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 2,
-        title: "Planetes",
-        altTitles: [],
-        searchText: "Planetes",
-      });
-      const other = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 31,
-        seriesId: otherSeries,
-        position: 1,
-        label: "1",
-      });
-      const omnibus = await ctx.db
-        .query("editions")
-        .withIndex("by_publicId", (q) => q.eq("publicId", 22))
-        .unique();
-      await ctx.db.insert("volumeCoverages", {
-        editionId: omnibus!._id,
-        volumeId: other,
-        order: 4,
-        extent: "complete",
-      });
+      const otherSeries = await insertSeries(ctx, { publicId: 2, title: "Planetes" });
+      const other = await insertVolume(ctx, { seriesId: otherSeries, publicId: 31 });
+      await insertCoverage(ctx, { editionId: omnibus, volumeId: other, order: 4 });
       return { otherSeries, other };
     });
-    const as = await withUser(t);
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: other, delta: 1 });
     await as.mutation(api.collection.setReleaseEntry, { releaseId: omnibusRelease, state: "owned" });
     await t.run(async (ctx) => await ctx.db.patch(otherSeries, { status: "hidden" }));
@@ -749,24 +587,17 @@ describe("reading.setEditionRead", () => {
     expect(book?.read).toBe(true);
   });
 
-  it("rejects an unknown edition and requires a user", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    const as = await withUser(t);
+  it("rejects an unknown edition", async () => {
+    const { as } = await setup();
     await expect(
       as.mutation(api.reading.setEditionRead, { editionPublicId: 99, read: true }),
-    ).rejects.toThrow(ConvexError);
-    await expect(
-      t.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: true }),
-    ).rejects.toThrow(ConvexError);
+    ).rejects.toMatchObject({ data: { code: "notFound" } });
   });
 });
 
 describe("reading.setEditionsRead", () => {
   it("marks a whole run, prompting once, and honours the cap", async () => {
-    const t = convexTest(schema);
-    const { v1, v2, v3 } = await seed(t);
-    const as = await withUser(t);
+    const { t, as, v1, v2, v3 } = await setup();
     const result = await as.mutation(api.reading.setEditionsRead, {
       editionPublicIds: [21, 22, 22, 23],
       read: true,
@@ -793,6 +624,57 @@ describe("reading.setEditionsRead", () => {
         editionPublicIds: Array.from({ length: 201 }, (_, i) => i),
         read: true,
       }),
-    ).rejects.toThrow(ConvexError);
+    ).rejects.toMatchObject({ data: { code: "tooMany" } });
+  });
+});
+
+describe("reading progress belongs to one user", () => {
+  it("another user neither sees the reader's progress nor changes it", async () => {
+    const { t, as, seriesId, v2, standardRelease, omnibusRelease } = await setup();
+    await as.mutation(api.reading.setSeriesReadingStatus, { seriesId, status: "reading" });
+    await as.mutation(api.reading.startPass, { releaseId: omnibusRelease });
+    const { completedAt } = await as.mutation(api.reading.completePass, { releaseId: omnibusRelease });
+    await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 2 });
+    await as.mutation(api.reading.startPass, { releaseId: standardRelease });
+    await as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 40 });
+    const readerTracking = await as.query(api.reading.seriesTracking, { seriesPublicId: 1 });
+    const readerOverview = await as.query(api.reading.myReading, {});
+    expect(readerTracking?.volumes.map((v) => v.readCount)).toEqual([1, 2, 1]);
+
+    const other = await withUser(t, OTHER);
+    // Their overlays read as untracked.
+    expect(await other.query(api.reading.seriesTracking, { seriesPublicId: 1 })).toMatchObject({
+      readingStatus: null,
+      passes: [],
+    });
+    expect(
+      (await other.query(api.reading.seriesTracking, { seriesPublicId: 1 }))?.volumes.map((v) => v.readCount),
+    ).toEqual([0, 0, 0]);
+    expect(await other.query(api.reading.passForRelease, { releaseId: standardRelease })).toEqual({ pass: null });
+    expect(await other.query(api.reading.myReading, {})).toMatchObject({ series: [] });
+
+    // The reader's pass is not theirs to move, complete or cancel.
+    await expect(
+      other.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 90 }),
+    ).rejects.toMatchObject({ data: { code: "noPass" } });
+    await expect(
+      other.mutation(api.reading.completePass, { releaseId: standardRelease }),
+    ).rejects.toMatchObject({ data: { code: "noPass" } });
+    await other.mutation(api.reading.cancelPass, { releaseId: standardRelease });
+    // Nor are the reader's completion, read counts or status theirs to undo.
+    expect(
+      await other.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, completedAt }),
+    ).toEqual({ decremented: 0 });
+    expect(await other.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: false })).toMatchObject({
+      changed: 0,
+    });
+    await other.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: -1 });
+    await other.mutation(api.reading.setSeriesReadingStatus, { seriesId });
+
+    expect(await as.query(api.reading.seriesTracking, { seriesPublicId: 1 })).toEqual(readerTracking);
+    expect(await as.query(api.reading.myReading, {})).toEqual(readerOverview);
+    expect(await as.query(api.reading.passForRelease, { releaseId: standardRelease })).toEqual({
+      pass: { percent: 40 },
+    });
   });
 });
