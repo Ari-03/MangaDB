@@ -164,6 +164,18 @@ describe("reading.seriesTracking", () => {
     expect(tracking?.passes).toEqual([]);
     expect(tracking?.volumes.map((v) => v.readCount)).toEqual([0, 0, 0]);
   });
+
+  it("counts the viewer's reads per volume, never another user's", async () => {
+    const t = convexTest(schema);
+    const { v1, v2 } = await seed(t);
+    const other = signedIn(t, "user_2other");
+    await other.mutation(api.users.claimUsername, { username: "other" });
+    await other.mutation(api.reading.adjustVolumeReadCount, { volumeId: v1, delta: 2 });
+    const as = await withUser(t);
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
+    const tracking = await as.query(api.reading.seriesTracking, { seriesPublicId: 1 });
+    expect(tracking?.volumes.map((v) => v.readCount)).toEqual([0, 1, 0]);
+  });
 });
 
 describe("reading.setSeriesReadingStatus", () => {
