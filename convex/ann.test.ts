@@ -7,12 +7,24 @@
 // steady-state new-Series gate, chained continuation, withdrawal, and the
 // 1 req/s etiquette default.
 
-import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import {
+  type CatalogOverrides,
+  insertCoverage,
+  insertEdition,
+  insertObservation,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertSourceRevision,
+  insertVolume,
+  seedCatalog,
+} from "./test.factories";
+import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
 
 type FixtureRelease = {
   annId: number;
@@ -117,20 +129,29 @@ afterEach(() => {
   reportRequests.length = 0;
 });
 
-function makeT() {
-  return convexTest(schema);
-}
-type TestT = ReturnType<typeof makeT>;
-
-async function seedRegistry(t: TestT, bootstrap: boolean) {
-  await t.mutation(internal.importSources.seedRegistry, {});
-  await t.mutation(internal.importSources.setBootstrapModeInternal, {
-    on: bootstrap,
-  });
-}
-
 const sync = (t: TestT, args: object = {}) =>
   t.action(internal.ann.sync, { politeDelayMs: 0, ...args });
+
+/**
+ * A publisher's book of Volumes the mirror built, as another source leaves
+ * it: an Edition of its own under `publisherId` covering the mirrored
+ * Series' Volumes `labels` in order, and its one Release.
+ */
+async function insertBook(
+  ctx: MutationCtx,
+  publisherId: Id<"publishers">,
+  labels: string[],
+  { release, extent = "complete" }: { release?: CatalogOverrides["release"]; extent?: Doc<"volumeCoverages">["extent"] } = {},
+) {
+  const series = (await ctx.db.query("series").collect())[0]!;
+  const volumes = await ctx.db.query("volumes").collect();
+  const editionId = await insertEdition(ctx, { publisherId });
+  for (const [i, label] of labels.entries()) {
+    const volumeId = volumes.find((v) => v.label === label)!._id;
+    await insertCoverage(ctx, { editionId, volumeId, order: i + 1, extent });
+  }
+  return await insertRelease(ctx, { editionId, publisherId, seriesIds: [series._id], ...release });
+}
 
 const ALPHA: FixtureManga = {
   id: 100,
@@ -212,63 +233,15 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     // Another source's records arrive: a publisher release of volume 1 with
     // no date, and a volume-2 release whose date an authoritative source set.
     const { releaseNoDate, releaseAuthDate } = await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volumes = await ctx.db.query("volumes").collect();
-      const vol = (label: string) => volumes.find((v) => v.label === label)!._id;
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "VIZ Media",
-        slug: "viz-media",
-      });
-      const makeRelease = async (
-        volumeId: Id<"volumes">,
-        pubDate?: { year: number; month: number; day: number; sort: number },
-      ) => {
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: Math.floor(Math.random() * 100000),
-          publisherId,
-        });
-        await ctx.db.insert("volumeCoverages", {
-          editionId,
-          volumeId,
-          order: 1,
-          extent: "complete",
-        });
-        return await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
-          pubDate,
-          publisherId,
-          seriesIds: [series._id],
-        });
-      };
-      const releaseNoDate = await makeRelease(vol("1"));
-      const releaseAuthDate = await makeRelease(vol("2"), {
-        year: 2026,
-        month: 5,
-        day: 19,
-        sort: 20260519,
-      });
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const pubDate = { year: 2026, month: 5, day: 19, sort: 20260519 };
+      const releaseNoDate = await insertBook(ctx, publisherId, ["1"]);
+      const releaseAuthDate = await insertBook(ctx, publisherId, ["2"], { release: { pubDate } });
       // Provenance: an authoritative source set volume 2's date.
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "sevenseas" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
-        ref: { type: "release", id: releaseAuthDate } as never,
-        seq: 1,
-        proposalId,
-        author: { kind: "source", sourceKey: "sevenseas" },
-        changes: [
-          {
-            field: "pubDate",
-            after: { year: 2026, month: 5, day: 19, sort: 20260519 },
-          },
-        ],
+      await insertSourceRevision(ctx, {
+        ref: { type: "release", id: releaseAuthDate },
+        sourceKey: "sevenseas",
+        changes: [{ field: "pubDate", after: pubDate }],
         comment: "Imported from Seven Seas Entertainment.",
       });
       return { releaseNoDate, releaseAuthDate };
@@ -331,9 +304,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       expect(runs[0]!.status).toBe("running");
     });
     // The scheduled continuation link finishes the mirror.
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs[0]!).toMatchObject({ status: "succeeded", recordsSeen: 510 });
@@ -466,9 +437,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       return new Response("not found", { status: 404 });
     });
     expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const observations = await ctx.db.query("sourceObservations").collect();
       expect(observations.every((obs) => !obs.withdrawn)).toBe(true);
@@ -511,9 +480,7 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
       return new Response("<html>Service unavailable</html>");
     });
     expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const observations = await ctx.db.query("sourceObservations").collect();
       expect(observations.every((obs) => !obs.withdrawn)).toBe(true);
@@ -550,33 +517,8 @@ describe("ann.sync — printings, packaging-only entries, labels", () => {
     pubDate: { year: number; month: number; day: number; sort: number },
   ) {
     return await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === label)!;
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "VIZ Media",
-        slug: "viz-media",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 77,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId: volume._id,
-        order: 1,
-        extent: "complete",
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        pubDate,
-        publisherId,
-        seriesIds: [series._id],
-      });
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      return await insertBook(ctx, publisherId, [label], { release: { pubDate } });
     });
   }
 
@@ -720,7 +662,7 @@ const obsFor = (t: TestT, annId: number) =>
   );
 
 async function seedPublisher(t: TestT, name: string, slug: string) {
-  return await t.run(async (ctx) => ctx.db.insert("publishers", { status: "active", name, slug }));
+  return await t.run((ctx) => insertPublisher(ctx, { name, slug }));
 }
 
 describe("ann — ISBN-linked release lines", () => {
@@ -748,33 +690,8 @@ describe("ann — ISBN-linked release lines", () => {
     stubAnn([NANA]);
     await sync(t, { releasePages: false });
     const releaseId = await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volume = (await ctx.db.query("volumes").collect())[0]!;
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "VIZ Media",
-        slug: "viz-media",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 5,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId: volume._id,
-        order: 1,
-        extent: "complete",
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13: "9781974757282",
-        publisherId,
-        seriesIds: [series._id],
-      });
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      return await insertBook(ctx, publisherId, ["1"], { release: { isbn13: "9781974757282" } });
     });
     await sync(t, { releasePages: false });
     expect((await obsFor(t, 9112))!.recordRef).toEqual({
@@ -949,29 +866,7 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
     stubAnn([ONE], PAGES);
     await sync(t, { releasePages: false });
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
-    const existing = await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "113")!;
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 9,
-        publisherId: vizId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId: volume._id,
-        order: 1,
-        extent: "complete",
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        publisherId: vizId,
-        seriesIds: [series._id],
-      });
-    });
+    const existing = await t.run((ctx) => insertBook(ctx, vizId, ["113"]));
     await syncPages(t);
     expect((await obsFor(t, 57439))!.recordRef).toEqual({
       type: "release",
@@ -990,9 +885,7 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
     stubAnn([ONE], PAGES);
     await seedPublisher(t, "VIZ Media", "viz-media");
     await sync(t);
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     expect((await obsFor(t, 57439))!.recordRef?.type).toBe("release");
   });
 
@@ -1009,9 +902,7 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
       sourceKey: "ann",
     });
     await sync(t, { runId });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     // The page pass ran under its own (forced) run and placed the release.
     expect((await obsFor(t, 57439))!.recordRef?.type).toBe("release");
     await t.run(async (ctx) => {
@@ -1056,15 +947,7 @@ describe("ann — repairs stand across mirrors", () => {
   it("never creates a Series whose title names a hidden one", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await t.run((ctx) =>
-      ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 77,
-        title: "Alpha Saga",
-        altTitles: [],
-        searchText: "Alpha Saga",
-      }),
-    );
+    await t.run((ctx) => insertSeries(ctx, { status: "hidden", publicId: 77, title: "Alpha Saga" }));
     stubAnn([ALPHA]);
     await sync(t);
     expect((await seriesTitled(t, "Alpha Saga")).map((s) => s.status)).toEqual(["hidden"]);
@@ -1090,13 +973,7 @@ describe("ann — repairs stand across mirrors", () => {
     await sync(t);
     const [loser] = await seriesTitled(t, "Alpha Saga");
     const survivorId = await t.run(async (ctx) => {
-      const survivorId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 88,
-        title: "Alpha Saga: Complete",
-        altTitles: ["Alpha Saga"],
-        searchText: "Alpha Saga: Complete Alpha Saga",
-      });
+      const survivorId = await insertSeries(ctx, { title: "Alpha Saga: Complete", altTitles: ["Alpha Saga"] });
       await ctx.db.patch(loser!._id, {
         status: "merged",
         mergedIntoId: survivorId,
@@ -1151,15 +1028,7 @@ describe("ann — repairs stand across mirrors", () => {
     expect((await volumesOf(t, ghost!._id)).map((v) => v.status)).toEqual(["hidden"]);
 
     await t.run(async (ctx) => {
-      for (const label of ["1", "2"]) {
-        await ctx.db.insert("volumes", {
-          status: "active",
-          publicId: Number(label) + 500,
-          seriesId: ghost!._id,
-          position: Number(label),
-          label,
-        });
-      }
+      for (const position of [1, 2]) await insertVolume(ctx, { seriesId: ghost!._id, position });
       await ctx.db.delete(placeholder!._id);
     });
     await sync(t);
@@ -1221,16 +1090,10 @@ describe("ann — repairs stand across mirrors", () => {
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
     await t.run(async (ctx) => {
       const series = (await ctx.db.query("series").collect())[0]!;
-      const editionId = await ctx.db.insert("editions", {
-        status: "hidden",
-        publicId: 9,
-        publisherId: vizId,
-      });
-      await ctx.db.insert("releases", {
+      const editionId = await insertEdition(ctx, { status: "hidden", publisherId: vizId });
+      await insertRelease(ctx, {
         status: "hidden",
         editionId,
-        format: "physical",
-        language: "en",
         isbn13: "9781974766703",
         publisherId: vizId,
         seriesIds: [series._id],
@@ -1260,18 +1123,11 @@ describe("ann.sync — the Plot Summary as the Series synopsis", () => {
     // Kodansha's own series text (authoritative) replaced ANN's since.
     await t.run(async (ctx) => {
       const current = (await ctx.db.query("series").first())!;
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "kodansha" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
-        ref: { type: "series", id: current._id } as never,
+      await insertSourceRevision(ctx, {
+        ref: { type: "series", id: current._id },
+        sourceKey: "kodansha",
         seq: 2,
-        proposalId,
-        author: { kind: "source", sourceKey: "kodansha" },
         changes: [{ field: "synopsis", before: current.synopsis, after: "The publisher's text." }],
-        comment: "Imported from kodansha.",
       });
       await ctx.db.patch(current._id, { synopsis: "The publisher's text." });
     });
@@ -1301,13 +1157,7 @@ describe("ann.sync — a publisher's Series under the full title", () => {
     await seedRegistry(t, true);
     // A publisher feed (PRH) already created the Series under the full title.
     const seriesId = await t.run((ctx) =>
-      ctx.db.insert("series", {
-        status: "active",
-        publicId: 264,
-        title: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!",
-        altTitles: [],
-        searchText: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!",
-      }),
+      insertSeries(ctx, { title: "7th Time Loop: The Villainess Enjoys a Carefree Life Married to Her Worst Enemy!" }),
     );
     stubAnn([
       {
@@ -1487,39 +1337,14 @@ describe("ann.sync — a title match that is another work", () => {
     altTitles: string[],
     isbn13: string,
   ) {
-    return await t.run(async (ctx) => {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 700,
-        title,
-        altTitles,
-        searchText: [title, ...altTitles].join(" "),
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 701,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Seven Seas Entertainment",
-        slug: "seven-seas",
-      });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 702, publisherId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-      await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13,
-        publisherId,
-        seriesIds: [seriesId],
-      });
-      return seriesId;
-    });
+    const { seriesId } = await t.run((ctx) =>
+      seedCatalog(ctx, {
+        publisher: { name: "Seven Seas Entertainment", slug: "seven-seas" },
+        series: { title, altTitles },
+        release: { isbn13 },
+      }),
+    );
+    return seriesId;
   }
 
   const linkOf = (t: TestT, mangaId: number) =>
@@ -1562,13 +1387,7 @@ describe("ann.sync — a title match that is another work", () => {
     await seedRegistry(t, true);
     // Tonogai's Doubt, already credited from its own ANN entry.
     const tonogai = await t.run(async (ctx) => {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 710,
-        title: "Doubt",
-        altTitles: [],
-        searchText: "Doubt",
-      });
+      const seriesId = await insertSeries(ctx, { title: "Doubt" });
       const personId = await ctx.db.insert("people", {
         publicId: 711,
         name: "Yoshiki Tonogai",
@@ -1642,37 +1461,12 @@ describe("ann — a single-volume line never lands on packaging or a split part 
     opts: { extent?: "complete" | "partial"; isbn13?: string } = {},
   ) {
     return await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volumes = await ctx.db.query("volumes").collect();
       const publisher = await ctx.db
         .query("publishers")
         .withIndex("by_slug", (q) => q.eq("slug", "viz-media"))
         .unique();
-      const publisherId =
-        publisher?._id ??
-        (await ctx.db.insert("publishers", { status: "active", name: "VIZ Media", slug: "viz-media" }));
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 4242,
-        publisherId,
-      });
-      for (const [order, label] of labels.entries()) {
-        await ctx.db.insert("volumeCoverages", {
-          editionId,
-          volumeId: volumes.find((v) => v.label === label)!._id,
-          order,
-          extent: opts.extent ?? "complete",
-        });
-      }
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13: opts.isbn13,
-        publisherId,
-        seriesIds: [series._id],
-      });
+      const publisherId = publisher?._id ?? (await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" }));
+      return await insertBook(ctx, publisherId, labels, { extent: opts.extent, release: { isbn13: opts.isbn13 } });
     });
   }
 
@@ -1757,6 +1551,12 @@ describe("ann — release-page descriptions", () => {
     10949: pageFor(10949, "Volume two."),
     10950: pageFor(10950, "Volume three."),
   };
+  /** Each Volume's Release Description once describedPages filled it (the cleaner drops the trailing credit). */
+  const FILLED: Record<string, string> = {
+    "1": BLURB,
+    "2": "Volume two.",
+    "3": "Volume three.",
+  };
 
   /**
    * Mirror LINES, then give each listed volume a VIZ Release carrying its
@@ -1773,44 +1573,19 @@ describe("ann — release-page descriptions", () => {
     await sync(t, { releasePages: false });
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
     const ids = await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volumes = await ctx.db.query("volumes").collect();
       const made: Record<string, Id<"releases">> = {};
-      for (const [i, book] of books.entries()) {
-        const volume = volumes.find((vol) => vol.label === book.label)!;
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: 100 + i,
-          publisherId: vizId,
-        });
-        await ctx.db.insert("volumeCoverages", {
-          editionId,
-          volumeId: volume._id,
-          order: 1,
-          extent: "complete",
-        });
-        const id = await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
-          isbn13: LINES.releases.find((r) => r.designator === `GN ${book.label}`)!.ean,
-          publisherId: vizId,
-          seriesIds: [series._id],
-          ...(book.description !== undefined ? { description: book.description } : {}),
-          ...(book.overridden ? { overriddenFields: ["description"] } : {}),
+      for (const book of books) {
+        const id = await insertBook(ctx, vizId, [book.label], {
+          release: {
+            isbn13: LINES.releases.find((r) => r.designator === `GN ${book.label}`)!.ean,
+            ...(book.description !== undefined ? { description: book.description } : {}),
+            ...(book.overridden ? { overriddenFields: ["description"] } : {}),
+          },
         });
         if (book.sevenSeas) {
-          const proposalId = await ctx.db.insert("proposals", {
-            author: { kind: "source", sourceKey: "sevenseas" },
-            state: "approved",
-            currentVersionNo: 1,
-          });
-          await ctx.db.insert("revisions", {
-            ref: { type: "release", id } as never,
-            seq: 1,
-            proposalId,
-            author: { kind: "source", sourceKey: "sevenseas" },
+          await insertSourceRevision(ctx, {
+            ref: { type: "release", id },
+            sourceKey: "sevenseas",
             changes: [{ field: "description", after: book.description }],
             comment: "Imported from Seven Seas Entertainment.",
           });
@@ -1853,20 +1628,7 @@ describe("ann — release-page descriptions", () => {
     await sync(t, { releasePages: false });
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
     // VIZ's GN 2 without an ISBN: the page pass links it rather than creating.
-    const existing = await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "2")!;
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9, publisherId: vizId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId: volume._id, order: 1, extent: "complete" });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        publisherId: vizId,
-        seriesIds: [series._id],
-      });
-    });
+    const existing = await t.run((ctx) => insertBook(ctx, vizId, ["2"]));
     await syncPages(t);
     expect((await obsFor(t, 10949))!.recordRef).toEqual({ type: "release", id: existing });
     expect(await descriptionOf(t, existing)).toBe("Volume two.");
@@ -1979,9 +1741,7 @@ describe("ann — release-page descriptions", () => {
   }
   async function runScheduled(t: TestT) {
     vi.restoreAllMocks();
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
   }
   const pageOf = async (t: TestT, annId: number) =>
     ((await obsFor(t, annId))!.snapshot as { page?: Record<string, unknown> }).page;
@@ -1998,21 +1758,7 @@ describe("ann — release-page descriptions", () => {
 
     // Another source creates the book; the next mirror links it by ISBN.
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
-    const releaseId = await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "2")!;
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9, publisherId: vizId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId: volume._id, order: 1, extent: "complete" });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13: "9781569319024",
-        publisherId: vizId,
-        seriesIds: [series._id],
-      });
-    });
+    const releaseId = await t.run((ctx) => insertBook(ctx, vizId, ["2"], { release: { isbn13: "9781569319024" } }));
     pageRequests.length = 0;
     await sync(t, { releasePages: false });
     expect((await obsFor(t, 10949))!.recordRef).toEqual({ type: "release", id: releaseId });
@@ -2030,9 +1776,7 @@ describe("ann — release-page descriptions", () => {
     const t = makeT();
     const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
     await syncPages(t, { maxRefetches: 2, maxFetches: 1 });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     // Across the run's links: two refetches, the third waits for the next run.
     expect(pageRequests).toHaveLength(2);
     const blank = async () =>
@@ -2057,7 +1801,7 @@ describe("ann — release-page descriptions", () => {
       "10949",
       "10950",
     ]);
-    for (const id of Object.values(ids)) expect(await descriptionOf(t, id)).not.toBeNull();
+    for (const [label, id] of Object.entries(ids)) expect(await descriptionOf(t, id), label).toBe(FILLED[label]);
   });
 
   it("the backfill continues after its time budget without repeating a page", async () => {
@@ -2073,7 +1817,7 @@ describe("ann — release-page descriptions", () => {
       "10949",
       "10950",
     ]);
-    for (const id of Object.values(ids)) expect(await descriptionOf(t, id)).not.toBeNull();
+    for (const [label, id] of Object.entries(ids)) expect(await descriptionOf(t, id), label).toBe(FILLED[label]);
   });
 
   it("the backfill refuses to run beside an ANN Import Run", async () => {
@@ -2114,9 +1858,7 @@ describe("ann — release-page descriptions", () => {
     });
     clock.mockRestore();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     // One failure in the first link, four in the next: five in a row, stop.
     expect(pageRequests).toHaveLength(5);
     expect(warn).toHaveBeenCalledWith(
@@ -2197,21 +1939,7 @@ describe("ann — release-page descriptions", () => {
     // Stored before the cleaner dropped credit sentences.
     await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.");
     const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
-    const releaseId = await t.run(async (ctx) => {
-      const series = (await ctx.db.query("series").collect())[0]!;
-      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "2")!;
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9, publisherId: vizId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId: volume._id, order: 1, extent: "complete" });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13: "9781569319024",
-        publisherId: vizId,
-        seriesIds: [series._id],
-      });
-    });
+    const releaseId = await t.run((ctx) => insertBook(ctx, vizId, ["2"], { release: { isbn13: "9781569319024" } }));
     await sync(t, { releasePages: false });
     expect(await descriptionOf(t, releaseId)).toBe("Volume two.");
   });
@@ -2274,18 +2002,10 @@ describe("ann — release-page descriptions", () => {
   /** A Revision by `sourceKey` setting the Release's description, as an import would. */
   async function sourceWrote(t: TestT, releaseId: Id<"releases">, sourceKey: string, text: string) {
     await t.run(async (ctx) => {
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
+      await insertSourceRevision(ctx, {
+        sourceKey,
         ref: { type: "release", id: releaseId },
-        seq: 1000,
-        proposalId,
-        author: { kind: "source", sourceKey },
         changes: [{ field: "description", after: text }],
-        comment: "Imported.",
       });
       await ctx.db.patch(releaseId, { description: text });
     });
@@ -2346,12 +2066,10 @@ describe("ann — release-page descriptions", () => {
     // More lines than one repair batch, sorting before release:10948.
     await t.run(async (ctx) => {
       for (let i = 0; i < 120; i++) {
-        await ctx.db.insert("sourceObservations", {
+        await insertObservation(ctx, {
           sourceKey: "ann",
           sourceRecordId: `release:0${String(i).padStart(4, "0")}`,
           snapshot: { kind: "annRelease", annId: `0${i}` },
-          lastSeenAt: 0,
-          withdrawn: false,
         });
       }
     });
@@ -2361,9 +2079,7 @@ describe("ann — release-page descriptions", () => {
     vi.spyOn(console, "log").mockImplementation((message: string) => void logs.push(message));
     expect(await repair(t)).toMatchObject({ scanned: 100, continued: true });
     clock.mockRestore();
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     expect(await descriptionOf(t, ids["1"]!)).toBe(BLURB);
     // The chain's final counts reach the logs, not just the first link's CLI.
     const done = logs.at(-1)!;
@@ -2426,11 +2142,6 @@ describe("ann — release-page descriptions", () => {
       const t = makeT();
       const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
       await syncPages(t);
-      const before = {
-        one: await descriptionOf(t, ids["1"]!),
-        two: await descriptionOf(t, ids["2"]!),
-        three: await descriptionOf(t, ids["3"]!),
-      };
       // 10948: a degraded page with a stub of the text.
       // 10949: its Release is locked.
       // 10950: its Release's text came from another line (10948).
@@ -2447,8 +2158,9 @@ describe("ann — release-page descriptions", () => {
         cleared: 0,
         held: 1,
       });
-      expect(await descriptionOf(t, ids["1"]!)).toBe(before.one);
-      expect(await descriptionOf(t, ids["2"]!)).toBe(before.two);
+      expect(await descriptionOf(t, ids["1"]!)).toBe(FILLED["1"]);
+      expect(await descriptionOf(t, ids["2"]!)).toBe(FILLED["2"]);
+      expect(await descriptionOf(t, ids["3"]!)).toBe(FILLED["3"]);
 
       // A failed fetch keeps the stored page and the text; a 404 too.
       await t.run(async (ctx) => ctx.db.patch(ids["2"]!, { locked: false }));
@@ -2468,8 +2180,7 @@ describe("ann — release-page descriptions", () => {
         refreshed: 0,
         cleared: 0,
       });
-      expect(await descriptionOf(t, ids["2"]!)).toBe(before.two);
-      expect(before.three).not.toBeNull();
+      expect(await descriptionOf(t, ids["2"]!)).toBe(FILLED["2"]);
     });
 
     it("decodes a legacy Windows-1252 byte in ANN's UTF-8 page instead of storing U+FFFD", async () => {
