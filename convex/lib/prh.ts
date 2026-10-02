@@ -416,7 +416,7 @@ const NOT_A_NAME =
 const FUSED = /\s[x×]\s/i;
 /** Words that make a name an organisation's: "Manta Comics", "SNK Corporation", "Team Moon". */
 const ORGANISATION =
-  /\b(?:comics|studio\w*|corporation|committee|productions?|project|projekt|team|entertainment|games)\b|\b(?:corp|inc|co|ltd)\.?$/i;
+  /\b(?:comics|studio\w*|corporation|committee|productions?|project|projekt|team|entertainment|games|battalion)\b|\b(?:corp|inc|co|ltd|soft)\.?$/i;
 /**
  * Organisations the extract credits that carry no organisation word: game
  * and anime studios named as creators (folded: lowercase, letters only).
@@ -429,7 +429,18 @@ const KNOWN_ORGANISATIONS = new Set([
   "bandainamco",
   "mihoyo",
   "snk",
+  "tokyopop",
+  "khara",
+  "zag",
+  "nttsolmare",
+  "gainax",
+  "hololive",
+  "quinrose",
+  "atlus",
+  "bones",
 ]);
+/** A label naming an adaptation: "Adapted and Illustrated by", "Adaptation and Artwork by". */
+const ADAPTED = /\badapt/i;
 /** An unlabelled name this long on a line with no labels is likely two people: "Kazuo Koike Goseki Kojima". */
 const FUSED_WORDS = 4;
 
@@ -465,7 +476,8 @@ export function isPersonName(name: string): boolean {
  * - One unlabelled name opening a labelled line takes the role the labels
  *   leave open: "A; Illustrated by B" → A wrote it, "A; Story by B" → A
  *   drew it, "A; created by B" → A is the author, and with both story and
- *   art labelled A is the original creator. Several unlabelled names
+ *   art labelled, or beside an adaptation label ("A; Adapted and
+ *   Illustrated by B"), A is the original creator. Several unlabelled names
  *   beside a story or art label ("A, B, and C; Illustrated by D") credit
  *   nobody: they may be co-writers or the original creators.
  * - A line crediting a writer but nobody for the art ("Written by A")
@@ -489,6 +501,7 @@ export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
   const labeled: AuthorCredit[] = [];
   let lead: string[] = [];
   let labels = 0;
+  let adapted = false;
   let first = true;
   for (const clause of text.split(CLAUSE_BREAK)) {
     if (clause === "") continue;
@@ -498,6 +511,7 @@ export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
     }
     const marks = [...clause.matchAll(LABEL)];
     labels += marks.length;
+    adapted ||= marks.some((mark) => mark[1] !== undefined && ADAPTED.test(mark[1]));
     const opening = marks[0]?.index ?? clause.length;
     if (opening > 0) {
       const names = first ? splitNames(clause.slice(0, opening)) : null;
@@ -519,8 +533,9 @@ export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
     labeled.some((credit) => credit.role === task || credit.role === "story_art");
   const story = has("story");
   const art = has("art");
+  // Someone else adapted it: an unlabelled name is the work's original creator.
   const leadRole: AuthorCredit["role"] =
-    story && art ? "original" : art ? "story" : story ? "art" : "author";
+    adapted || (story && art) ? "original" : art ? "story" : story ? "art" : "author";
   const leads = lead.length > 1 && (story || art) ? [] : lead;
   const credits: AuthorCredit[] = [...leads.map((name) => ({ name, role: leadRole })), ...labeled];
   const drawn = credits.some((credit) => credit.role === "art" || credit.role === "story_art");

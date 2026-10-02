@@ -199,7 +199,7 @@ describe("people.rebuild", () => {
 // Kodansha credits to Eiichiro Oda and Shirow Masamune, whom ANN knows as
 // "Eiichirō Oda" and "Masamune Shirow". ANN credits One Piece, so
 // Kodansha's name there is unused.
-async function publisherCatalog() {
+async function publisherCatalog(options: { budgetMs?: number } = {}) {
   const t = convexTest(schema);
   const ids = await t.run(async (ctx) => {
     let publicId = 100;
@@ -317,7 +317,19 @@ async function publisherCatalog() {
       merged,
     };
   });
-  await t.action(internal.people.rebuild, {});
+  if (options.budgetMs === undefined) {
+    await t.action(internal.people.rebuild, {});
+  } else {
+    // Each action hands on to a scheduled one once its budget is spent.
+    vi.useFakeTimers();
+    try {
+      const first = await t.action(internal.people.rebuild, { budgetMs: options.budgetMs });
+      expect(first).toMatchObject({ continued: true });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
   return { t, ids };
 }
 
@@ -339,6 +351,34 @@ async function creditLines(t: TestT, seriesId: Id<"series">) {
     return lines.sort();
   });
 }
+
+/** Every credit row and person, by name and title, for comparing two catalogs. */
+async function catalogState(t: TestT) {
+  return await t.run(async (ctx) => {
+    const credits = await Promise.all(
+      (await ctx.db.query("seriesCredits").collect()).map(async (row) => {
+        const series = await ctx.db.get(row.seriesId);
+        const person = await ctx.db.get(row.personId);
+        return `${series?.title} | ${person?.name}: ${row.role} ${row.source ?? "ann"}`;
+      }),
+    );
+    const people = (await ctx.db.query("people").collect()).map(
+      (p) => `${p.name} ${p.annId ?? "-"} ${p.seriesCount} ${p.originalCount}`,
+    );
+    return { credits: credits.sort(), people: people.sort() };
+  });
+}
+
+/** The observation a source keeps under a record id. */
+const observationOf = (t: TestT, sourceKey: string, sourceRecordId: string) =>
+  t.run(async (ctx) =>
+    (await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q.eq("sourceKey", sourceKey).eq("sourceRecordId", sourceRecordId),
+      )
+      .unique())!,
+  );
 
 const personNamed = (t: TestT, name: string) =>
   t.run(async (ctx) => (await ctx.db.query("people").collect()).filter((p) => p.name === name));
@@ -461,6 +501,82 @@ describe("people.rebuild publisher credits", () => {
     expect(verdict).toBe("unknown");
   });
 
+  it("lowers a role when PRH's line does, keeping the row", async () => {
+    const { t, ids } = await publisherCatalog();
+    const ruin = await observationOf(t, "prh", "9781646516650");
+    const setLine = (author: string) =>
+      t.run((ctx) => ctx.db.patch(ruin._id, { snapshot: { kind: "prhTitle", author } }));
+    await setLine("Story and Art by Muneyuki Kaneshiro");
+    await t.action(internal.people.rebuild, {});
+    expect(await creditLines(t, ids.ruin)).toEqual(["Muneyuki Kaneshiro: story_art (prh)"]);
+    const rowId = async () =>
+      (await t.run((ctx) =>
+        ctx.db
+          .query("seriesCredits")
+          .withIndex("by_series", (q) => q.eq("seriesId", ids.ruin))
+          .collect(),
+      )).find((row) => row.role !== "art")?._id;
+    const before = await rowId();
+    await setLine("Story by Muneyuki Kaneshiro; Art by Yusuke Nomura");
+    await t.action(internal.people.rebuild, {});
+    expect(await creditLines(t, ids.ruin)).toEqual([
+      "Muneyuki Kaneshiro: story (prh)",
+      "Yusuke Nomura: art (prh)",
+    ]);
+    expect(await rowId()).toBe(before);
+  });
+
+  it("deletes a Series' creators rows as soon as PRH credits it, before any sweep", async () => {
+    const { t, ids } = await publisherCatalog();
+    const volume = await observationOf(t, "kodansha", "1122/v1#physical");
+    await t.run((ctx) =>
+      ctx.db.insert("sourceObservations", {
+        sourceKey: "prh",
+        sourceRecordId: "9781111111111",
+        recordRef: volume.recordRef,
+        snapshot: { kind: "prhTitle", author: "Peko Watanabe" },
+        lastSeenAt: 0,
+        withdrawn: false,
+      }),
+    );
+    await t.mutation(internal.people.publisherBatch, {
+      sourceKey: "prh",
+      after: null,
+      rebuiltAt: Date.now() + 1000,
+    });
+    expect(await creditLines(t, ids.marriage)).toEqual(["Peko Watanabe: author (prh)"]);
+  });
+
+  it("adopts a publisher-named person only when no ANN namesake shares the key", async () => {
+    const { t, ids } = await publisherCatalog();
+    const nameOnly = await t.run(async (ctx) => {
+      // ANN's Kei Tanaka (id 50) and a publisher's Kei Tanaka, who may be
+      // either him or someone else.
+      const person = (annId?: string) =>
+        ctx.db.insert("people", {
+          publicId: 9000 + Number(annId ?? 0),
+          name: "Kei Tanaka",
+          nameKey: nameKey("Kei Tanaka"),
+          ...(annId ? { annId } : {}),
+          seriesCount: 0,
+          originalCount: 0,
+          coverUrl: null,
+          coverIsbn: null,
+        });
+      await person("50");
+      const id = await person();
+      await ctx.db.insert(
+        "sourceObservations",
+        annObservation(ids.anthology, "500", [{ personId: "51", name: "Kei Tanaka", task: "Art" }]),
+      );
+      return id;
+    });
+    await t.action(internal.people.rebuild, {});
+    const keis = await personNamed(t, "Kei Tanaka");
+    expect(keis.map((p) => p.annId ?? null).sort()).toEqual(["50", "51", null]);
+    expect(keis.find((p) => p._id === nameOnly)?.annId).toBeUndefined();
+  });
+
   it("shows no ANN link on the page of a person only publishers name", async () => {
     const { t } = await publisherCatalog();
     const [peko] = await personNamed(t, "Peko Watanabe");
@@ -561,6 +677,14 @@ describe("people.rebuild when the publisher pass fails", () => {
     const [oda] = await personNamed(t, "Eiichirō Oda");
     // Only the one-shot's publisher credit is left to count.
     expect(oda).toMatchObject({ seriesCount: 1 });
+  });
+});
+
+describe("people.rebuild across actions", () => {
+  it("gives the same rows when split across continuations as in one action", async () => {
+    const whole = await publisherCatalog();
+    const split = await publisherCatalog({ budgetMs: 0 });
+    expect(await catalogState(split.t)).toEqual(await catalogState(whole.t));
   });
 });
 

@@ -26,7 +26,7 @@
 // show (`annPersonUrl`).
 
 import { paginationOptsValidator } from "convex/server";
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -35,6 +35,7 @@ import {
   internalMutation,
   internalQuery,
   query,
+  type ActionCtx,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
@@ -159,76 +160,178 @@ const CREDITS_PER_PERSON = 1000;
 /** Credits read per Series: a handful in practice. */
 const CREDITS_PER_SERIES = 50;
 
+/** Work per rebuild action before it continues in a fresh one (actions run ≤10 min). */
+const REBUILD_BUDGET_MS = 5 * 60 * 1000;
+/** Rows per role-settling mutation. */
+const SETTLE_BATCH = 500;
+
+/**
+ * Where a rebuild is, carried from one action to the next: the phase, its
+ * cursor (`cursor` for observation and row walks, `afterPublicId` for
+ * people), the run's stamp, the running counts, and the publisher pass's
+ * error message once it failed.
+ */
+const rebuildStateValidator = v.object({
+  startedAt: v.number(),
+  phase: v.union(
+    v.literal("ann"),
+    v.literal("publisher"),
+    v.literal("sweep"),
+    v.literal("settle"),
+    v.literal("stats"),
+  ),
+  /** The publisher pass's place in PUBLISHER_SOURCES. */
+  source: v.number(),
+  cursor: v.union(v.string(), v.null()),
+  afterPublicId: v.union(v.number(), v.null()),
+  publisherError: v.union(v.string(), v.null()),
+  credits: v.number(),
+  publisherCredits: v.number(),
+  swept: v.number(),
+  people: v.number(),
+});
+type RebuildState = Infer<typeof rebuildStateValidator>;
+
 /**
  * Rebuild every Series credit from the stored ANN manga observations, then
  * credit the Series ANN did not from the publishers' release observations,
- * sweep credits no observation still gives, then refresh each author's
- * derived counts and jacket. Idempotent and safe beside an overlapping run
- * (stamps only move forward). A failed publisher pass still lets ANN's
- * stale rows be swept and the stats refresh, keeping every publisher row
- * (the pass may not have reached them to restamp), then rethrows. Runs
- * every six hours (crons.ts); by hand: `npx convex run people:rebuild`.
+ * sweep credits no observation still gives, settle publisher rows on the
+ * roles this run gave them, then refresh each author's derived counts and
+ * jacket. Each phase runs only after the one before it finished for the
+ * same `startedAt` stamp, so the sweep never removes rows a pass has yet to
+ * restamp. Idempotent and safe beside an overlapping run (stamps only move
+ * forward). After `budgetMs` (default REBUILD_BUDGET_MS) an action hands its
+ * state to a fresh one. A failed publisher pass still lets ANN's stale rows
+ * be swept and the stats refresh, keeping every publisher row (the pass may
+ * not have reached them to restamp) and their roles, then throws its
+ * error. Runs every six hours (crons.ts); by hand:
+ * `npx convex run people:rebuild`.
  */
 export const rebuild = internalAction({
-  args: {},
-  handler: async (ctx) =>
+  args: { state: v.optional(rebuildStateValidator), budgetMs: v.optional(v.number()) },
+  handler: async (ctx, { state: resumed, budgetMs }) =>
     withExceptionCapture("people.rebuild", ctx, async () => {
-      const startedAt = Date.now();
-      let after: string | null = null;
-      let credits = 0;
-      for (;;) {
-        const batch: { next: string | null; credits: number } = await ctx.runMutation(
-          internal.people.creditBatch,
-          { after, rebuiltAt: startedAt },
-        );
-        credits += batch.credits;
-        if (batch.next === null) break;
-        after = batch.next;
-      }
-      // After the ANN pass: it decides which Series are ANN's and gives
-      // every ANN person a name key for publisher names to match.
-      let publisherCredits = 0;
-      let publisherError: unknown = null;
-      try {
-        for (const { sourceKey } of PUBLISHER_SOURCES) {
-          let cursor: string | null = null;
-          for (;;) {
-            const batch: { next: string | null; credits: number } = await ctx.runMutation(
-              internal.people.publisherBatch,
-              { sourceKey, after: cursor, rebuiltAt: startedAt },
-            );
-            publisherCredits += batch.credits;
-            if (batch.next === null) break;
-            cursor = batch.next;
-          }
+      const began = Date.now();
+      const state: RebuildState = resumed ?? {
+        startedAt: began,
+        phase: "ann",
+        source: 0,
+        cursor: null,
+        afterPublicId: null,
+        publisherError: null,
+        credits: 0,
+        publisherCredits: 0,
+        swept: 0,
+        people: 0,
+      };
+      const counts = () => ({
+        credits: state.credits,
+        publisherCredits: state.publisherCredits,
+        swept: state.swept,
+        people: state.people,
+      });
+      for (let steps = 0; ; steps++) {
+        if (steps > 0 && Date.now() - began >= (budgetMs ?? REBUILD_BUDGET_MS)) {
+          await ctx.scheduler.runAfter(0, internal.people.rebuild, { state, budgetMs });
+          return { ...counts(), continued: true as const, phase: state.phase };
         }
-      } catch (error) {
-        publisherError = error;
+        if (await rebuildStep(ctx, state)) break;
       }
-      const annOnly = publisherError !== null;
-      let swept = 0;
-      for (;;) {
-        const n: number = await ctx.runMutation(internal.people.sweepCredits, {
-          before: startedAt,
-          annOnly,
-        });
-        swept += n;
-        if (n < SWEEP_BATCH) break;
-      }
-      let people = 0;
-      let afterPublicId: number | null = null;
-      for (;;) {
-        const batch: { next: number | null; count: number } = await ctx.runMutation(
-          internal.people.statsBatch,
-          { afterPublicId },
-        );
-        people += batch.count;
-        if (batch.next === null) break;
-        afterPublicId = batch.next;
-      }
-      if (publisherError !== null) throw publisherError;
-      return { credits, publisherCredits, swept, people, ms: Date.now() - startedAt };
+      if (state.publisherError !== null) throw new Error(state.publisherError);
+      return { ...counts(), continued: false as const, ms: Date.now() - state.startedAt };
     }),
+});
+
+/**
+ * Run one mutation of a rebuild and move `state` past it. True once the
+ * rebuild is done.
+ */
+async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean> {
+  const rebuiltAt = state.startedAt;
+  switch (state.phase) {
+    case "ann": {
+      const batch: { next: string | null; credits: number } = await ctx.runMutation(
+        internal.people.creditBatch,
+        { after: state.cursor, rebuiltAt },
+      );
+      state.credits += batch.credits;
+      state.cursor = batch.next;
+      // Next the publishers: the ANN pass decided which Series are ANN's
+      // and gave every ANN person a name key for publisher names to match.
+      if (batch.next === null) state.phase = "publisher";
+      return false;
+    }
+    case "publisher": {
+      const source = PUBLISHER_SOURCES[state.source];
+      if (!source) {
+        state.phase = "sweep";
+        return false;
+      }
+      try {
+        const batch: { next: string | null; credits: number } = await ctx.runMutation(
+          internal.people.publisherBatch,
+          { sourceKey: source.sourceKey, after: state.cursor, rebuiltAt },
+        );
+        state.publisherCredits += batch.credits;
+        state.cursor = batch.next;
+        if (batch.next === null) state.source++;
+      } catch (error) {
+        state.publisherError = error instanceof Error ? error.message : String(error);
+        state.cursor = null;
+        state.phase = "sweep";
+      }
+      return false;
+    }
+    case "sweep": {
+      const n: number = await ctx.runMutation(internal.people.sweepCredits, {
+        before: rebuiltAt,
+        annOnly: state.publisherError !== null,
+      });
+      state.swept += n;
+      if (n < SWEEP_BATCH) state.phase = state.publisherError === null ? "settle" : "stats";
+      return false;
+    }
+    case "settle": {
+      const next: string | null = await ctx.runMutation(internal.people.settleRoles, {
+        rebuiltAt,
+        cursor: state.cursor,
+      });
+      state.cursor = next;
+      if (next === null) state.phase = "stats";
+      return false;
+    }
+    case "stats": {
+      const batch: { next: number | null; count: number } = await ctx.runMutation(
+        internal.people.statsBatch,
+        { afterPublicId: state.afterPublicId },
+      );
+      state.people += batch.count;
+      state.afterPublicId = batch.next;
+      return batch.next === null;
+    }
+  }
+}
+
+/**
+ * Show the role this run's observations gave each publisher row it stamped
+ * (`runRole`), once the whole publisher pass is done: a correction that
+ * lowers a role ("Story and Art by A" → "Story by A; Art by B") lands here.
+ * A page of the run's rows at a time; the next cursor, or null when done.
+ */
+export const settleRoles = internalMutation({
+  args: { rebuiltAt: v.number(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { rebuiltAt, cursor }) => {
+    const page = await ctx.db
+      .query("seriesCredits")
+      .withIndex("by_rebuiltAt", (q) => q.eq("rebuiltAt", rebuiltAt))
+      .paginate({ cursor, numItems: SETTLE_BATCH });
+    for (const row of page.page) {
+      if (row.runRole !== undefined && row.runRole !== row.role) {
+        await ctx.db.patch(row._id, { role: row.runRole });
+      }
+    }
+    return page.isDone ? null : page.continueCursor;
+  },
 });
 
 /** Credit a batch of ANN manga observations, by source record id. */
@@ -317,7 +420,8 @@ async function creditObservation(
  * The author row for an ANN person id, renamed to ANN's spelling (and its
  * name key set, which rows from before the key existed lack). A person
  * with no row for the id yet adopts the publisher-named row of the same
- * name key, so their public id stays; otherwise a new row.
+ * name key when it is the only row of that key, so their public id stays;
+ * otherwise a new row.
  *
  * Adoption goes by name alone, so a different person ANN knows by the same
  * name (a "Kei", a "Fly") inherits the publisher-named person's id and
@@ -341,7 +445,9 @@ async function upsertPerson(ctx: MutationCtx, credit: AnnCredit): Promise<Id<"pe
     .query("people")
     .withIndex("by_nameKey", (q) => q.eq("nameKey", key))
     .take(NAME_MATCHES);
-  const nameOnly = named.find((p) => p.annId === undefined);
+  // Only the sole row of its key: beside an ANN namesake, which person a
+  // publisher meant by the name can't be known.
+  const nameOnly = named.length === 1 && named[0]!.annId === undefined ? named[0] : undefined;
   if (nameOnly) {
     await ctx.db.patch(nameOnly._id, { name: credit.name, annId: credit.personId });
     return nameOnly._id;
@@ -423,9 +529,11 @@ function publisherCredits(snapshot: unknown): AuthorCredit[] {
  * Stamp the credits one publisher observation gives the one active Series
  * its Release belongs to, unless ANN credited that Series in this run (or,
  * for role-less `creators` names, PRH did). Each person keeps one row per
- * Series and marker, its role merged (`mergeRoles`) with what earlier
- * observations of the run stamped, so names union across a Series'
- * volumes. Returns the credits stamped.
+ * Series and marker, its `runRole` merged (`mergeRoles`) with what earlier
+ * observations of the run gave, so names union across a Series' volumes;
+ * `settleRoles` makes that the shown role once the pass is done. PRH
+ * crediting a Series deletes its `creators` rows at once, as the ANN pass
+ * deletes publisher rows. Returns the credits stamped.
  */
 async function creditFromPublisher(
   ctx: MutationCtx,
@@ -461,31 +569,36 @@ async function creditFromPublisher(
   let count = 0;
   for (const [personId, roles] of incoming) {
     const mine = rows.filter((c) => c.source === marker && c.personId === personId);
-    const stamped = mine.filter((c) => c.rebuiltAt >= rebuiltAt);
-    const role = mergeRoles([...roles, ...stamped.map((c) => c.role)]);
-    // A role this run stamped earlier that the merge now replaces ("author"
-    // from one PRH line beside "story" from another).
-    for (const row of stamped.filter((c) => c.role !== role)) {
-      await ctx.db.delete(row._id);
-      rows.splice(rows.indexOf(row), 1);
-    }
-    // With nothing stamped yet this run, a row the person already has whose
-    // role covers this one (story over author, story_art over story) keeps
-    // its id, instead of a lesser row going in now only to be replaced when
-    // the observation with the fuller role comes, a batch or more later.
+    const stamped = mine.find((c) => c.rebuiltAt >= rebuiltAt);
+    const runRole = mergeRoles([...roles, ...(stamped ? [stamped.runRole ?? stamped.role] : [])]);
+    const covers = (c: Doc<"seriesCredits">) => mergeRoles([c.role, runRole]) === c.role;
+    // One row per person, keeping its id across runs: the one this run
+    // stamped, else one already in the run's role, else one whose role
+    // covers it (story_art over story), else any.
     const row =
-      mine.find((c) => c.role === role) ??
-      (stamped.length === 0 ? mine.find((c) => mergeRoles([c.role, role]) === c.role) : undefined);
+      stamped ?? mine.find((c) => c.role === runRole) ?? mine.find(covers) ?? mine[0];
     if (row) {
-      if (row.rebuiltAt < rebuiltAt) {
-        await ctx.db.patch(row._id, { rebuiltAt });
-        row.rebuiltAt = rebuiltAt;
+      // Shown: a covering role stays until the run settles, so the row
+      // doesn't drop to "author" between the batches of "author" and "art".
+      const role = covers(row) ? row.role : runRole;
+      if (row.rebuiltAt < rebuiltAt || row.role !== role || row.runRole !== runRole) {
+        const patch = { rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt), role, runRole };
+        await ctx.db.patch(row._id, patch);
+        Object.assign(row, patch);
       }
     } else {
-      const fields = { seriesId, personId, role, source: marker, rebuiltAt };
+      const fields = { seriesId, personId, role: runRole, runRole, source: marker, rebuiltAt };
       rows.push({ _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields });
     }
     count++;
+  }
+  // PRH credits the Series now: its role-less `creators` rows go here, not
+  // at the sweep, so no byline shows both meanwhile.
+  if (marker === "prh" && count > 0) {
+    for (const row of rows.filter((c) => c.source === "creators")) {
+      await ctx.db.delete(row._id);
+      rows.splice(rows.indexOf(row), 1);
+    }
   }
   return count;
 }

@@ -75,6 +75,16 @@ const dataRole = v.union(
 // revisions, and suppressions all target one of these. Volume-coverage rows
 // are deliberately absent: coverage is edited as the pseudo-field
 // "volumeCoverage" of its Edition, so revision history lands on the Edition.
+// A Series credit's role (people.ts ROLE_ORDER): "author" is the role-less
+// credit ("By") a publisher gives when it names someone without a task.
+const creditRole = v.union(
+  v.literal("story_art"),
+  v.literal("story"),
+  v.literal("art"),
+  v.literal("original"),
+  v.literal("author"),
+);
+
 // Exported for the moderation write path (moderation.ts), which takes and
 // stores these refs.
 export const recordRef = v.union(
@@ -315,18 +325,17 @@ export default defineSchema({
   seriesCredits: defineTable({
     seriesId: v.id("series"),
     personId: v.id("people"),
-    role: v.union(
-      v.literal("story_art"),
-      v.literal("story"),
-      v.literal("art"),
-      v.literal("original"),
-      v.literal("author"),
-    ),
+    role: creditRole,
     // Which publisher fallback wrote the row: "prh" for PRH's parsed author
     // line, "creators" for Kodansha's and Seven Seas' role-less creator
     // lists (used only where PRH credits nothing). Absent for rows derived
     // from ANN.
     source: v.optional(v.union(v.literal("prh"), v.literal("creators"))),
+    // Publisher rows only: the role the observations of the rebuild that
+    // last stamped the row gave it. `role` may show a fuller role from an
+    // earlier run until that rebuild settles (people.ts settleRoles), so a
+    // role the run has yet to reach doesn't flicker away and back.
+    runRole: v.optional(creditRole),
     rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])

@@ -3,7 +3,7 @@
 // it appeared where the count matters.
 
 import { describe, expect, it } from "vitest";
-import { parseAuthorCredits } from "./prh";
+import { isPersonName, parseAuthorCredits } from "./prh";
 
 /** The parse as "name: role" lines, for compact expectations. */
 const credits = (line: string) =>
@@ -131,6 +131,22 @@ describe("parseAuthorCredits", () => {
       "Karin Suzuragi: art",
     ]);
     expect(credits("Manga by Shiramine; created by TYPE-MOON")).toEqual(["Shiramine: art"]);
+    expect(credits("TOKYOPOP")).toEqual([]);
+    expect(credits("Hololive")).toEqual([]);
+    expect(credits("Story by Koma Warita; Art by Riku Tsuchida; Created by ZAG")).toEqual([
+      "Koma Warita: story",
+      "Riku Tsuchida: art",
+    ]);
+    expect(credits("Subaru Nitou; Original Work by NTT Solmare")).toEqual(["Subaru Nitou: author"]);
+    expect(credits("Ryo Kamito; Original Story by Liar Soft")).toEqual(["Ryo Kamito: author"]);
+  });
+
+  it("names the creator of an adapted work its original creator", () => {
+    // As in the "Story & Art by" and "Created by" variants of the same line.
+    expect(credits("Osamu Tezuka; Adapted and Illustrated by Satoshi Shiki")).toEqual([
+      "Osamu Tezuka: original",
+      "Satoshi Shiki: art",
+    ]);
   });
 
   it("makes a writer nobody draws for the role-less author", () => {
@@ -156,5 +172,15 @@ describe("parseAuthorCredits", () => {
     ).toEqual([]);
     expect(credits("")).toEqual([]);
     expect(parseAuthorCredits(undefined)).toEqual([]);
+  });
+});
+
+describe("isPersonName", () => {
+  it("passes people and stops organisations in a creator list", () => {
+    expect(isPersonName("Akane Shimizu")).toBe(true);
+    expect(isPersonName("CLAMP")).toBe(true);
+    for (const name of ["Various", "Atlus", "BONES", "616th Special Information Battalion"]) {
+      expect(isPersonName(name)).toBe(false);
+    }
   });
 });
