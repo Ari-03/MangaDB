@@ -5,126 +5,56 @@
 // append-only history, last-seen-only bumps, Bootstrap Mode tagging, the
 // steady-state review queue, covers in file storage, and withdrawal.
 
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
-import { convexTest, type TestConvex } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
-import { MIN_COVER_BYTES } from "./lib/covers";
 import { normalizeBook, parseBookListing, parseBookPage, type BookSnapshot } from "./lib/sevenSeas";
-import schema from "./schema";
-
-const BASE = "https://sevenseasentertainment.com";
-
-type FixtureBook = {
-  id: number;
-  slug: string;
-  title: string;
-  modified?: string;
-  seriesSlug?: string;
-  seriesTitle?: string;
-  date?: string;
-  price?: string;
-  category?: string;
-  isbn?: string;
-  cover?: boolean;
-  /** The cover's file under uploads/covers (default `{slug}.jpg`); an .svg is a placeholder. */
-  coverFile?: string;
-  /** The listing's `content.rendered` blurb HTML. */
-  blurb?: string;
-};
-
-function bookPageHtml(b: FixtureBook): string {
-  const file = b.coverFile ?? `${b.slug}.jpg`;
-  const cover =
-    b.cover === false
-      ? ""
-      : `<img src="${BASE}/wp-content/uploads/covers/${file}" title="${b.title}" alt="${b.title}">`;
-  const series = b.seriesSlug
-    ? `<b>Series: </b><span> <a href="${BASE}/series/${b.seriesSlug}/">${b.seriesTitle ?? b.title}</a></span>`
-    : "";
-  return `<html><body><div id="volume-module">${cover}</div><div id="volume-meta"> ${series}<p><b>Story & Art by:</b> <span class="creator"><a href="${BASE}/creator/someone/">Someone</a></span></p>${
-    b.date ? `<p><b>Release Date:</b> ${b.date}</p>` : ""
-  }${b.price ? `<p><b>Price:</b> ${b.price}</p>` : ""}<p><b>Format:</b> ${
-    b.category ?? "Manga"
-  }</p>${b.isbn ? `<p><b>ISBN:</b> ${b.isbn}</p>` : ""}</div></body></html>`;
-}
-
-/** Cover-image URLs the stubbed site served, cleared after each test. */
-const imageRequests: string[] = [];
-
-/** One book's item in the listing (`wp-json/wp/v2/books`) wire shape. */
-function listingItem(b: FixtureBook) {
-  return {
-    id: b.id,
-    status: "publish",
-    slug: b.slug,
-    link: `${BASE}/books/${b.slug}/`,
-    title: { rendered: b.title },
-    modified_gmt: b.modified ?? "2026-08-01T00:00:00",
-    content: { rendered: b.blurb ?? "" },
-  };
-}
-
-/** Stub global fetch with a fixture site serving the live wire shapes. */
-function stubSite(books: FixtureBook[]) {
-  const listing = books.map(listingItem);
-  const pages = new Map(books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]));
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url = typeof input === "object" && "url" in input ? input.url : String(input);
-    if (url.startsWith(`${BASE}/wp-json/wp/v2/books`)) {
-      return new Response(JSON.stringify(listing), {
-        headers: {
-          "x-wp-totalpages": books.length === 0 ? "0" : "1",
-          "content-type": "application/json",
-        },
-      });
-    }
-    const page = pages.get(url);
-    if (page !== undefined) {
-      return new Response(page, { headers: { "content-type": "text/html" } });
-    }
-    if (url.includes("/wp-content/uploads/")) {
-      imageRequests.push(url);
-      return url.endsWith(".svg")
-        ? new Response("<svg xmlns='http://www.w3.org/2000/svg'/>", {
-            headers: { "content-type": "image/svg+xml" },
-          })
-        : new Response(new Blob([new Uint8Array(MIN_COVER_BYTES + 1).fill(0xff)]), {
-            headers: { "content-type": "image/jpeg" },
-          });
-    }
-    return new Response("not found", { status: 404 });
-  });
-}
+import {
+  type CatalogOverrides,
+  insertObservation,
+  insertPublisher,
+  insertSeries,
+  insertSourceRevision,
+  seedCatalog,
+} from "./test.factories";
+import { alice, bundleMembers, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
+import {
+  ALPHA_1,
+  bookPageHtml,
+  type FixtureBook,
+  imageRequests,
+  listingItem,
+  SEVEN_SEAS as BASE,
+  stubSite,
+} from "./test.imports";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   imageRequests.length = 0;
 });
 
-async function seedRegistry(t: ReturnType<typeof convexTest>, bootstrap: boolean) {
-  await t.mutation(internal.importSources.seedRegistry, {});
-  await t.mutation(internal.importSources.setBootstrapModeInternal, {
-    on: bootstrap,
-  });
-}
-
-const sync = (t: ReturnType<typeof convexTest>, args: object = {}) =>
+const sync = (t: TestT, args: object = {}) =>
   t.action(internal.sevenSeas.sync, { politeDelayMs: 0, ...args });
 
-const ALPHA_1: FixtureBook = {
-  id: 101,
-  slug: "alpha-manga-vol-1",
-  title: "Alpha Adventures (Manga) Vol. 1",
-  modified: "2026-08-01T00:00:00",
-  seriesSlug: "alpha-manga",
-  seriesTitle: "Alpha Adventures (Manga)",
-  date: "January 6, 2026",
-  price: "$14.99",
-  isbn: "978-1-9990001-0-3",
-  blurb: "<p>Alpha&#8217;s <em>first</em>\n adventure.</p>\n",
-};
+/** The one observation of a fixture book. */
+const observationOf = (t: TestT, b: FixtureBook) =>
+  t.run(
+    async (ctx) =>
+      (await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", String(b.id)),
+        )
+        .unique())!,
+  );
+
+/** Age every observation's last sighting, so a later sweep that sees a book again shows it. */
+const ageObservations = (t: TestT) =>
+  t.run(async (ctx) => {
+    for (const observation of await ctx.db.query("sourceObservations").collect()) {
+      await ctx.db.patch(observation._id, { lastSeenAt: 1 });
+    }
+  });
 
 const ALPHA_2: FixtureBook = {
   id: 102,
@@ -147,7 +77,7 @@ const LIGHT_NOVEL: FixtureBook = {
 
 describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
   it("creates canonical records with cited Revisions, tags, covers, and a run log", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1, ALPHA_2, LIGHT_NOVEL]);
 
@@ -277,7 +207,7 @@ describe("sevenSeas.sync — Bootstrap Mode creation path", () => {
   });
 
   it("expands an omnibus range into multi-volume coverage and tags it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([
       {
@@ -322,7 +252,7 @@ describe("sevenSeas.sync — packaging coverage inference", () => {
   };
 
   it("reads the covered Volumes from the listing blurb", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([{ ...DELUXE, blurb: "<p>Collects volumes 1-3 in hardcover.</p>" }]);
     await sync(t);
@@ -338,7 +268,7 @@ describe("sevenSeas.sync — packaging coverage inference", () => {
   });
 
   it("creates Unmapped Packaging under its line when no signal states coverage", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([DELUXE]);
     await sync(t);
@@ -354,17 +284,9 @@ describe("sevenSeas.sync — packaging coverage inference", () => {
   });
 
   it("never queues a brand-new Series for a work an Editor hid", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, false);
-    await t.run((ctx) =>
-      ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 1,
-        title: "Alpha Adventures (Manga)",
-        altTitles: [],
-        searchText: "Alpha Adventures (Manga)",
-      }),
-    );
+    await t.run((ctx) => insertSeries(ctx, { status: "hidden", title: "Alpha Adventures (Manga)" }));
     stubSite([ALPHA_1]);
     await sync(t);
     await t.run(async (ctx) => {
@@ -376,7 +298,7 @@ describe("sevenSeas.sync — packaging coverage inference", () => {
   });
 
   it("keeps uncovered packaging on its observation outside Bootstrap Mode", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, false);
     stubSite([DELUXE]);
     await sync(t);
@@ -389,7 +311,7 @@ describe("sevenSeas.sync — packaging coverage inference", () => {
 
 describe("sevenSeas.sync — observations over repeated runs", () => {
   it("bumps last-seen only on an unchanged fetch", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
@@ -413,7 +335,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
   });
 
   it("the next sync fills a blurb the Release predates, even with the listing unchanged", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
@@ -444,7 +366,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
   });
 
   it("replaces an aggregator's description with its own blurb, even with the listing unchanged", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
@@ -452,16 +374,10 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     // before Seven Seas re-read the book.
     await t.run(async (ctx) => {
       const release = (await ctx.db.query("releases").collect())[0]!;
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "ann" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
+      await insertSourceRevision(ctx, {
         ref: { type: "release", id: release._id },
+        sourceKey: "ann",
         seq: 99,
-        proposalId,
-        author: { kind: "source", sourceKey: "ann" },
         changes: [{ field: "description", before: undefined, after: "ANN's summary." }],
         comment: "Imported from Anime News Network Encyclopedia.",
       });
@@ -506,7 +422,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
   });
 
   it("keeps append-only history and auto-updates authoritative fields on change", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
@@ -550,7 +466,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
   });
 
   it("never overwrites a sticky Human Override", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
@@ -576,7 +492,7 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
   });
 
   it("marks observations withdrawn only after a complete sweep stops seeing them", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1, ALPHA_2]);
     await sync(t);
@@ -598,11 +514,11 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
 });
 
 describe("sevenSeas.sync — covers", () => {
-  const cover = (t: ReturnType<typeof convexTest>) =>
+  const cover = (t: TestT) =>
     t.run(async (ctx) => (await ctx.db.query("releases").collect())[0]!.coverImage ?? null);
 
   it("keeps a current cover and replaces one whose URL changed, deleting its blob", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
@@ -625,12 +541,12 @@ describe("sevenSeas.sync — covers", () => {
     expect(second.sourceUrl).toBe(moved);
     expect(second.storageId).not.toBe(first.storageId);
     await t.run(async (ctx) => {
-      expect(await ctx.storage.getUrl(first.storageId)).toBeNull();
+      expect(await ctx.storage.getUrl(first.storageId!)).toBeNull();
     });
   });
 
   it("records an SVG placeholder on the Release instead of storing or refetching it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([{ ...ALPHA_1, coverFile: "no-cover.svg" }]);
     const result = await sync(t);
@@ -670,7 +586,7 @@ describe("sevenSeas.sync — failed cover retries", () => {
   }
 
   it("retries the art next run without refetching the unchanged book page", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     const requests: string[] = [];
     stubSite([ALPHA_1]);
@@ -700,7 +616,7 @@ describe("sevenSeas.sync — failed cover retries", () => {
   });
 
   it("paces retries with maxCoverRetries", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     const requests: string[] = [];
     stubSite([ALPHA_1, ALPHA_2]);
@@ -723,7 +639,7 @@ describe("sevenSeas.sync — failed cover retries", () => {
 
 describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
   it("queues a pre-filled In-Review proposal for a brand-new series, once", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, false);
     stubSite([ALPHA_1]);
     const result = await sync(t);
@@ -755,7 +671,7 @@ describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
   });
 
   it("auto-creates a single-volume release under an already-linked series", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t); // bootstrap run links the series
@@ -779,81 +695,43 @@ describe("sevenSeas.sync — steady-state gates (Bootstrap Mode off)", () => {
 
 /** A Seven Seas Series with Volume 1 and one whole-Volume Release of it (by default ALPHA_1's ISBN). */
 const insertCatalogRelease = async (
-  t: ReturnType<typeof convexTest>,
+  t: TestT,
   seriesTitle: string,
-  release: { isbn13?: string; binding?: string } = { isbn13: "9781999000103" },
-) =>
-  await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas Entertainment",
-      slug: "seven-seas",
-    });
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: seriesTitle,
-      altTitles: [],
-      searchText: seriesTitle,
-    });
-    const volumeId = await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: 1,
-      seriesId,
-      position: 1,
-      label: "1",
-    });
-    const editionId = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 1,
-      publisherId,
-    });
-    await ctx.db.insert("volumeCoverages", {
-      editionId,
-      volumeId,
-      order: 1,
-      extent: "complete",
-    });
-    return await ctx.db.insert("releases", {
-      status: "active",
-      editionId,
-      format: "physical",
-      language: "en",
-      ...release,
-      publisherId,
-      seriesIds: [seriesId],
-    });
-  });
+  release: CatalogOverrides["release"] = { isbn13: "9781999000103" },
+) => {
+  const { releaseId } = await t.run((ctx) =>
+    seedCatalog(ctx, {
+      publisher: { name: "Seven Seas Entertainment", slug: "seven-seas" },
+      series: { title: seriesTitle },
+      release,
+    }),
+  );
+  return releaseId;
+};
 
 describe("sevenSeas.sync — ISBN matching rung", () => {
   it("links to an existing release by ISBN when titles agree", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     const releaseId = await insertCatalogRelease(t, "Alpha Adventures");
     stubSite([ALPHA_1]);
     await sync(t);
     await t.run(async (ctx) => {
       expect(await ctx.db.query("releases").collect()).toHaveLength(1);
-      const obs = (await ctx.db.query("sourceObservations").collect()).find(
-        (o) => o.sourceRecordId === "101",
-      )!;
-      expect(obs.recordRef).toEqual({ type: "release", id: releaseId });
     });
+    expect((await observationOf(t, ALPHA_1)).recordRef).toEqual({ type: "release", id: releaseId });
   });
 
   it("flags an ISBN match with a dissimilar title for review instead of linking", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     await insertCatalogRelease(t, "Completely Different Zeta");
     stubSite([ALPHA_1]);
     const result = (await sync(t)) as { errorCount: number };
     expect(result.errorCount).toBe(1);
+    expect((await observationOf(t, ALPHA_1)).recordRef).toBeUndefined();
     await t.run(async (ctx) => {
       expect(await ctx.db.query("releases").collect()).toHaveLength(1);
-      const obs = (await ctx.db.query("sourceObservations").collect()).find(
-        (o) => o.sourceRecordId === "101",
-      )!;
-      expect(obs.recordRef).toBeUndefined();
       const run = (await ctx.db.query("importRuns").collect())[0]!;
       expect(run.errors[0]).toContain("review");
     });
@@ -862,7 +740,7 @@ describe("sevenSeas.sync — ISBN matching rung", () => {
 
 describe("sevenSeas.sync — Binding reaches the matching ladder (B14)", () => {
   it("a hardcover never links an ISBN-less paperback of its Volume; it becomes its sibling", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     const paperbackId = await insertCatalogRelease(t, "Alpha Adventures", {
       binding: "paperback",
@@ -884,7 +762,7 @@ describe("sevenSeas.sync — Binding reaches the matching ladder (B14)", () => {
 
 describe("sevenSeas.sync — a linked book never takes another Release's ISBN (B08)", () => {
   it("a changed ISBN another Release holds is a conflict, and none of the book's facts apply", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
@@ -914,55 +792,33 @@ describe("sevenSeas.sync — a linked book never takes another Release's ISBN (B
         (r) => r.isbn13 === heldIsbn,
       );
       expect(holders.map((r) => r._id)).toEqual([holderId]);
-      const observation = await ctx.db
-        .query("sourceObservations")
-        .withIndex("by_source_record", (q) =>
-          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "101"),
-        )
-        .unique();
-      expect(observation!.conflicts).toEqual([
-        expect.objectContaining({ field: "isbn13", offered: heldIsbn }),
-      ]);
     });
+    expect((await observationOf(t, ALPHA_1)).conflicts).toEqual([
+      expect.objectContaining({ field: "isbn13", offered: heldIsbn }),
+    ]);
   });
 });
 
 describe("sevenSeas.sync — failure handling", () => {
   it("does not withdraw a listed book when its title becomes out of scope", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
-    await t.run(async (ctx) => {
-      for (const observation of await ctx.db.query("sourceObservations").collect()) {
-        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
-      }
-    });
+    await ageObservations(t);
     stubSite([{ ...ALPHA_1, title: "Alpha Adventures (Light Novel) Vol. 1" }]);
     await sync(t);
-    await t.run(async (ctx) => {
-      const observation = await ctx.db
-        .query("sourceObservations")
-        .withIndex("by_source_record", (q) =>
-          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "101"),
-        )
-        .unique();
-      expect(observation?.withdrawn).toBe(false);
-    });
+    expect((await observationOf(t, ALPHA_1)).withdrawn).toBe(false);
   });
 
   it.each(["missing pagination", "malformed book", "unexpected empty page"])(
     "does not withdraw existing observations after %s",
     async (failure) => {
-      const t = convexTest(schema);
+      const t = makeT();
       await seedRegistry(t, true);
       stubSite([ALPHA_1]);
       await sync(t);
-      await t.run(async (ctx) => {
-        for (const observation of await ctx.db.query("sourceObservations").collect()) {
-          await ctx.db.patch(observation._id, { lastSeenAt: 1 });
-        }
-      });
+      await ageObservations(t);
       vi.stubGlobal(
         "fetch",
         async () =>
@@ -974,28 +830,16 @@ describe("sevenSeas.sync — failure handling", () => {
         failed: true,
         completeSweep: false,
       });
-      await t.run(async (ctx) => {
-        const observation = await ctx.db
-          .query("sourceObservations")
-          .withIndex("by_source_record", (q) =>
-            q.eq("sourceKey", "sevenseas").eq("sourceRecordId", "101"),
-          )
-          .unique();
-        expect(observation?.withdrawn).toBe(false);
-      });
+      expect((await observationOf(t, ALPHA_1)).withdrawn).toBe(false);
     },
   );
 
   it("skips an invalid listing item, imports the rest, and fails without withdrawing", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1, ALPHA_2]);
     await sync(t);
-    await t.run(async (ctx) => {
-      for (const observation of await ctx.db.query("sourceObservations").collect()) {
-        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
-      }
-    });
+    await ageObservations(t);
 
     // Vol. 2's rendered title comes back empty; Vol. 1 is still listed after it.
     stubSite([ALPHA_1]);
@@ -1026,15 +870,11 @@ describe("sevenSeas.sync — failure handling", () => {
   });
 
   it("fails an empty listing and withdraws nothing", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
-    await t.run(async (ctx) => {
-      for (const observation of await ctx.db.query("sourceObservations").collect()) {
-        await ctx.db.patch(observation._id, { lastSeenAt: 1 });
-      }
-    });
+    await ageObservations(t);
     stubSite([]); // X-WP-TotalPages: 0 and an empty first page
     expect(await sync(t)).toMatchObject({ failed: true, completeSweep: false });
     await t.run(async (ctx) => {
@@ -1046,7 +886,7 @@ describe("sevenSeas.sync — failure handling", () => {
   });
 
   it("notes a removed book page (HTTP 404) without failing the run", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1, ALPHA_2]);
     const siteFetch = globalThis.fetch;
@@ -1078,7 +918,7 @@ describe("sevenSeas.sync — failure handling", () => {
   });
 
   it("records a failed detail run without creating a book from an HTTP 200 error page", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     const siteFetch = globalThis.fetch;
@@ -1105,7 +945,7 @@ describe("sevenSeas.sync — failure handling", () => {
   });
 
   it("logs a failed run and counts toward source health", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     vi.stubGlobal("fetch", async () => new Response("gone", { status: 404 }));
     const result = (await sync(t)) as { failed?: boolean };
@@ -1123,7 +963,7 @@ describe("sevenSeas.sync — failure handling", () => {
   });
 
   it("skips cleanly when the registry row is disabled", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     await t.run(async (ctx) => {
       const source = (await ctx.db
@@ -1140,24 +980,19 @@ describe("sevenSeas.sync — failure handling", () => {
   });
 
   it("applies nothing once the source is disabled mid-run (the kill switch)", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
     await sync(t);
     const sourceRecordId = String(ALPHA_1.id);
-    const stored = await t.run(async (ctx) => {
+    await t.run(async (ctx) => {
       const source = (await ctx.db
         .query("approvedSources")
         .withIndex("by_key", (q) => q.eq("key", "sevenseas"))
         .unique())!;
       await ctx.db.patch(source._id, { enabled: false });
-      return (await ctx.db
-        .query("sourceObservations")
-        .withIndex("by_source_record", (q) =>
-          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", sourceRecordId),
-        )
-        .unique())!;
     });
+    const stored = await observationOf(t, ALPHA_1);
     const snapshot = { ...(stored.snapshot as BookSnapshot), title: "Alpha Manga Vol. 1 (Renamed)" };
     expect(await t.mutation(internal.sevenSeas.applyBook, { sourceRecordId, snapshot })).toEqual({
       status: "recordOnly",
@@ -1170,17 +1005,14 @@ describe("sevenSeas.sync — failure handling", () => {
   });
 });
 
-/** An Administrator (username "catalogmod") who can approve queued proposals. */
-async function withAdmin(t: ReturnType<typeof convexTest>) {
-  rateLimiterTest.register(t, "rateLimiter");
-  const admin = t.withIdentity({ subject: "admin_subject" });
-  await admin.mutation(api.users.claimUsername, { username: "catalogmod" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "catalogmod" });
-  return admin;
+/** An Administrator who can approve queued proposals. */
+async function withAdmin(t: TestT) {
+  await seedTeam(t, [alice]);
+  return signedIn(t, alice);
 }
 
 /** Approve the one In-Review proposal the importer queued. */
-async function approveQueued(t: ReturnType<typeof convexTest>, admin: Awaited<ReturnType<typeof withAdmin>>) {
+async function approveQueued(t: TestT, admin: Awaited<ReturnType<typeof withAdmin>>) {
   const queued = await t.run(async (ctx) =>
     (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview"),
   );
@@ -1212,7 +1044,7 @@ const OMNIBUS_2: FixtureBook = {
 // reviewed proposal files the Edition under that line when approved.
 describe("sevenSeas.sync — queued packaging keeps its Edition Line (B16)", () => {
   it("approving a steady-state omnibus creates its Edition Line and files the Edition under it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const admin = await withAdmin(t);
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
@@ -1233,7 +1065,7 @@ describe("sevenSeas.sync — queued packaging keeps its Edition Line (B16)", () 
   });
 
   it("a later steady-state member joins the line an earlier import created", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const admin = await withAdmin(t);
     await seedRegistry(t, true);
     stubSite([ALPHA_1, OMNIBUS_1]);
@@ -1257,24 +1089,13 @@ describe("sevenSeas.sync — queued packaging keeps its Edition Line (B16)", () 
   });
 
   it("a flagged packaging guess (ambiguous Series) also carries its line", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const admin = await withAdmin(t);
     await seedRegistry(t, true);
     await t.run(async (ctx) => {
-      await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Seven Seas Entertainment",
-        slug: "seven-seas",
-      });
-      for (const publicId of [1, 2]) {
-        await ctx.db.insert("series", {
-          status: "active",
-          publicId,
-          title: "Alpha Adventures",
-          altTitles: [],
-          searchText: "Alpha Adventures",
-        });
-      }
+      await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+      // Two Series of the same name: the omnibus's base Series is ambiguous.
+      for (let i = 0; i < 2; i++) await insertSeries(ctx, { title: "Alpha Adventures" });
     });
     stubSite([OMNIBUS_1]);
     expect(await sync(t)).toMatchObject({ errorCount: 1 });
@@ -1288,7 +1109,7 @@ describe("sevenSeas.sync — queued packaging keeps its Edition Line (B16)", () 
   });
 
   it("two members of a new line queued together both approve into that one line", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const admin = await withAdmin(t);
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
@@ -1332,23 +1153,15 @@ const BOX_1: FixtureBook = {
   isbn: "978-1-9990005-3-0",
 };
 
-/** The box's members, by their Releases' ISBNs in bundle order. */
-const boxMembers = (t: ReturnType<typeof convexTest>) =>
-  t.run(async (ctx) => {
-    const [bundle, ...more] = await ctx.db.query("releaseBundles").collect();
-    expect(more).toHaveLength(0);
-    const rows = (await ctx.db.query("bundleMemberships").collect())
-      .filter((row) => row.bundleId === bundle!._id)
-      .sort((a, b) => a.order - b.order);
-    return await Promise.all(rows.map(async (row) => (await ctx.db.get(row.releaseId))!.isbn13));
-  });
+/** The one box's members, by their Releases' ISBNs in bundle order. */
+const boxMembers = async (t: TestT) => (await bundleMembers(t)).map((member) => member.release.isbn13);
 
 // R09: a box imported before some of its books picks those books up once
 // they exist, whether its listing is unchanged (no detail fetch) or its
 // page is re-read.
 describe("sevenSeas.sync — a box set gains members that arrive after it (B15)", () => {
   it("an unchanged box listing reconciles its members without a detail fetch, in steady state", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1, BOX_1]);
     await sync(t);
@@ -1380,7 +1193,7 @@ describe("sevenSeas.sync — a box set gains members that arrive after it (B15)"
   });
 
   it("a re-read box page (changed or forced) reconciles its members too", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1, BOX_1]);
     await sync(t);
@@ -1390,15 +1203,7 @@ describe("sevenSeas.sync — a box set gains members that arrive after it (B15)"
     expect(await boxMembers(t)).toEqual(["9781999000103"]);
 
     const box = { sourceRecordId: String(BOX_1.id) };
-    const snapshot = await t.run(
-      async (ctx) =>
-        (await ctx.db
-          .query("sourceObservations")
-          .withIndex("by_source_record", (q) =>
-            q.eq("sourceKey", "sevenseas").eq("sourceRecordId", box.sourceRecordId),
-          )
-          .unique())!.snapshot,
-    );
+    const { snapshot } = await observationOf(t, BOX_1);
     // The unchanged snapshot, as a forced re-read applies it.
     expect(await t.mutation(internal.sevenSeas.applyBook, { ...box, snapshot })).toMatchObject({
       status: "updated",
@@ -1423,20 +1228,11 @@ const BETA_1: FixtureBook = {
 };
 
 /** The one box's members as `isbn@order`, in page order (by order, then creation). */
-const boxRows = (t: TestConvex<typeof schema>) =>
-  t.run(async (ctx) => {
-    const [bundle] = await ctx.db.query("releaseBundles").collect();
-    const rows = await ctx.db
-      .query("bundleMemberships")
-      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
-      .collect();
-    return await Promise.all(
-      rows.map(async (row) => `${(await ctx.db.get(row.releaseId))!.isbn13}@${row.order}`),
-    );
-  });
+const boxRows = async (t: TestT) =>
+  (await bundleMembers(t)).map((member) => `${member.release.isbn13}@${member.order}`);
 
 /** The newest Import Run's errors. */
-const lastRunErrors = (t: TestConvex<typeof schema>) =>
+const lastRunErrors = (t: TestT) =>
   t.run(async (ctx) => (await ctx.db.query("importRuns").order("desc").first())!.errors);
 
 // W08: a linked box fills only from its canonical identity. Its listing
@@ -1444,7 +1240,7 @@ const lastRunErrors = (t: TestConvex<typeof schema>) =>
 // the unchanged listing after it — and never adds that series' books.
 describe("sevenSeas.sync — a linked box keeps its canonical identity (W08)", () => {
   it("a box listed under another series adds nothing and reports review", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1, BETA_1, BOX_1]);
     await sync(t);
@@ -1475,7 +1271,7 @@ describe("sevenSeas.sync — a linked box keeps its canonical identity (W08)", (
 // order 1; the unchanged listing that fills Vol. 1 renumbers by position.
 describe("sevenSeas.sync — a legacy box's compact order is renumbered (W09)", () => {
   it("an unchanged box listing fills Vol. 1 ahead of a legacy Vol. 2", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_2, BOX_1]);
     await sync(t);
@@ -1500,18 +1296,6 @@ function countBookPages(): { count: number } {
   return counter;
 }
 
-/** The one observation of a fixture book. */
-const observationOf = (t: TestConvex<typeof schema>, b: FixtureBook) =>
-  t.run(
-    async (ctx) =>
-      (await ctx.db
-        .query("sourceObservations")
-        .withIndex("by_source_record", (q) =>
-          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", String(b.id)),
-        )
-        .unique())!,
-  );
-
 const FUTURE_3: FixtureBook = {
   id: 103,
   slug: "alpha-manga-vol-3",
@@ -1525,7 +1309,7 @@ const FUTURE_3: FixtureBook = {
 // review; the listing naming it again retires that review, whether the book
 // is unchanged (no page fetch) or re-read.
 describe("sevenSeas.sync — a relisted book retires its cancellation review (B17)", () => {
-  async function withdrawnFuture(t: ReturnType<typeof convexTest>) {
+  async function withdrawnFuture(t: TestT) {
     await seedRegistry(t, true);
     stubSite([ALPHA_1, FUTURE_3]);
     await sync(t);
@@ -1540,7 +1324,7 @@ describe("sevenSeas.sync — a relisted book retires its cancellation review (B1
   }
 
   it("an unchanged relisting withdraws the review without a page fetch", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const reviewId = await withdrawnFuture(t);
 
     stubSite([ALPHA_1, FUTURE_3]);
@@ -1558,7 +1342,7 @@ describe("sevenSeas.sync — a relisted book retires its cancellation review (B1
   });
 
   it("a changed relisting withdraws the review too", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const reviewId = await withdrawnFuture(t);
 
     stubSite([ALPHA_1, { ...FUTURE_3, modified: "2026-09-01T00:00:00" }]);
@@ -1576,39 +1360,30 @@ describe("sevenSeas.sync — a relisted book retires its cancellation review (B1
  * stubbed site serves (so the listing reads it as unchanged).
  */
 async function seedLegacyUnplaced(
-  t: ReturnType<typeof convexTest>,
+  t: TestT,
   b: FixtureBook,
   verdict: string,
 ) {
   const snapshot = normalizeBook(parseBookListing(listingItem(b))!, parseBookPage(bookPageHtml(b)));
   const at = Date.now() - 86_400_000;
-  await t.run(async (ctx) => {
-    await ctx.db.insert("sourceObservations", {
+  await t.run((ctx) =>
+    insertObservation(ctx, {
       sourceKey: "sevenseas",
       sourceRecordId: String(b.id),
       snapshot,
       lastSeenAt: at,
-      withdrawn: false,
       conflicts: [{ field: "placement", offered: null, at, reason: verdict }],
-    });
-  });
+    }),
+  );
 }
 
 /** An Editor hid the base Series a book's snapshot names. */
-async function hideSeriesOf(t: ReturnType<typeof convexTest>, b: FixtureBook) {
+async function hideSeriesOf(t: TestT, b: FixtureBook) {
   const { seriesTitle } = normalizeBook(
     parseBookListing(listingItem(b))!,
     parseBookPage(bookPageHtml(b)),
   );
-  await t.run((ctx) =>
-    ctx.db.insert("series", {
-      status: "hidden",
-      publicId: 99,
-      title: seriesTitle,
-      altTitles: [],
-      searchText: seriesTitle,
-    }),
-  );
+  await t.run((ctx) => insertSeries(ctx, { status: "hidden", title: seriesTitle }));
 }
 
 const LEGACY_PACKAGING = (b: FixtureBook) =>
@@ -1637,7 +1412,7 @@ const DELUXE_2: FixtureBook = {
 // listing: no page fetch, one detail-budget unit each, and never twice.
 describe("sevenSeas.sync — replays packaging an older planner left unplaced (B19)", () => {
   it("places a blurb-covered Deluxe book in Bootstrap Mode, once", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
     stubSite([DELUXE_1]);
@@ -1661,7 +1436,7 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
   });
 
   it("queues its pre-filled guess once in steady state", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, false);
     await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
     stubSite([DELUXE_1]);
@@ -1676,7 +1451,7 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
   });
 
   it("spends the detail budget, leaving the rest for the next run", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
     await seedLegacyUnplaced(t, DELUXE_2, LEGACY_PACKAGING(DELUXE_2));
@@ -1692,7 +1467,7 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
   });
 
   it("records the current verdict when the snapshot still places nothing, then leaves it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, false);
     const bare = { ...DELUXE_1, blurb: undefined };
     await seedLegacyUnplaced(t, bare, LEGACY_PACKAGING(bare));
@@ -1709,7 +1484,7 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
   });
 
   it("under a Series an Editor hid, notes the block once and stays a complete sweep", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     await hideSeriesOf(t, DELUXE_1);
     await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
@@ -1731,7 +1506,7 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
   });
 
   it("a new packaging book under a hidden Series is never replayed", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     await hideSeriesOf(t, DELUXE_1);
     stubSite([DELUXE_1]);
@@ -1749,7 +1524,7 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
   });
 
   it("leaves an unplaced book with no verdict (an Editor's unlink) until its page changes", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     await seedLegacyUnplaced(t, DELUXE_1, LEGACY_PACKAGING(DELUXE_1));
     await t.run(async (ctx) => {
@@ -1765,7 +1540,7 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
   });
 
   it("bundles a box set whose blurb states its coverage", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1, ALPHA_2]);
     await sync(t);
@@ -1789,7 +1564,10 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
 
 // R12: a gapped list of Volumes, in the title or the listing blurb, is
 // evidence no range can hold. The line's declared size (3-in-1 → 1–3) never
-// stands in for it, so no skipped Volume is created or covered.
+// stands in for it, so no skipped Volume is created or covered. The grammar
+// is pinned by lib/coverage.test.ts and lib/bookTitle.test.ts; these cases
+// prove Seven Seas' own wiring (the title and the listing blurb, its one
+// coverage text) for each outcome: placed, Unmapped, nothing created.
 describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)", () => {
   const THREE_IN_1: FixtureBook = {
     id: 311,
@@ -1800,116 +1578,147 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     date: "March 3, 2026",
     isbn: "978-1-9990004-2-4",
   };
+  const THREE_IN_1_2: FixtureBook = {
+    ...THREE_IN_1,
+    id: 313,
+    slug: "alpha-3-in-1-edition-2",
+    title: "Alpha 3-in-1 Edition 2",
+    isbn: "978-1-9990004-3-1",
+  };
+  const OMNIBUS: FixtureBook = {
+    ...THREE_IN_1,
+    id: 312,
+    slug: "alpha-omnibus-1",
+    title: "Alpha Omnibus 1",
+    seriesSlug: "alpha-omnibus",
+    seriesTitle: "Alpha Omnibus",
+  };
+  const DELUXE: FixtureBook = {
+    ...THREE_IN_1,
+    id: 314,
+    slug: "alpha-deluxe-edition-1",
+    title: "Alpha Deluxe Edition 1",
+    seriesSlug: "alpha-deluxe",
+    seriesTitle: "Alpha Deluxe Edition",
+  };
+  /** A book the listing files under the plain "Alpha" series: no Edition Line in its series link. */
+  const lineless = (title: string): FixtureBook => ({ ...DELUXE, title, seriesSlug: "alpha", seriesTitle: "Alpha" });
 
-  async function placed(t: ReturnType<typeof convexTest>) {
+  async function placed(t: TestT) {
     return await t.run(async (ctx) => ({
       volumes: (await ctx.db.query("volumes").collect()).map((v) => v.label).sort(),
       coverages: (await ctx.db.query("volumeCoverages").collect()).length,
       unmapped: (await ctx.db.query("editions").collect()).map((e) => e.coverageUnmapped ?? false),
     }));
   }
-
-  it("a blurb collecting Volumes 1 and 3 never falls back to the 3-in-1 size", async () => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb: "<p>Collects volumes 1 and 3.</p>" }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
-  });
-
-  // A gapped list with no collect-verb in front of it is still a statement.
-  it.each([
-    "<p>Volumes 1 &amp; 3 in one book!</p>",
-    "<p>Features volumes 1 and 3.</p>",
-    "<p>Collects volumes #1 and #3.</p>",
-  ])("a bare gapped list (%s) never falls back to the 3-in-1 size", async (blurb) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
-  });
+  const onlyCovering = (volumes: string[]) => ({ volumes, coverages: volumes.length, unmapped: [false] });
+  const PLACED_1_3 = onlyCovering(["1", "2", "3"]);
+  const UNMAPPED = { volumes: [], coverages: 0, unmapped: [true] };
+  const NOTHING = { volumes: [], coverages: 0, unmapped: [] };
 
   it.each([
-    "Alpha 3-in-1 Edition 1 (Vol. 1 & 3)",
-    "Alpha 3-in-1 Edition 1 (Vol. 1 and Vol. 3)",
-    "Alpha 3-in-1 Edition 1 (Vol. 1 & Vol. 3)",
-    "Alpha 3-in-1 Edition 1 (Vol. #1 & #3)",
-  ])("a title listing Volumes with a gap (%s) never falls back to the 3-in-1 size", async (title) => {
-    const t = convexTest(schema);
+    // The title.
+    {
+      name: "a title listing Volumes 1 & 3 never falls back to the 3-in-1 size",
+      book: { ...THREE_IN_1, title: "Alpha 3-in-1 Edition 1 (Vol. 1 & 3)" },
+      expected: UNMAPPED,
+    },
+    { name: "without any statement the declared size still places a 3-in-1", book: THREE_IN_1, expected: PLACED_1_3 },
+    {
+      name: "a title's own range (Alpha Omnibus 2 (Vol. 4-6)) creates and covers its Volumes",
+      book: { ...OMNIBUS, title: "Alpha Omnibus 2 (Vol. 4-6)" },
+      expected: onlyCovering(["4", "5", "6"]),
+    },
+    {
+      name: "a bare range beside a rejected bracket statement creates nothing",
+      book: lineless("Alpha, Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)"),
+      expected: NOTHING,
+    },
+    {
+      name: "an earlier marker makes a trailing statement a plain Volume's subtitle",
+      book: { ...DELUXE, title: "Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1-3" },
+      expected: onlyCovering(["2"]),
+    },
+    {
+      name: "a blurb never stands in for a title statement the outer range contradicts",
+      book: { ...DELUXE, title: "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)" },
+      blurb: "<p>Collects volumes 1-9.</p>",
+      expected: UNMAPPED,
+    },
+    // The listing blurb.
+    {
+      name: "a blurb collecting Volumes 1 and 3 never falls back to the 3-in-1 size",
+      book: THREE_IN_1,
+      blurb: "<p>Collects volumes 1 and 3.</p>",
+      expected: UNMAPPED,
+    },
+    {
+      name: "an entity-encoded bare gapped list never falls back to the 3-in-1 size",
+      book: THREE_IN_1,
+      blurb: "<p>Volumes 1 &amp; 3 in one book!</p>",
+      expected: UNMAPPED,
+    },
+    {
+      name: "a stated range before other numbers places an Omnibus at 1–3",
+      book: OMNIBUS,
+      blurb: "<p>Collects volumes 1-3 of Mob Psycho 100.</p>",
+      expected: PLACED_1_3,
+    },
+    {
+      name: "a count after the listed range places the 3-in-1 at 1–3",
+      book: THREE_IN_1,
+      blurb: "<p>Collects volumes 1-3 and 4 (four!) bonus stories.</p>",
+      expected: PLACED_1_3,
+    },
+    {
+      name: "a bare narrative list leaves an Omnibus Unmapped, creating no Volume",
+      book: OMNIBUS,
+      blurb: "<p>The story continues in volumes 4 and 5.</p>",
+      expected: UNMAPPED,
+    },
+    {
+      name: "a governed statement that contradicts the 3-in-1 size creates no Volume",
+      book: THREE_IN_1_2,
+      blurb: "<p>This collected edition contains Volumes 1–3 of the series.</p>",
+      expected: UNMAPPED,
+    },
+    {
+      name: "a joined range places a Deluxe book by the whole list",
+      book: DELUXE,
+      blurb: "<p>Collects volumes 1-3 plus 4-6 in one book.</p>",
+      expected: onlyCovering(["1", "2", "3", "4", "5", "6"]),
+    },
+    {
+      name: "a list the verb in another block does not govern places the 3-in-1 at 1–3",
+      book: THREE_IN_1,
+      blurb: "<p>Collects bonus art</p><p>The story continues in volumes 4 and 5</p>",
+      expected: PLACED_1_3,
+    },
+    {
+      name: "a Series title's own '!' before its Volumes places a Deluxe book by the statement",
+      book: {
+        ...DELUXE,
+        slug: "negima-deluxe-edition-1",
+        title: "Negima! Deluxe Edition 1",
+        seriesSlug: "negima-deluxe",
+        seriesTitle: "Negima! Deluxe Edition",
+      },
+      blurb: "<p>Collects Negima! Volumes 37-38.</p>",
+      expected: onlyCovering(["37", "38"]),
+    },
+  ])("$name", async ({ book, blurb, expected }) => {
+    const t = makeT();
     await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, title }]);
+    stubSite([{ ...book, blurb }]);
     await sync(t);
-    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
-  });
-
-  // "4 bonus stories" counts something else: the blurb reads 1–4 or 1–3,
-  // and the 3-in-1 size agrees with 1–3 alone. No Volume 4 is invented.
-  it.each([
-    "<p>Collects volumes 1–3 and 4 bonus stories.</p>",
-    "<p>Collects volumes 1-3 and 4 all-new bonus stories.</p>",
-    "<p>Collects volumes 1-3 plus 4 all-new bonus stories.</p>",
-    "<p>Collects volumes 1-3 and 4-page bonus comic.</p>",
-    "<p>Collects volumes 1-3 and 4 of the author's short stories.</p>",
-    "<p>Collects volumes 1-3 and 4 “bonus” stories.</p>",
-    "<p>Collects volumes 1-3 and 4 as-yet-unpublished stories.</p>",
-    "<p>Collects volumes 1-3 and 4 for the first time.</p>",
-    "<p>Collects volumes 1-3 and 4 on-model sketches.</p>",
-    "<p>Collects volumes 1-3 and 4 (four!) bonus stories.</p>",
-    "<p>Collects volumes 1-3 and 4.5 bonus pages.</p>",
-    "<p>Volumes 1-3 and 4 all-new stories in one book.</p>",
-  ])("a count after the listed range (%s) places the 3-in-1 at 1–3", async (blurb) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
-  });
-
-  // The last Volume of a contiguous list is never quietly dropped.
-  it.each([
-    "<ul><li>Collects volumes 1, 2, and 3</li><li>Hardcover</li></ul>",
-    "<p>Collects volumes 1, 2, and 3 featuring new cover art.</p>",
-  ])("a contiguous list before other copy (%s) places the 3-in-1 at 1–3", async (blurb) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
-  });
-
-  // A gapped or unfinished list, whatever follows it, places nothing.
-  it.each([
-    "<p>Collects volumes 1 and 3</p><p>Remastered</p>",
-    "<p>Collects volumes 1 and 3 remastered.</p>",
-    "<p>Collects volumes 1-3 and 4.5.</p>",
-    "<p>Collects volumes 1 as well as 3.</p>",
-    "<p>Collects volumes 1-2; 4.</p>",
-  ])("a gapped or unfinished list (%s) leaves the 3-in-1 Unmapped", async (blurb) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
-  });
-
-  it.each([
-    "Alpha 3-in-1 Edition 1 (Collecting Vols. 1 and 3)",
-    "Alpha 3-in-1 Edition 1 (Vol. 1 + Vol. 3)",
-    "Alpha 3-in-1 Edition 1 (Includes Vol. 1 + 3)",
-  ])("a title stating a gapped list (%s) leaves the 3-in-1 Unmapped", async (title) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, title }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
+    expect(await placed(t)).toEqual(expected);
   });
 
   // An observation stored before the parser marked gapped lists, left
   // unplaced by an older planner, replays (R13) from its stored snapshot:
   // the replay reads its packaging from today's parse, never the stale one.
   it("a replayed snapshot stored before the gap was marked still never widens", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedRegistry(t, true);
     const gapped = { ...THREE_IN_1, title: "Alpha 3-in-1 Edition 1 (Vol. 1 & 3)" };
     await seedLegacyUnplaced(t, gapped, LEGACY_PACKAGING(gapped));
@@ -1923,479 +1732,19 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     const pages = countBookPages();
     await sync(t);
     expect(pages.count).toBe(0);
-    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
-  });
-
-  it("without any statement the declared size still places it", async () => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([THREE_IN_1]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
-  });
-
-  const OMNIBUS: FixtureBook = {
-    ...THREE_IN_1,
-    id: 312,
-    slug: "alpha-omnibus-1",
-    title: "Alpha Omnibus 1",
-    seriesSlug: "alpha-omnibus",
-    seriesTitle: "Alpha Omnibus",
-  };
-
-  // A later number the list never joined counts something else: the one
-  // stated range places an Omnibus (no declared size) at 1–3.
-  it.each([
-    "<p>Collects volumes 1–3 (chapters 1–27).</p>",
-    "<p>Collects volumes 1-3 of Mob Psycho 100.</p>",
-    "<p>Collects volumes 1-3 of Kaiju No. 8.</p>",
-    "<p>Collects volumes 1-3 of 10.</p>",
-    "<p>Collects volumes 1-3, chapters 1 to 27.</p>",
-  ])("a stated range before other numbers (%s) places an Omnibus at 1–3", async (blurb) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...OMNIBUS, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
-  });
-
-  // A list with no collect-verb in front of it never overrides the 3-in-1
-  // size, and never creates the Volumes it names.
-  it.each([
-    "<p>The story continues in volumes 4 and 5.</p>",
-    "<p>Catch up before volumes 4 and 5, coming soon.</p>",
-    "<p>Don't miss volumes 2 and 3!</p>",
-    "<p>The story continues in volumes 4–6.</p>",
-  ])("a bare narrative list (%s) places the 3-in-1 at 1–3 from its size", async (blurb) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
-  });
-
-  // A collect-verb collects the phrase an article or preposition opens, not
-  // the list inside it, and a verb in another sentence governs nothing.
-  const UNGOVERNED = [
-    "<p>Collects bonus art</p><p>The story continues in volumes 4 and 5</p>",
-    "<p>Includes a preview of volumes 4 and 5.</p>",
-    "<p>Includes a preview of volume 4.</p>",
-    "<p>Includes a letter from Oda. Volumes 4 and 5 are out now.</p>",
-    "<p>Collects chapters 1-27 and a preview of volumes 4-6.</p>",
-  ];
-
-  it.each(UNGOVERNED)("a list the verb does not govern (%s) places the 3-in-1 at 1–3", async (blurb) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
-  });
-
-  it.each(UNGOVERNED)("a list the verb does not govern (%s) leaves an Omnibus Unmapped", async (blurb) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...OMNIBUS, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
-  });
-
-  it.each([
-    ["<p>Collects volumes 1-3 / 4-6.</p>", { volumes: [], coverages: 0, unmapped: [true] }],
-    // The statement the verb governs decides; the bare gap before it is silence.
-    [
-      "<p>Volumes 1 and 3 are here. Collects volumes 1-3.</p>",
-      { volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] },
-    ],
-  ])("an Omnibus with %s", async (blurb, expected) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...OMNIBUS, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual(expected);
-  });
-
-  it("a bare narrative list leaves an Omnibus Unmapped, creating no Volume", async () => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...OMNIBUS, blurb: "<p>The story continues in volumes 4 and 5.</p>" }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: [], coverages: 0, unmapped: [true] });
-  });
-
-  // "/" joins only weakly: the 3-in-1 size agrees with 1–3 alone.
-  it("a slash-joined range places the 3-in-1 at 1–3, creating no Volume 4–6", async () => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...THREE_IN_1, blurb: "<p>Collects volumes 1-3 / 4-6.</p>" }]);
-    await sync(t);
-    expect(await placed(t)).toEqual({ volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] });
+    expect(await placed(t)).toEqual(UNMAPPED);
   });
 
   // "Part N, Vol. M" is Volume M of the Part: no packaging, no Volume N.
-  it.each([
-    ["Alpha, Part 1, Vol. 2", "2"],
-    ["Alpha Book 2, Vol. 3", "3"],
-    ["Alpha: Part 5, Vol. 6", "6"],
-  ])("a title %s is one Volume of its Part, never packaging", async (title, label) => {
-    const t = convexTest(schema);
+  it("a title Alpha: Part 5, Vol. 6 is one Volume of its Part, never packaging", async () => {
+    const t = makeT();
     await seedRegistry(t, true);
+    const title = "Alpha: Part 5, Vol. 6";
     stubSite([{ ...THREE_IN_1, slug: "alpha-part", seriesSlug: "alpha-part", seriesTitle: undefined, title }]);
     await sync(t);
-    expect(await placed(t)).toEqual({ volumes: [label], coverages: 1, unmapped: [false] });
+    expect(await placed(t)).toEqual(onlyCovering(["6"]));
     await t.run(async (ctx) => {
       expect(await ctx.db.query("editionLines").collect()).toHaveLength(0);
     });
-  });
-
-  const THREE_IN_1_2: FixtureBook = {
-    ...THREE_IN_1,
-    id: 313,
-    slug: "alpha-3-in-1-edition-2",
-    title: "Alpha 3-in-1 Edition 2",
-    isbn: "978-1-9990004-3-1",
-  };
-  const PLACED_1_3 = { volumes: ["1", "2", "3"], coverages: 3, unmapped: [false] };
-  const UNMAPPED = { volumes: [], coverages: 0, unmapped: [true] };
-
-  async function syncOne(book: FixtureBook, blurb: string) {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...book, blurb }]);
-    await sync(t);
-    return await placed(t);
-  }
-
-  // The collect-verb nearest the list governs it.
-  it.each([
-    "<p>This collected edition includes volumes 1-3.</p>",
-    "<p>Includes a new afterword and collects volumes 1-3.</p>",
-    "<p>Includes all-new bonus material and collects volumes 1-3 of the original series.</p>",
-    "<p>Collecting the acclaimed manga, this omnibus contains volumes 1-3.</p>",
-  ])("the verb nearest the list (%s) places an Omnibus at 1–3", async (blurb) => {
-    expect(await syncOne(OMNIBUS, blurb)).toEqual(PLACED_1_3);
-  });
-
-  // A governed capital-Volumes 1–3 contradicts the size at position 2
-  // (4–6): the book stays Unmapped and no Volume 4–6 is created.
-  it("a governed statement that contradicts the 3-in-1 size creates no Volume", async () => {
-    const blurb = "<p>This collected edition contains Volumes 1–3 of the series.</p>";
-    expect(await syncOne(THREE_IN_1_2, blurb)).toEqual(UNMAPPED);
-  });
-
-  it.each(["<p>Collects volumes 1-3 plus 16 pages of color art.</p>", "<p>Collects volumes 1-3 of Alpha!</p>"])(
-    "a dash range (%s) places an Omnibus at 1–3",
-    async (blurb) => {
-      expect(await syncOne(OMNIBUS, blurb)).toEqual(PLACED_1_3);
-    },
-  );
-
-  // A range after "and" ("4 to 6") is a Volume range: 1–6, which the 3-in-1
-  // size contradicts. So does a list across a block boundary cleanBlurb
-  // spaced over, which the verb governs. Neither creates a Volume.
-  it.each([
-    "<p>Collects volumes 1-3 and 4 to 6 new pages.</p>",
-    "<h3>Collects the hit series</h3><p>Volumes 4-6 on sale now.</p>",
-  ])("a statement the 3-in-1 size contradicts (%s) leaves it Unmapped", async (blurb) => {
-    expect(await syncOne(THREE_IN_1, blurb)).toEqual(UNMAPPED);
-  });
-
-  it("an ambiguous last item agreeing with no size leaves the 3-in-1 Unmapped", async () => {
-    expect(await syncOne(THREE_IN_1_2, "<p>Collects volumes 1-3 and 4 bonus stories.</p>")).toEqual(UNMAPPED);
-  });
-
-  it.each(["<p>Volumes 1–3 of the acclaimed series, in hardcover.</p>", "<p>Volumes 1, 2, and 3 together at last.</p>"])(
-    "a sentence-initial list (%s) places an Omnibus at 1–3",
-    async (blurb) => {
-      expect(await syncOne(OMNIBUS, blurb)).toEqual(PLACED_1_3);
-    },
-  );
-
-  it.each([
-    ["an Omnibus", OMNIBUS],
-    ["a 3-in-1", THREE_IN_1],
-  ])("a run-on range leaves %s Unmapped", async (_, book) => {
-    expect(await syncOne(book, "<p>Collects volumes 1-2-3.</p>")).toEqual(UNMAPPED);
-  });
-
-  const DELUXE: FixtureBook = {
-    ...THREE_IN_1,
-    id: 314,
-    slug: "alpha-deluxe-edition-1",
-    title: "Alpha Deluxe Edition 1",
-    seriesSlug: "alpha-deluxe",
-    seriesTitle: "Alpha Deluxe Edition",
-  };
-  const onlyCovering = (volumes: string[]) => ({ volumes, coverages: volumes.length, unmapped: [false] });
-
-  // W02: a title statement reads its Volume designation only. "16 pages of
-  // art" is prose: no Volumes 2–16, and the 3-in-1 size never widens it.
-  it.each([
-    ["a Deluxe", DELUXE],
-    ["a 3-in-1", THREE_IN_1],
-  ])("a page count in a title statement on %s creates Volume 1 alone", async (_, book) => {
-    const title = book.title + " (Collecting Vol. 1 plus 16 pages of art)";
-    expect(await syncOne({ ...book, title }, "")).toEqual(onlyCovering(["1"]));
-  });
-
-  // W02: a bare last number with copy after it may count the copy, and a
-  // title has no size to settle it.
-  it("a title statement whose last number may count its copy leaves the book Unmapped", async () => {
-    const title = "Alpha Deluxe Edition 1 (Collecting Vol. 1 and 2 bonus stories)";
-    expect(await syncOne({ ...DELUXE, title }, "")).toEqual(UNMAPPED);
-  });
-
-  // W02: a marked Volume joined by "plus" is read, never dropped as prose:
-  // the title covers both Volumes; a gap after the join blocks.
-  it.each([
-    ["Alpha Deluxe Edition 1 (Collects Vol. 1 plus Vol. 2)", onlyCovering(["1", "2"])],
-    ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vols. 4-6)", onlyCovering(["1", "2", "3", "4", "5", "6"])],
-    ["Alpha Deluxe Edition 1 (Collects Vols. 1-3 plus Vol. 5)", UNMAPPED],
-  ])("a title statement joining a marked Volume (%s) is read whole", async (title, expected) => {
-    expect(await syncOne({ ...DELUXE, title }, "")).toEqual(expected);
-  });
-
-  // W03: "volume 4" carries its own marker, so it is a fourth Volume, never
-  // a count the 3-in-1 size may drop.
-  it.each([
-    ["a 3-in-1", THREE_IN_1, UNMAPPED],
-    ["a Deluxe", DELUXE, onlyCovering(["1", "2", "3", "4"])],
-  ])("a marked last Volume places %s by all four Volumes or not at all", async (_, book, expected) => {
-    expect(await syncOne(book, "<p>Collects volumes 1-3 and volume 4 in one book.</p>")).toEqual(expected);
-  });
-
-  // W04: a range joined by "plus" is read before the copy after it: a gap
-  // blocks on every line, a contiguous range widens the statement.
-  it.each([
-    ["a Deluxe", "<p>Collects volumes 1-3 plus 5-6 in one book.</p>", DELUXE, UNMAPPED],
-    ["a 3-in-1", "<p>Collects volumes 1-3 plus 5-6 in one book.</p>", THREE_IN_1, UNMAPPED],
-    [
-      "a Deluxe",
-      "<p>Collects volumes 1-3 plus 4-6 in one book.</p>",
-      DELUXE,
-      onlyCovering(["1", "2", "3", "4", "5", "6"]),
-    ],
-  ])("a joined range places %s by the whole list (%s)", async (_, blurb, book, expected) => {
-    expect(await syncOne(book, blurb)).toEqual(expected);
-  });
-
-  // N01: a title statement reads its list as a blurb does. Every item after
-  // a joined range is read and beats the size; a gap or a possessive blocks.
-  const ONE_TO_NINE = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
-  it.each([
-    [DELUXE, " (Collecting Vols. 1-3 plus 4-6 and 7-9 in one book)", onlyCovering(ONE_TO_NINE)],
-    [THREE_IN_1, " (Collecting Vols. 1-3 plus 4-6 and 7-9 in one book)", onlyCovering(ONE_TO_NINE)],
-    [DELUXE, " (Collecting Vols. 1-3 plus 4-6 and 8-9 in one book)", UNMAPPED],
-    [THREE_IN_1, " (Collecting Vols. 1-3 plus 4-6 and 8-9 in one book)", UNMAPPED],
-    [DELUXE, " (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", UNMAPPED],
-    [DELUXE, " (Collecting Vols. 1-3 plus 4)", onlyCovering(["1", "2", "3", "4"])],
-  ])("a title statement continuing past a joined range (%#) is read whole or not at all", async (book, statement, expected) => {
-    expect(await syncOne({ ...book, title: book.title + statement }, "")).toEqual(expected);
-  });
-
-  // N02: an uppercase possessive still reads two ways: the 3-in-1 size
-  // settles it to 1–3, and a Deluxe with no size stays Unmapped.
-  it.each([
-    ["a Deluxe", "<p>COLLECTS VOLUMES 1-3 AND VOLUME 4'S BONUS CHAPTER.</p>", DELUXE, UNMAPPED],
-    ["a Deluxe", "<p>COLLECTS VOLUMES 1-3 AND VOLUME 4’S BONUS CHAPTER.</p>", DELUXE, UNMAPPED],
-    ["a 3-in-1", "<p>COLLECTS VOLUMES 1-3 AND VOLUME 4'S BONUS CHAPTER.</p>", THREE_IN_1, PLACED_1_3],
-    ["a 3-in-1", "<p>COLLECTS VOLUMES 1-3 AND VOLUME 4’S BONUS CHAPTER.</p>", THREE_IN_1, PLACED_1_3],
-  ])("an uppercase possessive places %s by the size or not at all (%s)", async (_, blurb, book, expected) => {
-    expect(await syncOne(book, blurb)).toEqual(expected);
-  });
-
-  // N04: a range outside the brackets never stands in for a bracket
-  // statement no range holds, and two ranges that disagree place nothing:
-  // no Volume 4–9 is invented. Only an agreeing pair maps the book.
-  it.each([
-    [DELUXE, "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)", UNMAPPED],
-    [DELUXE, "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", UNMAPPED],
-    [DELUXE, "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)", UNMAPPED],
-    [DELUXE, "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3)", UNMAPPED],
-    [
-      DELUXE,
-      "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 7-9 in one book)",
-      onlyCovering(ONE_TO_NINE),
-    ],
-    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3 plus Vol. 4's bonus chapter)", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1 and 3)", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-6)", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3)", PLACED_1_3],
-    // The reverse: a gapped designation outside, a range in the bracket.
-    [DELUXE, "Alpha Deluxe Edition Vol. 1 & 3 (Collects Vols. 1-3)", UNMAPPED],
-  ])("a title stating its coverage twice (%#) maps only when both agree", async (book, title, expected) => {
-    expect(await syncOne({ ...book, title }, "")).toEqual(expected);
-  });
-
-  // N04: with no Edition Line to wait under, a bare range whose bracket
-  // disagrees places nothing at all; the observation waits for an Editor.
-  it.each([
-    "Alpha, Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)",
-    "Alpha, Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)",
-  ])("a bare range beside a rejected bracket statement (%s) creates no Volume", async (title) => {
-    const book = { ...DELUXE, title, seriesSlug: "alpha", seriesTitle: "Alpha" };
-    expect(await syncOne(book, "")).toEqual({ volumes: [], coverages: 0, unmapped: [] });
-  });
-
-  // N04: the rejected title is evidence, so a readable blurb never stands in.
-  it("a blurb never stands in for a title statement the outer range contradicts", async () => {
-    const title = "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)";
-    expect(await syncOne({ ...DELUXE, title }, "<p>Collects volumes 1-9.</p>")).toEqual(UNMAPPED);
-  });
-
-  // N04 siblings: a list after the packaging phrase meets the marker's
-  // designation in `agreed`, so the 3-in-1 size never places a gapped book.
-  // A lone number after the phrase is a line position and still maps.
-  it.each([
-    [THREE_IN_1, "Alpha 3-in-1 Edition 1 & 3, Vol. 1", UNMAPPED],
-    [OMNIBUS, "Alpha Omnibus 1-3 Vol. 4-6", UNMAPPED],
-    [OMNIBUS, "Alpha Omnibus 1-3 Vol. 1-3", PLACED_1_3],
-    [OMNIBUS, "Alpha Omnibus 2 (Vol. 4-6)", onlyCovering(["4", "5", "6"])],
-    [OMNIBUS, "Alpha Omnibus 2 Vol. 4-6", onlyCovering(["4", "5", "6"])],
-  ])("a list before a marker (%#) maps only when both agree", async (book, title, expected) => {
-    expect(await syncOne({ ...book, title }, "")).toEqual(expected);
-  });
-
-  // N04 siblings: a line-less book's subtitle statement meets its range in
-  // `agreed`; a disagreeing one places nothing.
-  it.each([
-    ["Alpha, Vol. 1-3: Includes Vols. 1 & 3", { volumes: [], coverages: 0, unmapped: [] }],
-    ["Alpha, Vol. 1-3: Includes Vols. 1-6", { volumes: [], coverages: 0, unmapped: [] }],
-    ["Alpha, Vol. 1-3: Includes Vols. 1-3", PLACED_1_3],
-  ])("a line-less subtitle statement (%s) maps only when it agrees", async (title, expected) => {
-    const book = { ...DELUXE, title, seriesSlug: "alpha", seriesTitle: "Alpha" };
-    expect(await syncOne(book, "")).toEqual(expected);
-  });
-
-  // N04 follow-up: a packaging bracket's own Volume list, a subtitle
-  // statement after a phrase's own number or list, and a subtitle that is
-  // only a list are statements too. A Volume list or a phrase's list the
-  // grammar cannot read (left in the Series title or a subtitle) stands
-  // against the rest. A gapped or disagreeing one places nothing, and the
-  // line size never stands in for it.
-  it.each([
-    [THREE_IN_1, "Alpha (3-in-1 Edition 1 & 3), Vol. 1", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition 1 (Omnibus Vol. 1 & 3)", UNMAPPED],
-    [OMNIBUS, "Alpha (Omnibus 1-3) Vol. 4-6", UNMAPPED],
-    [OMNIBUS, "Alpha (Omnibus Vol. 1-3) Vol. 2", PLACED_1_3],
-    [THREE_IN_1, "Alpha Vol. 1 & 3 3-in-1 Edition 1", UNMAPPED],
-    [OMNIBUS, "Alpha Vol. 4-6 Omnibus 1-3", UNMAPPED],
-    [DELUXE, "Alpha Omnibus 1 & 3 Deluxe Edition 2 Vol. 4-6", UNMAPPED],
-    [DELUXE, "Alpha Deluxe Edition 1-3: Includes Vols. 4-6", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition 1 & 3: Includes Vols. 1-3", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition 1: Includes Vols. 1-3", PLACED_1_3],
-    [THREE_IN_1, "Alpha 3-in-1 Edition, Vol. 1: Vols. 1 & 3", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition, Vol. 1: Volumes 1 & 3", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition, Vol. 1: Vols. 1-3", PLACED_1_3],
-    // A phrase's list in a marker's subtitle, or before a later phrase.
-    [DELUXE, "Alpha Vol. 1-3 Omnibus 1 & 3 Deluxe Edition 1", UNMAPPED],
-    [DELUXE, "Alpha Omnibus 1 & 3 Vol. 1-3 Deluxe Edition 1", UNMAPPED],
-    [DELUXE, "Alpha Vol. 4-6 Omnibus 1-3 Deluxe Edition 2", UNMAPPED],
-    // A dash chain where the title read no list before: no Volumes 2–6 or 4–8.
-    [OMNIBUS, "Alpha Omnibus, Vol. 2: Vol. 2 - 4-6", UNMAPPED],
-    [OMNIBUS, "Alpha (Omnibus) Vol. 2: Vols. 4-6-8", UNMAPPED],
-    [THREE_IN_1, "Alpha 3-in-1 Edition, Vol. 1: Vols. 1-2-5", UNMAPPED],
-    [OMNIBUS, "Alpha (Omnibus Vol. 4-6-8)", UNMAPPED],
-  ])("a statement or an unread list in the title (%#) maps only when all agree", async (book, title, expected) => {
-    expect(await syncOne({ ...book, title }, "")).toEqual(expected);
-  });
-
-  it.each(["Alpha, Vol. 1-3 Omnibus 1 & 3: Cloud Dragon", "Alpha Vol. 1-3 Omnibus 4-6 Hardcover"])(
-    "a line-less book whose subtitle holds a phrase's list (%s) creates no Volume",
-    async (title) => {
-      const book = { ...DELUXE, title, seriesSlug: "alpha", seriesTitle: "Alpha" };
-      expect(await syncOne(book, "")).toEqual({ volumes: [], coverages: 0, unmapped: [] });
-    },
-  );
-
-  // N04 follow-up: an unmarked list, a Part or Book list, and a phrase's
-  // range beside a lone number belong to the name or the position, never
-  // to the coverage: the book places as it always did.
-  it.each([
-    [OMNIBUS, "Persona 3 & 4 Omnibus 1", UNMAPPED],
-    [THREE_IN_1, "Persona 3 & 4 3-in-1 Edition 1", PLACED_1_3],
-    [OMNIBUS, "Alpha Book 1-2 Omnibus 1", UNMAPPED],
-    [OMNIBUS, "Alpha Part 1-2 Omnibus 1 (Vol. 1-3)", PLACED_1_3],
-    [OMNIBUS, "Alpha 1, 2 & 3 Omnibus 2", UNMAPPED],
-    [OMNIBUS, "Alpha Omnibus 1-3 Vol. 2", UNMAPPED],
-    // An earlier marker designates the book; the trailing statement is its subtitle.
-    [DELUXE, "Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1-3", onlyCovering(["2"])],
-    [DELUXE, "Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1 & 3", onlyCovering(["2"])],
-    [OMNIBUS, "Alpha, Vol. 2: Omnibus 1 - Includes Vols. 4-6", onlyCovering(["2"])],
-    [OMNIBUS, "Alpha Part 2: Omnibus 1: Includes Vols. 1-3", onlyCovering(["2"])],
-    [OMNIBUS, "Alpha Vol. 3: Box Set 1: Includes Vols. 1-3", onlyCovering(["3"])],
-    [OMNIBUS, "Alpha Omnibus Omnibus Vol. 1-3: Includes Vols. 1-3", PLACED_1_3],
-    [OMNIBUS, "Alpha Box Set Omnibus Vol. 1-3: Includes Vols. 1-3", PLACED_1_3],
-  ])("a list that is no statement (%#) places the book as before", async (book, title, expected) => {
-    expect(await syncOne({ ...book, title }, "")).toEqual(expected);
-  });
-
-  it("a Part list beside a line-less range (Alpha Part 1-2, Vol. 1-3) places it as before", async () => {
-    const book = { ...DELUXE, title: "Alpha Part 1-2, Vol. 1-3", seriesSlug: "alpha", seriesTitle: "Alpha" };
-    expect(await syncOne(book, "")).toEqual(PLACED_1_3);
-  });
-
-  // A trailing statement split off only where the marker grammar would read
-  // it: an earlier marker keeps the Series the title always named.
-  it.each([
-    ["Alpha, Vol. 2: Deluxe Edition 1: Includes Vols. 1-3", "Alpha"],
-    ["Alpha: Part 4 - Diamond Deluxe Edition 1: Includes Vols. 1-3", "Alpha"],
-    ["Alpha Omnibus Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha Omnibus"],
-    ["Alpha 3-in-1 Edition Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha 3-in-1 Edition"],
-    ["Alpha Box Set Omnibus Vol. 1-3: Includes Vols. 1-3", "Alpha Box Set"],
-  ])("a trailing statement after an earlier marker (%s) keeps Series %s", async (title, seriesTitle) => {
-    const t = convexTest(schema);
-    await seedRegistry(t, true);
-    stubSite([{ ...OMNIBUS, slug: "alpha-book", seriesSlug: "alpha-book", seriesTitle: undefined, title }]);
-    await sync(t);
-    const series = await t.run(async (ctx) => (await ctx.db.query("series").collect()).map((s) => s.title));
-    expect(series).toEqual([seriesTitle]);
-  });
-
-  // A Series name's thousands-separated number is no list left unread.
-  const SAVING = "Saving 80,000 Gold in Another World for My Retirement";
-  it.each([
-    [OMNIBUS, `${SAVING} Omnibus 1 (Vol. 1-3)`, "", PLACED_1_3],
-    [THREE_IN_1, `${SAVING} 3-in-1 Edition 1`, "", PLACED_1_3],
-    [DELUXE, `${SAVING} Deluxe Edition 1`, "<p>Collects volumes 1-3.</p>", PLACED_1_3],
-    [OMNIBUS, "I'm Standing on 1,000,000 Lives Omnibus 1 (Vol. 1-2)", "", onlyCovering(["1", "2"])],
-  ])("a thousands-separated number in the Series name (%#) still maps", async (book, title, blurb, expected) => {
-    expect(await syncOne({ ...book, title }, blurb)).toEqual(expected);
-  });
-
-  it("a thousands-separated number in a line-less Series name still maps", async () => {
-    const book = { ...DELUXE, title: `${SAVING}, Vol. 1-3`, seriesSlug: "saving", seriesTitle: SAVING };
-    expect(await syncOne(book, "")).toEqual(PLACED_1_3);
-  });
-
-  // W05: "Negima!" is the Series' name, not a sentence end. The verb governs
-  // 37–38, which the 3-in-1 size at position 13 (37–39) contradicts: no
-  // Volume 39 is invented. With no size the statement places the book.
-  it.each([
-    [
-      "a 3-in-1",
-      {
-        ...THREE_IN_1,
-        slug: "negima-3-in-1-edition-13",
-        title: "Negima! 3-in-1 Edition Vol. 13",
-        seriesSlug: "negima-3-in-1",
-        seriesTitle: "Negima! 3-in-1 Edition",
-      },
-      UNMAPPED,
-    ],
-    [
-      "a Deluxe",
-      {
-        ...DELUXE,
-        slug: "negima-deluxe-edition-1",
-        title: "Negima! Deluxe Edition 1",
-        seriesSlug: "negima-deluxe",
-        seriesTitle: "Negima! Deluxe Edition",
-      },
-      onlyCovering(["37", "38"]),
-    ],
-  ])("a Series title's own '!' before its Volumes places %s by the statement", async (_, book, expected) => {
-    expect(await syncOne(book, "<p>Collects Negima! Volumes 37-38.</p>")).toEqual(expected);
   });
 });
