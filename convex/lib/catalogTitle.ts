@@ -15,6 +15,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
 import { packagingValidator, rangeLabels, type ParsedBookTitle } from "./bookTitle";
 import { fullDateValidator } from "./dates";
+import type { CoverRequest } from "./covers";
 import { inferCoverage } from "./coverage";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./matching";
 import { upsertObservation } from "./observations";
@@ -108,10 +109,17 @@ export type ApplyResult = {
     | "recordOnly";
   changed: boolean;
   releaseId?: Id<"releases">;
+  /** Art the action should store on the Release (Seven Seas, Kodansha). */
+  cover?: CoverRequest;
   reason?: string;
 };
 
-/** The fields this source offers on a linked Release, in canonical form. */
+/**
+ * The fields this source offers on a linked Release, in canonical form.
+ * Seven Seas, Kodansha and OpenLibrary keep their own: each reads other
+ * snapshot fields and offers a different set, and the key order becomes
+ * the order of a queued Proposal's changes.
+ */
 function offeredReleaseFields(snapshot: CatalogTitle): Record<string, unknown> {
   const offered: Record<string, unknown> = {};
   offered.isbn13 = snapshot.isbn13;

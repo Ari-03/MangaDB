@@ -48,7 +48,8 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
-import { coverKey, coverRequest, type CoverRequest, type StoredCovers } from "./lib/covers";
+import type { ApplyResult } from "./lib/catalogTitle";
+import { coverKey, coverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { MAX_CARRIED_ERRORS, registryRow, runToContinue, storeRunCover } from "./lib/importRuns";
@@ -629,23 +630,6 @@ export const backlistSync = internalAction({
 });
 
 // ---------- applying one (volume, format) ----------
-
-type ApplyResult = {
-  status:
-    | "unchanged"
-    | "created"
-    | "updated"
-    | "linked"
-    | "queued"
-    | "alreadyQueued"
-    | "needsReview"
-    | "recordOnly";
-  changed: boolean;
-  releaseId?: Id<"releases">;
-  /** Art the action should store on the Release (lib/covers.ts `storeCover`). */
-  cover?: CoverRequest;
-  reason?: string;
-};
 
 /** The fields this source offers on a linked Release, in canonical form. */
 function offeredReleaseFields(snapshot: KodanshaSnapshot): Record<string, unknown> {

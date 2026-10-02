@@ -27,6 +27,7 @@ import {
   type CoverRequest,
   type StoredCovers,
 } from "./lib/covers";
+import type { ApplyResult } from "./lib/catalogTitle";
 import { errorMessage, politeFetch } from "./lib/http";
 import { registryRow, storeRunCover } from "./lib/importRuns";
 import { applyRetrying } from "./lib/occ";
@@ -47,6 +48,7 @@ import {
   reconcileLinkedBundle,
   reconcileLinkedSeries,
   recordUnplaced,
+  removedSeriesFor,
   toPartialDate,
   linkSeriesObservation,
   type BundleReconcile,
@@ -397,23 +399,6 @@ export const noteListing = internalMutation({
 });
 
 // ---------- applying one book ----------
-
-type ApplyResult = {
-  status:
-    | "unchanged"
-    | "created"
-    | "updated"
-    | "linked"
-    | "queued"
-    | "alreadyQueued"
-    | "needsReview"
-    | "recordOnly";
-  changed: boolean;
-  releaseId?: Id<"releases">;
-  /** Art the action should store on the Release (lib/covers.ts `storeCover`). */
-  cover?: CoverRequest;
-  reason?: string;
-};
 
 /** The fields this source offers on a linked Release, in canonical form. */
 function offeredReleaseFields(snapshot: BookSnapshot): Record<string, unknown> {
@@ -797,6 +782,22 @@ export const applyBook = internalMutation({
     if (gates.length > 0 && !bootstrap) {
       if (await alreadyHandled(ctx, observation)) {
         return { status: "alreadyQueued", changed: false };
+      }
+      if (seriesId === null) {
+        // A brand-new Series for a work an Editor hid would undo the repair:
+        // the book stays on its observation instead of the queue, as in
+        // Kodansha and applyCatalogTitle (the creation path checks itself).
+        const removed = await removedSeriesFor(ctx, {
+          sourceKey: SOURCE_KEY,
+          observation,
+          seriesKey: snapshot.seriesSlug,
+          seriesTitle: snapshot.seriesTitle,
+          publisherId: publisher?._id ?? null,
+        });
+        if (removed?.kind === "hidden") {
+          await recordUnplaced(ctx, observation, removed.reason, now);
+          return { status: "recordOnly", changed: false, reason: "hidden series" };
+        }
       }
       await queueCreationProposal(ctx, {
         sourceKey: SOURCE_KEY,

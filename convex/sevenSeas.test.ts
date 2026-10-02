@@ -353,6 +353,28 @@ describe("sevenSeas.sync — packaging coverage inference", () => {
     });
   });
 
+  it("never queues a brand-new Series for a work an Editor hid", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, false);
+    await t.run((ctx) =>
+      ctx.db.insert("series", {
+        status: "hidden",
+        publicId: 1,
+        title: "Alpha Adventures (Manga)",
+        altTitles: [],
+        searchText: "Alpha Adventures (Manga)",
+      }),
+    );
+    stubSite([ALPHA_1]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("proposals").collect()).toHaveLength(0);
+      const [obs] = await ctx.db.query("sourceObservations").collect();
+      expect(obs?.queuedProposalId).toBeUndefined();
+      expect(obs?.conflicts?.some((c) => c.reason.includes("an Editor hid"))).toBe(true);
+    });
+  });
+
   it("keeps uncovered packaging on its observation outside Bootstrap Mode", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, false);
