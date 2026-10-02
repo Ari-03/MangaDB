@@ -518,10 +518,6 @@ export const applyBook = internalMutation({
   handler: async (ctx, { sourceRecordId, snapshot }): Promise<ApplyResult> => {
     const now = Date.now();
     const source = await getSourceByKey(ctx, SOURCE_KEY);
-    // Kill switch, as in applyCatalogTitle: disabling the source stops an
-    // in-flight sync's applies too, not just the next run's gate. Seven Seas
-    // has no operator-forced runs, so nothing else applies through here.
-    if (source && !source.enabled) return { status: "recordOnly", changed: false };
     const sourceName = source?.name ?? PUBLISHER.name;
     const citation = { sourceName, url: snapshot.url };
 
