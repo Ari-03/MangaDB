@@ -601,7 +601,6 @@ export default defineSchema({
     .index("by_publicId", ["publicId"])
     .index("by_isbn13", ["isbn13"])
     .index("by_isbn10", ["isbn10"])
-    .index("by_date", ["pubDate.sort"])
     .index("by_bootstrap", ["bootstrapUnreviewed"])
     .index("by_cover", ["coverImage.storageId"]),
 
@@ -804,7 +803,7 @@ export default defineSchema({
         into: v.optional(v.string()),
       }),
     ),
-  }).index("by_proposal", ["proposalId"]),
+  }),
 
   // Where a data-repair entry's sweep of personal rows stands between its
   // bounded legs (lib/repair/ops.ts sweep): one row per sweep, keyed by the
@@ -849,7 +848,7 @@ export default defineSchema({
       v.object({ kind: v.literal("system") }),
     ),
     reason: v.optional(v.string()),
-  }).index("by_user", ["userId"]),
+  }),
 
   // Sequential public-ID allocation per entity type ("series", "volume",
   // "edition", "bundle"). Imports reserve blocks in one bump; gaps are fine.
@@ -1139,7 +1138,7 @@ export default defineSchema({
       v.object({ kind: v.literal("system") }),
     ),
     reason: v.optional(v.string()),
-  }).index("by_review", ["reviewId"]),
+  }),
 
   // Comments (convex/comments.ts, CONTEXT.md: Comment): short public plain
   // text on a Series or Volume page, one level of replies. Unlike Ratings
