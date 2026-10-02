@@ -162,32 +162,6 @@ describe("catalog.search", () => {
     ]);
   });
 
-  it("offers no typo help when the query names a Publisher", async () => {
-    const t = makeT();
-    await seed(t);
-    // "Seven Seas" is one edit-pair from Seven Seeds, but it names a Publisher.
-    const results = await t.query(api.catalog.search, { query: "Seven Seas" });
-    expect(results.publishers.map((p) => p.slug)).toEqual(["seven-seas"]);
-    expect(results.didYouMean).toEqual([]);
-    // Without the Publisher, the same query is a typo for Seven Seeds.
-    const typo = await t.query(api.catalog.search, { query: "Seven Seaz" });
-    expect(typo.didYouMean.map((s) => s.title)).toEqual(["Seven Seeds"]);
-  });
-
-  it("resolves a canonical alias to its Publisher", async () => {
-    const t = makeT();
-    await seed(t);
-    for (const [query, slug] of [
-      ["Shonen Jump", "viz-media"],
-      ["viz signature", "viz-media"],
-      ["Seven Seas Siren", "seven-seas"],
-    ]) {
-      const results = await t.query(api.catalog.search, { query });
-      expect(results.publishers.map((p) => p.slug)).toEqual([slug]);
-      expect(results.didYouMean).toEqual([]);
-    }
-  });
-
   it("keeps typo help when the query only starts a word of a Publisher's name", async () => {
     const t = makeT();
     await seed(t);
@@ -200,28 +174,6 @@ describe("catalog.search", () => {
     expect(results.didYouMean.map((s) => s.title)).toEqual(["Witch Hat Atelier"]);
   });
 
-  it("keeps typo help when the query is only a word inside a Publisher's name", async () => {
-    const t = makeT();
-    await seed(t);
-    await t.run(async (ctx) => {
-      await insertPublisher(ctx, { name: "Titan Manga", slug: "titan-manga" });
-      await insertSeries(ctx, { publicId: 6, title: "Mango Days" });
-    });
-    const results = await t.query(api.catalog.search, { query: "manga" });
-    expect(results.publishers.map((p) => p.slug)).toEqual(["titan-manga"]);
-    expect(results.didYouMean.map((s) => s.title)).toEqual(["Mango Days"]);
-  });
-
-  it("returns nothing for an empty or whitespace query", async () => {
-    const t = makeT();
-    await seed(t);
-    expect(await t.query(api.catalog.search, { query: "   " })).toEqual({
-      series: [],
-      authors: [],
-      publishers: [],
-      didYouMean: [],
-    });
-  });
 });
 
 describe("catalog.suggest", () => {
@@ -301,15 +253,6 @@ describe("catalog.suggest", () => {
     ).toEqual([{ name: "Kodansha", slug: "kodansha" }]);
   });
 
-  it("offers no typo help or loose matches when the query names a Publisher", async () => {
-    const t = makeT();
-    await seed(t);
-    const results = await t.query(api.catalog.suggest, { query: "Seven Seas" });
-    expect(results.publishers.map((p) => p.slug)).toEqual(["seven-seas"]);
-    expect(results.didYouMean).toEqual([]);
-    expect(results.series).toEqual([]);
-  });
-
   it("does not match a Publisher mid-word", async () => {
     const t = makeT();
     await seed(t);
@@ -320,36 +263,64 @@ describe("catalog.suggest", () => {
     const results = await t.query(api.catalog.suggest, { query: "one" });
     expect(results.publishers.map((p) => p.slug)).toEqual(["one-peace-books"]);
   });
+});
 
-  it("keeps typo help beside a Publisher the query only shares a word with", async () => {
+// The rules search and suggest share, each case run against both queries.
+// Beside a named Publisher, search still lists the Series its words match;
+// suggest, a dropdown, lists none.
+describe.each([
+  { name: "search", endpoint: api.catalog.search, beside: ["Seven Seeds"] },
+  { name: "suggest", endpoint: api.catalog.suggest, beside: [] },
+])("catalog.$name and Publisher names", ({ endpoint, beside }) => {
+  const sevenSeas = { name: "Seven Seas Entertainment", slug: "seven-seas" };
+  const viz = { name: "VIZ Media", slug: "viz-media" };
+
+  /** Publishers whose names sit a typo away from Series titles; returns a way to ask `endpoint`. */
+  const seeded = async () => {
     const t = makeT();
-    await seed(t);
     await t.run(async (ctx) => {
-      await insertPublisher(ctx, { name: "Titan Manga", slug: "titan-manga" });
+      for (const publisher of [sevenSeas, viz, { name: "Titan Manga", slug: "titan-manga" }]) {
+        await insertPublisher(ctx, publisher);
+      }
+      await insertSeries(ctx, { publicId: 5, title: "Seven Seeds" });
       await insertSeries(ctx, { publicId: 6, title: "Mango Days" });
     });
-    const results = await t.query(api.catalog.suggest, { query: "manga" });
+    return (query: string) => t.query(endpoint, { query });
+  };
+
+  it("offers no typo help when the query names a Publisher", async () => {
+    const ask = await seeded();
+    // "Seven Seas" is one edit-pair from Seven Seeds, but it names a Publisher.
+    const results = await ask("Seven Seas");
+    expect(results.publishers.map((p) => p.slug)).toEqual(["seven-seas"]);
+    expect(results.didYouMean).toEqual([]);
+    expect(results.series.map((s) => s.title)).toEqual(beside);
+    // Without the Publisher, the same query is a typo for Seven Seeds.
+    const typo = await ask("Seven Seaz");
+    expect(typo.didYouMean.map((s) => s.title)).toEqual(["Seven Seeds"]);
+  });
+
+  it("keeps typo help when the query is only a word inside a Publisher's name", async () => {
+    const ask = await seeded();
+    const results = await ask("manga");
     expect(results.publishers.map((p) => p.slug)).toEqual(["titan-manga"]);
     expect(results.didYouMean.map((s) => s.title)).toEqual(["Mango Days"]);
   });
 
-  it("finds a Publisher through its canonical alias", async () => {
-    const t = makeT();
-    await seed(t);
-    expect(
-      (await t.query(api.catalog.suggest, { query: "shonen jump" })).publishers,
-    ).toEqual([{ name: "VIZ Media", slug: "viz-media" }]);
+  it.each([
+    ["Shonen Jump", viz],
+    ["viz signature", viz],
+    ["Seven Seas Siren", sevenSeas],
+  ])("resolves the canonical alias %j to its Publisher", async (query, publisher) => {
+    const ask = await seeded();
+    const results = await ask(query);
+    expect(results.publishers).toEqual([publisher]);
+    expect(results.didYouMean).toEqual([]);
   });
 
-  it("returns nothing for a blank query", async () => {
-    const t = makeT();
-    await seed(t);
-    expect(await t.query(api.catalog.suggest, { query: " " })).toEqual({
-      series: [],
-      authors: [],
-      didYouMean: [],
-      publishers: [],
-    });
+  it.each([" ", "   "])("returns nothing for the blank query %j", async (query) => {
+    const ask = await seeded();
+    expect(await ask(query)).toEqual({ series: [], authors: [], publishers: [], didYouMean: [] });
   });
 });
 
