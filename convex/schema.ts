@@ -272,16 +272,25 @@ export default defineSchema({
     .index("by_rating", ["ratingRank", "publicId"])
     .index("by_rebuiltAt", ["rebuiltAt"]),
 
-  // Authors (people.ts): the creators ANN credits on each Series, derived by
-  // `people.rebuild` from the stored ANN manga observations, like
-  // seriesStats. ANN's person id is the identity, so one author keeps one
-  // row across entries and spellings. `seriesCount` (Series they wrote or
-  // drew), `originalCount` (Series they are only the original creator of),
-  // and the jacket (their biggest Series') are derived for the Authors tab.
+  // Authors (people.ts): the creators credited on each Series, derived by
+  // `people.rebuild` from the stored ANN manga observations and, for Series
+  // ANN does not credit, the publishers' release observations, like
+  // seriesStats. ANN's person id is the identity when there is one, so one
+  // author keeps one row across entries and spellings; a person only a
+  // publisher names has no `annId` and is matched by `nameKey`.
+  // `seriesCount` (Series they wrote or drew), `originalCount` (Series they
+  // are only the original creator of), and the jacket (their biggest
+  // Series') are derived for the Authors tab.
   people: defineTable({
     publicId: v.number(),
     name: v.string(),
-    annId: v.string(),
+    // Absent for a person only a publisher names; ANN adopts the row (sets
+    // this) when it later credits someone of the same `nameKey`.
+    annId: v.optional(v.string()),
+    // people.ts nameKey(name): lowercased, accents stripped, spaces
+    // collapsed. Optional only until the rebuild's ANN pass has touched the
+    // row (it sets it lazily); publisher-named rows always have it.
+    nameKey: v.optional(v.string()),
     seriesCount: v.number(),
     // Optional only until the first rebuild after it arrived; readers read 0.
     originalCount: v.optional(v.number()),
@@ -295,10 +304,14 @@ export default defineSchema({
   })
     .index("by_publicId", ["publicId"])
     .index("by_annId", ["annId"])
+    .index("by_nameKey", ["nameKey"])
     .index("by_seriesCount", ["seriesCount"])
     .searchIndex("search_name", { searchField: "name" }),
 
-  // One Series–author–role link, from ANN's staff tasks (people.ts roleFor).
+  // One Series–author–role link, from ANN's staff tasks (people.ts roleFor)
+  // or, for a Series ANN does not credit, a publisher's creator names.
+  // "author" is the role-less credit ("By"): a publisher named the person
+  // without saying what they did.
   seriesCredits: defineTable({
     seriesId: v.id("series"),
     personId: v.id("people"),
@@ -307,7 +320,11 @@ export default defineSchema({
       v.literal("story"),
       v.literal("art"),
       v.literal("original"),
+      v.literal("author"),
     ),
+    // "publisher" for the fallback rows the rebuild's publisher pass
+    // writes; absent for rows derived from ANN.
+    source: v.optional(v.literal("publisher")),
     rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])

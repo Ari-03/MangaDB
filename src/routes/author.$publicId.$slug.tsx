@@ -15,10 +15,12 @@ import {
 import { authorPath, parsePublicId, slugParams } from "~/lib/slug";
 
 /**
- * An author page (`/author/{id}/{slug}`): everyone ANN credits on a Series
+ * An author page (`/author/{id}/{slug}`): everyone credited on a Series
  * gets one, listing every Series they worked on, latest release first, with
  * their role on each. Credits come from the Anime News Network
- * Encyclopedia, which the page credits and links, as ANN's terms ask.
+ * Encyclopedia, which the page credits and links, as ANN's terms ask, or
+ * from publishers' creator names for Series ANN does not credit; a person
+ * only publishers name has no ANN page, so neither link nor credit shows.
  * A stale slug 301s to the canonical URL, as for a Series.
  */
 type AuthorSeries = AuthorPageData["series"][number];
@@ -116,13 +118,15 @@ function AuthorPage() {
           ) : null}
         </p>
         {all.length > 0 ? <p className="author-roles">{roleSummary(all)}</p> : null}
-        <p className="note author-credit">
-          Credits from the{" "}
-          <a href={author.annUrl} rel="noopener" target="_blank">
-            Anime News Network Encyclopedia
-          </a>
-          .
-        </p>
+        {author.annUrl ? (
+          <p className="note author-credit">
+            Credits from the{" "}
+            <a href={author.annUrl} rel="noopener" target="_blank">
+              Anime News Network Encyclopedia
+            </a>
+            .
+          </p>
+        ) : null}
       </header>
 
       <section className="section">

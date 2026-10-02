@@ -36,6 +36,7 @@
 // signal and is left to Editors.
 
 import { v, type Infer } from "convex/values";
+import type { Doc } from "../_generated/dataModel";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
 import { catalogTitleFields } from "./catalogTitle";
 import { cleanBlurb } from "./text";
@@ -341,4 +342,165 @@ export function parseTitleList(raw: unknown): {
     dropped.push({ ...(isbn13 !== undefined ? { isbn13 } : {}), reason: read });
   }
   return { titles, dropped, rawCount: list.length, recordCount };
+}
+
+// ---------- the author line ----------
+
+/** One credit an author line gives, in people.ts's roles. */
+export type AuthorCredit = { name: string; role: Doc<"seriesCredits">["role"] };
+
+type Task = "story" | "art" | "original";
+
+// Every task an author-line label may name, and what it credits: null for
+// tasks that make no one an author of the Series here (design, translation,
+// lettering, editing, adapting someone else's work).
+const TASKS: Record<string, Task | null> = {
+  story: "story",
+  written: "story",
+  writer: "story",
+  art: "art",
+  artwork: "art",
+  illustrated: "art",
+  illustration: "art",
+  illustrations: "art",
+  manga: "art",
+  drawn: "art",
+  created: "original",
+  creator: "original",
+  "original story": "original",
+  "original concept": "original",
+  "original work": "original",
+  "original creator": "original",
+  "original illustrations": null,
+  "original character design": null,
+  "original character designs": null,
+  "character design": null,
+  "character designs": null,
+  "graffiti designs": null,
+  translated: null,
+  translation: null,
+  lettered: null,
+  lettering: null,
+  letters: null,
+  retouch: null,
+  compiled: null,
+  storyboards: null,
+  layouts: null,
+  composition: null,
+  contributions: null,
+  supervised: null,
+  organized: null,
+  "research consulting": null,
+  adaptation: null,
+  adapted: null,
+  adaptated: null,
+  script: null,
+};
+
+const TASK = Object.keys(TASKS)
+  .sort((a, b) => b.length - a.length)
+  .join("|");
+/** Between tasks of one label: "Story & Art", "Created, written, and illustrated". */
+const TASK_JOIN = /\s*,\s*and\s+|\s*,\s*|\s*&\s*|\s+and\s+/i;
+/** A label opening a clause or following a comma: "Story by ", ", Art by ", "By ". */
+const LABEL = new RegExp(
+  `(?:^|,\\s*)(?:((?:${TASK})(?:(?:${TASK_JOIN.source})(?:${TASK}))*)\\s+)?by\\s+`,
+  "gi",
+);
+/** Clauses end at a semicolon or a sentence's full stop (not an initial's: "M. Alice"). */
+const CLAUSE_BREAK = /\s*;\s*|(?<=[^\s.]{2})\.(?:\s+|$)/;
+/** Words no name contains: a sign the line has a shape this parser does not know. */
+const NOT_A_NAME =
+  /\b(?:by|with|various|artists?|creators?|series|story|art|written|illustrated|illustrations?|designs?|translat\w*|letter\w*|based|original)\b/i;
+
+/**
+ * The credits in PRH's free-text `author` line, or none when the line has a
+ * shape this does not recognise (a wrong credit is worse than none):
+ *
+ * - "Yui Sakuma", "Kazuo Koike and Goseki Kojima": each a role-less author.
+ * - Labelled clauses split by ";", ", " before a label, or a full stop:
+ *   "Story by A; Art by B", "Written and illustrated by A. Translated by
+ *   B.", "Original concept by A; Story by B; Art by C". Tasks map to roles
+ *   (`TASKS`); a label with only dropped tasks (character design,
+ *   translation, compilation, adaptation) credits nobody, "By A" is a
+ *   role-less author, and a label naming an "Original ..." credits the
+ *   original creator whatever follows ("Original Story and Illustrations").
+ * - Unlabelled names opening a labelled line take the role the labels
+ *   leave open: "A; Illustrated by B" → A wrote it, "A; Story by B" → A
+ *   drew it, "A; created by B" → A is the author, and with both story and
+ *   art labelled A is the original creator.
+ * - A line crediting a writer but nobody for the art ("Written by A")
+ *   makes the writer the role-less author.
+ *
+ * Refused: a single-word name beside a comma ("Fushimi, Tsukasa" is Last,
+ * First), colons, an unlabelled name after the first clause, a label this
+ * does not know, and names holding task words ("Various Artists").
+ * Parenthesised studios and labels are dropped first ("POPO (Friendly
+ * Land)"); a "based on ..." clause names the source, not a credit. A
+ * person may appear twice with two roles; people.ts merges them.
+ */
+export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
+  const text = (author ?? "").replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim();
+  if (text === "" || /[:/()[\]]/.test(text)) return [];
+  const labeled: AuthorCredit[] = [];
+  let lead: string[] = [];
+  let first = true;
+  for (const clause of text.split(CLAUSE_BREAK)) {
+    if (clause === "") continue;
+    if (/^based on\b/i.test(clause)) {
+      first = false;
+      continue;
+    }
+    const marks = [...clause.matchAll(LABEL)];
+    const opening = marks[0]?.index ?? clause.length;
+    if (opening > 0) {
+      const names = first ? splitNames(clause.slice(0, opening)) : null;
+      if (!names) return [];
+      lead = names;
+    }
+    first = false;
+    for (const [i, mark] of marks.entries()) {
+      const names = splitNames(
+        clause.slice(mark.index + mark[0].length, marks[i + 1]?.index ?? clause.length),
+      );
+      if (!names) return [];
+      const role = mark[1] === undefined ? "author" : labelRole(mark[1]);
+      if (role) labeled.push(...names.map((name) => ({ name, role })));
+    }
+  }
+  const has = (task: "story" | "art") =>
+    labeled.some((credit) => credit.role === task || credit.role === "story_art");
+  const story = has("story");
+  const art = has("art");
+  const leadRole: AuthorCredit["role"] =
+    story && art ? "original" : art ? "story" : story ? "art" : "author";
+  const credits: AuthorCredit[] = [...lead.map((name) => ({ name, role: leadRole })), ...labeled];
+  if (credits.some((credit) => credit.role === "art" || credit.role === "story_art")) return credits;
+  return credits.map((credit): AuthorCredit =>
+    credit.role === "story" ? { ...credit, role: "author" } : credit,
+  );
+}
+
+/** A label's role: writing and drawing are Story & Art; null when it credits no maker or source. */
+function labelRole(label: string): AuthorCredit["role"] | null {
+  const tasks = label.toLowerCase().split(TASK_JOIN);
+  const original = tasks[0]?.startsWith("original ") === true;
+  const found = new Set(tasks.map((task) => (original && TASKS[task] ? "original" : TASKS[task])));
+  if (found.has("story") && found.has("art")) return "story_art";
+  if (found.has("story")) return "story";
+  if (found.has("art")) return "art";
+  if (found.has("original")) return "original";
+  return null;
+}
+
+/**
+ * The names in "A, B, and C" / "A and B" / "A & B", or null when one is
+ * not plainly a name: empty, holding a task word, or a single word in a
+ * comma list (a "Last, First" name).
+ */
+function splitNames(text: string): string[] | null {
+  const names = text.split(/\s*,\s*(?:and\s+)?|\s+(?:and|&)\s+/i).map((name) => name.trim());
+  if (names.some((name) => name === "" || NOT_A_NAME.test(name))) return null;
+  if (text.includes(",") && names.some((name) => !name.includes(" "))) return null;
+  return names;
 }

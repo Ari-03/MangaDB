@@ -679,7 +679,7 @@ export const seriesPage = query({
         mature: series.mature === true,
       },
       family,
-      // Its authors, from ANN's staff credits (people.ts).
+      // Its authors, from ANN's staff credits or publishers' creator names (people.ts).
       credits: await creditsFor(ctx, series._id),
       volumes,
       editionGroups,
