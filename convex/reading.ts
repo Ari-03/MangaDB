@@ -155,6 +155,26 @@ async function completedSuggestions(
   return suggestCompleted;
 }
 
+/** An active pass as /me lists it, linking the Edition row of its Release. */
+async function passEntry(
+  ctx: QueryCtx,
+  pass: Doc<"releaseProgress">,
+  release: Doc<"releases">,
+  edition: Doc<"editions">,
+) {
+  const { title } = await editionCoverage(ctx, edition);
+  return {
+    releaseId: pass.releaseId,
+    percent: pass.percent ?? null,
+    format: release.format,
+    binding: release.binding ?? null,
+    editionPublicId: edition.publicId,
+    editionTitle: title,
+    anchor: releaseAnchor(release),
+    ...(await releaseCover(ctx, release)),
+  };
+}
+
 /**
  * Store one user's read count for a Volume: patch their row, or create it
  * under the Volume and (denormalized) its Series.
@@ -262,17 +282,7 @@ export const myReading = query({
       totalVolumes: number;
       coverUrl: string | null;
       coverIsbn: string | null;
-      passes: Array<{
-        releaseId: Id<"releases">;
-        percent: number | null;
-        format: "physical" | "digital";
-        binding: string | null;
-        editionPublicId: number;
-        editionTitle: string;
-        anchor: string;
-        coverUrl: string | null;
-        coverIsbns: string[];
-      }>;
+      passes: Array<Awaited<ReturnType<typeof passEntry>>>;
     };
     const rows = new Map<Id<"series">, Row>();
     const rowFor = async (rawSeriesId: Id<"series">): Promise<Row | null> => {
@@ -323,17 +333,7 @@ export const myReading = query({
       if (!edition) continue;
       const row = await rowFor(pass.seriesId);
       if (!row) continue;
-      const { title } = await editionCoverage(ctx, edition);
-      row.passes.push({
-        releaseId: pass.releaseId,
-        percent: pass.percent ?? null,
-        format: release.format,
-        binding: release.binding ?? null,
-        editionPublicId: edition.publicId,
-        editionTitle: title,
-        anchor: releaseAnchor(release),
-        ...(await releaseCover(ctx, release)),
-      });
+      row.passes.push(await passEntry(ctx, pass, release, edition));
     }
 
     // Read Volumes without a status or pass still put the Series here.

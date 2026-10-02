@@ -247,30 +247,22 @@ export const myUpcoming = query({
     // Future Wanted/Ordered Bundles, regardless of preference. An undated
     // Bundle is not announced (CONTEXT.md: an Upcoming Release has a *known*
     // future date), so it never appears.
-    const bundleItems: Array<{
-      kind: "bundle";
-      id: Id<"releaseBundles">;
-      bundlePublicId: number;
-      name: string;
-      sort: number;
-      day: number | null;
-      format: "physical" | "digital" | null;
-      state: "wanted" | "ordered";
-    }> = [];
-    for (const { doc, state } of bundleEntries.values()) {
-      if (state !== "wanted" && state !== "ordered") continue;
-      if (!upcoming(doc.pubDate)) continue;
-      bundleItems.push({
-        kind: "bundle" as const,
-        id: doc._id,
-        bundlePublicId: doc.publicId,
-        name: doc.name,
-        sort: doc.pubDate!.sort,
-        day: doc.pubDate!.day ?? null,
-        format: doc.format ?? null,
-        state,
-      });
-    }
+    const bundleItems = [...bundleEntries.values()].flatMap(({ doc, state }) =>
+      (state === "wanted" || state === "ordered") && upcoming(doc.pubDate)
+        ? [
+            {
+              kind: "bundle" as const,
+              id: doc._id,
+              bundlePublicId: doc.publicId,
+              name: doc.name,
+              sort: doc.pubDate!.sort,
+              day: doc.pubDate!.day ?? null,
+              format: doc.format ?? null,
+              state,
+            },
+          ]
+        : [],
+    );
 
     const name = (
       item: (typeof releaseItems)[number] | (typeof bundleItems)[number],

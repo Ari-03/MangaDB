@@ -356,14 +356,9 @@ export const publicProfile = query({
         position: number;
         readCount: number;
       }>;
-      passes: Array<{
-        editionPublicId: number;
-        editionTitle: string;
-        anchor: string;
-        format: "physical" | "digital";
-        binding: string | null;
-        percent: number | null;
-      }>;
+      passes: Array<
+        NonNullable<Awaited<ReturnType<typeof releaseLink>>> & { percent: number | null }
+      >;
     };
     const readingRows = new Map<Id<"series">, ReadingRow>();
 

@@ -518,6 +518,56 @@ export async function seriesEditions(
 }
 
 /**
+ * A Series' Family as its page shows it: only when >= 2 active member
+ * Series exist (spec §2), so a lone Series displays no family concept at
+ * all. Null otherwise.
+ */
+async function seriesFamily(ctx: QueryCtx, series: Doc<"series">) {
+  if (!series.familyId) return null;
+  const familyDoc = await ctx.db.get(series.familyId);
+  if (!familyDoc || familyDoc.status !== "active") return null;
+  const members = (
+    await ctx.db
+      .query("series")
+      .withIndex("by_family", (q) => q.eq("familyId", familyDoc._id))
+      .collect()
+  ).filter((doc) => doc.status === "active");
+  if (members.length < 2) return null;
+  const memberById = new Map(members.map((m) => [m._id, m]));
+  // Edges are stored once as "from is a {type} of to" (spec §2); the page
+  // renders the sentence whichever end this Series is.
+  const edges = [
+    ...(await ctx.db
+      .query("seriesRelationships")
+      .withIndex("by_from", (q) => q.eq("fromSeriesId", series._id))
+      .collect()),
+    ...(await ctx.db
+      .query("seriesRelationships")
+      .withIndex("by_to", (q) => q.eq("toSeriesId", series._id))
+      .collect()),
+  ];
+  const relationships = [];
+  for (const edge of edges) {
+    const from = memberById.get(edge.fromSeriesId);
+    const to = memberById.get(edge.toSeriesId);
+    if (!from || !to) continue;
+    relationships.push({
+      type: edge.type,
+      note: edge.note ?? null,
+      from: { publicId: from.publicId, title: from.title },
+      to: { publicId: to.publicId, title: to.title },
+    });
+  }
+  return {
+    name: familyDoc.name,
+    members: members
+      .sort((a, b) => a.publicId - b.publicId)
+      .map((m) => ({ publicId: m.publicId, title: m.title })),
+    relationships,
+  };
+}
+
+/**
  * Everything the Series page renders, shaped as the Reading Path hierarchy
  * validated in prototype #16 (spec §10): the canonical Volume sequence leads
  * (ordered by Volume Position — the Label is display-only); each
@@ -534,63 +584,7 @@ export const seriesPage = query({
     const series = await resolveActiveSeries(ctx, publicId);
     if (!series) return null;
 
-    // Series Family: shown only when >= 2 active member Series exist (spec
-    // §2); a lone Series displays no family concept at all.
-    let family: {
-      name: string;
-      members: Array<{ publicId: number; title: string }>;
-      relationships: Array<{
-        type: Doc<"seriesRelationships">["type"];
-        note: string | null;
-        from: { publicId: number; title: string };
-        to: { publicId: number; title: string };
-      }>;
-    } | null = null;
-    if (series.familyId) {
-      const familyDoc = await ctx.db.get(series.familyId);
-      if (familyDoc && familyDoc.status === "active") {
-        const members = (
-          await ctx.db
-            .query("series")
-            .withIndex("by_family", (q) => q.eq("familyId", familyDoc._id))
-            .collect()
-        ).filter((doc) => doc.status === "active");
-        if (members.length >= 2) {
-          const memberById = new Map(members.map((m) => [m._id, m]));
-          // Edges are stored once as "from is a {type} of to" (spec §2); the
-          // page renders the sentence whichever end this Series is.
-          const edges = [
-            ...(await ctx.db
-              .query("seriesRelationships")
-              .withIndex("by_from", (q) => q.eq("fromSeriesId", series._id))
-              .collect()),
-            ...(await ctx.db
-              .query("seriesRelationships")
-              .withIndex("by_to", (q) => q.eq("toSeriesId", series._id))
-              .collect()),
-          ];
-          const relationships = [];
-          for (const edge of edges) {
-            const from = memberById.get(edge.fromSeriesId);
-            const to = memberById.get(edge.toSeriesId);
-            if (!from || !to) continue;
-            relationships.push({
-              type: edge.type,
-              note: edge.note ?? null,
-              from: { publicId: from.publicId, title: from.title },
-              to: { publicId: to.publicId, title: to.title },
-            });
-          }
-          family = {
-            name: familyDoc.name,
-            members: members
-              .sort((a, b) => a.publicId - b.publicId)
-              .map((m) => ({ publicId: m.publicId, title: m.title })),
-            relationships,
-          };
-        }
-      }
-    }
+    const family = await seriesFamily(ctx, series);
 
     // The canonical Volume sequence, in reading order.
     const volumeDocs = await activeVolumes(ctx, series._id);
