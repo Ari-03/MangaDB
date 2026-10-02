@@ -139,6 +139,48 @@ export const MAX_BLURB = 4000;
 // <a>…) vanish so "<i>Akira</i>," stays "Akira,".
 const BREAKING_TAG = /<\/?(?:p|br|div|li|ul|ol|h[1-6]|blockquote|table|tr|td|th|section)\b[^>]*>/gi;
 
+// Windows-1252's characters for bytes 0x80–0x9F (its five undefined slots
+// pass through as the same C1 control code points), so mojibake can be
+// turned back into the UTF-8 bytes it came from.
+const CP1252_HIGH = "€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008DŽ\u008F\u0090‘’“”•–—˜™š›œ\u009DžŸ";
+// A UTF-8 lead byte read as Windows-1252 (Â–ô), followed by exactly the
+// continuation bytes it needs (0x80–0xBF read the same way): "â€™" is ’.
+const CONT = `[${CP1252_HIGH}\u00A0-\u00BF]`;
+const MOJIBAKE = new RegExp(
+  `[\u00C2-\u00DF]${CONT}|[\u00E0-\u00EF]${CONT}{2}|[\u00F0-\u00F4]${CONT}{3}`,
+  "g",
+);
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
+// What mojibake in English copy decodes to: Latin-1 and Latin Extended-A
+// letters (é, ō) and general punctuation (’ “ — …). Anything else (CJK,
+// Hebrew, IPA) means the run was real text that only looked encoded.
+const REPAIRED = /^[\u00A0-\u017F\u2000-\u206F]$/;
+
+/**
+ * Undo UTF-8 text that was decoded as Windows-1252 somewhere upstream
+ * ("Tsukasaâ€™s" → "Tsukasa’s"). Only a run shaped exactly like an encoded
+ * character is re-decoded, only when its bytes are valid UTF-8, and only
+ * when it decodes to a Latin letter or punctuation. Real text that happens
+ * to look encoded stays: "pâté", "Ã la", an accented letter before curly
+ * punctuation ("café…”", "CLICHÉ”"), "×" before a no-break space. ANN's
+ * cleaner (lib/ann.ts) calls it; `cleanBlurb` does not, since other
+ * sources never showed the problem.
+ */
+export function repairMojibake(text: string): string {
+  return text.replace(MOJIBAKE, (run) => {
+    const bytes = Uint8Array.from(run, (ch) => {
+      const code = ch.charCodeAt(0);
+      return code <= 0xff ? code : 0x80 + CP1252_HIGH.indexOf(ch);
+    });
+    try {
+      const decoded = STRICT_UTF8.decode(bytes);
+      return REPAIRED.test(decoded) ? decoded : run;
+    } catch {
+      return run;
+    }
+  });
+}
+
 /**
  * A source's blurb (HTML or plain text) → one clean paragraph for a Release
  * Description or Series synopsis: tags stripped, entities decoded,

@@ -5,10 +5,14 @@
 // release line, so digital-only and newer Series often have no ANN entry;
 // for those, the creator names publishers print on their release
 // observations stand in: PRH's free-text `author` line (lib/prh.ts
-// parseAuthorCredits, roles where it states them) and, for a Series PRH
-// does not credit either, Kodansha's and Seven Seas' `creators` (names
-// only, a role-less "author" credit; Kodansha lists the original creator
-// first, so PRH's roles are the better publisher source).
+// parseAuthorCredits, roles where it states them, unioned across a Series'
+// volumes, near spellings of one name collapsed to the most used) and, for
+// a Series PRH does not credit either, Kodansha's and Seven Seas'
+// `creators` (names only, a role-less "author" credit, unioned across
+// volumes; Kodansha lists the original creator first, so PRH's roles are
+// the better publisher source). Publisher names find their person through
+// `nameKey` and `matchPerson`; a name-only person uncredited at the end of
+// two successful rebuilds running is pruned.
 //
 // `rebuild` derives `people` and `seriesCredits` from the stored
 // observations on a schedule, like the Series library's stats, with no
@@ -85,12 +89,23 @@ export function mergeRoles(roles: ReadonlyArray<CreditRole>): CreditRole {
 }
 
 /**
- * A person's name as an identity key (`people.nameKey`): lowercased, Latin
- * accents and punctuation stripped, and its words sorted, so "Eiichirō
- * Oda" is "Eiichiro Oda", "In-Wan Youn" is "Inwan Youn", and "Masamune
- * Shirow" is "Shirow Masamune" (sources disagree on Japanese name order).
- * Punctuation is removed, not spaced, so a hyphenated given name stays one
- * word. Kana keep their voicing marks.
+ * A person's name as an identity key (`people.nameKey`), folding the ways
+ * sources spell one name:
+ *
+ * - case, Latin accents, and punctuation ("Eiichirō" = "Eiichiro",
+ *   "In-Wan" = "Inwan": punctuation is removed, not spaced);
+ * - long vowels, which romanisations write as ō, ou, oo, oh, ū or uu
+ *   ("Kōji" = "Kouji", "Tohru" = "Toru", "Ryūō" = "Ryuuou");
+ * - Kunrei and Hepburn spellings: shi = si, nn = n, jy = j
+ *   ("Shingyougaku" = "Singyougaku", "coolkyousinnjya" = "Coolkyoushinja");
+ * - word order and spacing: the words are sorted and joined without spaces,
+ *   so "Masamune Shirow" = "Shirow Masamune", "Indo So" = "Indoso", and
+ *   "Natsu Hyuuga" = "Hyūganatsu".
+ *
+ * Kana keep their voicing marks. A looser key joins more spellings and
+ * more namesakes, so it only finds candidates: `matchPerson` prefers an
+ * exact spelling (`strictNameKey`) and keeps a name its own person when
+ * ANN namesakes share the key.
  */
 export function nameKey(name: string): string {
   return name
@@ -101,8 +116,89 @@ export function nameKey(name: string): string {
     .replace(/[^\p{L}\p{N}\s]+/gu, "")
     .split(/\s+/)
     .filter(Boolean)
+    .map((word) =>
+      word
+        .replace(/uu/g, "u")
+        .replace(/o[uo]/g, "o")
+        .replace(/oh(?![aeiouy])/g, "o")
+        .replace(/shi/g, "si")
+        .replace(/nn/g, "n")
+        .replace(/jy/g, "j"),
+    )
+    .sort()
+    .join("");
+}
+
+/**
+ * A name's exact spelling as a key: case, Latin accents, punctuation and
+ * word order folded, nothing else ("Ayumi Kanou" stays apart from "Ayumi
+ * Kano"). `matchPerson` prefers a person whose spelling matches this way
+ * over one only the looser `nameKey` finds.
+ */
+export function strictNameKey(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, "")
+    .split(/\s+/)
+    .filter(Boolean)
     .sort()
     .join(" ");
+}
+
+/**
+ * Whether two name keys are near spellings of one name: within edit
+ * distance 1, or 2 when both keys have at least 6 characters ("choegyuseok"
+ * and "choigyuseok"). Equal keys are not near; they are the same key.
+ */
+export function nearKeys(a: string, b: string): boolean {
+  if (a === b) return false;
+  const limit = Math.min(a.length, b.length) >= 6 ? 2 : 1;
+  if (Math.abs(a.length - b.length) > limit) return false;
+  let previous = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        previous[j]! + 1,
+        current[j - 1]! + 1,
+        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length]! <= limit;
+}
+
+/**
+ * Which of the people sharing a name's `nameKey` the name means, or null
+ * for a new name-only person. In order:
+ *
+ * 1. the one ANN person spelled exactly so (`strictNameKey`);
+ * 2. failing an exact ANN spelling, the one ANN person the key finds
+ *    ("Kouji Kumeta" is ANN's "Kōji Kumeta");
+ * 3. with no ANN person at the key, the earliest name-only person
+ *    ("Indo So" joins "Indoso");
+ * 4. when several ANN people share the key (or the exact spelling) and
+ *    the name can't choose, its own name-only person, spelled exactly so,
+ *    or a new one: the credit stays, on a person of its own.
+ */
+export function matchPerson(
+  name: string,
+  candidates: ReadonlyArray<Doc<"people">>,
+): Doc<"people"> | null {
+  const strict = strictNameKey(name);
+  const ann = candidates.filter((person) => person.annId !== undefined);
+  const exactAnn = ann.filter((person) => strictNameKey(person.name) === strict);
+  if (exactAnn.length === 1) return exactAnn[0]!;
+  if (exactAnn.length === 0 && ann.length === 1) return ann[0]!;
+  const nameOnly = candidates
+    .filter((person) => person.annId === undefined)
+    .sort((a, b) => a.publicId - b.publicId);
+  if (ann.length === 0) return nameOnly[0] ?? null;
+  return nameOnly.find((person) => strictNameKey(person.name) === strict) ?? null;
 }
 
 /**
@@ -138,8 +234,9 @@ const PUBLISHER_BATCH = 200;
  * marker their credit rows carry. PRH goes first: its parsed line has
  * roles, so a Series it credits in a run takes no role-less `creators`
  * names from Seven Seas or Kodansha (Kodansha print books are
- * PRH-distributed and usually have a PRH line). Literal keys (prh.ts,
- * sevenSeas.ts, kodansha.ts SOURCE_KEY).
+ * PRH-distributed and usually have a PRH line, and Kodansha lists the
+ * original creator first). Literal keys (prh.ts, sevenSeas.ts, kodansha.ts
+ * SOURCE_KEY).
  */
 const PUBLISHER_SOURCES = [
   { sourceKey: "prh", marker: "prh" },
@@ -149,8 +246,12 @@ const PUBLISHER_SOURCES = [
 
 /** Which publisher kind wrote a credit row (`seriesCredits.source`); absent for ANN's rows. */
 type PublisherMarker = NonNullable<Doc<"seriesCredits">["source"]>;
-/** People rows read per name key: two already make a name ambiguous. */
-const NAME_MATCHES = 2;
+/** People rows read per name key: far past the namesakes any key has. */
+const NAME_ROWS = 10;
+/** People per rekey or prune mutation. */
+const PEOPLE_BATCH = 500;
+/** Name-only people one rebuild may delete, so a bad run can't empty the table. */
+const PRUNE_CAP = 100;
 /** People per stats mutation; each reads its credits, Series, and stats. */
 const STATS_BATCH = 100;
 /** Stale credit rows deleted per sweep mutation. */
@@ -162,25 +263,27 @@ const CREDITS_PER_SERIES = 50;
 
 /** Work per rebuild action before it continues in a fresh one (actions run ≤10 min). */
 const REBUILD_BUDGET_MS = 5 * 60 * 1000;
-/** Rows per role-settling mutation. */
-const SETTLE_BATCH = 500;
+/** Rows per settling mutation; a PRH row settles its whole Series. */
+const SETTLE_BATCH = 100;
 
 /**
  * Where a rebuild is, carried from one action to the next: the phase, its
- * cursor (`cursor` for observation and row walks, `afterPublicId` for
- * people), the run's stamp, the running counts, and the publisher pass's
- * error message once it failed.
+ * cursors (`cursor` for observation and row walks, `afterPublicId` for
+ * people, `source` for PUBLISHER_SOURCES), the run's stamp, the running
+ * counts, and the publisher pass's error message once it failed. Its size
+ * does not grow with the catalog: what the passes tally lives on the rows.
  */
 const rebuildStateValidator = v.object({
   startedAt: v.number(),
   phase: v.union(
+    v.literal("rekey"),
     v.literal("ann"),
     v.literal("publisher"),
     v.literal("sweep"),
     v.literal("settle"),
+    v.literal("prune"),
     v.literal("stats"),
   ),
-  /** The publisher pass's place in PUBLISHER_SOURCES. */
   source: v.number(),
   cursor: v.union(v.string(), v.null()),
   afterPublicId: v.union(v.number(), v.null()),
@@ -188,23 +291,31 @@ const rebuildStateValidator = v.object({
   credits: v.number(),
   publisherCredits: v.number(),
   swept: v.number(),
+  pruned: v.number(),
   people: v.number(),
 });
 type RebuildState = Infer<typeof rebuildStateValidator>;
 
 /**
- * Rebuild every Series credit from the stored ANN manga observations, then
- * credit the Series ANN did not from the publishers' release observations,
- * sweep credits no observation still gives, settle publisher rows on the
- * roles this run gave them, then refresh each author's derived counts and
- * jacket. Each phase runs only after the one before it finished for the
- * same `startedAt` stamp, so the sweep never removes rows a pass has yet to
- * restamp. Idempotent and safe beside an overlapping run (stamps only move
+ * Rebuild every Series credit, in phases that each run only after the one
+ * before finished for the same `startedAt` stamp:
+ *
+ * 1. rekey: give every person the current `nameKey`, so names find them;
+ * 2. ann: credit Series from the stored ANN manga observations;
+ * 3. publisher: credit the Series ANN did not from PRH's author lines,
+ *    then the Series neither did from Seven Seas' and Kodansha's creator
+ *    lists, each the union of what the Series' observations name;
+ * 4. sweep credits no observation still gives, settle publisher rows (the
+ *    roles this run gave them, and the most named of a name's near
+ *    spellings), and prune name-only people uncredited two runs running;
+ * 5. stats: refresh each author's derived counts and jacket.
+ *
+ * Idempotent and safe beside an overlapping run (stamps only move
  * forward). After `budgetMs` (default REBUILD_BUDGET_MS) an action hands its
  * state to a fresh one. A failed publisher pass still lets ANN's stale rows
  * be swept and the stats refresh, keeping every publisher row (the pass may
- * not have reached them to restamp) and their roles, then throws its
- * error. Runs every six hours (crons.ts); by hand:
+ * not have reached them to restamp), their roles, and every person, then
+ * throws its error. Runs every six hours (crons.ts); by hand:
  * `npx convex run people:rebuild`.
  */
 export const rebuild = internalAction({
@@ -214,7 +325,7 @@ export const rebuild = internalAction({
       const began = Date.now();
       const state: RebuildState = resumed ?? {
         startedAt: began,
-        phase: "ann",
+        phase: "rekey",
         source: 0,
         cursor: null,
         afterPublicId: null,
@@ -222,12 +333,14 @@ export const rebuild = internalAction({
         credits: 0,
         publisherCredits: 0,
         swept: 0,
+        pruned: 0,
         people: 0,
       };
       const counts = () => ({
         credits: state.credits,
         publisherCredits: state.publisherCredits,
         swept: state.swept,
+        pruned: state.pruned,
         people: state.people,
       });
       for (let steps = 0; ; steps++) {
@@ -242,13 +355,30 @@ export const rebuild = internalAction({
     }),
 });
 
+/** Enter a phase with its cursors reset. */
+function enter(state: RebuildState, phase: RebuildState["phase"]) {
+  state.phase = phase;
+  state.source = 0;
+  state.cursor = null;
+  state.afterPublicId = null;
+}
+
 /**
- * Run one mutation of a rebuild and move `state` past it. True once the
- * rebuild is done.
+ * Run one function of a rebuild and move `state` past it. True once the
+ * rebuild is done. A publisher batch that throws records its message and
+ * skips to the sweep of ANN's rows.
  */
 async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean> {
   const rebuiltAt = state.startedAt;
   switch (state.phase) {
+    case "rekey": {
+      const next: number | null = await ctx.runMutation(internal.people.rekeyPeople, {
+        afterPublicId: state.afterPublicId,
+      });
+      state.afterPublicId = next;
+      if (next === null) enter(state, "ann");
+      return false;
+    }
     case "ann": {
       const batch: { next: string | null; credits: number } = await ctx.runMutation(
         internal.people.creditBatch,
@@ -256,15 +386,14 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
       );
       state.credits += batch.credits;
       state.cursor = batch.next;
-      // Next the publishers: the ANN pass decided which Series are ANN's
-      // and gave every ANN person a name key for publisher names to match.
-      if (batch.next === null) state.phase = "publisher";
+      // Next the publishers: the ANN pass decided which Series are ANN's.
+      if (batch.next === null) enter(state, "publisher");
       return false;
     }
     case "publisher": {
       const source = PUBLISHER_SOURCES[state.source];
       if (!source) {
-        state.phase = "sweep";
+        enter(state, "sweep");
         return false;
       }
       try {
@@ -277,8 +406,7 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
         if (batch.next === null) state.source++;
       } catch (error) {
         state.publisherError = error instanceof Error ? error.message : String(error);
-        state.cursor = null;
-        state.phase = "sweep";
+        enter(state, "sweep");
       }
       return false;
     }
@@ -288,7 +416,7 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
         annOnly: state.publisherError !== null,
       });
       state.swept += n;
-      if (n < SWEEP_BATCH) state.phase = state.publisherError === null ? "settle" : "stats";
+      if (n < SWEEP_BATCH) enter(state, state.publisherError === null ? "settle" : "stats");
       return false;
     }
     case "settle": {
@@ -297,7 +425,21 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
         cursor: state.cursor,
       });
       state.cursor = next;
-      if (next === null) state.phase = "stats";
+      if (next === null) enter(state, "prune");
+      return false;
+    }
+    case "prune": {
+      const batch: { next: number | null; deleted: number } = await ctx.runMutation(
+        internal.people.pruneOrphans,
+        {
+          afterPublicId: state.afterPublicId,
+          rebuiltAt,
+          limit: Math.max(0, PRUNE_CAP - state.pruned),
+        },
+      );
+      state.pruned += batch.deleted;
+      state.afterPublicId = batch.next;
+      if (batch.next === null) enter(state, "stats");
       return false;
     }
     case "stats": {
@@ -313,10 +455,76 @@ async function rebuildStep(ctx: ActionCtx, state: RebuildState): Promise<boolean
 }
 
 /**
- * Show the role this run's observations gave each publisher row it stamped
- * (`runRole`), once the whole publisher pass is done: a correction that
- * lowers a role ("Story and Art by A" → "Story by A; Art by B") lands here.
- * A page of the run's rows at a time; the next cursor, or null when done.
+ * Give a page of people the current `nameKey` rule's key where theirs
+ * differs (rows keyed by an older rule), so the publisher pass finds them
+ * by it. The next cursor, or null when done.
+ */
+export const rekeyPeople = internalMutation({
+  args: { afterPublicId: v.union(v.number(), v.null()) },
+  handler: async (ctx, { afterPublicId }) => {
+    const docs = await ctx.db
+      .query("people")
+      .withIndex("by_publicId", (q) =>
+        afterPublicId === null ? q : q.gt("publicId", afterPublicId),
+      )
+      .take(PEOPLE_BATCH);
+    for (const person of docs) {
+      const key = nameKey(person.name);
+      if (person.nameKey !== key) await ctx.db.patch(person._id, { nameKey: key });
+    }
+    const last = docs.at(-1);
+    return docs.length < PEOPLE_BATCH || !last ? null : last.publicId;
+  },
+});
+
+/**
+ * A page of people only publishers named (no `annId`), at the end of a
+ * rebuild whose publisher pass completed: one credited nowhere is marked
+ * (`creditlessSince`), deleted if an earlier successful rebuild had
+ * already marked them (their author page lists nothing, and a single run's
+ * loss, such as a near spelling losing a tie, is never final), and
+ * unmarked once credited again. At most `limit` deletions. Nothing but
+ * `seriesCredits` refers to a person, so nothing else needs cleaning. ANN
+ * people stay whatever their credits.
+ */
+export const pruneOrphans = internalMutation({
+  args: { afterPublicId: v.union(v.number(), v.null()), rebuiltAt: v.number(), limit: v.number() },
+  handler: async (ctx, { afterPublicId, rebuiltAt, limit }) => {
+    const docs = await ctx.db
+      .query("people")
+      .withIndex("by_publicId", (q) =>
+        afterPublicId === null ? q : q.gt("publicId", afterPublicId),
+      )
+      .take(PEOPLE_BATCH);
+    let deleted = 0;
+    for (const person of docs) {
+      if (person.annId !== undefined) continue;
+      const credit = await ctx.db
+        .query("seriesCredits")
+        .withIndex("by_person", (q) => q.eq("personId", person._id))
+        .first();
+      if (credit) {
+        if (person.creditlessSince !== undefined) {
+          await ctx.db.patch(person._id, { creditlessSince: undefined });
+        }
+      } else if (person.creditlessSince === undefined) {
+        await ctx.db.patch(person._id, { creditlessSince: rebuiltAt });
+      } else if (person.creditlessSince < rebuiltAt && deleted < limit) {
+        await ctx.db.delete(person._id);
+        deleted++;
+      }
+    }
+    const last = docs.at(-1);
+    return { next: docs.length < PEOPLE_BATCH || !last ? null : last.publicId, deleted };
+  },
+});
+
+/**
+ * Settle the publisher rows a run stamped, once its whole publisher pass
+ * is done. A `creators` row shows the role this run's observations gave it
+ * (`runRole`); a correction that lowers a role lands here. A Series' PRH
+ * rows are decided together (`settlePrhSeries`). A page of the run's rows
+ * at a time; the next cursor, or null when done.
  */
 export const settleRoles = internalMutation({
   args: { rebuiltAt: v.number(), cursor: v.union(v.string(), v.null()) },
@@ -325,14 +533,111 @@ export const settleRoles = internalMutation({
       .query("seriesCredits")
       .withIndex("by_rebuiltAt", (q) => q.eq("rebuiltAt", rebuiltAt))
       .paginate({ cursor, numItems: SETTLE_BATCH });
+    const memo: PublisherMemo = {
+      survivors: new Map(),
+      credits: new Map(),
+      people: new Map(),
+      keys: new Map(),
+    };
+    const settled = new Set<Id<"series">>();
     for (const row of page.page) {
-      if (row.runRole !== undefined && row.runRole !== row.role) {
+      if (row.source === "prh") {
+        if (settled.has(row.seriesId)) continue;
+        settled.add(row.seriesId);
+        await settlePrhSeries(ctx, row.seriesId, rebuiltAt, memo);
+      } else if (row.runRole !== undefined && row.runRole !== row.role) {
         await ctx.db.patch(row._id, { role: row.runRole });
       }
     }
     return page.isDone ? null : page.continueCursor;
   },
 });
+
+/**
+ * Decide a Series' PRH credits from the names its rows tallied this run
+ * (`runNames`). Spellings sharing a `nameKey` are one name. Taking the
+ * names most used first (then the one seen most recently, then code-point
+ * order), each joins the first person holding a near spelling (`nearKeys`)
+ * and no name a line named it beside (`runApart`), else starts a person of
+ * its own; a person shows their first, most used spelling, resolved to a
+ * person only now (`personNamed`), with the roles all its spellings gave.
+ * Each person keeps one row (the one already showing them, else the one
+ * that tallied most of their names, else a new one) and the rest are
+ * deleted. Each kept row is given the person's whole tally, so settling
+ * the Series again (it can span two settle pages) changes nothing.
+ */
+async function settlePrhSeries(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+  rebuiltAt: number,
+  memo: PublisherMemo,
+) {
+  const rows = (
+    await ctx.db
+      .query("seriesCredits")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .take(CREDITS_PER_SERIES)
+  ).filter((c) => c.source === "prh" && c.rebuiltAt === rebuiltAt);
+  type Name = NonNullable<Doc<"seriesCredits">["runNames"]>[number] & { key: string; best: number };
+  const names = new Map<string, Name>();
+  for (const row of rows) {
+    for (const n of row.runNames ?? []) {
+      const key = nameKey(n.name);
+      const s = names.get(key) ?? { ...n, key, best: 0, count: 0, seenAt: 0 };
+      if (n.count > s.best) Object.assign(s, { best: n.count, name: n.name });
+      Object.assign(s, {
+        role: mergeRoles([s.role, n.role]),
+        count: s.count + n.count,
+        seenAt: Math.max(s.seenAt, n.seenAt),
+      });
+      names.set(key, s);
+    }
+  }
+  const runApart = [...new Set(rows.flatMap((row) => row.runApart ?? []))].sort();
+  const apart = (a: Name, b: Name) => runApart.includes([a.key, b.key].sort().join("|"));
+  const order = (a: Name, b: Name) =>
+    b.count - a.count || b.seenAt - a.seenAt || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const people: Name[][] = [];
+  for (const n of [...names.values()].sort(order)) {
+    const person = people.find(
+      (group) => group.some((m) => nearKeys(n.key, m.key)) && !group.some((m) => apart(n, m)),
+    );
+    if (person) person.push(n);
+    else people.push([n]);
+  }
+  const total = (group: Name[]) => group.reduce((sum, n) => sum + n.count, 0);
+  const used = new Set<Id<"seriesCredits">>();
+  for (const group of people.sort((a, b) => total(b) - total(a) || order(a[0]!, b[0]!))) {
+    const personId = await personNamed(ctx, group[0]!.name, memo);
+    const role = mergeRoles(group.map((n) => n.role));
+    const keys = new Set(group.map((n) => n.key));
+    const onRow = (row: Doc<"seriesCredits">) =>
+      (row.runNames ?? []).reduce((sum, n) => sum + (keys.has(nameKey(n.name)) ? n.count : 0), 0);
+    const row = rows
+      .filter((c) => !used.has(c._id) && onRow(c) > 0)
+      .sort(
+        (a, b) =>
+          Number(b.personId === personId) - Number(a.personId === personId) ||
+          onRow(b) - onRow(a) ||
+          a._creationTime - b._creationTime,
+      )[0];
+    const fields = {
+      personId,
+      role,
+      runRole: role,
+      runNames: group.map(({ name, role, count, seenAt }) => ({ name, role, count, seenAt })),
+      runApart,
+    };
+    if (!row) {
+      await ctx.db.insert("seriesCredits", { ...fields, seriesId, source: "prh", rebuiltAt });
+      continue;
+    }
+    used.add(row._id);
+    const current = { personId: row.personId, role: row.role, runRole: row.runRole, runNames: row.runNames, runApart: row.runApart };
+    if (JSON.stringify(current) !== JSON.stringify(fields)) await ctx.db.patch(row._id, fields);
+  }
+  for (const row of rows) if (!used.has(row._id)) await ctx.db.delete(row._id);
+}
 
 /** Credit a batch of ANN manga observations, by source record id. */
 export const creditBatch = internalMutation({
@@ -418,15 +723,17 @@ async function creditObservation(
 
 /**
  * The author row for an ANN person id, renamed to ANN's spelling (and its
- * name key set, which rows from before the key existed lack). A person
- * with no row for the id yet adopts the publisher-named row of the same
- * name key when it is the only row of that key, so their public id stays;
- * otherwise a new row.
+ * name key set to the current rule). A person with no row for the id yet
+ * adopts a publisher-named row of the same `nameKey` when no ANN person has
+ * that key (the one spelled exactly so, else the earliest), so their
+ * public id stays; otherwise a new row. Beside an ANN namesake, which
+ * person a publisher meant by the name can't be known, so nothing is
+ * adopted.
  *
  * Adoption goes by name alone, so a different person ANN knows by the same
  * name (a "Kei", a "Fly") inherits the publisher-named person's id and
  * their publisher-credited Series. Publisher names already join ANN people
- * by name the same way (`personNamed`); name matching can't tell
+ * by name the same way (`matchPerson`); name matching can't tell
  * namesakes apart, and the risk is highest for short single-word names.
  */
 async function upsertPerson(ctx: MutationCtx, credit: AnnCredit): Promise<Id<"people">> {
@@ -444,12 +751,17 @@ async function upsertPerson(ctx: MutationCtx, credit: AnnCredit): Promise<Id<"pe
   const named = await ctx.db
     .query("people")
     .withIndex("by_nameKey", (q) => q.eq("nameKey", key))
-    .take(NAME_MATCHES);
-  // Only the sole row of its key: beside an ANN namesake, which person a
-  // publisher meant by the name can't be known.
-  const nameOnly = named.length === 1 && named[0]!.annId === undefined ? named[0] : undefined;
+    .take(NAME_ROWS);
+  const nameOnly = named.some((p) => p.annId !== undefined)
+    ? null
+    : (named.find((p) => strictNameKey(p.name) === strictNameKey(credit.name)) ??
+      matchPerson(credit.name, named));
   if (nameOnly) {
-    await ctx.db.patch(nameOnly._id, { name: credit.name, annId: credit.personId });
+    await ctx.db.patch(nameOnly._id, {
+      name: credit.name,
+      annId: credit.personId,
+      creditlessSince: undefined,
+    });
     return nameOnly._id;
   }
   return await ctx.db.insert("people", {
@@ -474,8 +786,10 @@ type PublisherMemo = {
    * names, PRH did.
    */
   credits: Map<Id<"series">, Doc<"seriesCredits">[] | null>;
-  /** A name key → its person, or null when the name is ambiguous. */
-  people: Map<string, Id<"people"> | null>;
+  /** A name's exact spelling → its person. */
+  people: Map<string, Id<"people">>;
+  /** A person → their `nameKey`, for near-spelling checks. */
+  keys: Map<Id<"people">, string>;
 };
 
 /**
@@ -495,7 +809,12 @@ export const publisherBatch = internalMutation({
           : q.eq("sourceKey", sourceKey).gt("sourceRecordId", after),
       )
       .take(PUBLISHER_BATCH);
-    const memo: PublisherMemo = { survivors: new Map(), credits: new Map(), people: new Map() };
+    const memo: PublisherMemo = {
+      survivors: new Map(),
+      credits: new Map(),
+      people: new Map(),
+      keys: new Map(),
+    };
     let credits = 0;
     for (const observation of docs) {
       credits += await creditFromPublisher(ctx, observation, source.marker, rebuiltAt, memo);
@@ -528,12 +847,18 @@ function publisherCredits(snapshot: unknown): AuthorCredit[] {
 /**
  * Stamp the credits one publisher observation gives the one active Series
  * its Release belongs to, unless ANN credited that Series in this run (or,
- * for role-less `creators` names, PRH did). Each person keeps one row per
- * Series and marker, its `runRole` merged (`mergeRoles`) with what earlier
- * observations of the run gave, so names union across a Series' volumes;
- * `settleRoles` makes that the shown role once the pass is done. PRH
- * crediting a Series deletes its `creators` rows at once, as the ANN pass
- * deletes publisher rows. Returns the credits stamped.
+ * for role-less `creators` names, PRH did). A Series' credits are the
+ * union of what its observations name: each person keeps one row per
+ * Series and marker (its id kept across runs), its `runRole` merged
+ * (`mergeRoles`) with what earlier observations of the run gave, and
+ * `settleRoles` shows that role once the pass is done.
+ *
+ * PRH names are tallied by spelling (`stampPrh`) and settled per Series:
+ * PRH's volumes carry typos and variant romanisations ("Choe Gyu-Seok" /
+ * "Choi Gyu-Seok") that settle collapses to the most used. Kodansha's and
+ * Seven Seas' lists stay a plain union (`stampCreators`). PRH crediting a
+ * Series deletes its `creators` rows at once, as the ANN pass deletes
+ * publisher rows. Returns the credits stamped.
  */
 async function creditFromPublisher(
   ctx: MutationCtx,
@@ -545,7 +870,7 @@ async function creditFromPublisher(
   if (observation.withdrawn || observation.recordRef?.type !== "release") return 0;
   const named = publisherCredits(observation.snapshot);
   if (named.length === 0) return 0;
-  const seriesId = await soleSeriesOf(ctx, observation.recordRef.id, memo);
+  const seriesId = await soleSeriesOf(ctx, observation.recordRef.id, memo.survivors);
   if (!seriesId) return 0;
   let rows = memo.credits.get(seriesId);
   if (rows === undefined) {
@@ -561,40 +886,12 @@ async function creditFromPublisher(
   }
   if (rows === null) return 0;
 
-  const incoming = new Map<Id<"people">, CreditRole[]>();
-  for (const credit of named) {
-    const personId = await personNamed(ctx, credit.name, memo);
-    if (personId) incoming.set(personId, [...(incoming.get(personId) ?? []), credit.role]);
-  }
-  let count = 0;
-  for (const [personId, roles] of incoming) {
-    const mine = rows.filter((c) => c.source === marker && c.personId === personId);
-    const stamped = mine.find((c) => c.rebuiltAt >= rebuiltAt);
-    const runRole = mergeRoles([...roles, ...(stamped ? [stamped.runRole ?? stamped.role] : [])]);
-    const covers = (c: Doc<"seriesCredits">) => mergeRoles([c.role, runRole]) === c.role;
-    // One row per person, keeping its id across runs: the one this run
-    // stamped, else one already in the run's role, else one whose role
-    // covers it (story_art over story), else any.
-    const row =
-      stamped ?? mine.find((c) => c.role === runRole) ?? mine.find(covers) ?? mine[0];
-    if (row) {
-      // Shown: a covering role stays until the run settles, so the row
-      // doesn't drop to "author" between the batches of "author" and "art".
-      const role = covers(row) ? row.role : runRole;
-      if (row.rebuiltAt < rebuiltAt || row.role !== role || row.runRole !== runRole) {
-        const patch = { rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt), role, runRole };
-        await ctx.db.patch(row._id, patch);
-        Object.assign(row, patch);
-      }
-    } else {
-      const fields = { seriesId, personId, role: runRole, runRole, source: marker, rebuiltAt };
-      rows.push({ _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields });
-    }
-    count++;
-  }
+  const args = { seriesId, rows, named, rebuiltAt };
+  if (marker === "creators") return await stampCreators(ctx, args, memo);
+  const count = await stampPrh(ctx, { ...args, seenAt: observation.lastSeenAt }, memo);
   // PRH credits the Series now: its role-less `creators` rows go here, not
   // at the sweep, so no byline shows both meanwhile.
-  if (marker === "prh" && count > 0) {
+  if (count > 0) {
     for (const row of rows.filter((c) => c.source === "creators")) {
       await ctx.db.delete(row._id);
       rows.splice(rows.indexOf(row), 1);
@@ -603,25 +900,210 @@ async function creditFromPublisher(
   return count;
 }
 
+/** A person's `nameKey`, remembered for the batch. */
+async function personKey(ctx: QueryCtx, memo: PublisherMemo, personId: Id<"people">) {
+  let key = memo.keys.get(personId);
+  if (key === undefined) {
+    const person = await ctx.db.get(personId);
+    key = person ? (person.nameKey ?? nameKey(person.name)) : "";
+    memo.keys.set(personId, key);
+  }
+  return key;
+}
+
+/** The first of `items` that `test` passes, tested in order. */
+async function findFirst<T>(items: ReadonlyArray<T>, test: (item: T) => Promise<boolean>) {
+  for (const item of items) if (await test(item)) return item;
+  return undefined;
+}
+
+/** What one observation gives a Series' credits, for the stamp helpers. */
+type StampArgs = {
+  seriesId: Id<"series">;
+  /** The Series' credit rows, kept current. */
+  rows: Doc<"seriesCredits">[];
+  named: ReadonlyArray<AuthorCredit>;
+  rebuiltAt: number;
+};
+
+/**
+ * Stamp a Kodansha or Seven Seas creator list: a plain union, one row per
+ * person (its id kept across runs), its `runRole` merged (`mergeRoles`)
+ * with what earlier observations of the run gave. A row of another person
+ * whose `nameKey` the name shares (a duplicate the key merged) passes to
+ * the person the name now means. Returns the credits stamped.
+ */
+async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherMemo) {
+  const { seriesId, rows, rebuiltAt } = args;
+  const incoming = new Map<Id<"people">, CreditRole[]>();
+  for (const credit of args.named) {
+    const personId = await personNamed(ctx, credit.name, memo);
+    incoming.set(personId, [...(incoming.get(personId) ?? []), credit.role]);
+  }
+  const isStamped = (c: Doc<"seriesCredits">) => c.rebuiltAt >= rebuiltAt;
+  let count = 0;
+  for (const [personId, roles] of incoming) {
+    const key = await personKey(ctx, memo, personId);
+    const mine: Doc<"seriesCredits">[] = [];
+    for (const c of rows) {
+      if (c.source !== "creators") continue;
+      if (c.personId === personId || (await personKey(ctx, memo, c.personId)) === key) mine.push(c);
+    }
+    const stamped =
+      mine.find((c) => isStamped(c) && c.personId === personId) ?? mine.find(isStamped);
+    const runRole = mergeRoles([...roles, ...(stamped ? [stamped.runRole ?? stamped.role] : [])]);
+    const covers = (c: Doc<"seriesCredits">) => mergeRoles([c.role, runRole]) === c.role;
+    const row =
+      stamped ??
+      mine.find((c) => c.personId === personId) ??
+      mine.find((c) => c.role === runRole) ??
+      mine.find(covers) ??
+      mine[0];
+    if (row) {
+      // Shown: a covering role stays until the run settles, so the row
+      // doesn't drop to "author" between the batches of "author" and "art".
+      const role = covers(row) ? row.role : runRole;
+      if (
+        row.personId !== personId ||
+        row.rebuiltAt < rebuiltAt ||
+        row.role !== role ||
+        row.runRole !== runRole
+      ) {
+        const patch = { personId, rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt), role, runRole };
+        await ctx.db.patch(row._id, patch);
+        Object.assign(row, patch);
+      }
+    } else {
+      const fields = { seriesId, personId, role: runRole, runRole, source: "creators" as const, rebuiltAt };
+      rows.push({ _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields });
+    }
+    count++;
+  }
+  return count;
+}
+
+/**
+ * Stamp a PRH author line: the run's credits are the union of the Series'
+ * lines, tallied on its rows by name (`runNames`: roles, observations,
+ * latest lastSeenAt per spelling key), never by person, so a spelling that
+ * loses needs no person. A name goes on the row that already tallies its
+ * spelling this run, else the row of the person its key names, else a row
+ * whose person or tallied names are a near spelling (`nearKeys`); only a
+ * name with none of these looks up (or creates) its person for a new row.
+ * Two names on this line are never put on one row, and every pair of
+ * them is remembered (`runApart`), so settle keeps them two people. `settleRoles` then decides each Series' people and roles.
+ * Returns the credits stamped.
+ */
+async function stampPrh(
+  ctx: MutationCtx,
+  args: StampArgs & { seenAt: number },
+  memo: PublisherMemo,
+) {
+  const { seriesId, rows, rebuiltAt, seenAt } = args;
+  const names = new Map<string, { name: string; roles: CreditRole[] }>();
+  for (const credit of args.named) {
+    const key = nameKey(credit.name);
+    if (key === "") continue;
+    const entry = names.get(key);
+    if (entry) entry.roles.push(credit.role);
+    else names.set(key, { name: credit.name, roles: [credit.role] });
+  }
+  const isStamped = (c: Doc<"seriesCredits">) => c.rebuiltAt >= rebuiltAt;
+  const tallied = (c: Doc<"seriesCredits">) => (isStamped(c) ? (c.runNames ?? []) : []);
+  const placed = new Map<string, Doc<"seriesCredits">>();
+  for (const [key, entry] of names) {
+    const role = mergeRoles(entry.roles);
+    const taken = new Set([...placed.values()].map((c) => c._id));
+    const free = rows.filter((c) => c.source === "prh" && !taken.has(c._id));
+    const row =
+      free.find((c) => tallied(c).some((n) => nameKey(n.name) === key)) ??
+      (await findFirst(free, async (c) => (await personKey(ctx, memo, c.personId)) === key)) ??
+      (await findFirst(
+        free,
+        async (c) =>
+          nearKeys(key, await personKey(ctx, memo, c.personId)) ||
+          tallied(c).some((n) => nearKeys(key, nameKey(n.name))),
+      ));
+    if (row) {
+      const tally = [...tallied(row)];
+      const at = tally.findIndex((n) => nameKey(n.name) === key);
+      const prior = tally[at];
+      if (prior) {
+        tally[at] = {
+          name: prior.name,
+          role: mergeRoles([prior.role, role]),
+          count: prior.count + 1,
+          seenAt: Math.max(prior.seenAt, seenAt),
+        };
+      } else {
+        tally.push({ name: entry.name, role, count: 1, seenAt });
+      }
+      const runRole = mergeRoles(tally.map((n) => n.role));
+      const patch = {
+        rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt),
+        // Shown: a covering role stays until the run settles.
+        role: mergeRoles([row.role, runRole]) === row.role ? row.role : runRole,
+        runRole,
+        runNames: tally,
+        runApart: isStamped(row) ? (row.runApart ?? []) : [],
+        runVariants: undefined,
+      };
+      await ctx.db.patch(row._id, patch);
+      Object.assign(row, patch);
+      placed.set(key, row);
+    } else {
+      const fields = {
+        seriesId,
+        personId: await personNamed(ctx, entry.name, memo),
+        role,
+        runRole: role,
+        source: "prh" as const,
+        rebuiltAt,
+        runNames: [{ name: entry.name, role, count: 1, seenAt }],
+        runApart: [],
+      };
+      const doc = { _id: await ctx.db.insert("seriesCredits", fields), _creationTime: 0, ...fields };
+      rows.push(doc);
+      placed.set(key, doc);
+    }
+  }
+  // Names on one line are two people, near or not: a spelling near both
+  // must not join them at settle.
+  const keys = [...names.keys()];
+  for (const [i, a] of keys.entries()) {
+    for (const b of keys.slice(i + 1)) {
+      const pair = [a, b].sort().join("|");
+      for (const row of [placed.get(a), placed.get(b)]) {
+        if (!row || (row.runApart ?? []).includes(pair)) continue;
+        const runApart = [...(row.runApart ?? []), pair];
+        await ctx.db.patch(row._id, { runApart });
+        row.runApart = runApart;
+      }
+    }
+  }
+  return names.size;
+}
+
 /**
  * The one active Series a Release belongs to (both followed through
  * merges), or null when the Release is not active or its Series resolve to
- * none, to a hidden one, or to more than one.
+ * none, to a hidden one, or to more than one. `survivors` remembers Series
+ * lookups within a batch.
  */
 async function soleSeriesOf(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   releaseId: Id<"releases">,
-  memo: PublisherMemo,
+  survivors: Map<Id<"series">, Id<"series"> | null>,
 ): Promise<Id<"series"> | null> {
   const release = await survivorOf<"releases">(ctx, await ctx.db.get(releaseId));
   if (!release || release.status !== "active") return null;
   const found = new Set<Id<"series"> | null>();
   for (const id of release.seriesIds) {
-    let survivor = memo.survivors.get(id);
+    let survivor = survivors.get(id);
     if (survivor === undefined) {
       const series = await survivorOf<"series">(ctx, await ctx.db.get(id));
       survivor = series?.status === "active" ? series._id : null;
-      memo.survivors.set(id, survivor);
+      survivors.set(id, survivor);
     }
     found.add(survivor);
   }
@@ -630,27 +1112,27 @@ async function soleSeriesOf(
 }
 
 /**
- * The person a publisher's name means: the one row with its name key (an
- * ANN person or an earlier publisher name), else a new row without an ANN
- * id. Null when two rows share the key, since the name alone can't say
- * which person it is.
+ * The person a publisher's name means (`matchPerson` over the people its
+ * `nameKey` finds), else a new row without an ANN id. Every name gets a
+ * person: when ANN namesakes make it ambiguous, its own name-only one.
  */
 async function personNamed(
   ctx: MutationCtx,
   name: string,
   memo: PublisherMemo,
-): Promise<Id<"people"> | null> {
-  const key = nameKey(name);
-  if (key === "") return null;
-  const known = memo.people.get(key);
+): Promise<Id<"people">> {
+  const exact = strictNameKey(name);
+  const known = memo.people.get(exact);
   if (known !== undefined) return known;
+  const key = nameKey(name);
   const rows = await ctx.db
     .query("people")
     .withIndex("by_nameKey", (q) => q.eq("nameKey", key))
-    .take(NAME_MATCHES);
-  let personId = rows.length === 1 ? rows[0]!._id : null;
-  if (rows.length === 0) {
-    personId = await ctx.db.insert("people", {
+    .take(NAME_ROWS);
+  const match = matchPerson(name, rows);
+  const personId =
+    match?._id ??
+    (await ctx.db.insert("people", {
       publicId: await allocatePublicId(ctx, "person"),
       name,
       nameKey: key,
@@ -658,9 +1140,9 @@ async function personNamed(
       originalCount: 0,
       coverUrl: null,
       coverIsbn: null,
-    });
-  }
-  memo.people.set(key, personId);
+    }));
+  memo.people.set(exact, personId);
+  memo.keys.set(personId, key);
   return personId;
 }
 

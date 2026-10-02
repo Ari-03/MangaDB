@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  cleanAnnDescription,
   parseAnnDate,
   parseApiResponse,
   parseReleasePage,
@@ -290,6 +291,10 @@ As a child, Luffy was inspired to become a pirate by listening to the tales of t
 <br>
 Story and art by Eiichiro Oda.</p><p><small>(added on 2008-01-04, modified on 2008-01-04)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1223">One Piece (manga)</a></b></li></ul></body></html>`;
 
+// A sparse 2006 entry (fetched 2026-10-02): no description, only ANN's
+// review link inside the Description field.
+const NO_DESCRIPTION_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><div id="cover_placeholder"></div><b>Title:</b> June<br><b>Volume:</b>  GN 4<br><b>Pages:</b> 200<br><b>Distributor:</b> <a href="company.php?id=7117">Netcomics</a><p><b>Release date:</b> 2007-11-30<br><b>Suggested retail price:</b> $9.99<br><b>Age rating:</b> 13+<br></p><p><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">60009</span><span title="product">143</span><span title="check digit">1</span></span><span style="visibility:hidden"> 1600091431</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">60009</span><span title="product">143</span><span title="check digit">8</span></span><span style="visibility:hidden"> 9781600091438</span><br></p><p class="easyread-width"><b>Description:</b><br><a href="0/0/reviews/new">Submit your own review of this item.</a></p><p><small>(added on 2006-12-01, modified on 2006-12-01)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=7283">June (manhwa)</a></b></li></ul></body></html>`;
+
 const BOX_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/24124.jpg" align="RIGHT"><b>Title:</b> One Piece - East Blue and Baroque Works Box Set<br><b>Volume:</b>  GN 1-23<br><b>Pages:</b> 4720<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2013-11-05<br><b>Suggested retail price:</b> $185.99<br><b>Age rating:</b> 13+<br></p><p><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">4215</span><span title="product">6074</span><span title="check digit">7</span></span><span style="visibility:hidden"> 1421560747</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">4215</span><span title="product">6074</span><span title="check digit">8</span></span><span style="visibility:hidden"> 9781421560748</span><br></p><p class="easyread-width"><b>Description:</b><br>…</p><p><small>(added on 2013-06-18, modified on 2013-06-18)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=1223">One Piece (manga)</a></b></li></ul></body></html>`;
 
 const OLD_PAGE = `<html><body><div id="nav"><a href="/encyclopedia/manga.php?id=1">Top manga</a></div><hr><img src="//cdn.animenewsnetwork.com/thumbnails/area200x300/releases/10045.jpg" align="RIGHT"><b>Title:</b> Fall in Love Like a Comic!<br><b>Volume:</b>  GN 2 / 2<br><b>Pages:</b> 192<br><b>Distributor:</b> <a href="company.php?id=4552">Viz Media</a><p><b>Release date:</b> 2008-01-01<br><b>Suggested retail price:</b> $8.99<br><b>Age rating:</b> 15+<br></p><p><b>SKU:</b> <span class="release-ean">CTFL-02</span><br><b>ISBN-10:</b> <span class="release-ean"><span title="English language">1</span><span title="publisher">4215</span><span title="product">1374</span><span title="check digit">9</span></span><span style="visibility:hidden"> 1421513749</span><br><b>ISBN-13:</b> <span class="release-ean"><span title="Bookland (ISBN)">978</span><span title="English language">1</span><span title="publisher">4215</span><span title="product">1374</span><span title="check digit">4</span></span><span style="visibility:hidden"> 9781421513744</span><br></p><p class="easyread-width"><b>Description:</b><br>…</p><p><small>(added on 2007-10-05, modified on 2007-10-05)</small></p><ul><li><b>Encyclopedia information about <a class="ENCYC" href="/encyclopedia/manga.php?id=8124">Zoku Manga Mitaina Koi Shitai!</a></b></li></ul></body></html>`;
@@ -350,7 +355,8 @@ describe("parseReleasePage", () => {
       isbn13: "9781569319017",
       mangaId: "1223",
       description:
-        'In a world of pirates, one man wants to become the greatest of them all: Monkey D. Luffy, who gained strange powers from eating the cursed Gum-Gum Fruit! As a child, Luffy was inspired to become a pirate by listening to the tales of the buccaneer "Red-Haired" Shanks. Now, Luffy is grown up and sets out to sea in a rowboat, in search of "One Piece," the greatest treasure in the world! But is Roronoa Zoro, the pirate hunter, a friend or a foe? Story and art by Eiichiro Oda.',
+        // ANN's appended credit sentence is dropped: the byline shows it.
+        'In a world of pirates, one man wants to become the greatest of them all: Monkey D. Luffy, who gained strange powers from eating the cursed Gum-Gum Fruit! As a child, Luffy was inspired to become a pirate by listening to the tales of the buccaneer "Red-Haired" Shanks. Now, Luffy is grown up and sets out to sea in a rowboat, in search of "One Piece," the greatest treasure in the world! But is Roronoa Zoro, the pirate hunter, a friend or a foe?',
     });
     // The newer layout: text in a div after the field's paragraph, with
     // zero-width spaces after its punctuation.
@@ -393,6 +399,21 @@ describe("parseReleasePage", () => {
     expect(parseReleasePage(divField("&#8203;"))?.description).toBeUndefined();
   });
 
+  it("never returns ANN's review link as a description", () => {
+    expect(parseReleasePage(NO_DESCRIPTION_PAGE)).toMatchObject({
+      title: "June",
+      volume: "GN 4",
+      distributor: "Netcomics",
+      isbn13: "9781600091438",
+      mangaId: "7283",
+      description: undefined,
+    });
+    // The link after real text goes too.
+    expect(parseReleasePage(inlineField('A story.<br><a href="0/0/reviews/new">Submit your own review of this item.</a>'))?.description).toBe(
+      "A story.",
+    );
+  });
+
   it("has no description when the page has none", () => {
     const field = /<p class="easyread-width">[\s\S]*?<\/p>/;
     expect(field.test(ROMANCE_DAWN_PAGE)).toBe(true);
@@ -400,5 +421,114 @@ describe("parseReleasePage", () => {
     const empty = ROMANCE_DAWN_PAGE.replace(field, '<p class="easyread-width"><b>Description:</b><br></p>');
     expect(parseReleasePage(absent)).toMatchObject({ isbn13: "9781569319017", description: undefined });
     expect(parseReleasePage(empty)?.description).toBeUndefined();
+  });
+});
+
+describe("cleanAnnDescription", () => {
+  it("drops ANN's trailing credit sentences", () => {
+    expect(cleanAnnDescription("But is Roronoa Zoro, the pirate hunter, a friend or a foe? Story and art by Eiichiro Oda.")).toBe(
+      "But is Roronoa Zoro, the pirate hunter, a friend or a foe?",
+    );
+    expect(cleanAnnDescription("Noriko needs all the help she can get. Story and art by Kiyoko Hikawa.")).toBe(
+      "Noriko needs all the help she can get.",
+    );
+    expect(cleanAnnDescription("Magic school! Story & Art by CLAMP")).toBe("Magic school!");
+    expect(cleanAnnDescription('"Run!" Written and illustrated by Ken Akamatsu.')).toBe('"Run!"');
+  });
+
+  // Real endings from the first 1,604 production descriptions.
+  it.each([
+    "Story by Yumi Hotta and Art by Takeshi Obata.",
+    "Story by Ken Akamatsu and art by RAN.",
+    "Story by Eiji Otsuka and Art by Sho-u Tajima.",
+    "Story by Haruka Aoi and Art by BH SNOW+CLINIC.",
+    "Story by Naoki Hisaya and Art by Chaco Abeno",
+    "Story and art by Dat Nishiwaki and Original Concept by Type-Moon.",
+    "Story and art by Yu Yagami and Original Story by Taro Achi.",
+    "Original story by Studio BONES and story and art by Jinsei Kataoka & Kazuma Kondou.",
+    "Manga by Mizutaka Suhou and original story by Akira Kurosawa.",
+    "Originally written by Hideyuki Kikuchi, adapted by Saiko Takaki.",
+    "Story by Sunao Yoshida and Art by Kiyo Kyujyo; Character Designs by Thores Shibamoto.",
+    "Written by Yuya Aoki and Illustrated by Rando Ayamine.",
+    "Story and Kazuo Koike and Art by Goseki Kojima.",
+    "Story and art by by Akira Himekawa.",
+    "Story and art by Masanori*Ookamigumi*Katakura.",
+    "Story and art by Oh!Great.",
+    "Story and art by MEE (Minoru Tachikawa).",
+    "Adapted by Chayamachi Suguro.",
+    "Story and art by Eiichiro Oda. Notes: Recalled due to a misprint on page 193.",
+  ])("drops the credit ending %j", (ending) => {
+    expect(cleanAnnDescription(`Will they win the final battle? ${ending}`)).toBe("Will they win the final battle?");
+  });
+
+  it("drops a capitalized credit glued to the copy before it", () => {
+    expect(
+      cleanAnnDescription(
+        "Insights from an E.R. physician Story by Koshun Takami and art by Masayuki Taguchi.",
+      ),
+    ).toBe("Insights from an E.R. physician");
+  });
+
+  it("keeps prose that only looks like a credit", () => {
+    for (const text of [
+      // Glued mid-sentence with one clause: prose, not ANN's credit.
+      "Their journey begins a Love Story by Moonlight.",
+      "She paints a Story by Candlelight.",
+      // One common-noun word after a plain role.
+      "It all started here. Created by God.",
+      "The plan was doomed. Art by Committee.",
+      "Every letter matters. Written by Hand.",
+      // A shouted sentence.
+      "The lab burns. CREATED BY ACCIDENT, THE CLONE SEEKS REVENGE.",
+      // A "Notes:" line that is the publisher's copy.
+      "A mystery unfolds. Notes: none of this is what it seems.",
+    ]) {
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
+  });
+
+  it("still drops glued credits ANN writes: fused story-and-art, or two clauses", () => {
+    expect(cleanAnnDescription("The end of her Story and art by Akihisa Ikeda.")).toBe("The end of her");
+    expect(cleanAnnDescription("A one-shot. Story and art by CLAMP.")).toBe("A one-shot.");
+    expect(cleanAnnDescription("A sequel. Notes: This volume despite being numbered as the first volume contains material from the 10th volume of the Japanese release.")).toBe(
+      "A sequel.",
+    );
+  });
+
+  it("keeps the endings it cannot read as names (the six leftovers in the sample)", () => {
+    for (const ending of [
+      "Story and art by atsushi Suzumi.",
+      "Story by ufotable and Art by tartan check.",
+      "Story and art by Osamu Tezuka. Harcover edition limited to only 1,500 copies",
+      "Story and art by Miwa Ueda. #75 - What's Hot Pick",
+      "Written and drawn by Yukito Kishiro. 232 pages.",
+    ]) {
+      const text = `Will they win? ${ending}`;
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
+  });
+
+  it("has nothing left when the text is only a credit or page chrome", () => {
+    expect(cleanAnnDescription("Story and art by Eiichiro Oda.")).toBeUndefined();
+    expect(cleanAnnDescription("Story and art by Yonezou Nekota.")).toBeUndefined();
+    expect(cleanAnnDescription("Submit your own review of this item.")).toBeUndefined();
+  });
+
+  it("keeps credits that are prose, mid-text, or not a sentence of their own", () => {
+    for (const text of [
+      "Story and art by Eiichiro Oda. Now in a deluxe edition.",
+      "A thriller. Art by the creator of the hit series.",
+      "The cover was created by hand.",
+      "A gripping tale created by fans and rewritten by many hands across the years.",
+    ]) {
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
+  });
+
+  it("repairs mojibake and is idempotent on clean text", () => {
+    expect(cleanAnnDescription("Tsukasaâ€™s secret. Story by A B.")).toBe("Tsukasa’s secret.");
+    const clean = "Luffy, Zoro, and Nami. A friend or a foe?";
+    expect(cleanAnnDescription(clean)).toBe(clean);
+    expect(cleanAnnDescription(cleanAnnDescription("X. Story by Y Z.")!)).toBe("X.");
   });
 });

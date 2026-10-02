@@ -3,7 +3,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import { cleanBlurb, cleanTitleText, decodeEntities, MAX_BLURB, stripHtml } from "./text";
+import {
+  cleanBlurb,
+  cleanTitleText,
+  decodeEntities,
+  MAX_BLURB,
+  repairMojibake,
+  stripHtml,
+} from "./text";
 
 describe("decodeEntities", () => {
   it("decodes ANN's double-escaped numeric entities to a fixpoint", () => {
@@ -89,5 +96,44 @@ describe("cleanBlurb", () => {
     const long = cleanBlurb("word ".repeat(2000))!;
     expect(long.length).toBeLessThanOrEqual(MAX_BLURB);
     expect(long.endsWith("word…")).toBe(true);
+  });
+});
+
+// ANN stores a few descriptions as UTF-8 read as Windows-1252 (3 of the
+// first 714 production fills, e.g. "Tsukasaâ€™s").
+describe("repairMojibake", () => {
+  it("re-decodes Windows-1252 runs of UTF-8 bytes", () => {
+    expect(repairMojibake("Tsukasaâ€™s secret")).toBe("Tsukasa’s secret");
+    expect(repairMojibake("â€œHello,â€\u009d she said â€” then waitedâ€¦")).toBe(
+      "“Hello,” she said — then waited…",
+    );
+    expect(repairMojibake("a cafÃ© in KyÅ\u008dto")).toBe("a café in Kyōto");
+    // Mixed with clean typography: only the broken runs change.
+    expect(repairMojibake("It’s Tsukasaâ€™s")).toBe("It’s Tsukasa’s");
+  });
+
+  it("leaves clean text with a real â or Ã alone", () => {
+    for (const clean of ["pâté and crème brûlée", "Ã la carte", "naïve façade", "Â is a letter", "plain text"]) {
+      expect(repairMojibake(clean)).toBe(clean);
+    }
+  });
+
+  it("leaves an accented letter before typographic punctuation alone", () => {
+    // Each is valid UTF-8 when read as bytes, decoding to CJK, NKo, IPA or
+    // Hebrew: real text, never mojibake.
+    for (const clean of [
+      "a quiet café…” she said",
+      "her fiancé”—she paused",
+      "Spaß“ in German",
+      "CLICHÉ”",
+      "3 ×\u00a04",
+    ]) {
+      expect(repairMojibake(clean)).toBe(clean);
+    }
+  });
+
+  it("is not part of cleanBlurb, which every source shares", () => {
+    expect(cleanBlurb("<p>a quiet café…” she said</p>")).toBe("a quiet café…” she said");
+    expect(cleanBlurb("<p>Tsukasaâ€™s day</p>")).toBe("Tsukasaâ€™s day");
   });
 });

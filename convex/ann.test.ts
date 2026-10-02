@@ -1840,11 +1840,10 @@ describe("ann — release-page descriptions", () => {
     await syncPages(t);
     const obs = (await obsFor(t, 10948))!;
     expect(obs.snapshot).toMatchObject({
-      page: { status: "ok", descriptionChecked: true, description: `${BLURB} Story and art by Eiichiro Oda.` },
+      page: { status: "ok", descriptionChecked: true, description: BLURB },
     });
-    expect(await descriptionOf(t, obs.recordRef!.id as Id<"releases">)).toBe(
-      `${BLURB} Story and art by Eiichiro Oda.`,
-    );
+    // ANN's credit sentence is dropped: the byline shows it.
+    expect(await descriptionOf(t, obs.recordRef!.id as Id<"releases">)).toBe(BLURB);
   });
 
   it("a Release the page pass links fills a blank description", async () => {
@@ -1884,7 +1883,7 @@ describe("ann — release-page descriptions", () => {
     expect(result).toMatchObject({ fetched: 1, continued: false, errorCount: 0 });
     // Only the blank, override-free Release's page is worth a fetch.
     expect(pageRequests).toEqual(["10948"]);
-    expect(await descriptionOf(t, ids["1"]!)).toBe(`${BLURB} Story and art by Eiichiro Oda.`);
+    expect(await descriptionOf(t, ids["1"]!)).toBe(BLURB);
     expect(await descriptionOf(t, ids["2"]!)).toBe("The publisher's copy.");
     expect(await descriptionOf(t, ids["3"]!)).toBeNull();
     await t.run(async (ctx) => {
@@ -2051,7 +2050,13 @@ describe("ann — release-page descriptions", () => {
     slowClock();
     expect(await syncPages(t)).toMatchObject({ continued: true, fetched: 1 });
     await runScheduled(t);
-    expect([...pageRequests].sort()).toEqual(["10948", "10949", "10950"]);
+    // Each of this test's pages exactly once (a late timer from an earlier
+    // test can add another fixture's id to the shared log).
+    expect(pageRequests.filter((id) => id.startsWith("1094") || id === "10950").sort()).toEqual([
+      "10948",
+      "10949",
+      "10950",
+    ]);
     for (const id of Object.values(ids)) expect(await descriptionOf(t, id)).not.toBeNull();
   });
 
@@ -2061,7 +2066,13 @@ describe("ann — release-page descriptions", () => {
     slowClock();
     expect(await backfill(t)).toMatchObject({ fetched: 1, filled: 1, continued: true });
     await runScheduled(t);
-    expect([...pageRequests].sort()).toEqual(["10948", "10949", "10950"]);
+    // Each of this test's pages exactly once (a late timer from an earlier
+    // test can add another fixture's id to the shared log).
+    expect(pageRequests.filter((id) => id.startsWith("1094") || id === "10950").sort()).toEqual([
+      "10948",
+      "10949",
+      "10950",
+    ]);
     for (const id of Object.values(ids)) expect(await descriptionOf(t, id)).not.toBeNull();
   });
 
@@ -2157,5 +2168,206 @@ describe("ann — release-page descriptions", () => {
     const after = (await obsFor(t, 10948))!;
     expect(after.withdrawn).toBe(true);
     expect(after.snapshot).toEqual(obs.snapshot);
+  });
+
+  /** Put a page Description written by an older cleaner back on a line and its Release. */
+  async function storeOldText(t: TestT, annId: number, text: string, release?: Id<"releases">) {
+    const obs = (await obsFor(t, annId))!;
+    const snapshot = obs.snapshot as { page?: Record<string, unknown> };
+    await t.run(async (ctx) => {
+      await ctx.db.patch(obs._id, {
+        snapshot: {
+          ...snapshot,
+          page: { status: "ok", fetchedAt: 1, descriptionChecked: true, ...snapshot.page, description: text },
+        },
+      });
+      if (release !== undefined) await ctx.db.patch(release, { description: text });
+    });
+  }
+  const repair = (t: TestT) => t.action(internal.ann.repairDescriptions, {});
+  const inReview = (t: TestT) =>
+    t.run(async (ctx) => (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview").length);
+
+  it("a stale stored Description is cleaned before the link path writes it", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([LINES], describedPages);
+    await sync(t, { releasePages: false });
+    await syncPages(t);
+    // Stored before the cleaner dropped credit sentences.
+    await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.");
+    const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
+    const releaseId = await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "2")!;
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9, publisherId: vizId });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId: volume._id, order: 1, extent: "complete" });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        isbn13: "9781569319024",
+        publisherId: vizId,
+        seriesIds: [series._id],
+      });
+    });
+    await sync(t, { releasePages: false });
+    expect(await descriptionOf(t, releaseId)).toBe("Volume two.");
+  });
+
+  it("the repair re-cleans stored text and fixes Releases still showing ANN's old text", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [
+      { label: "1" },
+      { label: "2" },
+      { label: "3", overridden: true },
+    ]);
+    await syncPages(t);
+    // What production stored before this cleaner.
+    await storeOldText(t, 10948, `${BLURB} Story and art by Eiichiro Oda.`, ids["1"]);
+    await storeOldText(t, 10949, "Submit your own review of this item.", ids["2"]);
+    await storeOldText(t, 10950, "Story and art by Yonezou Nekota.");
+    await t.run(async (ctx) => ctx.db.patch(ids["3"]!, { description: "Story and art by Yonezou Nekota." }));
+    const proposalsBefore = await t.run(async (ctx) => (await ctx.db.query("proposals").collect()).length);
+
+    expect(await repair(t)).toEqual({
+      scanned: 3,
+      snapshotFixed: 3,
+      releaseUpdated: 1,
+      releaseCleared: 1,
+      errors: 0,
+      continued: false,
+    });
+    expect(await descriptionOf(t, ids["1"]!)).toBe(BLURB);
+    expect(await descriptionOf(t, ids["2"]!)).toBeNull();
+    // A Human Override keeps its text; only the snapshot is re-read.
+    expect(await descriptionOf(t, ids["3"]!)).toBe("Story and art by Yonezou Nekota.");
+    expect(await pageOf(t, 10950)).not.toHaveProperty("description");
+    expect(await pageOf(t, 10948)).toMatchObject({ description: BLURB, descriptionChecked: true });
+    expect(await inReview(t)).toBe(0);
+    await t.run(async (ctx) => {
+      // One approved ANN Proposal per repaired Release, nothing else.
+      expect((await ctx.db.query("proposals").collect()).length).toBe(proposalsBefore + 2);
+      const revisions = await ctx.db
+        .query("revisions")
+        .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", ids["2"]!))
+        .collect();
+      expect(revisions.at(-1)).toMatchObject({
+        author: { kind: "source", sourceKey: "ann" },
+        changes: [{ field: "description", before: "Submit your own review of this item." }],
+        citation: { url: "https://www.animenewsnetwork.com/encyclopedia/releases.php?id=10949" },
+      });
+    });
+
+    // Rerun: clean text cleans to itself.
+    expect(await repair(t)).toMatchObject({ snapshotFixed: 0, releaseUpdated: 0, releaseCleared: 0 });
+    // A publisher's text (its own Revision), even one ending in a credit
+    // the cleaner would drop, is never ANN's to repair.
+    const publisherCopy = "The publisher's copy. Story and art by Eiichiro Oda.";
+    await storeOldText(t, 10948, `${BLURB} Story and art by Eiichiro Oda.`);
+    await sourceWrote(t, ids["1"]!, "sevenseas", publisherCopy);
+    expect(await repair(t)).toMatchObject({ snapshotFixed: 1, releaseUpdated: 0, errors: 0 });
+    expect(await descriptionOf(t, ids["1"]!)).toBe(publisherCopy);
+  });
+
+  /** A Revision by `sourceKey` setting the Release's description, as an import would. */
+  async function sourceWrote(t: TestT, releaseId: Id<"releases">, sourceKey: string, text: string) {
+    await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: releaseId },
+        seq: 1000,
+        proposalId,
+        author: { kind: "source", sourceKey },
+        changes: [{ field: "description", after: text }],
+        comment: "Imported.",
+      });
+      await ctx.db.patch(releaseId, { description: text });
+    });
+  }
+
+  it("a Release skipped while locked is repaired by a rerun once unlocked", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    await syncPages(t);
+    await storeOldText(t, 10948, `${BLURB} Story and art by Eiichiro Oda.`, ids["1"]);
+    await t.run(async (ctx) => ctx.db.patch(ids["1"]!, { locked: true }));
+    expect(await repair(t)).toMatchObject({ snapshotFixed: 1, releaseUpdated: 0 });
+    await t.run(async (ctx) => ctx.db.patch(ids["1"]!, { locked: false }));
+    // The snapshot is clean now; the Release's own text still needs it.
+    expect(await repair(t)).toMatchObject({ snapshotFixed: 0, releaseUpdated: 1 });
+    expect(await descriptionOf(t, ids["1"]!)).toBe(BLURB);
+  });
+
+  it("only the line ANN's text came from repairs a Release two lines share", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }]);
+    await syncPages(t);
+    // 10949 wrote Release 2; 10948 (sorting first) also links to it and
+    // its own stored text cleans to nothing.
+    await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.", ids["2"]);
+    const shared = (await obsFor(t, 10948))!;
+    await t.run(async (ctx) => ctx.db.patch(shared._id, { recordRef: { type: "release", id: ids["2"]! } }));
+    await storeOldText(t, 10948, "Story and art by Yonezou Nekota.");
+    expect(await repair(t)).toMatchObject({ releaseUpdated: 1, releaseCleared: 0, errors: 0 });
+    expect(await descriptionOf(t, ids["2"]!)).toBe("Volume two.");
+    // No conflict note left on the line that did not write the text.
+    expect((await obsFor(t, 10948))!.conflicts ?? []).toEqual([]);
+    expect(await inReview(t)).toBe(0);
+  });
+
+  it("one malformed line is counted and logged, and the walk goes on", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }]);
+    await syncPages(t);
+    const broken = (await obsFor(t, 10948))!;
+    await t.run(async (ctx) =>
+      ctx.db.patch(broken._id, {
+        snapshot: { ...(broken.snapshot as object), page: { status: "ok", fetchedAt: 1, description: 42 } },
+      }),
+    );
+    await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.", ids["2"]);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await repair(t)).toMatchObject({ errors: 1, releaseUpdated: 1 });
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("[ann.repairDescriptions] line"));
+    expect(await descriptionOf(t, ids["2"]!)).toBe("Volume two.");
+  });
+
+  it("the repair continues after its time budget", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    await syncPages(t);
+    await storeOldText(t, 10948, `${BLURB} Story and art by Eiichiro Oda.`, ids["1"]);
+    // More lines than one repair batch, sorting before release:10948.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 120; i++) {
+        await ctx.db.insert("sourceObservations", {
+          sourceKey: "ann",
+          sourceRecordId: `release:0${String(i).padStart(4, "0")}`,
+          snapshot: { kind: "annRelease", annId: `0${i}` },
+          lastSeenAt: 0,
+          withdrawn: false,
+        });
+      }
+    });
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (now += 6 * 60_000));
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((message: string) => void logs.push(message));
+    expect(await repair(t)).toMatchObject({ scanned: 100, continued: true });
+    clock.mockRestore();
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    expect(await descriptionOf(t, ids["1"]!)).toBe(BLURB);
+    // The chain's final counts reach the logs, not just the first link's CLI.
+    const done = logs.at(-1)!;
+    expect(done).toMatch(/^\[ann\.repairDescriptions\] done: /);
+    expect(JSON.parse(done.slice(done.indexOf("{")))).toMatchObject({ scanned: 123, releaseUpdated: 1, errors: 0 });
   });
 });

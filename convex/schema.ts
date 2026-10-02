@@ -297,9 +297,11 @@ export default defineSchema({
     // Absent for a person only a publisher names; ANN adopts the row (sets
     // this) when it later credits someone of the same `nameKey`.
     annId: v.optional(v.string()),
-    // people.ts nameKey(name): lowercased, accents stripped, spaces
-    // collapsed. Optional only until the rebuild's ANN pass has touched the
-    // row (it sets it lazily); publisher-named rows always have it.
+    // people.ts nameKey(name): the folded key (case, accents, punctuation,
+    // long vowels, Kunrei/Hepburn spellings, word order and spacing) that
+    // finds a name's candidate people; people.ts matchPerson then prefers
+    // an exact spelling. The rebuild's first phase rewrites a key an older
+    // rule left; optional only for rows from before keys existed.
     nameKey: v.optional(v.string()),
     seriesCount: v.number(),
     // Optional only until the first rebuild after it arrived; readers read 0.
@@ -311,6 +313,10 @@ export default defineSchema({
     // not opted in. The jacket above never comes from a Mature Series
     // while they have another.
     matureOnly: v.optional(v.literal(true)),
+    // Name-only people: the rebuild that found them credited nowhere.
+    // The next successful rebuild deletes them if still uncredited (so one
+    // run's loss is never final), and clears this once they are credited.
+    creditlessSince: v.optional(v.number()),
   })
     .index("by_publicId", ["publicId"])
     .index("by_annId", ["annId"])
@@ -336,6 +342,26 @@ export default defineSchema({
     // earlier run until that rebuild settles (people.ts settleRoles), so a
     // role the run has yet to reach doesn't flicker away and back.
     runRole: v.optional(creditRole),
+    // PRH rows only: the names this rebuild's observations gave this credit,
+    // one per spelling key, near spellings of one name among them ("Choe
+    // Gyu-Seok", "Choi Gyu-Seok"), each with its roles, how many
+    // observations named it, and the latest of those observations'
+    // lastSeenAt. Names, not people: a spelling that loses never needs a
+    // person. `settleRoles` decides each Series from these. A handful at most.
+    runNames: v.optional(
+      v.array(
+        v.object({ name: v.string(), role: creditRole, count: v.number(), seenAt: v.number() }),
+      ),
+    ),
+    // PRH rows only: pairs of spelling keys ("a|b") one line of this
+    // rebuild named together, so settle keeps them two people. A line names
+    // a handful of people, so a Series has a few pairs.
+    runApart: v.optional(v.array(v.string())),
+    // Superseded by runNames; left by a staging rehearsal of the previous
+    // rule and cleared from each row the next time a rebuild stamps it.
+    runVariants: v.optional(
+      v.array(v.object({ personId: v.id("people"), count: v.number(), seenAt: v.number() })),
+    ),
     rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])

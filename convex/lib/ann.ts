@@ -25,7 +25,7 @@
 import { v, type Infer } from "convex/values";
 import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
 import { toIsbn13 } from "./openLibrary";
-import { cleanBlurb, cleanTitleText, decodeEntities, stripHtml } from "./text";
+import { cleanBlurb, cleanTitleText, decodeEntities, repairMojibake, stripHtml } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -390,6 +390,185 @@ function pageField(html: string, label: string): string | undefined {
 const ADDED_ON = /<p>\s*<small>\s*\(added on\b/i;
 const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
 
+// Site chrome ANN renders inside the Description field itself. A page with
+// no description (release 8116, seen 2026-10-02) carries only its review
+// link there: `<b>Description:</b><br><a href="0/0/reviews/new">Submit your
+// own review of this item.</a></p>`.
+const REVIEW_LINK = /<a\b[^>]*\breviews\/new\b[^>]*>[\s\S]*?<\/a>/gi;
+const CHROME = ["Submit your own review of this item."];
+
+// The credit ANN appends to publisher copy ("… a friend or a foe? Story
+// and art by Eiichiro Oda."): the byline already shows it. In the first
+// 1,604 production descriptions it ends 87% of them, in these shapes:
+// "Story and art by X.", "Story by X and Art by Y.", "Story and art by X
+// and Original Concept by Y.", "Manga by X and original story by Y.",
+// "Originally written by X, adapted by Y.", "Story by X. Art by Y.". A
+// credit tail is one or more clauses ROLE by NAMES, joined by "and", a
+// comma or a sentence break, running to the very end of the text.
+const CREDIT_ROLES = [
+  "written and illustrated",
+  "written & illustrated",
+  "story and art",
+  "story & art",
+  "art and story",
+  "originally written",
+  "original story",
+  "original concept",
+  "original creator",
+  "original work",
+  "character designs",
+  "character design",
+  "story",
+  "art",
+  "artwork",
+  "written",
+  "illustrated",
+  "illustrations",
+  "created",
+  "script",
+  "manga",
+  "adapted",
+  "concept",
+].map((role) => role.split(" "));
+/** A name word: it starts with a capital or digit ("Oh!Great", "Sho-u", "RAN", "(Studio"). */
+const NAME_WORD = /^\(?[\p{Lu}\d]\S*$/u;
+const NAME_JOINERS = new Set(["and", "&", "with", "/"]);
+const SENTENCE_END = /[.!?…"”’)]$/;
+const MAX_CLAUSES = 4;
+const MAX_NAME_WORDS = 8;
+
+/**
+ * Words in a credit role starting at `at`, then "by" (repeats allowed: "by
+ * by"); 0 when none. An ALL-CAPS role ("CREATED BY ACCIDENT, …") is a
+ * shouted sentence, never ANN's credit.
+ */
+function creditRoleAt(words: string[], at: number): number {
+  if (/^[A-Z]{2,}$/.test(words[at] ?? "")) return 0;
+  for (const role of CREDIT_ROLES) {
+    if (!role.every((part, k) => words[at + k]?.toLowerCase() === part)) continue;
+    let end = at + role.length;
+    if (words[end]?.toLowerCase() !== "by") continue;
+    while (words[end]?.toLowerCase() === "by") end++;
+    return end - at;
+  }
+  return 0;
+}
+
+type CreditClause = { role: string; names: number };
+
+/**
+ * The clauses of words[start..] when it is nothing but credit clauses:
+ * ROLE by NAMES (and ROLE by NAMES)*; null otherwise.
+ */
+function creditTail(words: string[], start: number): CreditClause[] | null {
+  const clauses: CreditClause[] = [];
+  let at = start;
+  for (let clause = 0; clause < MAX_CLAUSES; clause++) {
+    const role = creditRoleAt(words, at);
+    if (role === 0) return null;
+    const current = { role: words.slice(at, at + role).join(" ").toLowerCase(), names: 0 };
+    clauses.push(current);
+    at += role;
+    for (;;) {
+      const word = words[at];
+      if (word === undefined || !NAME_WORD.test(word.replace(/[.,;:!?]+$/, ""))) return null;
+      if (++current.names > MAX_NAME_WORDS) return null;
+      at++;
+      if (at === words.length) return clauses;
+      const next = words[at]!;
+      // "… and Art by Y": the joiner opens the next clause.
+      if (NAME_JOINERS.has(next.toLowerCase()) && creditRoleAt(words, at + 1) > 0) {
+        at++;
+        break;
+      }
+      // "X, adapted by Y" / "X. Art by Y" / "X Art by Y".
+      if (creditRoleAt(words, at) > 0) break;
+      // "X and Y", "X & Y": the list goes on.
+      if (NAME_JOINERS.has(next.toLowerCase())) at++;
+    }
+  }
+  return null;
+}
+
+/** ANN's own fused role: "Story and art by", "Story & art by" (any case after "Story"). */
+function isStoryAndArt(clause: CreditClause): boolean {
+  return /^story (?:and|&) art by/.test(clause.role);
+}
+
+/** Whether words are a bare list of names ("Kazuo Koike", "X & Y"). */
+function isNameList(words: string[]): boolean {
+  return (
+    words.length > 0 &&
+    words.length <= MAX_NAME_WORDS &&
+    words.every((w) => NAME_WORD.test(w.replace(/[.,;:!?]+$/, "")) || NAME_JOINERS.has(w.toLowerCase()))
+  );
+}
+
+// ANN's own typo, three times in the sample: "Story and Kazuo Koike and
+// Art by Goseki Kojima." ("and" for "by").
+const STORY_AND_TYPO = /^Story and (.+?) and Art by (.+)$/;
+
+/**
+ * Drop a trailing credit tail (`creditTail`). It must start a sentence,
+ * except a capitalized "Story and art by …" glued to the text before it,
+ * or a tail of two or more clauses: a lone glued "Story by Moonlight" is
+ * prose. A single clause naming one word ("Created by God.", "Art by
+ * Committee.") is kept unless its role is ANN's fused "Story and art"
+ * ("Story and art by CLAMP.", every one-word credit in the sample).
+ */
+function stripCreditTail(text: string): string {
+  const words = text.split(" ");
+  for (let at = 0; at < words.length; at++) {
+    const opensSentence = at === 0 || SENTENCE_END.test(words[at - 1]!);
+    const typo = opensSentence ? STORY_AND_TYPO.exec(words.slice(at).join(" ")) : null;
+    if (typo && isNameList(typo[1]!.split(" ")) && isNameList(typo[2]!.split(" "))) {
+      return words.slice(0, at).join(" ");
+    }
+    if (creditRoleAt(words, at) === 0) continue;
+    const clauses = creditTail(words, at);
+    if (clauses === null) continue;
+    const several = clauses.length >= 2;
+    const glued = words[at] === "Story" && isStoryAndArt(clauses[0]!);
+    if (!opensSentence && !glued && !several) continue;
+    if (!several && clauses[0]!.names === 1 && !isStoryAndArt(clauses[0]!)) continue;
+    return words.slice(0, at).join(" ");
+  }
+  return text;
+}
+
+// ANN's own release notes some contributors append after the copy
+// ("… Notes: Originally scheduled for 2006-07-31."): not the publisher's.
+// Dropped when the note is about the release itself (it starts with a
+// capital and talks of ISBNs, printings, schedules, recalls, volumes) or
+// follows a credit tail; "Notes: none of this is what it seems." stays.
+const NOTES_TAIL = /([.!?…"”’)])\s+Notes:\s([\s\S]*)$/;
+const ANN_NOTE =
+  /^[A-Z][\s\S]*\b(?:ISBN|release[sd]?|reprint(?:ed)?|printing|edition|volume|scheduled|recalled|misprint|cover)\b/i;
+
+/** Drop ANN's trailing "Notes:" section when it is ANN's note (see NOTES_TAIL). */
+function stripNotesTail(text: string): string {
+  const notes = NOTES_TAIL.exec(text);
+  if (!notes) return text;
+  const before = text.slice(0, notes.index + notes[1]!.length);
+  return ANN_NOTE.test(notes[2]!) || stripCreditTail(before) !== before ? before : text;
+}
+
+/**
+ * The cleaner every ANN release-page description goes through, at parse
+ * time and again on stored text (`ann:repairDescriptions`), so it is
+ * idempotent and works on already-cleaned text: zero-width spaces and
+ * Windows-1252 mojibake repaired, ANN page chrome and a trailing "Notes:"
+ * section rejected, and a trailing credit tail dropped (`stripCreditTail`).
+ * Undefined when nothing of the publisher's copy remains.
+ */
+export function cleanAnnDescription(text: string): string | undefined {
+  let out = repairMojibake(text.replace(ZERO_WIDTH, ""));
+  for (const chrome of CHROME) out = out.split(chrome).join(" ");
+  out = stripNotesTail(out.replace(/\s+/g, " ").trim());
+  out = stripCreditTail(out).trim();
+  return out === "" ? undefined : out;
+}
+
 /**
  * The page's Description, cleaned to one paragraph. It opens with a `<br>`
  * and spans paragraphs, so `pageField` cannot read it. Seen live
@@ -399,15 +578,15 @@ const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
  * field ends at the "added on" trailer, so markup inside the text (a list,
  * an inline `<small>`, a bold "Note:") never cuts it short: the div runs to
  * its last `</div>`, inline text to its closing `</p>`. Without a trailer
- * both stop at the first close. ANN's newer copy sprinkles zero-width
- * spaces after punctuation, sometimes as entities: they go after decoding.
+ * both stop at the first close. The review link ANN puts in an empty field
+ * is dropped, and the text goes through `cleanAnnDescription`.
  */
 function pageDescription(html: string): string | undefined {
   const label = /<b>Description:<\/b>/i.exec(html);
   if (!label) return undefined;
   const rest = html.slice(label.index + label[0].length);
   const trailer = rest.search(ADDED_ON);
-  const field = trailer >= 0 ? rest.slice(0, trailer) : rest;
+  const field = (trailer >= 0 ? rest.slice(0, trailer) : rest).replace(REVIEW_LINK, "");
   const div = (
     trailer >= 0
       ? /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*)<\/div>/i
@@ -415,11 +594,8 @@ function pageDescription(html: string): string | undefined {
   ).exec(field)?.[1];
   const inline =
     trailer >= 0 ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
-  const text = cleanBlurb(div ?? inline)
-    ?.replace(ZERO_WIDTH, "")
-    .replace(/ {2,}/g, " ")
-    .trim();
-  return text || undefined;
+  const text = cleanBlurb(div ?? inline);
+  return text !== undefined ? cleanAnnDescription(text) : undefined;
 }
 
 /**
