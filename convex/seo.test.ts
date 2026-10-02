@@ -1,9 +1,19 @@
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
+import { pubDate } from "./test.catalog";
+import {
+  insertBundle,
+  insertCoverage,
+  insertEdition,
+  insertEditionLine,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertSourceRevision,
+  insertVolume,
+} from "./test.factories";
+import { makeT, type TestT } from "./test.helpers";
 
 const PAGE = { cursor: null, numItems: 100 };
 
@@ -13,96 +23,34 @@ const PAGE = { cursor: null, numItems: 100 };
  * an Edition Line member (composed titles); and a Revision that must drive
  * `lastmod` over the record's creation time.
  */
-async function seed(t: ReturnType<typeof convexTest>) {
+async function seed(t: TestT) {
   return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "VIZ Media",
-      slug: "viz-media",
-    });
-    await ctx.db.insert("publishers", {
-      status: "hidden",
-      name: "Hidden Press",
-      slug: "hidden-press",
-    });
+    const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+    await insertPublisher(ctx, { status: "hidden", name: "Hidden Press", slug: "hidden-press" });
 
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Berserk",
-      altTitles: [],
-      searchText: "Berserk",
-    });
-    const hiddenSeries = await ctx.db.insert("series", {
-      status: "hidden",
-      publicId: 2,
-      title: "Hidden Series",
-      altTitles: [],
-      searchText: "Hidden Series",
-    });
-    await ctx.db.insert("series", {
-      status: "merged",
-      publicId: 3,
-      title: "Duplicate",
-      altTitles: [],
-      searchText: "Duplicate",
-      mergedIntoId: seriesId,
-    });
+    const seriesId = await insertSeries(ctx, { publicId: 1, title: "Berserk" });
+    const hiddenSeries = await insertSeries(ctx, { status: "hidden", publicId: 2, title: "Hidden Series" });
+    await insertSeries(ctx, { status: "merged", publicId: 3, title: "Duplicate", mergedIntoId: seriesId });
 
-    const volumeId = await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: 11,
-      seriesId,
-      position: 1,
-      label: "1",
-    });
+    const volumeId = await insertVolume(ctx, { publicId: 11, seriesId, label: "1" });
     // Volume of a hidden Series: hidden from the public site → no URL.
-    await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: 12,
-      seriesId: hiddenSeries,
-      position: 1,
-      label: "1",
-    });
+    await insertVolume(ctx, { publicId: 12, seriesId: hiddenSeries, label: "1" });
 
-    const lineId = await ctx.db.insert("editionLines", {
-      status: "active",
-      seriesId,
-      publisherId,
-      name: "Deluxe Edition",
-    });
-    const editionId = await ctx.db.insert("editions", {
-      status: "active",
+    const lineId = await insertEditionLine(ctx, { seriesId, publisherId, name: "Deluxe Edition" });
+    const editionId = await insertEdition(ctx, {
       publicId: 21,
       publisherId,
       editionLineId: lineId,
       linePosition: "1",
     });
-    await ctx.db.insert("volumeCoverages", {
-      editionId,
-      volumeId,
-      order: 1,
-      extent: "complete",
-    });
+    await insertCoverage(ctx, { editionId, volumeId });
 
-    await ctx.db.insert("releaseBundles", {
-      status: "active",
-      publicId: 31,
-      name: "Berserk Box Set",
-      publisherId,
-    });
+    await insertBundle(ctx, { publicId: 31, name: "Berserk Box Set", publisherId });
 
     // A Revision on the Series: its creation time is the sitemap lastmod.
-    const proposalId = await ctx.db.insert("proposals", {
-      author: { kind: "source", sourceKey: "test" },
-      state: "approved",
-      currentVersionNo: 1,
-    });
-    const revisionId = await ctx.db.insert("revisions", {
+    const { revisionId } = await insertSourceRevision(ctx, {
+      sourceKey: "test",
       ref: { type: "series", id: seriesId },
-      seq: 1,
-      proposalId,
-      author: { kind: "source", sourceKey: "test" },
       changes: [],
       comment: "retitle",
     });
@@ -113,7 +61,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
 
 describe("seo.sitemapPage", () => {
   it("lists only active Series, lastmod from the latest Revision", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { revisionId } = await seed(t);
     const revisionTime = await t.run(
       async (ctx) => (await ctx.db.get(revisionId))!._creationTime,
@@ -130,8 +78,8 @@ describe("seo.sitemapPage", () => {
   });
 
   it("falls back to creation time for records without Revisions", async () => {
-    const t = convexTest(schema);
-    const { seriesId } = await seed(t);
+    const t = makeT();
+    await seed(t);
     const createdAt = await t.run(async (ctx) => {
       const volume = await ctx.db
         .query("volumes")
@@ -139,7 +87,6 @@ describe("seo.sitemapPage", () => {
         .unique();
       return volume!._creationTime;
     });
-    void seriesId;
 
     const result = await t.query(api.seo.sitemapPage, {
       entity: "volume",
@@ -152,7 +99,7 @@ describe("seo.sitemapPage", () => {
   });
 
   it("composes Edition titles from line + position", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     const result = await t.query(api.seo.sitemapPage, {
       entity: "edition",
@@ -164,7 +111,7 @@ describe("seo.sitemapPage", () => {
   });
 
   it("lists Publishers by slug and Bundles by name, active only", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     const publishers = await t.query(api.seo.sitemapPage, {
       entity: "publisher",
@@ -181,81 +128,22 @@ describe("seo.sitemapPage", () => {
   });
 });
 
-describe("seo.sitemapPage bundle maturity", () => {
-  // B35: a general Publisher's box set of a Mature Series is as mature on the
-  // sitemap as on its page.
-  it("leaves out a box set holding a Mature Series' book", async () => {
-    const t = convexTest(schema);
-    const { seriesId } = await seed(t);
-    await t.run(async (ctx) => {
-      await ctx.db.patch(seriesId, { mature: true });
-      const edition = await ctx.db
-        .query("editions")
-        .withIndex("by_publicId", (q) => q.eq("publicId", 21))
-        .unique();
-      const bundle = await ctx.db
-        .query("releaseBundles")
-        .withIndex("by_publicId", (q) => q.eq("publicId", 31))
-        .unique();
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId: edition!._id,
-        publisherId: edition!.publisherId,
-        seriesIds: [seriesId],
-        format: "physical",
-        language: "en",
-      });
-      await ctx.db.insert("bundleMemberships", { bundleId: bundle!._id, releaseId, order: 1 });
-    });
-    expect((await t.query(api.catalogPages.bundlePage, { publicId: 31 }))?.mature).toBe(true);
-    const bundles = await t.query(api.seo.sitemapPage, { entity: "bundle", paginationOpts: PAGE });
-    expect(bundles.entries).toEqual([]);
-  });
-});
-
 describe("seo.sitemapMonthRange", () => {
-  async function insertRelease(
-    t: ReturnType<typeof convexTest>,
-    sort: number,
-    pubDate: { year: number; month?: number; day?: number },
-  ) {
-    await t.run(async (ctx) => {
-      const publisherId =
-        (await ctx.db.query("publishers").first())?._id ??
-        (await ctx.db.insert("publishers", {
-          status: "active",
-          name: "P",
-          slug: "p",
-        }));
-      const editionId =
-        (await ctx.db.query("editions").first())?._id ??
-        (await ctx.db.insert("editions", {
-          status: "active",
-          publicId: 90,
-          publisherId: publisherId as Id<"publishers">,
-        }));
-      await ctx.db.insert("releases", {
-        status: "active",
-        editionId: editionId as Id<"editions">,
-        format: "physical",
-        language: "en",
-        pubDate: { ...pubDate, sort },
-        publisherId: publisherId as Id<"publishers">,
-        seriesIds: [],
-      });
-    });
-  }
-
   it("returns null with no dated Releases", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     expect(await t.query(api.seo.sitemapMonthRange, {})).toBeNull();
   });
 
   it("spans earliest to latest dated Release, clamping year-only dates", async () => {
-    const t = convexTest(schema);
-    // Year-precision (sort yyyy0000) clamps to January / December.
-    await insertRelease(t, 20250000, { year: 2025 });
-    await insertRelease(t, 20260815, { year: 2026, month: 8, day: 15 });
+    const t = makeT();
+    await t.run(async (ctx) => {
+      const publisherId = await insertPublisher(ctx);
+      const editionId = await insertEdition(ctx, { publisherId });
+      // Year-precision (sort yyyy0000) clamps to January / December.
+      for (const sort of [20250000, 20260815]) {
+        await insertRelease(ctx, { editionId, publisherId, seriesIds: [], pubDate: pubDate(sort) });
+      }
+    });
     expect(await t.query(api.seo.sitemapMonthRange, {})).toEqual({
       from: { year: 2025, month: 1 },
       to: { year: 2026, month: 8 },

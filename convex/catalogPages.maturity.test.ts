@@ -1,8 +1,18 @@
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
-import schema from "./schema";
+import {
+  insertBundle,
+  insertBundleMember,
+  insertCoverage,
+  insertEdition,
+  insertEditionLine,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+  seedCatalog,
+} from "./test.factories";
+import { makeT } from "./test.helpers";
 
 // Mature content is judged from what a book holds, through merges and before
 // display hiding (B34/B35, review R14/R15): hiding a member, a covered
@@ -16,30 +26,16 @@ const PAGE = { cursor: null, numItems: 100 };
  * of it, and a box set (4) holding that Release as its sole member.
  */
 async function seed() {
-  const t = convexTest(schema);
+  const t = makeT();
   const ids = await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", { status: "active", name: "General", slug: "general" });
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Adult Story",
-      altTitles: [],
-      searchText: "Adult Story",
-      mature: true,
+    const { publisherId, seriesId, volumeId, editionId, releaseId } = await seedCatalog(ctx, {
+      publisher: { name: "General", slug: "general" },
+      series: { publicId: 1, title: "Adult Story", mature: true },
+      volume: { publicId: 2 },
+      edition: { publicId: 3 },
     });
-    const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: 2, seriesId, position: 1, label: "1" });
-    const editionId = await ctx.db.insert("editions", { status: "active", publicId: 3, publisherId });
-    await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-    const releaseId = await ctx.db.insert("releases", {
-      status: "active",
-      editionId,
-      publisherId,
-      seriesIds: [seriesId],
-      format: "physical",
-      language: "en",
-    });
-    const bundleId = await ctx.db.insert("releaseBundles", { status: "active", publicId: 4, publisherId, name: "Adult Box" });
-    await ctx.db.insert("bundleMemberships", { bundleId, releaseId, order: 1 });
+    const bundleId = await insertBundle(ctx, { publicId: 4, publisherId, name: "Adult Box" });
+    await insertBundleMember(ctx, { bundleId, releaseId, order: 1 });
     return { publisherId, seriesId, volumeId, editionId, releaseId, bundleId };
   });
   return { t, ids };
@@ -50,14 +46,8 @@ type Seeded = Awaited<ReturnType<typeof seed>>;
 /** A general Series (publicId 10) with one Volume (11), for merge targets. */
 async function generalSeries({ t }: Seeded) {
   return await t.run(async (ctx) => {
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 10,
-      title: "Gentle Story",
-      altTitles: [],
-      searchText: "Gentle Story",
-    });
-    const volumeId = await ctx.db.insert("volumes", { status: "active", publicId: 11, seriesId, position: 1, label: "1" });
+    const seriesId = await insertSeries(ctx, { publicId: 10, title: "Gentle Story" });
+    const volumeId = await insertVolume(ctx, { publicId: 11, seriesId });
     return { seriesId, volumeId };
   });
 }
@@ -71,7 +61,10 @@ describe("Bundle maturity from hidden members (R14)", () => {
   for (const hidden of ["release", "edition"] as const) {
     it(`stays mature, and off the sitemap, when its sole member's ${hidden} is hidden`, async () => {
       const seeded = await seed();
+      // B35: a general Publisher's box set of a Mature Series is as mature on
+      // the sitemap as on its page, before anything is hidden.
       expect((await bundlePage(seeded))?.mature).toBe(true);
+      expect(await sitemapIds(seeded, "bundle")).toEqual([]);
       await seeded.t.run((ctx) =>
         ctx.db.patch(hidden === "release" ? seeded.ids.releaseId : seeded.ids.editionId, { status: "hidden" }),
       );
@@ -86,13 +79,11 @@ describe("Bundle maturity from hidden members (R14)", () => {
     const seeded = await seed();
     const { ids } = seeded;
     await seeded.t.run(async (ctx) => {
-      const survivor = await ctx.db.insert("releases", {
+      const survivor = await insertRelease(ctx, {
         status: "hidden",
         editionId: ids.editionId,
         publisherId: ids.publisherId,
         seriesIds: [ids.seriesId],
-        format: "physical",
-        language: "en",
       });
       await ctx.db.patch(ids.releaseId, { status: "merged", mergedIntoId: survivor });
     });
@@ -106,8 +97,8 @@ describe("Bundle maturity from hidden members (R14)", () => {
     const seeded = await seed();
     const { ids } = seeded;
     await seeded.t.run(async (ctx) => {
-      const survivor = await ctx.db.insert("editions", { status: "hidden", publicId: 5, publisherId: ids.publisherId });
-      await ctx.db.insert("volumeCoverages", { editionId: survivor, volumeId: ids.volumeId, order: 1, extent: "complete" });
+      const survivor = await insertEdition(ctx, { status: "hidden", publicId: 5, publisherId: ids.publisherId });
+      await insertCoverage(ctx, { editionId: survivor, volumeId: ids.volumeId });
       await ctx.db.patch(ids.editionId, { status: "merged", mergedIntoId: survivor });
     });
     const page = await bundlePage(seeded);
@@ -122,16 +113,14 @@ describe("Bundle maturity from hidden members (R14)", () => {
     const general = await generalSeries(seeded);
     // The box set's member merged away from a general book into the mature one.
     await seeded.t.run(async (ctx) => {
-      const generalEdition = await ctx.db.insert("editions", { status: "active", publicId: 6, publisherId: ids.publisherId });
-      await ctx.db.insert("volumeCoverages", { editionId: generalEdition, volumeId: general.volumeId, order: 1, extent: "complete" });
-      const loser = await ctx.db.insert("releases", {
+      const generalEdition = await insertEdition(ctx, { publicId: 6, publisherId: ids.publisherId });
+      await insertCoverage(ctx, { editionId: generalEdition, volumeId: general.volumeId });
+      const loser = await insertRelease(ctx, {
         status: "merged",
         mergedIntoId: ids.releaseId,
         editionId: generalEdition,
         publisherId: ids.publisherId,
         seriesIds: [general.seriesId],
-        format: "physical",
-        language: "en",
       });
       const membership = await ctx.db
         .query("bundleMemberships")
@@ -150,13 +139,10 @@ describe("Bundle maturity from hidden members (R14)", () => {
     const seeded = await seed();
     const { ids } = seeded;
     await seeded.t.run(async (ctx) => {
-      const survivor = await ctx.db.insert("releases", {
-        status: "active",
+      const survivor = await insertRelease(ctx, {
         editionId: ids.editionId,
         publisherId: ids.publisherId,
         seriesIds: [ids.seriesId],
-        format: "physical",
-        language: "en",
         isbn13: "9780000000001",
       });
       await ctx.db.patch(ids.releaseId, { status: "merged", mergedIntoId: survivor });
@@ -183,28 +169,19 @@ describe("Edition maturity from its line and covered content (R15)", () => {
   async function unmapped(seeded: Seeded) {
     const { ids } = seeded;
     return await seeded.t.run(async (ctx) => {
-      const lineId = await ctx.db.insert("editionLines", {
-        status: "active",
+      const lineId = await insertEditionLine(ctx, {
         seriesId: ids.seriesId,
         publisherId: ids.publisherId,
         name: "Deluxe",
       });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
+      const editionId = await insertEdition(ctx, {
         publicId: 7,
         publisherId: ids.publisherId,
         editionLineId: lineId,
         linePosition: "1",
         coverageUnmapped: true,
       });
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        publisherId: ids.publisherId,
-        seriesIds: [ids.seriesId],
-        format: "physical",
-        language: "en",
-      });
+      const releaseId = await insertRelease(ctx, { editionId, publisherId: ids.publisherId, seriesIds: [ids.seriesId] });
       return { lineId, editionId, releaseId };
     });
   }
@@ -216,7 +193,7 @@ describe("Edition maturity from its line and covered content (R15)", () => {
     await seeded.t.run(async (ctx) => {
       await ctx.db.patch(seeded.ids.seriesId, { status: "hidden" });
       // A box set holding the packaging is mature through it too.
-      await ctx.db.insert("bundleMemberships", { bundleId: seeded.ids.bundleId, releaseId, order: 2 });
+      await insertBundleMember(ctx, { bundleId: seeded.ids.bundleId, releaseId, order: 2 });
       await ctx.db.patch(seeded.ids.releaseId, { status: "hidden" });
     });
     const page = await editionPage(seeded, 7);
