@@ -3,9 +3,7 @@
 // it to `npx convex run repair:runBatch` step by step, batch by batch.
 // Dry-run is the default; nothing writes without --apply.
 //
-//   node scripts/repair.ts metrics [label]
 //   node scripts/repair.ts run --stage 3 [--step 3a] [--apply] [--actor ari]
-//   node scripts/repair.ts rebuild            # seriesBrowse:rebuild
 //
 // Options: --plan <repair-plan.json>  --out <dir for run reports; default runs/ next to the plan>
 //          --deployment <name|prod>   passed to `convex run`; anything other
@@ -168,24 +166,12 @@ function runStage(plan: Plan, stageNo: number, onlyStep: string | null) {
 }
 
 switch (command) {
-  case "metrics": {
-    const result = convexRun("repair:metrics", {});
-    mkdirSync(outDir, { recursive: true });
-    const file = join(outDir, `metrics-${argv[1] && !argv[1].startsWith("--") ? argv[1] : stamp()}.json`);
-    writeFileSync(file, result);
-    console.log(result.trim());
-    console.log(`saved: ${file}`);
-    break;
-  }
   case "run": {
     const plan = JSON.parse(readFileSync(planPath, "utf8")) as Plan;
     const stepOnly = option("step", "");
     runStage(plan, Number(option("stage", "0")), stepOnly || null);
     break;
   }
-  case "rebuild":
-    console.log(convexRun("seriesBrowse:rebuild", {}).trim());
-    break;
   default:
-    console.log("usage: node scripts/repair.ts metrics [label] | run --stage N [--step ID] [--apply] | rebuild");
+    console.log("usage: node scripts/repair.ts run --stage N [--step ID] [--apply]");
 }

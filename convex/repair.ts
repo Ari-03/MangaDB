@@ -2,7 +2,6 @@
 // internal functions, driven by scripts/repair.ts from repair-plan.json:
 //
 //   npx convex run repair:runBatch '{"dryRun":true,"actor":"ari","entries":[…]}'
-//   npx convex run repair:metrics
 //
 // runBatch applies each entry in its own sub-transaction (ctx.runMutation),
 // so one failing or drifted entry rolls back alone and is reported. A dry
@@ -14,18 +13,9 @@
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { createAudit, resolveActor } from "./lib/repair/audit";
 import { outcome, repairEntry, type Outcome, type RepairEntry } from "./lib/repair/entries";
-import {
-  computeMetrics,
-  metricTables,
-  projectObservation,
-  projectRow,
-  type MetricTable,
-  type ObservationRow,
-  type Row,
-} from "./lib/repair/metrics";
 import { applyEntry } from "./lib/repair/ops";
 
 /** Evidence stored on each repair Proposal: its source observations, else a plan note. */
@@ -102,99 +92,5 @@ export const runBatch = internalMutation({
       }
     }
     return outcomes;
-  },
-});
-
-// ---------- metrics ----------
-
-const metricTable = v.union(...metricTables.map((name) => v.literal(name)));
-
-/** One page of a table, projected to what the metrics read. */
-export const metricsPage = internalQuery({
-  args: { table: metricTable, cursor: v.union(v.string(), v.null()), numItems: v.number() },
-  handler: async (ctx, { table, cursor, numItems }) => {
-    const page = await ctx.db.query(table).paginate({ cursor, numItems });
-    return {
-      rows: page.page.map((doc) => projectRow(table, doc)),
-      continueCursor: page.continueCursor,
-      isDone: page.isDone,
-    };
-  },
-});
-
-/**
- * One page of linked-release observations for a source. ANN's per-series
- * `manga:` records (large, never linked to releases) are skipped by range.
- */
-export const observationsPage = internalQuery({
-  args: { sourceKey: v.string(), cursor: v.union(v.string(), v.null()), numItems: v.number() },
-  handler: async (ctx, { sourceKey, cursor, numItems }) => {
-    const page = await ctx.db
-      .query("sourceObservations")
-      .withIndex("by_source_record", (q) =>
-        sourceKey === "ann" ? q.eq("sourceKey", "ann").gte("sourceRecordId", "release:") : q.eq("sourceKey", sourceKey),
-      )
-      .paginate({ cursor, numItems });
-    return {
-      rows: page.page.map(projectObservation),
-      continueCursor: page.continueCursor,
-      isDone: page.isDone,
-    };
-  },
-});
-
-type Page<R> = { rows: R[]; continueCursor: string; isDone: boolean };
-
-async function drain<R>(fetch: (cursor: string | null) => Promise<Page<R>>): Promise<R[]> {
-  const rows: R[] = [];
-  let cursor: string | null = null;
-  for (;;) {
-    const page: Page<R> = await fetch(cursor);
-    rows.push(...page.rows);
-    if (page.isDone) return rows;
-    cursor = page.continueCursor;
-  }
-}
-
-/**
- * The repair's before/after metrics over the whole catalog (read-only):
- * polluted titles, series not starting at 1, duplicate title clusters,
- * publisher rows, out-of-scope and conflated releases, and more.
- */
-export const metrics = internalAction({
-  args: {},
-  // Annotated: the handler calls this module's own queries through
-  // `internal`, which would otherwise make its type circular.
-  handler: async (ctx): Promise<ReturnType<typeof computeMetrics>> => {
-    const table = <T extends MetricTable>(name: T, numItems: number): Promise<Row<T>[]> =>
-      drain(async (cursor): Promise<Page<Row<T>>> => {
-        const page: Page<Row<MetricTable>> = await ctx.runQuery(internal.repair.metricsPage, {
-          table: name,
-          cursor,
-          numItems,
-        });
-        // metricsPage projects `name`'s rows; its declared type is the union.
-        return page as Page<Row<T>>;
-      });
-    const observations: ObservationRow[] = [];
-    for (const sourceKey of ["prh", "openlibrary", "kodansha", "ann"]) {
-      observations.push(
-        ...(await drain(
-          (cursor): Promise<Page<ObservationRow>> =>
-            ctx.runQuery(internal.repair.observationsPage, { sourceKey, cursor, numItems: 2000 }),
-        )),
-      );
-    }
-    return computeMetrics({
-      publishers: await table("publishers", 500),
-      series: await table("series", 4000),
-      volumes: await table("volumes", 8000),
-      editions: await table("editions", 8000),
-      releases: await table("releases", 4000),
-      editionLines: await table("editionLines", 4000),
-      releaseBundles: await table("releaseBundles", 4000),
-      bundleMemberships: await table("bundleMemberships", 4000),
-      observations,
-    });
   },
 });

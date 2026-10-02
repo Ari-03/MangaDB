@@ -12,7 +12,6 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { RepairEntry } from "./lib/repair/entries";
 import { canonicalLabel, labelNumber, sameLabel } from "./lib/repair/audit";
-import { clusterKey } from "./lib/repair/metrics";
 import schema from "./schema";
 
 // Explicit module map: node_modules may be shared with another checkout,
@@ -90,13 +89,6 @@ describe("label helpers", () => {
     expect(labelNumber("Side Story")).toBeNull();
     expect(sameLabel("01", "1")).toBe(true);
     expect(sameLabel(null, undefined)).toBe(true);
-  });
-
-  it("clusters per-volume shard titles onto their base title", () => {
-    expect(clusterKey("Otherside Picnic 05 (Manga)")).toBe(clusterKey("Otherside Picnic"));
-    expect(clusterKey("Lone Wolf and Cub Volume 5: Black Wind")).toBe(clusterKey("Lone Wolf and Cub"));
-    expect(clusterKey("Noragami Omnibus 7 (Vol. 19-21)")).toBe(clusterKey("Noragami"));
-    expect(clusterKey("Tokyo Ghoul:re")).not.toBe(clusterKey("Tokyo Ghoul"));
   });
 });
 
