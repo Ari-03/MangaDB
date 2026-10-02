@@ -432,9 +432,54 @@ describe("cleanAnnDescription", () => {
     expect(cleanAnnDescription("Noriko needs all the help she can get. Story and art by Kiyoko Hikawa.")).toBe(
       "Noriko needs all the help she can get.",
     );
-    expect(cleanAnnDescription("A lone wolf. Story by Kazuo Koike. Art by Goseki Kojima.")).toBe("A lone wolf.");
     expect(cleanAnnDescription("Magic school! Story & Art by CLAMP")).toBe("Magic school!");
     expect(cleanAnnDescription('"Run!" Written and illustrated by Ken Akamatsu.')).toBe('"Run!"');
+  });
+
+  // Real endings from the first 1,604 production descriptions.
+  it.each([
+    "Story by Yumi Hotta and Art by Takeshi Obata.",
+    "Story by Ken Akamatsu and art by RAN.",
+    "Story by Eiji Otsuka and Art by Sho-u Tajima.",
+    "Story by Haruka Aoi and Art by BH SNOW+CLINIC.",
+    "Story by Naoki Hisaya and Art by Chaco Abeno",
+    "Story and art by Dat Nishiwaki and Original Concept by Type-Moon.",
+    "Story and art by Yu Yagami and Original Story by Taro Achi.",
+    "Original story by Studio BONES and story and art by Jinsei Kataoka & Kazuma Kondou.",
+    "Manga by Mizutaka Suhou and original story by Akira Kurosawa.",
+    "Originally written by Hideyuki Kikuchi, adapted by Saiko Takaki.",
+    "Story by Sunao Yoshida and Art by Kiyo Kyujyo; Character Designs by Thores Shibamoto.",
+    "Written by Yuya Aoki and Illustrated by Rando Ayamine.",
+    "Story and Kazuo Koike and Art by Goseki Kojima.",
+    "Story and art by by Akira Himekawa.",
+    "Story and art by Masanori*Ookamigumi*Katakura.",
+    "Story and art by Oh!Great.",
+    "Story and art by MEE (Minoru Tachikawa).",
+    "Adapted by Chayamachi Suguro.",
+    "Story and art by Eiichiro Oda. Notes: Recalled due to a misprint on page 193.",
+  ])("drops the credit ending %j", (ending) => {
+    expect(cleanAnnDescription(`Will they win the final battle? ${ending}`)).toBe("Will they win the final battle?");
+  });
+
+  it("drops a capitalized credit glued to the copy before it", () => {
+    expect(
+      cleanAnnDescription(
+        "Insights from an E.R. physician Story by Koshun Takami and art by Masayuki Taguchi.",
+      ),
+    ).toBe("Insights from an E.R. physician");
+  });
+
+  it("keeps the endings it cannot read as names (the six leftovers in the sample)", () => {
+    for (const ending of [
+      "Story and art by atsushi Suzumi.",
+      "Story by ufotable and Art by tartan check.",
+      "Story and art by Osamu Tezuka. Harcover edition limited to only 1,500 copies",
+      "Story and art by Miwa Ueda. #75 - What's Hot Pick",
+      "Written and drawn by Yukito Kishiro. 232 pages.",
+    ]) {
+      const text = `Will they win? ${ending}`;
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
   });
 
   it("has nothing left when the text is only a credit or page chrome", () => {

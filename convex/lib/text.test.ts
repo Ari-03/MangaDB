@@ -118,7 +118,22 @@ describe("repairMojibake", () => {
     }
   });
 
-  it("runs inside cleanBlurb", () => {
-    expect(cleanBlurb("<p>Tsukasaâ€™s day</p>")).toBe("Tsukasa’s day");
+  it("leaves an accented letter before typographic punctuation alone", () => {
+    // Each is valid UTF-8 when read as bytes, decoding to CJK, NKo, IPA or
+    // Hebrew: real text, never mojibake.
+    for (const clean of [
+      "a quiet café…” she said",
+      "her fiancé”—she paused",
+      "Spaß“ in German",
+      "CLICHÉ”",
+      "3 ×\u00a04",
+    ]) {
+      expect(repairMojibake(clean)).toBe(clean);
+    }
+  });
+
+  it("is not part of cleanBlurb, which every source shares", () => {
+    expect(cleanBlurb("<p>a quiet café…” she said</p>")).toBe("a quiet café…” she said");
+    expect(cleanBlurb("<p>Tsukasaâ€™s day</p>")).toBe("Tsukasaâ€™s day");
   });
 });

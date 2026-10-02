@@ -2236,6 +2236,7 @@ describe("ann — release-page descriptions", () => {
       snapshotFixed: 3,
       releaseUpdated: 1,
       releaseCleared: 1,
+      errors: 0,
       continued: false,
     });
     expect(await descriptionOf(t, ids["1"]!)).toBe(BLURB);
@@ -2259,13 +2260,82 @@ describe("ann — release-page descriptions", () => {
       });
     });
 
-    // Rerun: clean text cleans to itself. Text that is not ANN's old text
-    // (a publisher replaced it) is never touched, only the snapshot.
+    // Rerun: clean text cleans to itself.
     expect(await repair(t)).toMatchObject({ snapshotFixed: 0, releaseUpdated: 0, releaseCleared: 0 });
+    // A publisher's text (its own Revision), even one ending in a credit
+    // the cleaner would drop, is never ANN's to repair.
+    const publisherCopy = "The publisher's copy. Story and art by Eiichiro Oda.";
     await storeOldText(t, 10948, `${BLURB} Story and art by Eiichiro Oda.`);
-    await t.run(async (ctx) => ctx.db.patch(ids["1"]!, { description: "The publisher's copy." }));
+    await sourceWrote(t, ids["1"]!, "sevenseas", publisherCopy);
+    expect(await repair(t)).toMatchObject({ snapshotFixed: 1, releaseUpdated: 0, errors: 0 });
+    expect(await descriptionOf(t, ids["1"]!)).toBe(publisherCopy);
+  });
+
+  /** A Revision by `sourceKey` setting the Release's description, as an import would. */
+  async function sourceWrote(t: TestT, releaseId: Id<"releases">, sourceKey: string, text: string) {
+    await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: releaseId },
+        seq: 1000,
+        proposalId,
+        author: { kind: "source", sourceKey },
+        changes: [{ field: "description", after: text }],
+        comment: "Imported.",
+      });
+      await ctx.db.patch(releaseId, { description: text });
+    });
+  }
+
+  it("a Release skipped while locked is repaired by a rerun once unlocked", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    await syncPages(t);
+    await storeOldText(t, 10948, `${BLURB} Story and art by Eiichiro Oda.`, ids["1"]);
+    await t.run(async (ctx) => ctx.db.patch(ids["1"]!, { locked: true }));
     expect(await repair(t)).toMatchObject({ snapshotFixed: 1, releaseUpdated: 0 });
-    expect(await descriptionOf(t, ids["1"]!)).toBe("The publisher's copy.");
+    await t.run(async (ctx) => ctx.db.patch(ids["1"]!, { locked: false }));
+    // The snapshot is clean now; the Release's own text still needs it.
+    expect(await repair(t)).toMatchObject({ snapshotFixed: 0, releaseUpdated: 1 });
+    expect(await descriptionOf(t, ids["1"]!)).toBe(BLURB);
+  });
+
+  it("only the line ANN's text came from repairs a Release two lines share", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }]);
+    await syncPages(t);
+    // 10949 wrote Release 2; 10948 (sorting first) also links to it and
+    // its own stored text cleans to nothing.
+    await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.", ids["2"]);
+    const shared = (await obsFor(t, 10948))!;
+    await t.run(async (ctx) => ctx.db.patch(shared._id, { recordRef: { type: "release", id: ids["2"]! } }));
+    await storeOldText(t, 10948, "Story and art by Yonezou Nekota.");
+    expect(await repair(t)).toMatchObject({ releaseUpdated: 1, releaseCleared: 0, errors: 0 });
+    expect(await descriptionOf(t, ids["2"]!)).toBe("Volume two.");
+    // No conflict note left on the line that did not write the text.
+    expect((await obsFor(t, 10948))!.conflicts ?? []).toEqual([]);
+    expect(await inReview(t)).toBe(0);
+  });
+
+  it("one malformed line is counted and logged, and the walk goes on", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }]);
+    await syncPages(t);
+    const broken = (await obsFor(t, 10948))!;
+    await t.run(async (ctx) =>
+      ctx.db.patch(broken._id, {
+        snapshot: { ...(broken.snapshot as object), page: { status: "ok", fetchedAt: 1, description: 42 } },
+      }),
+    );
+    await storeOldText(t, 10949, "Volume two. Story and art by Someone Else.", ids["2"]);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await repair(t)).toMatchObject({ errors: 1, releaseUpdated: 1 });
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("[ann.repairDescriptions] line"));
+    expect(await descriptionOf(t, ids["2"]!)).toBe("Volume two.");
   });
 
   it("the repair continues after its time budget", async () => {
@@ -2286,9 +2356,18 @@ describe("ann — release-page descriptions", () => {
       }
     });
     let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => (now += 6 * 60_000));
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => (now += 6 * 60_000));
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((message: string) => void logs.push(message));
     expect(await repair(t)).toMatchObject({ scanned: 100, continued: true });
-    await runScheduled(t);
+    clock.mockRestore();
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
     expect(await descriptionOf(t, ids["1"]!)).toBe(BLURB);
+    // The chain's final counts reach the logs, not just the first link's CLI.
+    const done = logs.at(-1)!;
+    expect(done).toMatch(/^\[ann\.repairDescriptions\] done: /);
+    expect(JSON.parse(done.slice(done.indexOf("{")))).toMatchObject({ scanned: 123, releaseUpdated: 1, errors: 0 });
   });
 });

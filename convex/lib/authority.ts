@@ -23,7 +23,10 @@
 //   is an equal-authority conflict, never a silent flip-flop.
 // - Filling a field that has no canonical value is not a disagreement —
 //   any source with authority over the field may fill it (how OpenLibrary's
-//   ISBN fill works in seeding stage ④).
+//   ISBN fill works in seeding stage ④). That holds when a source emptied
+//   it (ANN's repair clearing a credit line): the blank is open to any
+//   source. A blank a human left stays theirs: a Human Override blocks
+//   above, and a human-authored blank still queues below.
 // - Weak blurbs from different records disagreeing (ANN's release-page text
 //   vs OpenLibrary's, or two OpenLibrary editions of one ISBN) are not worth
 //   a reviewer's time: aggregator copy of the same book. The first text
@@ -195,8 +198,9 @@ export function decideField(args: {
     return recordOnly("the source has no authority for this field");
   }
 
-  // Filling an empty field is not a disagreement.
-  if (current === undefined && incumbent.kind === "none") {
+  // Filling an empty field is not a disagreement, whichever source last
+  // wrote (or cleared) it.
+  if (current === undefined && (incumbent.kind === "none" || incumbent.kind === "source")) {
     return auto("fills a field with no canonical value");
   }
 

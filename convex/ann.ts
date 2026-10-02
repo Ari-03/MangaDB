@@ -1794,50 +1794,67 @@ export const backfillDescriptions = internalAction({
 
 // ---------- the description repair ----------
 
-/** Release-line observations examined per repair mutation. */
-const REPAIR_BATCH = 100;
+/** Release-line observations scanned per repair lookup. */
+const REPAIR_SCAN = 100;
+/** Failed lines whose message a repair link keeps (the count is complete). */
+const REPAIR_ERROR_SAMPLES = 20;
 
 const repairCounts = v.object({
   scanned: v.number(),
   snapshotFixed: v.number(),
   releaseUpdated: v.number(),
   releaseCleared: v.number(),
+  errors: v.number(),
 });
 type RepairCounts = typeof repairCounts.type;
 
+/** Text the cleaner would change: a stored or shown ANN description to repair. */
+function stale(text: unknown): boolean {
+  // A non-string is malformed: listed so its line fails loudly and is counted.
+  return text !== undefined && (typeof text !== "string" || cleanAnnDescription(text) !== text);
+}
+
 /**
- * Whether ANN wrote the Release's current description: the latest Revision
- * touching the field is ANN-authored. Anything else (a publisher's, Open
- * Library's, a human's, unattributed text) is never repaired.
+ * The observations behind the Release's current description when ANN wrote
+ * it: the evidence of the latest Revision touching the field. Null when
+ * anyone else wrote it (a publisher, Open Library, a human) or nobody did.
  */
-async function annWroteDescription(ctx: MutationCtx, release: Doc<"releases">): Promise<boolean> {
+async function annDescriptionEvidence(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+): Promise<string[] | null> {
   const history = ctx.db
     .query("revisions")
     .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
     .order("desc");
   for await (const revision of history) {
     if (!revision.changes.some((change) => change.field === "description")) continue;
-    return revision.author.kind === "source" && revision.author.sourceKey === SOURCE_KEY;
+    if (revision.author.kind !== "source" || revision.author.sourceKey !== SOURCE_KEY) return null;
+    const proposal = revision.proposalId ? await ctx.db.get(revision.proposalId) : null;
+    const version = proposal
+      ? await ctx.db
+          .query("proposalVersions")
+          .withIndex("by_proposal", (q) =>
+            q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
+          )
+          .unique()
+      : null;
+    return (version?.evidence ?? []).flatMap((row) =>
+      row.kind === "observation" ? [row.observationId as string] : [],
+    );
   }
-  return false;
+  return null;
 }
 
 /**
- * One repair step over up to REPAIR_BATCH release lines after `after`: a
- * stored page Description the current cleaner (`cleanAnnDescription`) now
- * reads differently is rewritten on the snapshot (patched in place, no
- * history row: it is the same fetch, re-read), and when the linked Release
- * still shows exactly the old ANN text, the new text replaces it — or
- * clears it when nothing remains — through reconcileFields, as the
- * backfill writes it (ANN's own fact: one approved Proposal, its version,
- * one Revision citing the release page). A Release with a Human Override,
- * a lock, or any other text is left alone.
+ * Up to REPAIR_SCAN release lines after `after`, and the ones with work:
+ * a stored page Description the cleaner would change, or a linked Release
+ * whose current description it would change (whoever wrote it; the repair
+ * mutation decides). Where to look next is null once exhausted.
  */
-export const repairDescriptionBatch = internalMutation({
+export const repairCandidates = internalQuery({
   args: { after: v.union(v.string(), v.null()) },
-  handler: async (ctx, { after }): Promise<{ counts: RepairCounts; next: string | null }> => {
-    const now = Date.now();
-    const counts: RepairCounts = { scanned: 0, snapshotFixed: 0, releaseUpdated: 0, releaseCleared: 0 };
+  handler: async (ctx, { after }) => {
     const docs = await ctx.db
       .query("sourceObservations")
       .withIndex("by_source_record", (q) =>
@@ -1846,64 +1863,98 @@ export const repairDescriptionBatch = internalMutation({
           .gt("sourceRecordId", after ?? "release:")
           .lt("sourceRecordId", "release;"),
       )
-      .take(REPAIR_BATCH);
-    const source = await getSourceByKey(ctx, SOURCE_KEY);
-    for (const observation of docs) {
-      counts.scanned++;
-      const line = observation.snapshot as AnnReleaseSnapshot;
-      const old = line.page?.description;
-      if (line.page === undefined || old === undefined) continue;
-      const fixed = cleanAnnDescription(old);
-      if (fixed === old) continue;
-      const { description: _, ...rest } = line.page;
-      const page: PageState = fixed === undefined ? rest : { ...rest, description: fixed };
-      await ctx.db.patch(observation._id, { snapshot: { ...line, page } });
-      counts.snapshotFixed++;
-
-      if (observation.recordRef?.type !== "release") continue;
-      const release = await ctx.db.get(observation.recordRef.id);
-      if (
-        release === null ||
-        release.status !== "active" ||
-        release.locked ||
-        release.overriddenFields?.includes("description") ||
-        release.description !== old ||
-        !(await annWroteDescription(ctx, release))
-      ) {
-        continue;
-      }
-      const result = await reconcileFields(ctx, {
-        sourceKey: SOURCE_KEY,
-        ref: { type: "release", id: release._id },
-        doc: release,
-        offered: { description: fixed },
-        observation: { ...observation, snapshot: { ...line, page } },
-        citation: {
-          sourceName: source?.name ?? "Anime News Network Encyclopedia",
-          url: releaseUrl(line.annId),
-        },
-        now,
-      });
-      if (result.applied.includes("description")) {
-        if (fixed === undefined) counts.releaseCleared++;
-        else counts.releaseUpdated++;
-      }
+      .take(REPAIR_SCAN);
+    const ids: Id<"sourceObservations">[] = [];
+    for (const doc of docs) {
+      const line = doc.snapshot as AnnReleaseSnapshot;
+      const release = doc.recordRef?.type === "release" ? await ctx.db.get(doc.recordRef.id) : null;
+      if (stale(line.page?.description) || stale(release?.description)) ids.push(doc._id);
     }
     const last = docs.at(-1);
-    return { counts, next: docs.length < REPAIR_BATCH || !last ? null : last.sourceRecordId };
+    return {
+      ids,
+      scanned: docs.length,
+      next: docs.length < REPAIR_SCAN || !last ? null : last.sourceRecordId,
+    };
+  },
+});
+
+/**
+ * Repair one release line. Its stored page Description is re-cleaned
+ * (`cleanAnnDescription`; patched in place, no history row: it is the same
+ * fetch, re-read). Its linked Release is repaired when the Release's own
+ * current text needs it, whatever the snapshot says (a Release skipped
+ * while locked is fixed on a rerun): only when ANN wrote that text from
+ * THIS line (the Revision's evidence), the Release is active or hidden,
+ * unlocked, and carries no Human Override on the field. The new text — or
+ * a cleared field, when nothing remains — goes through reconcileFields as
+ * ANN's own fact, as the backfill writes it: one approved Proposal, its
+ * version, one Revision citing the release page.
+ */
+export const repairDescriptionLine = internalMutation({
+  args: { observationId: v.id("sourceObservations") },
+  handler: async (
+    ctx,
+    { observationId },
+  ): Promise<{ snapshotFixed: boolean; release: "updated" | "cleared" | null }> => {
+    const observation = await ctx.db.get(observationId);
+    if (observation === null) return { snapshotFixed: false, release: null };
+    const line = observation.snapshot as AnnReleaseSnapshot;
+    let snapshotFixed = false;
+    if (line.page !== undefined && stale(line.page.description)) {
+      const fixed = cleanAnnDescription(line.page.description!);
+      const { description: _, ...rest } = line.page;
+      await ctx.db.patch(observation._id, {
+        snapshot: { ...line, page: fixed === undefined ? rest : { ...rest, description: fixed } },
+      });
+      snapshotFixed = true;
+    }
+
+    if (observation.recordRef?.type !== "release") return { snapshotFixed, release: null };
+    const release = await ctx.db.get(observation.recordRef.id);
+    if (
+      release === null ||
+      (release.status !== "active" && release.status !== "hidden") ||
+      release.locked ||
+      release.overriddenFields?.includes("description") ||
+      typeof release.description !== "string" ||
+      !stale(release.description)
+    ) {
+      return { snapshotFixed, release: null };
+    }
+    const evidence = await annDescriptionEvidence(ctx, release);
+    if (evidence === null || !evidence.includes(observation._id)) return { snapshotFixed, release: null };
+    const fixed = cleanAnnDescription(release.description);
+    const source = await getSourceByKey(ctx, SOURCE_KEY);
+    const result = await reconcileFields(ctx, {
+      sourceKey: SOURCE_KEY,
+      ref: { type: "release", id: release._id },
+      doc: release,
+      offered: { description: fixed },
+      observation,
+      citation: {
+        sourceName: source?.name ?? "Anime News Network Encyclopedia",
+        url: releaseUrl(line.annId),
+      },
+      now: Date.now(),
+    });
+    if (!result.applied.includes("description")) return { snapshotFixed, release: null };
+    return { snapshotFixed, release: fixed === undefined ? "cleared" : "updated" };
   },
 });
 
 /**
  * Re-clean every stored ANN release-page Description with today's
- * `cleanAnnDescription` (credit tails, page chrome, mojibake) and repair
- * the Releases still showing the old ANN text (`repairDescriptionBatch`).
- * No network. Weak text that filled a blank is never replaced by a
- * refetch, so this is how already-written descriptions get fixed. Safe
- * beside a running `backfillDescriptions` (each batch is one transaction,
- * and a Release is only touched while it shows exactly the old ANN text)
- * and safe to rerun: clean text cleans to itself. Continues itself across
- * the action time limit; returns the counts so far.
+ * `cleanAnnDescription` (credit tails, page chrome, "Notes:" sections,
+ * mojibake) and repair the Releases still showing ANN's text
+ * (`repairDescriptionLine`). No network. Weak text that filled a blank is
+ * never replaced by a refetch, so this is how already-written descriptions
+ * get fixed. Each line is its own mutation: one that fails is counted
+ * under `errors` (its message logged) and the walk goes on. Safe beside a
+ * running `backfillDescriptions` and safe to rerun: clean text cleans to
+ * itself. Continues itself across the action time limit and logs its
+ * counts at every hand-off and at the end (the CLI stops listening after a
+ * few minutes).
  *
  *   npx convex run ann:repairDescriptions '{}'
  */
@@ -1920,22 +1971,35 @@ export const repairDescriptions = internalAction({
       snapshotFixed: 0,
       releaseUpdated: 0,
       releaseCleared: 0,
+      errors: 0,
     };
+    let logged = 0;
     let cursor: string | null = args.after ?? null;
     for (;;) {
-      const batch: { counts: RepairCounts; next: string | null } = await applyRetrying(
-        ctx,
-        internal.ann.repairDescriptionBatch,
-        { after: cursor },
-      );
-      counts.scanned += batch.counts.scanned;
-      counts.snapshotFixed += batch.counts.snapshotFixed;
-      counts.releaseUpdated += batch.counts.releaseUpdated;
-      counts.releaseCleared += batch.counts.releaseCleared;
+      const batch: { ids: Id<"sourceObservations">[]; scanned: number; next: string | null } =
+        await ctx.runQuery(internal.ann.repairCandidates, { after: cursor });
+      counts.scanned += batch.scanned;
+      for (const observationId of batch.ids) {
+        try {
+          const done = await applyRetrying(ctx, internal.ann.repairDescriptionLine, { observationId });
+          if (done.snapshotFixed) counts.snapshotFixed++;
+          if (done.release === "updated") counts.releaseUpdated++;
+          if (done.release === "cleared") counts.releaseCleared++;
+        } catch (e) {
+          counts.errors++;
+          if (logged++ < REPAIR_ERROR_SAMPLES) {
+            console.error(`[ann.repairDescriptions] line ${observationId}: ${errorMessage(e)}`);
+          }
+        }
+      }
       cursor = batch.next;
-      if (cursor === null) return { ...counts, continued: false };
+      if (cursor === null) {
+        console.log(`[ann.repairDescriptions] done: ${JSON.stringify(counts)}`);
+        return { ...counts, continued: false };
+      }
       if (Date.now() - started > LINK_BUDGET_MS) {
         await ctx.scheduler.runAfter(0, internal.ann.repairDescriptions, { after: cursor, counts });
+        console.log(`[ann.repairDescriptions] continuing after ${cursor}: ${JSON.stringify(counts)}`);
         return { ...counts, continued: true };
       }
     }

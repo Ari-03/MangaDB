@@ -1211,11 +1211,13 @@ to start while an ANN Import Run is running (one older than 12 hours counts
 as stranded and is ignored), stops after 5 failed fetches in a row across
 its continuations, logs why it stopped, and never touches a withdrawn line.
 Every ANN description goes through one cleaner (`cleanAnnDescription`):
-ANN's review link, mojibake, and the trailing credit sentence ("Story and
-art by …", shown by the byline already) are removed. Text stored before
-the cleaner changed is fixed without any fetch by
+ANN's review link, its "Notes:" section, mojibake, and the trailing credit
+("Story by X and Art by Y.", shown by the byline already) are removed.
+Text stored before the cleaner changed is fixed without any fetch by
 `npx convex run ann:repairDescriptions '{}'`, which updates or clears a
-Release only while it still shows exactly ANN's old text. Seven Seas re-reads a book
+Release only when ANN wrote its current text from that line, and logs its
+counts (lines scanned, snapshots fixed, Releases updated and cleared,
+errors) at every hand-off and at the end. Seven Seas re-reads a book
 whose description an aggregator wrote, so its own blurb still replaces
 ANN's or Open Library's.
 

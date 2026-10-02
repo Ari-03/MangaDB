@@ -326,4 +326,22 @@ describe("the description category", () => {
     ).toBe("queue");
     expect(blurb({ incomingSourceKey: "prh", incomingRank: 2, incumbent: src("prh2", 2) })).toBe("queue");
   });
+
+  it("(h) a blank a source cleared is open to any source; a human's blank is not", () => {
+    // ANN's repair cleared a credit-only text: ANN is still the incumbent.
+    const cleared = { current: undefined, offered: "An OpenLibrary blurb." };
+    expect(blurb({ ...cleared, incomingSourceKey: "openlibrary", incomingRank: 1, incumbent: src("ann", 1) })).toBe(
+      "auto",
+    );
+    expect(blurb({ ...cleared, incumbent: src("kodansha", 3), incomingSourceKey: "ann", incomingRank: 1 })).toBe(
+      "auto",
+    );
+    // A Human Override, or a blank a human authored, still never fills.
+    expect(
+      blurb({ ...cleared, overridden: true, incomingSourceKey: "openlibrary", incomingRank: 1, incumbent: src("ann", 1) }),
+    ).toBe("queue");
+    expect(blurb({ ...cleared, incomingSourceKey: "openlibrary", incomingRank: 1, incumbent: { kind: "human" } })).toBe(
+      "queue",
+    );
+  });
 });

@@ -397,38 +397,139 @@ const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
 const REVIEW_LINK = /<a\b[^>]*\breviews\/new\b[^>]*>[\s\S]*?<\/a>/gi;
 const CHROME = ["Submit your own review of this item."];
 
-// The credit sentence ANN appends to publisher copy ("… a friend or a foe?
-// Story and art by Eiichiro Oda."): the byline already shows it. A credit
-// phrase, then a short list of names: capitalized words joined by "and",
-// "&", "with", commas or slashes — never prose.
-const CREDIT_TAIL =
-  /(^|[.!?…"”’)]\s+)(?:story\s+(?:and|&)\s+art|written\s+and\s+illustrated|original\s+story|story|art|written|illustrated|created|script)\s+by\s+([^.!?]{1,80}?)\.?\s*$/i;
-const NAME_TOKEN = /^(?:\p{Lu}|\d)[\p{L}\p{M}'’-]*$/u;
-const NAME_JOINER = /^(?:and|&|with|\/)$/;
+// The credit ANN appends to publisher copy ("… a friend or a foe? Story
+// and art by Eiichiro Oda."): the byline already shows it. In the first
+// 1,604 production descriptions it ends 87% of them, in these shapes:
+// "Story and art by X.", "Story by X and Art by Y.", "Story and art by X
+// and Original Concept by Y.", "Manga by X and original story by Y.",
+// "Originally written by X, adapted by Y.", "Story by X. Art by Y.". A
+// credit tail is one or more clauses ROLE by NAMES, joined by "and", a
+// comma or a sentence break, running to the very end of the text.
+const CREDIT_ROLES = [
+  "written and illustrated",
+  "written & illustrated",
+  "story and art",
+  "story & art",
+  "art and story",
+  "originally written",
+  "original story",
+  "original concept",
+  "original creator",
+  "original work",
+  "character designs",
+  "character design",
+  "story",
+  "art",
+  "artwork",
+  "written",
+  "illustrated",
+  "illustrations",
+  "created",
+  "script",
+  "manga",
+  "adapted",
+  "concept",
+].map((role) => role.split(" "));
+/** A name word: it starts with a capital or digit ("Oh!Great", "Sho-u", "RAN", "(Studio"). */
+const NAME_WORD = /^\(?[\p{Lu}\d]\S*$/u;
+const NAME_JOINERS = new Set(["and", "&", "with", "/"]);
+const SENTENCE_END = /[.!?…"”’)]$/;
+const MAX_CLAUSES = 4;
+const MAX_NAME_WORDS = 8;
 
-/** Whether a credit's object reads as a list of names, not a phrase. */
-function isNameList(names: string): boolean {
-  const tokens = names.replace(/[,/]/g, " / ").split(/\s+/).filter(Boolean);
-  return tokens.length > 0 && tokens.length <= 12 && tokens.every((t) => NAME_TOKEN.test(t) || NAME_JOINER.test(t));
+/** Words in a credit role starting at `at`, then "by" (repeats allowed: "by by"); 0 when none. */
+function creditRoleAt(words: string[], at: number): number {
+  for (const role of CREDIT_ROLES) {
+    if (!role.every((part, k) => words[at + k]?.toLowerCase() === part)) continue;
+    let end = at + role.length;
+    if (words[end]?.toLowerCase() !== "by") continue;
+    while (words[end]?.toLowerCase() === "by") end++;
+    return end - at;
+  }
+  return 0;
 }
+
+/** Whether words[start..] is nothing but credit clauses: ROLE by NAMES (and ROLE by NAMES)*. */
+function isCreditTail(words: string[], start: number): boolean {
+  let at = start;
+  for (let clause = 0; clause < MAX_CLAUSES; clause++) {
+    const role = creditRoleAt(words, at);
+    if (role === 0) return false;
+    at += role;
+    let names = 0;
+    for (;;) {
+      const word = words[at];
+      if (word === undefined || !NAME_WORD.test(word.replace(/[.,;:!?]+$/, ""))) return false;
+      if (++names > MAX_NAME_WORDS) return false;
+      at++;
+      if (at === words.length) return true;
+      const next = words[at]!;
+      // "… and Art by Y": the joiner opens the next clause.
+      if (NAME_JOINERS.has(next.toLowerCase()) && creditRoleAt(words, at + 1) > 0) {
+        at++;
+        break;
+      }
+      // "X, adapted by Y" / "X. Art by Y" / "X Art by Y".
+      if (creditRoleAt(words, at) > 0) break;
+      // "X and Y", "X & Y": the list goes on.
+      if (NAME_JOINERS.has(next.toLowerCase())) at++;
+    }
+  }
+  return false;
+}
+
+/** Whether words are a bare list of names ("Kazuo Koike", "X & Y"). */
+function isNameList(words: string[]): boolean {
+  return (
+    words.length > 0 &&
+    words.length <= MAX_NAME_WORDS &&
+    words.every((w) => NAME_WORD.test(w.replace(/[.,;:!?]+$/, "")) || NAME_JOINERS.has(w.toLowerCase()))
+  );
+}
+
+// ANN's own typo, three times in the sample: "Story and Kazuo Koike and
+// Art by Goseki Kojima." ("and" for "by").
+const STORY_AND_TYPO = /^Story and (.+?) and Art by (.+)$/;
+
+/**
+ * Drop a trailing credit tail (`isCreditTail`). It must start a sentence,
+ * except a capitalized "Story and art by …" or "Story by …" glued to the
+ * text before it.
+ */
+function stripCreditTail(text: string): string {
+  const words = text.split(" ");
+  for (let at = 0; at < words.length; at++) {
+    const opensSentence = at === 0 || SENTENCE_END.test(words[at - 1]!);
+    const typo = opensSentence ? STORY_AND_TYPO.exec(words.slice(at).join(" ")) : null;
+    if (typo && isNameList(typo[1]!.split(" ")) && isNameList(typo[2]!.split(" "))) {
+      return words.slice(0, at).join(" ");
+    }
+    if (creditRoleAt(words, at) === 0) continue;
+    const gluedStory = words[at] === "Story" && /^(?:and|&|by)$/.test(words[at + 1] ?? "");
+    if ((opensSentence || gluedStory) && isCreditTail(words, at)) {
+      return words.slice(0, at).join(" ");
+    }
+  }
+  return text;
+}
+
+// ANN's own release notes some contributors append after the copy
+// ("… Notes: Originally scheduled for 2006-07-31."): not the publisher's.
+const NOTES_TAIL = /([.!?…"”’)])\s+Notes:\s[\s\S]*$/;
 
 /**
  * The cleaner every ANN release-page description goes through, at parse
  * time and again on stored text (`ann:repairDescriptions`), so it is
  * idempotent and works on already-cleaned text: zero-width spaces and
- * Windows-1252 mojibake repaired, ANN page chrome rejected, and up to two
- * trailing credit sentences ("Story by X. Art by Y.") dropped. Undefined
- * when nothing of the publisher's copy remains.
+ * Windows-1252 mojibake repaired, ANN page chrome and a trailing "Notes:"
+ * section rejected, and a trailing credit tail dropped (`stripCreditTail`).
+ * Undefined when nothing of the publisher's copy remains.
  */
 export function cleanAnnDescription(text: string): string | undefined {
   let out = repairMojibake(text.replace(ZERO_WIDTH, ""));
   for (const chrome of CHROME) out = out.split(chrome).join(" ");
-  out = out.replace(/\s+/g, " ").trim();
-  for (let i = 0; i < 2; i++) {
-    const credit = CREDIT_TAIL.exec(out);
-    if (!credit || !isNameList(credit[2]!)) break;
-    out = out.slice(0, credit.index + credit[1]!.length).trim();
-  }
+  out = out.replace(/\s+/g, " ").trim().replace(NOTES_TAIL, "$1");
+  out = stripCreditTail(out).trim();
   return out === "" ? undefined : out;
 }
 

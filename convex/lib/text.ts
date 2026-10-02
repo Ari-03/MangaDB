@@ -151,12 +151,20 @@ const MOJIBAKE = new RegExp(
   "g",
 );
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
+// What mojibake in English copy decodes to: Latin-1 and Latin Extended-A
+// letters (é, ō) and general punctuation (’ “ — …). Anything else (CJK,
+// Hebrew, IPA) means the run was real text that only looked encoded.
+const REPAIRED = /^[\u00A0-\u017F\u2000-\u206F]$/;
 
 /**
  * Undo UTF-8 text that was decoded as Windows-1252 somewhere upstream
  * ("Tsukasaâ€™s" → "Tsukasa’s"). Only a run shaped exactly like an encoded
- * character is re-decoded, and only when its bytes are valid UTF-8, so a
- * real "â" or "Ã" in clean text ("pâté", "Ã la") is left alone.
+ * character is re-decoded, only when its bytes are valid UTF-8, and only
+ * when it decodes to a Latin letter or punctuation. Real text that happens
+ * to look encoded stays: "pâté", "Ã la", an accented letter before curly
+ * punctuation ("café…”", "CLICHÉ”"), "×" before a no-break space. ANN's
+ * cleaner (lib/ann.ts) calls it; `cleanBlurb` does not, since other
+ * sources never showed the problem.
  */
 export function repairMojibake(text: string): string {
   return text.replace(MOJIBAKE, (run) => {
@@ -165,7 +173,8 @@ export function repairMojibake(text: string): string {
       return code <= 0xff ? code : 0x80 + CP1252_HIGH.indexOf(ch);
     });
     try {
-      return STRICT_UTF8.decode(bytes);
+      const decoded = STRICT_UTF8.decode(bytes);
+      return REPAIRED.test(decoded) ? decoded : run;
     } catch {
       return run;
     }
@@ -175,13 +184,13 @@ export function repairMojibake(text: string): string {
 /**
  * A source's blurb (HTML or plain text) → one clean paragraph for a Release
  * Description or Series synopsis: tags stripped, entities decoded,
- * whitespace collapsed, mojibake repaired (`repairMojibake`), capped at
- * MAX_BLURB on a word boundary so snapshots stay small. Anything empty or
- * non-string is undefined: an adapter offers nothing rather than "".
+ * whitespace collapsed, capped at MAX_BLURB on a word boundary so snapshots
+ * stay small. Anything empty or non-string is undefined: an adapter offers
+ * nothing rather than "".
  */
 export function cleanBlurb(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
-  const text = repairMojibake(decodeEntities(raw.replace(BREAKING_TAG, " ").replace(/<[^>]*>/g, "")))
+  const text = decodeEntities(raw.replace(BREAKING_TAG, " ").replace(/<[^>]*>/g, ""))
     .replace(/\s+/g, " ")
     .trim();
   if (text === "") return undefined;
