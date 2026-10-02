@@ -104,6 +104,10 @@
   color: var(--text-dim);
   line-height: 1.68;
 }
+/* A borrowed description's source ("About the series") sits tight above it. */
+.detail-blurb .note + p {
+  margin-top: 6px;
+}
 .detail-note {
   margin-top: 18px;
   max-width: 58ch;
@@ -328,13 +332,6 @@
   color: var(--text-mute);
 }
 
-.release-row .release-description {
-  margin-top: 10px;
-  max-width: 64ch;
-  font-size: 0.87rem;
-  line-height: 1.6;
-  color: var(--text-dim);
-}
 /* Variants and bundles belong to the Release above them, so they hang off it
    rather than starting a row of their own. */
 .release-row .release-variants,

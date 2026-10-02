@@ -227,11 +227,22 @@ queries in `convex/catalogPages.ts`, read by the route loaders through
   omnibus case shows the Edition's full ordered Coverage (chips linking each
   covered Volume), and canonical Volume numbering (Position + public
   Label) stays visibly separate from Edition Line numbering throughout.
-- **`/edition/{id}/{slug}`** is the book detail page: Release rows differing
-  only in Format/Binding, each with ISBN-13/10, date, price, Release
-  Description, its Release Variants beneath, and links to containing
-  Bundles. Editions have no stored name — the page title is composed from
-  series + Edition Line + position or covered Volumes (`convex/lib/titles.ts`),
+  Under the title sits one description: the Volume Synopsis, else the
+  representative blurb of the Editions that are ordinary books of this one
+  whole Volume ("From the {publisher} edition"; omnibuses, split parts and
+  Edition Line packaging never lend theirs), else the Series synopsis
+  labelled "About the series".
+- **`/edition/{id}/{slug}`** is the book detail page: one **Edition
+  Description** in the header, then Release rows differing only in
+  Format/Binding, each with ISBN-13/10, date, price, its Release Variants
+  beneath, and links to containing Bundles. Releases keep storing their own
+  Release Description; the page resolves one at query time
+  (`convex/lib/descriptions.ts`): a Human Override first, then physical
+  before digital, earliest date, longest text. A blurbless Edition of one
+  whole Volume falls back to that Volume Synopsis, anything else to the
+  Series synopsis labelled "About the series". Editions have no stored
+  name — the page title is composed from series + Edition Line + position
+  or covered Volumes (`convex/lib/titles.ts`),
   and the slug is computed from that composed title. Releases have no page
   of their own (spec §11): each row anchors by ISBN when present, else
   document ID.
@@ -1166,7 +1177,7 @@ on ANN dates reconcile in at standard authority.
 A completed mirror chains the **release-page pass**
 (`ann:syncReleasePages`): the API has no publisher, so each still-unlinked
 line's Encyclopedia page (`releases.php?id=N`: Distributor, ISBN-10/13,
-date, SRP) is fetched **once** at 1 req/s and stored on the line's
+date, SRP, Description) is fetched **once** at 1 req/s and stored on the line's
 observation as `page` (the fetch state — later passes re-place stored
 pages without refetching; 404s re-check after 90 days, errors after 7).
 A line then links to the Release carrying its ISBN, or becomes a **leaf
@@ -1181,6 +1192,17 @@ The first pass over the ~17k unlinked lines is ~5 h of fetching, chained
 300 pages per action. Citations link the Encyclopedia entry or release
 page, satisfying ANN's attribution license. `npx convex run ann:sync '{}'`
 (`'{"releasePages": false}'` skips the chained pass).
+
+The page's **Description** (publisher copy entered by ANN contributors)
+becomes the Release Description at weak authority, on create and on link,
+and only for a Release with no description and no Human Override on it.
+A linked line whose Release lacks one, and whose stored page was never
+read for one, is refetched once by the page pass (within its per-link
+budget); a page without a Description is marked checked and never
+refetched for it. To fill the existing Releases in bulk instead, run the
+operator backfill (1 req/s, continues itself, ignores the enabled flag):
+`npx convex run ann:backfillDescriptions '{"limit": 300}'`, or
+`'{"annIds": ["10948", "23227"]}'` for specific release pages.
 
 **PRH API** (`convex/prh.ts`, parsers `convex/lib/prh.ts`; daily +
 weekly full sweep). The authoritative date/ISBN/price overlay on
@@ -1225,7 +1247,8 @@ npx convex run prh:sync '{"mode":"full"}'
 `convex/lib/openLibrary.ts`; monthly). The bulk-dump ISBN fill (seeding
 stage ④): flat records match *into* the existing skeleton and **never
 define Series structure** — a match fills ISBNs (standard), dates (weak),
-binding (standard); an unmatched record may create at most a **leaf**
+binding (standard), and the edition's description (weak: a blank only);
+an unmatched record may create at most a **leaf**
 Release under a Series, Volume, and Publisher that all already exist (how
 VIZ physical releases materialize under the ANN backbone), and it never
 creates Series/Volumes/Publishers, never queues review proposals, and
@@ -1250,6 +1273,15 @@ curl -sL https://openlibrary.org/data/ol_dump_editions_latest.txt.gz \
 npx convex env set OPENLIBRARY_DUMP_URL https://…/filtered.txt
 npx convex run openLibrary:sync '{}'   # streams + self-continues to the end
 ```
+
+An edition observed before its Release existed (ANN creates most VIZ
+books) stays unlinked, so its description never reaches the Release on its
+own. `npx convex run openLibrary:replayDescriptions '{"limit": 500}'`
+re-applies the stored, unlinked editions that carry a description and
+whose ISBN an active Release now holds, through the same `applyEdition`
+path, with no network access: they link by ISBN and fill a blank
+description; nothing is created. Run it before `ann:backfillDescriptions`
+so the two weak sources never offer different text to one Release.
 
 **Yen Press** (`convex/yenPress.ts`, parsers `convex/lib/yenPress.ts`;
 daily; post-v1). Yen is Hachette-distributed, so PRH never carried it.
@@ -1369,16 +1401,18 @@ Spec §11. All metadata is formula-generated — no hand-written metadata in v1.
 (Series "{Title} – English Manga Volumes & Release Dates | MangaDB", Volume
 "{Series} Vol. {Label} – …", Edition "{Composed title} ({Publisher}) – ISBN &
 Release Date | MangaDB", Publisher, Month, browser, Bundle). Descriptions are
-assembled from facts, falling back to a truncated Volume Synopsis / Release
-Description. Every page's `head()` goes through `pageHead()`, which also
-emits the canonical link and the **cover-led OG/Twitter card** — the
+assembled from facts, falling back to the page's truncated description
+(Volume Synopsis or Edition Description) when it is the book's own, never the
+Series synopsis fallback. Every page's `head()` goes through `pageHead()`,
+which also emits the canonical link and the **cover-led OG/Twitter card** — the
 representative release cover picked at query time (spec §8) upgrades the
 card to `summary_large_image`.
 
 **JSON-LD.** BreadcrumbList on every catalog page; BookSeries on Series;
 one Book per Release row on Edition pages (URL = the Edition page anchored
-at the row — Releases have no page of their own); Organization on Publisher;
-ItemList on unfiltered month pages. No ratings markup. Builders live in
+at the row — Releases have no page of their own; `description` = the Edition
+Description when it is the book's own); Organization on Publisher; ItemList
+on unfiltered month pages. No ratings markup. Builders live in
 `src/lib/seo.ts`, unit-tested in `src/lib/seo.test.ts`.
 
 **Indexing policy.** Catalog pages, `/releases`, and month views are

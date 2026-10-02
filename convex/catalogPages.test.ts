@@ -135,7 +135,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
       extent: "partial",
       note: "First half only.",
     });
-    await ctx.db.insert("releases", {
+    const r4 = await ctx.db.insert("releases", {
       status: "active",
       editionId: split,
       format: "digital",
@@ -167,7 +167,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
       order: 2,
     });
 
-    return { publisherId, seriesId, v1, v2, v3, standard, omnibus, split, r1, r2, r3, bundleId };
+    return { publisherId, seriesId, v1, v2, v3, standard, omnibus, split, r1, r2, r3, r4, bundleId };
   });
 }
 
@@ -283,11 +283,13 @@ describe("catalogPages.editionPage", () => {
       isbn13: R1_ISBN13,
       isbn10: R1_ISBN10,
       pubDate: { year: 2015, month: 6, day: 16, sort: 20150616 },
-      description: "Back-cover blurb.",
       variants: [{ name: "Box-set exclusive cover" }],
       bundles: [{ publicId: 31, name: "S Complete Box Set" }],
     });
     expect(digital).toMatchObject({ format: "digital", isbn13: null, variants: [] });
+    // One description for the book, none per row.
+    expect(page?.description).toEqual({ source: "release", text: "Back-cover blurb." });
+    for (const row of page!.releases) expect(row).not.toHaveProperty("description");
   });
 
   it("composes the omnibus title from the Edition Line and lists full Coverage", async () => {
@@ -364,6 +366,166 @@ describe("catalogPages.editionPage", () => {
     expect(barePage).toMatchObject({ coverUrl: null, coverIsbns: [R1_ISBN13] });
     const bareRow = june.releases.find((r) => r.edition.publicId === 24);
     expect(bareRow).toMatchObject({ coverUrl: null, coverIsbns: [R1_ISBN13] });
+  });
+});
+
+describe("Edition Description", () => {
+  // The seed's standard Edition 21: r1 (physical) carries "Back-cover
+  // blurb.", r2 (digital) is blank.
+  it("collapses identical physical and digital blurbs to one", async () => {
+    const t = convexTest(schema);
+    const { r2 } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(r2, { description: "Back-cover blurb." });
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
+    expect(page?.description).toEqual({ source: "release", text: "Back-cover blurb." });
+    for (const row of page!.releases) expect(row).not.toHaveProperty("description");
+  });
+
+  it("fills an Edition from its one described Release", async () => {
+    const t = convexTest(schema);
+    const { r1, r2 } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(r1, { description: undefined });
+      await ctx.db.patch(r2, { description: "Digital blurb." });
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
+    expect(page?.description).toEqual({ source: "release", text: "Digital blurb." });
+  });
+
+  it("lets a Human Override of a description win over the physical default", async () => {
+    const t = convexTest(schema);
+    const { r2 } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(r2, { description: "Corrected.", overriddenFields: ["description"] });
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
+    expect(page?.description).toEqual({ source: "release", text: "Corrected." });
+  });
+
+  it("borrows the Volume Synopsis only for one whole Volume, else the flagged Series synopsis", async () => {
+    const t = convexTest(schema);
+    const { seriesId, v1, v3, r1 } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(r1, { description: undefined });
+      await ctx.db.patch(v1, { synopsis: "Vol 1 synopsis." });
+      await ctx.db.patch(v3, { synopsis: "Vol 3 synopsis." });
+      await ctx.db.patch(seriesId, { synopsis: "Series synopsis." });
+    });
+    const page = (publicId: number) => t.query(api.catalogPages.editionPage, { publicId });
+    // The blurbless standard Edition of Vol 1 borrows its Volume's.
+    expect((await page(21))?.description).toEqual({ source: "volume", text: "Vol 1 synopsis." });
+    // The omnibus (Vols 1–3) never borrows one Volume's, nor does the split
+    // part of Vol 3: both fall to the Series synopsis, flagged as such.
+    expect((await page(22))?.description).toEqual({ source: "series", text: "Series synopsis." });
+    expect((await page(23))?.description).toEqual({ source: "series", text: "Series synopsis." });
+  });
+
+  it("is null when nothing at all describes the book", async () => {
+    const t = convexTest(schema);
+    await seed(t);
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 22 });
+    expect(page?.description).toBeNull();
+  });
+});
+
+describe("Volume page description", () => {
+  /**
+   * Beside the seed: a deluxe Edition Line member covering Vol 2 alone and
+   * completely, and an earlier Kodansha paperback of Vol 1; the omnibus and
+   * the split part carry blurbs of their own.
+   */
+  async function seedLenders(t: ReturnType<typeof convexTest>) {
+    const ids = await seed(t);
+    await t.run(async (ctx) => {
+      const { publisherId, seriesId, v1, v2, r3, r4 } = ids;
+      await ctx.db.patch(r3, { description: "Omnibus blurb." });
+      await ctx.db.patch(r4, { description: "Split blurb." });
+
+      const deluxeLine = await ctx.db.insert("editionLines", {
+        status: "active",
+        seriesId,
+        publisherId,
+        name: "Deluxe Edition",
+      });
+      const deluxe = await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 25,
+        publisherId,
+        editionLineId: deluxeLine,
+        linePosition: "2",
+      });
+      await ctx.db.insert("volumeCoverages", { editionId: deluxe, volumeId: v2, order: 1, extent: "complete" });
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId: deluxe,
+        format: "physical",
+        language: "en",
+        description: "Deluxe blurb.",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+
+      const kodansha = await ctx.db.insert("publishers", {
+        status: "active",
+        name: "Kodansha",
+        slug: "kodansha",
+      });
+      const early = await ctx.db.insert("editions", { status: "active", publicId: 26, publisherId: kodansha });
+      await ctx.db.insert("volumeCoverages", { editionId: early, volumeId: v1, order: 1, extent: "complete" });
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId: early,
+        format: "physical",
+        language: "en",
+        pubDate: { year: 2010, sort: 20100000 },
+        description: "Kodansha blurb.",
+        publisherId: kodansha,
+        seriesIds: [seriesId],
+      });
+    });
+    return ids;
+  }
+
+  const volume = (t: ReturnType<typeof convexTest>, publicId: number) =>
+    t.query(api.catalogPages.volumePage, { publicId });
+
+  it("borrows the representative blurb of whole single-volume, line-less Editions, naming the Edition", async () => {
+    const t = convexTest(schema);
+    await seedLenders(t);
+    const page = await volume(t, 11);
+    // Kodansha's 2010 paperback outranks VIZ's 2015 one; the omnibus never lends.
+    expect(page?.description).toEqual({
+      source: "edition",
+      text: "Kodansha blurb.",
+      edition: { publicId: 26, title: "S Vol 1", publisherName: "Kodansha" },
+    });
+    for (const edition of page!.editions) {
+      for (const row of edition.releases) expect(row).not.toHaveProperty("description");
+    }
+  });
+
+  it("never borrows from an omnibus, a split part, or a line's packaging", async () => {
+    const t = convexTest(schema);
+    const { seriesId } = await seedLenders(t);
+    // Vol 2: only the omnibus and the deluxe line member cover it. Vol 3: the
+    // omnibus and the split part.
+    expect((await volume(t, 12))?.description).toBeNull();
+    expect((await volume(t, 13))?.description).toBeNull();
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seriesId, { synopsis: "Series synopsis." });
+    });
+    expect((await volume(t, 12))?.description).toEqual({ source: "series", text: "Series synopsis." });
+  });
+
+  it("shows the Volume Synopsis ahead of any borrowed blurb", async () => {
+    const t = convexTest(schema);
+    const { v1 } = await seedLenders(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(v1, { synopsis: "Curated synopsis." });
+    });
+    expect((await volume(t, 11))?.description).toEqual({ source: "volume", text: "Curated synopsis." });
   });
 });
 

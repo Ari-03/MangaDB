@@ -467,6 +467,8 @@
   line-height: 1.68;
 }
 .synopsis p + p { margin-top: 12px; }
+/* A borrowed description's source ("From the … edition") sits tight above it. */
+.synopsis .note + p { margin-top: 6px; }
 
 .volume-editions-head {
   margin-top: 38px;

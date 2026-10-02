@@ -1,7 +1,8 @@
 // Shared render pieces for the catalog detail pages (ticket #23): the
-// Release row (publication facts, ISBNs, Release Description, Variants
-// beneath, Bundle cross-links) and the coverage chip listing. Used by the
-// Volume, Edition and Bundle pages; the Series page keeps its own lighter row.
+// Release row (publication facts, ISBNs, Variants beneath, Bundle
+// cross-links; the page shows one description above, not one per row) and
+// the coverage chip listing. Used by the Volume, Edition and Bundle pages;
+// the Series page keeps its own lighter row.
 //
 // Classes live in styles/catalog-edition.css and are scoped under
 // `.release-row` / `.coverage-chips` so the Series page's lighter row keeps
@@ -9,26 +10,14 @@
 
 import { Link } from "@tanstack/react-router";
 
+import type { EditionPageData } from "~/lib/catalogData";
 import { ReleaseCollectionControls } from "~/lib/collection";
 import { formatPartialDate, formatPrice } from "~/lib/format";
 import { ReleasePassControls } from "~/lib/reading";
 import { slugParams } from "~/lib/slug";
 
-/** The releaseRow shape from convex/catalogPages.ts, structurally. */
-export type ReleaseRowData = {
-  id: string;
-  anchor: string;
-  format: "physical" | "digital";
-  binding: string | null;
-  language: string;
-  isbn13: string | null;
-  isbn10: string | null;
-  pubDate: { year: number; month?: number; day?: number; sort: number } | null;
-  price: { amountCents: number; currency: string } | null;
-  description: string | null;
-  variants: Array<{ name: string }>;
-  bundles: Array<{ publicId: number; name: string }>;
-};
+/** The releaseRow shape from convex/catalogPages.ts (Edition and Volume pages share it). */
+export type ReleaseRowData = EditionPageData["releases"][number];
 
 export type CoverageChipData = {
   volumePublicId: number;
@@ -84,9 +73,6 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
               </span>
             ) : null}
           </p>
-        ) : null}
-        {release.description ? (
-          <p className="release-description">{release.description}</p>
         ) : null}
         {release.variants.length > 0 ? (
           <p className="release-variants">

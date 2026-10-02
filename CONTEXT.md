@@ -31,14 +31,14 @@ The placement of a Volume within its Series' single canonical reading sequence. 
 The publisher-facing designation shown for a Volume, such as "7.5," "Side Story," or "Spring Log." It is not the Volume's identity or sort order.
 
 **Volume Synopsis**:
-An optional edition-independent summary of a Volume's content, curated by Editors. When absent, displays borrow the Release Description of a representative Release.
+An optional edition-independent summary of a Volume's content, curated by Editors. When absent, the Volume's page borrows the representative Release Description (ranked as for an Edition Description) among the Editions that cover that Volume alone and completely and belong to no Edition Line, naming the Edition it came from, and otherwise shows its Series' synopsis labelled as being about the series; an omnibus, a split part, or a line's packaging never lends its blurb.
 
 **Release**:
 A specific purchasable publication of an Edition — one Format, Binding where applicable, one language, and optional ISBN-10 and ISBN-13 identifiers. An unchanged reprint or the same digital publication sold by another retailer retains its Release identity; a change to those characteristics creates another Release.
 _Avoid_: edition, printing
 
 **Release Description**:
-The publisher-provided descriptive text for a specific Release, such as a back-cover blurb. It describes that edition of the content and may differ between Releases covering the same Volume.
+The publisher-provided descriptive text for a specific Release, such as a back-cover blurb, stored per Release. It describes that edition of the content and may differ between Releases covering the same Volume. Pages do not print it per Release; they show the Edition Description.
 
 **Release Variant**:
 A visually distinct form of a Release, such as an alternate or box-set-exclusive cover, whose publication characteristics and content are otherwise unchanged. A user may identify the Release Variant they own without giving it a separate Release identity.
@@ -46,6 +46,9 @@ A visually distinct form of a Release, such as an alternate or box-set-exclusive
 **Edition**:
 A publisher's packaging of specific content — one Publisher, one Volume Coverage, and one Edition Line membership or none — realized by one or more Releases that differ only in Format and Binding. "Berserk Deluxe Edition Vol 4" is one Edition; its hardcover and digital Releases belong to it, while a 3-in-1 omnibus of the same chapters is a different Edition.
 _Avoid_: version, printing
+
+**Edition Description**:
+The one description an Edition's page shows, derived at display time rather than stored. It is the Release Description of the Edition's representative Release: one whose description is a Human Override first, then physical before digital, then the earliest publication date, then the longest text. When none of its Releases has one, an Edition covering exactly one Volume, completely, shows that Volume Synopsis; otherwise it shows its Series' synopsis, labelled as being about the series. An omnibus never borrows a single Volume's Synopsis.
 
 **Format**:
 How a Release is published — physical or digital in v1.
