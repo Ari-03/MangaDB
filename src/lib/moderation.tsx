@@ -1,12 +1,13 @@
-// Moderation affordances on catalog pages (ticket #31, spec §5): the public
-// per-record revision history — final diff, author, approver, timestamp,
-// change comment, citation — and the moderator/administrator edit link.
-// Both fetch client-side through the reactive Convex client: history is
-// public data; the edit link is cosmetic gating on the viewer's role (the
-// moderation functions re-check authorization on every call).
+// Moderation affordances (spec §5). On catalog pages: the public per-record
+// revision history — final diff, author, approver, timestamp, change
+// comment, citation — and the moderator/administrator edit links. On the
+// /mod pages: the access gate and the tool links. All of it fetches
+// client-side through the reactive Convex client; role checks here are
+// cosmetic (the moderation functions re-check authorization on every call).
 
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
+import type { ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
@@ -175,6 +176,70 @@ export const timestamp = (ms: number) =>
     hour: "2-digit",
     minute: "2-digit",
   });
+
+/**
+ * The access gate in front of a mod page: "Checking your access…" while the
+ * viewer loads, then the page for a viewer holding `role`, else a refusal
+ * that says who the page is for (`refusal`) and links sign-in when signed
+ * out. `children` only mounts once the viewer is let in. Only under the
+ * Convex provider: each page answers the unconfigured mode itself first.
+ * The Convex functions re-check the role on every call.
+ */
+export function ModGate({
+  role,
+  refusal,
+  children,
+}: {
+  role: "dataTeam" | "moderator";
+  refusal: string;
+  children: ReactNode;
+}) {
+  const viewer = useQuery(api.users.viewer, {});
+  const isDataTeam = useIsDataTeam();
+  const isModerator = useIsModerator();
+  if (viewer === undefined) {
+    return (
+      <main className="mod-page">
+        <p className="notice">Checking your access…</p>
+      </main>
+    );
+  }
+  if (!(role === "moderator" ? isModerator : isDataTeam)) {
+    return (
+      <main className="mod-page">
+        <h1>{role === "moderator" ? "Moderators only" : "Data team only"}</h1>
+        <p className="notice">
+          {refusal} {viewer === null ? <a href="/sign-in">Sign in</a> : null}
+        </p>
+      </main>
+    );
+  }
+  return children;
+}
+
+const MOD_TOOLS = [
+  { to: "/mod/queue", label: "Review queue" },
+  { to: "/mod/imports", label: "Imports" },
+  { to: "/mod/launch", label: "Launch" },
+  { to: "/mod/packaging", label: "Catalog gaps" },
+] as const;
+
+/**
+ * The data team's tool links under a dashboard's heading, leaving out the
+ * page they sit on, then the Comments queue.
+ */
+export function ModTools({ current }: { current?: (typeof MOD_TOOLS)[number]["to"] }) {
+  return (
+    <nav className="mod-tools" aria-label="Data team tools">
+      {MOD_TOOLS.filter((tool) => tool.to !== current).map((tool) => (
+        <Link key={tool.to} to={tool.to}>
+          {tool.label}
+        </Link>
+      ))}
+      <CommentsQueueLink />
+    </nav>
+  );
+}
 
 /**
  * The Comments queue link for the `.mod-tools` navs, with the number of

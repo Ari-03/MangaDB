@@ -7,7 +7,8 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
 import { plural } from "~/lib/format";
-import { CommentsQueueLink } from "~/lib/moderation";
+import { ModTools } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
@@ -49,9 +50,7 @@ function UnmappedQueue({ canAct }: { canAct: boolean }) {
   const queue = useQuery(api.packaging.unmappedQueue, {});
   return (
     <main className="mod-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span> <span>Catalog gaps</span>
-      </nav>
+      <Breadcrumbs trail={["Catalog gaps"]} />
       <h1>Catalog gaps</h1>
       <BooklessSeries />
       <h2>Unmapped packaging</h2>
@@ -61,12 +60,7 @@ function UnmappedQueue({ canAct }: { canAct: boolean }) {
         them lets reading progress and ownership follow the volumes inside. Check the
         publisher's page for the collected range, then map.
       </p>
-      <nav className="mod-tools" aria-label="Data team tools">
-        <Link to="/mod/queue">Review queue</Link>
-        <Link to="/mod/imports">Imports</Link>
-        <Link to="/mod/launch">Launch</Link>
-        <CommentsQueueLink />
-      </nav>
+      <ModTools current="/mod/packaging" />
       {queue === undefined ? (
         <p className="notice">Loading…</p>
       ) : queue.rows.length === 0 ? (

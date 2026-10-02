@@ -4,7 +4,8 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
-import { useIsDataTeam } from "~/lib/viewer";
+import { ModGate } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
@@ -14,12 +15,7 @@ import { convexClient } from "~/providers";
  * mutation, or nothing. Data-Team-only; never indexed.
  */
 export const Route = createFileRoute("/mod/propose-new/$seriesPublicId")({
-  head: () => ({
-    meta: [
-      { title: "Propose new records — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Propose new records — MangaDB" }] }),
   component: ProposeNewPage,
 });
 
@@ -45,31 +41,14 @@ function ProposeNewPage() {
       </main>
     );
   }
-  return <Gate publicId={publicId} />;
-}
-
-function Gate({ publicId }: { publicId: number }) {
-  const isDataTeam = useIsDataTeam();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          Proposing new records needs an Editor (or stronger) role.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <ProposeNewForm publicId={publicId} />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="Proposing new records needs an Editor (or stronger) role."
+    >
+      <ProposeNewForm publicId={publicId} />
+    </ModGate>
+  );
 }
 
 function ProposeNewForm({ publicId }: { publicId: number }) {
@@ -168,10 +147,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
 
   return (
     <main className="mod-page mod-edit-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Propose new records</span>
-      </nav>
+      <Breadcrumbs trail={["Propose new records"]} />
       <h1>New volume + edition + release: {form.title}</h1>
       <p className="section-hint">
         One atomic proposal creates all three records together (temp-IDs wire

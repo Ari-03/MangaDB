@@ -6,8 +6,9 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
-import { CommentsQueueLink, timestamp } from "~/lib/moderation";
-import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
+import { CommentsQueueLink, ModGate, timestamp } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
+import { useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
@@ -19,12 +20,7 @@ import { slugParams } from "~/lib/slug";
  * server-side. Never indexed.
  */
 export const Route = createFileRoute("/mod/launch")({
-  head: () => ({
-    meta: [
-      { title: "Launch — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Launch — MangaDB" }] }),
   component: LaunchPage,
 });
 
@@ -39,42 +35,22 @@ function LaunchPage() {
       </main>
     );
   }
-  return <LaunchGate />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="The launch dashboard is visible to Editors, Moderators, and Administrators."
+    >
+      <Launch />
+    </ModGate>
+  );
 }
 
-function LaunchGate() {
-  const viewer = useQuery(api.users.viewer, {});
-  const isModerator = useIsModerator();
-  const isDataTeam = useIsDataTeam();
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          The launch dashboard is visible to Editors, Moderators, and
-          Administrators.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <Launch canAct={isModerator} />;
-}
-
-function Launch({ canAct }: { canAct: boolean }) {
+/** Editors watch the dashboard; Moderators and Administrators act on it. */
+function Launch() {
+  const canAct = useIsModerator();
   return (
     <main className="mod-page launch-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Launch</span>
-      </nav>
+      <Breadcrumbs trail={["Launch"]} />
       <h1>Seeding, quality gates &amp; launch</h1>
       <p className="section-hint">
         Spec §7: run the four seed stages in order under Bootstrap Mode, pass

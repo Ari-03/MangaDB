@@ -17,6 +17,7 @@ import {
 } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
 import { slugParams } from "~/lib/slug";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
@@ -37,12 +38,7 @@ import { convexClient } from "~/providers";
  * every call. Never indexed.
  */
 export const Route = createFileRoute("/mod/edit/$type/$key")({
-  head: () => ({
-    meta: [
-      { title: "Edit record — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Edit record — MangaDB" }] }),
   component: ModEditPage,
 });
 
@@ -175,10 +171,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
 
   return (
     <main className="mod-page mod-edit-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Edit</span>
-      </nav>
+      <Breadcrumbs trail={["Edit"]} />
       <h1>Edit: {form.title}</h1>
       <p className="section-hint">
         Saving applies immediately as an approved proposal and adds a public

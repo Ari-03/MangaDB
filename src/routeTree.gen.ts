@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AboutTheDataRouteImport } from './routes/about-the-data'
 import { Route as ClaimUsernameRouteImport } from './routes/claim-username'
 import { Route as MeRouteImport } from './routes/me'
+import { Route as ModRouteImport } from './routes/mod'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as AuthorsIndexRouteImport } from './routes/authors.index'
 import { Route as IsbnIsbnRouteImport } from './routes/isbn.$isbn'
@@ -69,6 +70,11 @@ const MeRoute = MeRouteImport.update({
   path: '/me',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModRoute = ModRouteImport.update({
+  id: '/mod',
+  path: '/mod',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
@@ -90,39 +96,39 @@ const MeIndexRoute = MeIndexRouteImport.update({
   getParentRoute: () => MeRoute,
 } as any)
 const ModCommentsRoute = ModCommentsRouteImport.update({
-  id: '/mod/comments',
-  path: '/mod/comments',
-  getParentRoute: () => rootRouteImport,
+  id: '/comments',
+  path: '/comments',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModImportsRoute = ModImportsRouteImport.update({
-  id: '/mod/imports',
-  path: '/mod/imports',
-  getParentRoute: () => rootRouteImport,
+  id: '/imports',
+  path: '/imports',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModLaunchRoute = ModLaunchRouteImport.update({
-  id: '/mod/launch',
-  path: '/mod/launch',
-  getParentRoute: () => rootRouteImport,
+  id: '/launch',
+  path: '/launch',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModPackagingRoute = ModPackagingRouteImport.update({
-  id: '/mod/packaging',
-  path: '/mod/packaging',
-  getParentRoute: () => rootRouteImport,
+  id: '/packaging',
+  path: '/packaging',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModProposalsRoute = ModProposalsRouteImport.update({
-  id: '/mod/proposals',
-  path: '/mod/proposals',
-  getParentRoute: () => rootRouteImport,
+  id: '/proposals',
+  path: '/proposals',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModQueueRoute = ModQueueRouteImport.update({
-  id: '/mod/queue',
-  path: '/mod/queue',
-  getParentRoute: () => rootRouteImport,
+  id: '/queue',
+  path: '/queue',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModRolesRoute = ModRolesRouteImport.update({
-  id: '/mod/roles',
-  path: '/mod/roles',
-  getParentRoute: () => rootRouteImport,
+  id: '/roles',
+  path: '/roles',
+  getParentRoute: () => ModRoute,
 } as any)
 const PublisherSlugRoute = PublisherSlugRouteImport.update({
   id: '/publisher/$slug',
@@ -200,15 +206,15 @@ const EditionPublicIdSlugRoute = EditionPublicIdSlugRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModProposalIdRoute = ModProposalIdRouteImport.update({
-  id: '/mod/proposal/$id',
-  path: '/mod/proposal/$id',
-  getParentRoute: () => rootRouteImport,
+  id: '/proposal/$id',
+  path: '/proposal/$id',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModProposeNewSeriesPublicIdRoute =
   ModProposeNewSeriesPublicIdRouteImport.update({
-    id: '/mod/propose-new/$seriesPublicId',
-    path: '/mod/propose-new/$seriesPublicId',
-    getParentRoute: () => rootRouteImport,
+    id: '/propose-new/$seriesPublicId',
+    path: '/propose-new/$seriesPublicId',
+    getParentRoute: () => ModRoute,
   } as any)
 const SeriesPublicIdIndexRoute = SeriesPublicIdIndexRouteImport.update({
   id: '/series/$publicId/',
@@ -231,19 +237,19 @@ const VolumePublicIdSlugRoute = VolumePublicIdSlugRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const ModEditTypeKeyRoute = ModEditTypeKeyRouteImport.update({
-  id: '/mod/edit/$type/$key',
-  path: '/mod/edit/$type/$key',
-  getParentRoute: () => rootRouteImport,
+  id: '/edit/$type/$key',
+  path: '/edit/$type/$key',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModManageTypeKeyRoute = ModManageTypeKeyRouteImport.update({
-  id: '/mod/manage/$type/$key',
-  path: '/mod/manage/$type/$key',
-  getParentRoute: () => rootRouteImport,
+  id: '/manage/$type/$key',
+  path: '/manage/$type/$key',
+  getParentRoute: () => ModRoute,
 } as any)
 const ModProposeTypeKeyRoute = ModProposeTypeKeyRouteImport.update({
-  id: '/mod/propose/$type/$key',
-  path: '/mod/propose/$type/$key',
-  getParentRoute: () => rootRouteImport,
+  id: '/propose/$type/$key',
+  path: '/propose/$type/$key',
+  getParentRoute: () => ModRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -251,6 +257,7 @@ export interface FileRoutesByFullPath {
   '/about-the-data': typeof AboutTheDataRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/me': typeof MeRouteWithChildren
+  '/mod': typeof ModRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/comments': typeof ModCommentsRoute
@@ -291,6 +298,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about-the-data': typeof AboutTheDataRoute
   '/claim-username': typeof ClaimUsernameRoute
+  '/mod': typeof ModRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/comments': typeof ModCommentsRoute
@@ -333,6 +341,7 @@ export interface FileRoutesById {
   '/about-the-data': typeof AboutTheDataRoute
   '/claim-username': typeof ClaimUsernameRoute
   '/me': typeof MeRouteWithChildren
+  '/mod': typeof ModRouteWithChildren
   '/search': typeof SearchRoute
   '/isbn/$isbn': typeof IsbnIsbnRoute
   '/mod/comments': typeof ModCommentsRoute
@@ -376,6 +385,7 @@ export interface FileRouteTypes {
     | '/about-the-data'
     | '/claim-username'
     | '/me'
+    | '/mod'
     | '/search'
     | '/isbn/$isbn'
     | '/mod/comments'
@@ -416,6 +426,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about-the-data'
     | '/claim-username'
+    | '/mod'
     | '/search'
     | '/isbn/$isbn'
     | '/mod/comments'
@@ -457,6 +468,7 @@ export interface FileRouteTypes {
     | '/about-the-data'
     | '/claim-username'
     | '/me'
+    | '/mod'
     | '/search'
     | '/isbn/$isbn'
     | '/mod/comments'
@@ -499,15 +511,9 @@ export interface RootRouteChildren {
   AboutTheDataRoute: typeof AboutTheDataRoute
   ClaimUsernameRoute: typeof ClaimUsernameRoute
   MeRoute: typeof MeRouteWithChildren
+  ModRoute: typeof ModRouteWithChildren
   SearchRoute: typeof SearchRoute
   IsbnIsbnRoute: typeof IsbnIsbnRoute
-  ModCommentsRoute: typeof ModCommentsRoute
-  ModImportsRoute: typeof ModImportsRoute
-  ModLaunchRoute: typeof ModLaunchRoute
-  ModPackagingRoute: typeof ModPackagingRoute
-  ModProposalsRoute: typeof ModProposalsRoute
-  ModQueueRoute: typeof ModQueueRoute
-  ModRolesRoute: typeof ModRolesRoute
   PublisherSlugRoute: typeof PublisherSlugRoute
   PublishersMonthRoute: typeof PublishersMonthRoute
   ReleasesMonthRoute: typeof ReleasesMonthRoute
@@ -521,8 +527,6 @@ export interface RootRouteChildren {
   AuthorPublicIdSlugRoute: typeof AuthorPublicIdSlugRoute
   BundlePublicIdSlugRoute: typeof BundlePublicIdSlugRoute
   EditionPublicIdSlugRoute: typeof EditionPublicIdSlugRoute
-  ModProposalIdRoute: typeof ModProposalIdRoute
-  ModProposeNewSeriesPublicIdRoute: typeof ModProposeNewSeriesPublicIdRoute
   SeriesPublicIdSlugRoute: typeof SeriesPublicIdSlugRoute
   VolumePublicIdSlugRoute: typeof VolumePublicIdSlugRoute
   AuthorPublicIdIndexRoute: typeof AuthorPublicIdIndexRoute
@@ -530,9 +534,6 @@ export interface RootRouteChildren {
   EditionPublicIdIndexRoute: typeof EditionPublicIdIndexRoute
   SeriesPublicIdIndexRoute: typeof SeriesPublicIdIndexRoute
   VolumePublicIdIndexRoute: typeof VolumePublicIdIndexRoute
-  ModEditTypeKeyRoute: typeof ModEditTypeKeyRoute
-  ModManageTypeKeyRoute: typeof ModManageTypeKeyRoute
-  ModProposeTypeKeyRoute: typeof ModProposeTypeKeyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -565,6 +566,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mod': {
+      id: '/mod'
+      path: '/mod'
+      fullPath: '/mod'
+      preLoaderRoute: typeof ModRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/search': {
       id: '/search'
       path: '/search'
@@ -595,52 +603,52 @@ declare module '@tanstack/react-router' {
     }
     '/mod/comments': {
       id: '/mod/comments'
-      path: '/mod/comments'
+      path: '/comments'
       fullPath: '/mod/comments'
       preLoaderRoute: typeof ModCommentsRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/imports': {
       id: '/mod/imports'
-      path: '/mod/imports'
+      path: '/imports'
       fullPath: '/mod/imports'
       preLoaderRoute: typeof ModImportsRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/launch': {
       id: '/mod/launch'
-      path: '/mod/launch'
+      path: '/launch'
       fullPath: '/mod/launch'
       preLoaderRoute: typeof ModLaunchRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/packaging': {
       id: '/mod/packaging'
-      path: '/mod/packaging'
+      path: '/packaging'
       fullPath: '/mod/packaging'
       preLoaderRoute: typeof ModPackagingRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/proposals': {
       id: '/mod/proposals'
-      path: '/mod/proposals'
+      path: '/proposals'
       fullPath: '/mod/proposals'
       preLoaderRoute: typeof ModProposalsRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/queue': {
       id: '/mod/queue'
-      path: '/mod/queue'
+      path: '/queue'
       fullPath: '/mod/queue'
       preLoaderRoute: typeof ModQueueRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/roles': {
       id: '/mod/roles'
-      path: '/mod/roles'
+      path: '/roles'
       fullPath: '/mod/roles'
       preLoaderRoute: typeof ModRolesRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/publisher/$slug': {
       id: '/publisher/$slug'
@@ -749,17 +757,17 @@ declare module '@tanstack/react-router' {
     }
     '/mod/proposal/$id': {
       id: '/mod/proposal/$id'
-      path: '/mod/proposal/$id'
+      path: '/proposal/$id'
       fullPath: '/mod/proposal/$id'
       preLoaderRoute: typeof ModProposalIdRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/propose-new/$seriesPublicId': {
       id: '/mod/propose-new/$seriesPublicId'
-      path: '/mod/propose-new/$seriesPublicId'
+      path: '/propose-new/$seriesPublicId'
       fullPath: '/mod/propose-new/$seriesPublicId'
       preLoaderRoute: typeof ModProposeNewSeriesPublicIdRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/series/$publicId/': {
       id: '/series/$publicId/'
@@ -791,24 +799,24 @@ declare module '@tanstack/react-router' {
     }
     '/mod/edit/$type/$key': {
       id: '/mod/edit/$type/$key'
-      path: '/mod/edit/$type/$key'
+      path: '/edit/$type/$key'
       fullPath: '/mod/edit/$type/$key'
       preLoaderRoute: typeof ModEditTypeKeyRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/manage/$type/$key': {
       id: '/mod/manage/$type/$key'
-      path: '/mod/manage/$type/$key'
+      path: '/manage/$type/$key'
       fullPath: '/mod/manage/$type/$key'
       preLoaderRoute: typeof ModManageTypeKeyRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
     '/mod/propose/$type/$key': {
       id: '/mod/propose/$type/$key'
-      path: '/mod/propose/$type/$key'
+      path: '/propose/$type/$key'
       fullPath: '/mod/propose/$type/$key'
       preLoaderRoute: typeof ModProposeTypeKeyRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ModRoute
     }
   }
 }
@@ -823,13 +831,22 @@ const MeRouteChildren: MeRouteChildren = {
 
 const MeRouteWithChildren = MeRoute._addFileChildren(MeRouteChildren)
 
-const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  AboutTheDataRoute: AboutTheDataRoute,
-  ClaimUsernameRoute: ClaimUsernameRoute,
-  MeRoute: MeRouteWithChildren,
-  SearchRoute: SearchRoute,
-  IsbnIsbnRoute: IsbnIsbnRoute,
+interface ModRouteChildren {
+  ModCommentsRoute: typeof ModCommentsRoute
+  ModImportsRoute: typeof ModImportsRoute
+  ModLaunchRoute: typeof ModLaunchRoute
+  ModPackagingRoute: typeof ModPackagingRoute
+  ModProposalsRoute: typeof ModProposalsRoute
+  ModQueueRoute: typeof ModQueueRoute
+  ModRolesRoute: typeof ModRolesRoute
+  ModProposalIdRoute: typeof ModProposalIdRoute
+  ModProposeNewSeriesPublicIdRoute: typeof ModProposeNewSeriesPublicIdRoute
+  ModEditTypeKeyRoute: typeof ModEditTypeKeyRoute
+  ModManageTypeKeyRoute: typeof ModManageTypeKeyRoute
+  ModProposeTypeKeyRoute: typeof ModProposeTypeKeyRoute
+}
+
+const ModRouteChildren: ModRouteChildren = {
   ModCommentsRoute: ModCommentsRoute,
   ModImportsRoute: ModImportsRoute,
   ModLaunchRoute: ModLaunchRoute,
@@ -837,6 +854,23 @@ const rootRouteChildren: RootRouteChildren = {
   ModProposalsRoute: ModProposalsRoute,
   ModQueueRoute: ModQueueRoute,
   ModRolesRoute: ModRolesRoute,
+  ModProposalIdRoute: ModProposalIdRoute,
+  ModProposeNewSeriesPublicIdRoute: ModProposeNewSeriesPublicIdRoute,
+  ModEditTypeKeyRoute: ModEditTypeKeyRoute,
+  ModManageTypeKeyRoute: ModManageTypeKeyRoute,
+  ModProposeTypeKeyRoute: ModProposeTypeKeyRoute,
+}
+
+const ModRouteWithChildren = ModRoute._addFileChildren(ModRouteChildren)
+
+const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
+  AboutTheDataRoute: AboutTheDataRoute,
+  ClaimUsernameRoute: ClaimUsernameRoute,
+  MeRoute: MeRouteWithChildren,
+  ModRoute: ModRouteWithChildren,
+  SearchRoute: SearchRoute,
+  IsbnIsbnRoute: IsbnIsbnRoute,
   PublisherSlugRoute: PublisherSlugRoute,
   PublishersMonthRoute: PublishersMonthRoute,
   ReleasesMonthRoute: ReleasesMonthRoute,
@@ -850,8 +884,6 @@ const rootRouteChildren: RootRouteChildren = {
   AuthorPublicIdSlugRoute: AuthorPublicIdSlugRoute,
   BundlePublicIdSlugRoute: BundlePublicIdSlugRoute,
   EditionPublicIdSlugRoute: EditionPublicIdSlugRoute,
-  ModProposalIdRoute: ModProposalIdRoute,
-  ModProposeNewSeriesPublicIdRoute: ModProposeNewSeriesPublicIdRoute,
   SeriesPublicIdSlugRoute: SeriesPublicIdSlugRoute,
   VolumePublicIdSlugRoute: VolumePublicIdSlugRoute,
   AuthorPublicIdIndexRoute: AuthorPublicIdIndexRoute,
@@ -859,9 +891,6 @@ const rootRouteChildren: RootRouteChildren = {
   EditionPublicIdIndexRoute: EditionPublicIdIndexRoute,
   SeriesPublicIdIndexRoute: SeriesPublicIdIndexRoute,
   VolumePublicIdIndexRoute: VolumePublicIdIndexRoute,
-  ModEditTypeKeyRoute: ModEditTypeKeyRoute,
-  ModManageTypeKeyRoute: ModManageTypeKeyRoute,
-  ModProposeTypeKeyRoute: ModProposeTypeKeyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

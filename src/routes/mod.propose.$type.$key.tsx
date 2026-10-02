@@ -14,7 +14,8 @@ import {
   type FormState,
 } from "~/lib/editForm";
 import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
-import { useIsDataTeam } from "~/lib/viewer";
+import { ModGate } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
@@ -26,12 +27,7 @@ import { convexClient } from "~/providers";
  * functions re-check the role on every call. Never indexed.
  */
 export const Route = createFileRoute("/mod/propose/$type/$key")({
-  head: () => ({
-    meta: [
-      { title: "Propose a change — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Propose a change — MangaDB" }] }),
   component: ModProposePage,
 });
 
@@ -56,31 +52,14 @@ function ModProposePage() {
       </main>
     );
   }
-  return <ProposeGate type={type} editKey={key} />;
-}
-
-function ProposeGate({ type, editKey }: { type: RecordType; editKey: string }) {
-  const isDataTeam = useIsDataTeam();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          Proposing changes needs an Editor (or stronger) role.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <ProposeForm type={type} editKey={editKey} />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="Proposing changes needs an Editor (or stronger) role."
+    >
+      <ProposeForm type={type} editKey={key} />
+    </ModGate>
+  );
 }
 
 function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
@@ -151,10 +130,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
 
   return (
     <main className="mod-page mod-edit-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Propose</span>
-      </nav>
+      <Breadcrumbs trail={["Propose"]} />
       <h1>Propose a change: {form.title}</h1>
       <p className="section-hint">
         Your submission goes to the shared review queue; a Moderator approves

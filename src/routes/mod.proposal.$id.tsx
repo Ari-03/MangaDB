@@ -6,9 +6,9 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
-import { ProposalStateChip, renderFieldValue } from "~/lib/moderation";
+import { ModGate, ProposalStateChip, renderFieldValue } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
-import { useIsDataTeam } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**
@@ -20,12 +20,7 @@ import { convexClient } from "~/providers";
  * indexed.
  */
 export const Route = createFileRoute("/mod/proposal/$id")({
-  head: () => ({
-    meta: [
-      { title: "Proposal — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Proposal — MangaDB" }] }),
   component: ProposalPage,
 });
 
@@ -40,31 +35,14 @@ function ProposalPage() {
       </main>
     );
   }
-  return <ProposalGate id={id} />;
-}
-
-function ProposalGate({ id }: { id: string }) {
-  const isDataTeam = useIsDataTeam();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          Pending proposals are Data-Team-only in v1.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <ProposalDetail id={id} />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="Pending proposals are Data-Team-only in v1."
+    >
+      <ProposalDetail id={id} />
+    </ModGate>
+  );
 }
 
 type Detail = NonNullable<
@@ -258,11 +236,7 @@ function ProposalDetail({ id }: { id: string }) {
 
   return (
     <main className="mod-page mod-proposal-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <Link to="/mod/queue">Review queue</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Proposal</span>
-      </nav>
+      <Breadcrumbs trail={[<Link to="/mod/queue">Review queue</Link>, "Proposal"]} />
       <div className="mod-title-row">
         <h1>Proposal</h1>
         <ProposalStateChip state={detail.state} />
