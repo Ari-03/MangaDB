@@ -2,11 +2,11 @@
 // database rungs against a hand-built catalog. Rung ① (the stored link) is
 // the adapter's fast path and is covered by the reconcile tests.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import type { Id } from "../_generated/dataModel";
-import schema from "../schema";
+import { insertPublisher, insertSeries, seedCatalog, type CatalogOverrides } from "../test.factories";
+import { makeT, type TestT } from "../test.helpers";
 import {
   candidateSeries,
   hiddenSeriesTitled,
@@ -92,101 +92,22 @@ describe("labelsEqual", () => {
 
 // ---------- the database rungs ----------
 
-// Named factory so helper params keep the schema-typed TestConvex.
-const makeT = () => convexTest(schema);
-type TestT = ReturnType<typeof makeT>;
-
-type Catalog = {
-  publisherId: Id<"publishers">;
-  seriesId: Id<"series">;
-  releaseId: Id<"releases">;
-};
-
 /**
- * publisher → series → volume "1" → single-coverage edition → release. The
- * coverage extent, an Edition Line membership, and the Release's binding
- * and language are overridable for the packaging and identity rules.
+ * publisher → series "Alpha Adventures" → volume "1" → single-coverage
+ * edition → release, under the "seven-seas" publisher unless another slug is
+ * given; every chain in one test shares the publisher of its slug.
  */
-async function buildCatalog(
+const buildCatalog = (
   t: TestT,
-  overrides: Partial<{
-    seriesTitle: string;
-    label: string;
-    format: "physical" | "digital";
-    binding: string;
-    language: string;
-    extent: "complete" | "partial";
-    editionLine: string;
-    isbn13: string;
-    locked: boolean;
-    overriddenFields: string[];
-    publisherSlug: string;
-  }> = {},
-): Promise<Catalog> {
-  return await t.run(async (ctx) => {
-    const slug = overrides.publisherSlug ?? "seven-seas";
-    const existing = await ctx.db
-      .query("publishers")
-      .withIndex("by_slug", (q) => q.eq("slug", slug))
-      .unique();
-    const publisherId =
-      existing?._id ??
-      (await ctx.db.insert("publishers", {
-        status: "active",
-        name: slug,
-        slug,
-      }));
-    const title = overrides.seriesTitle ?? "Alpha Adventures";
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: Math.floor(Math.random() * 1e9),
-      title,
-      altTitles: [],
-      searchText: title,
-    });
-    const volumeId = await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: Math.floor(Math.random() * 1e9),
-      seriesId,
-      position: 1,
-      label: overrides.label ?? "1",
-    });
-    const editionLineId =
-      overrides.editionLine === undefined
-        ? undefined
-        : await ctx.db.insert("editionLines", {
-            status: "active",
-            seriesId,
-            publisherId,
-            name: overrides.editionLine,
-          });
-    const editionId = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: Math.floor(Math.random() * 1e9),
-      publisherId,
-      editionLineId,
-    });
-    await ctx.db.insert("volumeCoverages", {
-      editionId,
-      volumeId,
-      order: 1,
-      extent: overrides.extent ?? "complete",
-    });
-    const releaseId = await ctx.db.insert("releases", {
-      status: "active",
-      editionId,
-      format: overrides.format ?? "physical",
-      binding: overrides.binding,
-      language: overrides.language ?? "en",
-      isbn13: overrides.isbn13,
-      locked: overrides.locked,
-      overriddenFields: overrides.overriddenFields,
-      publisherId,
-      seriesIds: [seriesId],
-    });
-    return { publisherId, seriesId, releaseId };
-  });
-}
+  overrides: Omit<CatalogOverrides, "publisher"> & { publisher?: { slug: string } } = {},
+) =>
+  t.run((ctx) =>
+    seedCatalog(ctx, {
+      ...overrides,
+      publisher: overrides.publisher ?? { slug: "seven-seas" },
+      series: { title: "Alpha Adventures", ...overrides.series },
+    }),
+  );
 
 const fact = (
   publisherId: Id<"publishers"> | null,
@@ -205,14 +126,14 @@ const match = (t: TestT, f: ReleaseFact) => t.run((ctx) => matchRelease(ctx, f))
 describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
   it("matches on ISBN when titles agree, outranking rung ③", async () => {
     const t = makeT();
-    const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
+    const catalog = await buildCatalog(t, { release: { isbn13: "9781999000103" } });
     const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }));
     expect(outcome).toMatchObject({ kind: "match", rung: 2 });
   });
 
   it("reviews an ISBN an Editor hid, and follows a merged Release to its survivor", async () => {
     const t = makeT();
-    const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
+    const catalog = await buildCatalog(t, { release: { isbn13: "9781999000103" } });
     await t.run((ctx) => ctx.db.patch(catalog.releaseId, { status: "hidden" }));
     expect(await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }))).toMatchObject({
       kind: "review",
@@ -220,7 +141,7 @@ describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
       reason: expect.stringContaining("hid"),
     });
 
-    const other = await buildCatalog(t, { isbn13: "9781999000110" });
+    const other = await buildCatalog(t, { release: { isbn13: "9781999000110" } });
     await t.run(async (ctx) => {
       await ctx.db.patch(catalog.releaseId, {
         status: "merged",
@@ -234,10 +155,10 @@ describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
 
   it("reviews duplicate ISBNs even when only one candidate has a similar title", async () => {
     const t = makeT();
-    const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
+    const catalog = await buildCatalog(t, { release: { isbn13: "9781999000103" } });
     await buildCatalog(t, {
-      isbn13: "9781999000103",
-      seriesTitle: "Completely Different Zeta",
+      release: { isbn13: "9781999000103" },
+      series: { title: "Completely Different Zeta" },
     });
 
     expect(await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }))).toMatchObject({
@@ -249,8 +170,8 @@ describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
 
   it("deduplicates ISBN rows merged into the same active survivor", async () => {
     const t = makeT();
-    const catalog = await buildCatalog(t, { isbn13: "9781999000103" });
-    const duplicate = await buildCatalog(t, { isbn13: "9781999000103" });
+    const catalog = await buildCatalog(t, { release: { isbn13: "9781999000103" } });
+    const duplicate = await buildCatalog(t, { release: { isbn13: "9781999000103" } });
     await t.run((ctx) =>
       ctx.db.patch(duplicate.releaseId, {
         status: "merged",
@@ -266,8 +187,8 @@ describe("matchRelease — rung ② (ISBN-13 + title sanity)", () => {
   it("flags an ISBN hit with a dissimilar title for review — never merges", async () => {
     const t = makeT();
     const catalog = await buildCatalog(t, {
-      seriesTitle: "Completely Different Zeta",
-      isbn13: "9781999000103",
+      series: { title: "Completely Different Zeta" },
+      release: { isbn13: "9781999000103" },
     });
     const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781999000103" }));
     expect(outcome).toMatchObject({ kind: "review", rung: 2 });
@@ -288,7 +209,7 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
 
   it("matches numerically equal labels and normalized titles", async () => {
     const t = makeT();
-    const catalog = await buildCatalog(t, { label: "01" });
+    const catalog = await buildCatalog(t, { volume: { label: "01" } });
     const outcome = await match(t, fact(catalog.publisherId, { volumeLabel: "1" }));
     expect(outcome).toMatchObject({ kind: "match", rung: 3 });
   });
@@ -305,7 +226,7 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
     // Citrus v4 vs Citrus Plus v4: a different ISBN is a different Release,
     // so the full key alone must not link — nor overwrite — the other book.
     const t = makeT();
-    const catalog = await buildCatalog(t, { isbn13: "9781626922174" });
+    const catalog = await buildCatalog(t, { release: { isbn13: "9781626922174" } });
     const outcome = await match(t, fact(catalog.publisherId, { isbn13: "9781638585268" }));
     expect(outcome).toMatchObject({ kind: "create", rung: 5 });
     // Without an ISBN on the fact, the full key still links.
@@ -319,14 +240,14 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
     // An ISBN-less Part 1 of a split Volume 1 is not the full Volume 1:
     // linking it would hand the part the full book's ISBN, date and cover.
     const t = makeT();
-    const split = await buildCatalog(t, { extent: "partial" });
+    const split = await buildCatalog(t, { coverage: { extent: "partial" } });
     const outcome = await match(t, fact(split.publisherId, { isbn13: "9781999000103" }));
     expect(outcome).toMatchObject({ kind: "review", rung: 4 });
 
     // A single-volume book of an Edition Line (a Collector's Edition) is
     // packaging, never the ordinary Volume 1.
     const t2 = makeT();
-    const collectors = await buildCatalog(t2, { editionLine: "Collector's Edition" });
+    const collectors = await buildCatalog(t2, { line: { name: "Collector's Edition" } });
     expect(await match(t2, fact(collectors.publisherId))).toMatchObject({
       kind: "review",
       rung: 4,
@@ -335,7 +256,7 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
 
   it("a hardcover or another language is another Release, never the paperback (B14)", async () => {
     const t = makeT();
-    const paperback = await buildCatalog(t, { binding: "paperback" });
+    const paperback = await buildCatalog(t, { release: { binding: "paperback" } });
     // Another Binding of the same Edition is a sibling: the creation path.
     expect(
       await match(t, fact(paperback.publisherId, { binding: "Hardcover" })),
@@ -348,7 +269,7 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
 
     // Another language is another Release by definition.
     const t2 = makeT();
-    const french = await buildCatalog(t2, { language: "fr" });
+    const french = await buildCatalog(t2, { release: { language: "fr" } });
     expect(await match(t2, fact(french.publisherId, { language: "en" }))).toMatchObject({
       kind: "create",
       rung: 5,
@@ -361,7 +282,7 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
 
   it("a single candidate under an override or lock still reviews", async () => {
     const t = makeT();
-    const overridden = await buildCatalog(t, { overriddenFields: ["pubDate"] });
+    const overridden = await buildCatalog(t, { release: { overriddenFields: ["pubDate"] } });
     expect(await match(t, fact(overridden.publisherId))).toMatchObject({
       kind: "review",
       rung: 3,
@@ -369,14 +290,14 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
 
     // An edited blurb is editorial, not identity: the link still happens.
     const t3 = makeT();
-    const prose = await buildCatalog(t3, { overriddenFields: ["description"] });
+    const prose = await buildCatalog(t3, { release: { overriddenFields: ["description"] } });
     expect(await match(t3, fact(prose.publisherId))).toMatchObject({
       kind: "match",
       rung: 3,
     });
 
     const t2 = makeT();
-    const locked = await buildCatalog(t2, { locked: true });
+    const locked = await buildCatalog(t2, { release: { locked: true } });
     expect(await match(t2, fact(locked.publisherId))).toMatchObject({
       kind: "review",
       rung: 3,
@@ -387,14 +308,8 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
 describe("matchRelease — rungs ④ and ⑤", () => {
   it("a title-only candidate (wrong publisher) always reviews", async () => {
     const t = makeT();
-    await buildCatalog(t, { publisherSlug: "other-pub" });
-    const sevenSeas = await t.run((ctx) =>
-      ctx.db.insert("publishers", {
-        status: "active",
-        name: "Seven Seas",
-        slug: "seven-seas",
-      }),
-    );
+    await buildCatalog(t, { publisher: { slug: "other-pub" } });
+    const sevenSeas = await t.run((ctx) => insertPublisher(ctx, { name: "Seven Seas", slug: "seven-seas" }));
     const outcome = await match(t, fact(sevenSeas));
     expect(outcome).toMatchObject({ kind: "review", rung: 4 });
   });
@@ -404,7 +319,7 @@ describe("matchRelease — rungs ④ and ⑤", () => {
     // publisher's digital counterpart of an existing print volume is a new
     // sibling Release, not ambiguity for a human to untangle.
     const t = makeT();
-    const catalog = await buildCatalog(t, { format: "digital" });
+    const catalog = await buildCatalog(t, { release: { format: "digital" } });
     const outcome = await match(t, fact(catalog.publisherId));
     expect(outcome).toMatchObject({ kind: "create", rung: 5 });
   });
@@ -435,48 +350,35 @@ describe("matchRelease — rungs ④ and ⑤", () => {
 });
 
 describe("candidateSeries", () => {
-  async function insertSeries(
-    t: TestT,
-    title: string,
-    altTitles: string[] = [],
-  ): Promise<Id<"series">> {
-    return await t.run((ctx) =>
-      ctx.db.insert("series", {
-        status: "active",
-        publicId: Math.floor(Math.random() * 1e9),
-        title,
-        altTitles,
-        searchText: [title, ...altTitles].join(" "),
-      }),
-    );
-  }
+  const series = (t: TestT, title: string, altTitles: string[] = []) =>
+    t.run((ctx) => insertSeries(ctx, { title, altTitles }));
 
   it("finds a release-less backbone Series buried under many near-namesakes", async () => {
     const t = makeT();
     // The polluted shards the old PRH splitter created, crowding the search.
     for (let n = 1; n <= 30; n++) {
-      await insertSeries(t, `Otherside Picnic ${String(n).padStart(2, "0")} (Manga)`);
+      await series(t, `Otherside Picnic ${String(n).padStart(2, "0")} (Manga)`);
     }
-    const ann = await insertSeries(t, "Otherside Picnic");
+    const ann = await series(t, "Otherside Picnic");
     const hits = await t.run((ctx) => candidateSeries(ctx, "Otherside Picnic"));
     expect(hits.map((s) => s._id)).toEqual([ann]);
   });
 
   it("folds &/and and accents, and prefers primary titles over alt titles", async () => {
     const t = makeT();
-    const candy = await insertSeries(t, "Candy & Cigarettes");
+    const candy = await series(t, "Candy & Cigarettes");
     expect(
       (await t.run((ctx) => candidateSeries(ctx, "CANDY AND CIGARETTES"))).map((s) => s._id),
     ).toEqual([candy]);
 
     // ANN lists "Citrus Plus" as an alt title of Citrus: the real Citrus
     // Plus Series wins, and the alt title counts only as a fallback.
-    await insertSeries(t, "Citrus", ["Citrus Plus"]);
-    const plus = await insertSeries(t, "Citrus Plus");
+    await series(t, "Citrus", ["Citrus Plus"]);
+    const plus = await series(t, "Citrus Plus");
     expect((await t.run((ctx) => candidateSeries(ctx, "Citrus Plus"))).map((s) => s._id)).toEqual([
       plus,
     ]);
-    const tenken = await insertSeries(t, "Reincarnated as a Sword", ["Tenken"]);
+    const tenken = await series(t, "Reincarnated as a Sword", ["Tenken"]);
     expect((await t.run((ctx) => candidateSeries(ctx, "Tenken"))).map((s) => s._id)).toEqual([
       tenken,
     ]);
@@ -485,8 +387,8 @@ describe("candidateSeries", () => {
   it("picks the namesake whose title matches with punctuation kept", async () => {
     const t = makeT();
     // Two works that key to "bastard": the WEBTOON and Hagiwara's BASTARD!!.
-    const webtoon = await insertSeries(t, "Bastard");
-    const hagiwara = await insertSeries(t, "Bastard!!");
+    const webtoon = await series(t, "Bastard");
+    const hagiwara = await series(t, "Bastard!!");
     const ids = async (title: string) =>
       (await t.run((ctx) => candidateSeries(ctx, title))).map((s) => s._id);
     expect(await ids("Bastard")).toEqual([webtoon]);
@@ -497,14 +399,14 @@ describe("candidateSeries", () => {
 
   it("answers a merged Series' title with its survivor, and reports hidden namesakes apart", async () => {
     const t = makeT();
-    const survivor = await insertSeries(t, "Summer Ghost: Complete");
-    const loser = await insertSeries(t, "Summer Ghost");
+    const survivor = await series(t, "Summer Ghost: Complete");
+    const loser = await series(t, "Summer Ghost");
     await t.run((ctx) => ctx.db.patch(loser, { status: "merged", mergedIntoId: survivor }));
     expect((await t.run((ctx) => candidateSeries(ctx, "Summer Ghost"))).map((s) => s._id)).toEqual([
       survivor,
     ]);
 
-    const hidden = await insertSeries(t, "Emma & Capucine");
+    const hidden = await series(t, "Emma & Capucine");
     await t.run((ctx) => ctx.db.patch(hidden, { status: "hidden" }));
     expect(await t.run((ctx) => candidateSeries(ctx, "Emma and Capucine"))).toEqual([]);
     expect(
@@ -513,13 +415,13 @@ describe("candidateSeries", () => {
 
     // A hidden namesake never shadows an active Series' alt title, and a
     // hidden Series' alt title never counts.
-    const paradise = await insertSeries(t, "Paradise");
+    const paradise = await series(t, "Paradise");
     await t.run((ctx) => ctx.db.patch(paradise, { status: "hidden" }));
-    const kept = await insertSeries(t, "Paradise Residence", ["Paradise"]);
+    const kept = await series(t, "Paradise Residence", ["Paradise"]);
     expect((await t.run((ctx) => candidateSeries(ctx, "Paradise"))).map((s) => s._id)).toEqual([
       kept,
     ]);
-    await insertSeries(t, "Mo Dao Zu Shi (Novel)", ["Grandmaster"]).then((id) =>
+    await series(t, "Mo Dao Zu Shi (Novel)", ["Grandmaster"]).then((id) =>
       t.run((ctx) => ctx.db.patch(id, { status: "hidden" })),
     );
     expect(await t.run((ctx) => hiddenSeriesTitled(ctx, "Grandmaster"))).toEqual([]);
@@ -527,7 +429,7 @@ describe("candidateSeries", () => {
 
   it("never offers a manga Series for a novel title", async () => {
     const t = makeT();
-    await insertSeries(t, "The Seven Deadly Sins");
+    await series(t, "The Seven Deadly Sins");
     expect(await t.run((ctx) => candidateSeries(ctx, "The Seven Deadly Sins (Novel)"))).toEqual([]);
   });
 });
