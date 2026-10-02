@@ -848,7 +848,8 @@ export default defineSchema({
   }),
 
   // Sequential public-ID allocation per entity type ("series", "volume",
-  // "edition", "bundle"). Imports reserve blocks in one bump; gaps are fine.
+  // "edition", "bundle", "person"), one ID per new record (lib/publicIds.ts);
+  // gaps are fine.
   counters: defineTable({
     entity: v.string(),
     next: v.number(),

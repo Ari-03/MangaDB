@@ -1,7 +1,7 @@
 // Following merges (spec §4/§8): a merged record keeps its public ID and
 // points at the record that absorbed it, so reads resolve every stored
-// reference to its survivor. Public pages and tracking alike read through
-// these; catalogPages.ts re-exports `followMerges` for older importers.
+// reference to its survivor. Public pages, tracking and the importers alike
+// read through these.
 
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
