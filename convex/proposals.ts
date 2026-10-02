@@ -45,13 +45,10 @@ import { fieldDescriptor } from "./lib/moderationFields";
 import { captureModeration } from "./lib/posthog";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
-  applyHide,
-  applyLock,
   applyMerge,
-  applyRestore,
-  applySplit,
-  applyUnlock,
+  SINGLE_RECORD_OPS,
   type OpMeta,
+  type SingleRecordOp,
 } from "./lib/sensitiveOps";
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
@@ -812,18 +809,7 @@ export const approveProposal = mutation({
             )),
           );
         } else {
-          const ref = op.ref;
-          const apply =
-            op.kind === "hide"
-              ? applyHide
-              : op.kind === "restore"
-                ? applyRestore
-                : op.kind === "split"
-                  ? applySplit
-                  : op.kind === "lock"
-                    ? applyLock
-                    : applyUnlock;
-          revisionIds.push(...(await apply(ctx, ref, meta)));
+          revisionIds.push(...(await SINGLE_RECORD_OPS[op.kind](ctx, op.ref, meta)));
         }
       }
     }
@@ -986,26 +972,24 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
         summary: `Merge ${await refLabel(ctx, op.merged)} into ${await refLabel(ctx, op.survivor)}`,
       });
     } else {
-      const verb =
-        op.kind === "hide"
-          ? "Hide"
-          : op.kind === "restore"
-            ? "Restore"
-            : op.kind === "split"
-              ? "Split out"
-              : op.kind === "lock"
-                ? "Lock"
-                : op.kind === "unlock"
-                  ? "Unlock"
-                  : "Clear an override on";
       rendered.push({
         kind: op.kind,
-        summary: `${verb} ${await refLabel(ctx, op.ref)}`,
+        summary: `${OP_VERBS[op.kind]} ${await refLabel(ctx, op.ref)}`,
       });
     }
   }
   return rendered;
 }
+
+/** How a summary line names each single-record op. */
+const OP_VERBS: Record<SingleRecordOp | "clearOverride", string> = {
+  hide: "Hide",
+  restore: "Restore",
+  split: "Split out",
+  lock: "Lock",
+  unlock: "Unlock",
+  clearOverride: "Clear an override on",
+};
 
 /** `type "title"` label for a sensitive-op summary line. */
 async function refLabel(

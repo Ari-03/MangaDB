@@ -18,15 +18,12 @@ import {
   type RecordRef,
 } from "./moderation";
 import {
-  applyHide,
-  applyLock,
   applyMerge,
-  applyRestore,
-  applySplit,
-  applyUnlock,
   impactOf,
   reversibleManifestOf,
+  SINGLE_RECORD_OPS,
   type OpMeta,
+  type SingleRecordOp,
 } from "./lib/sensitiveOps";
 import { fail } from "./lib/errors";
 import { requireModerator } from "./lib/roles";
@@ -120,64 +117,39 @@ const singleRefArgs = {
   confirmImpact: v.boolean(),
 };
 
+/**
+ * The mutation for one single-record operation: recorded as its Proposal op
+ * (hide, restore and split name the record's base Revision; locks do not),
+ * then applied through the same function as the review queue.
+ */
+function singleRecordMutation(kind: SingleRecordOp) {
+  return mutation({
+    args: singleRefArgs,
+    handler: async (ctx, args) => {
+      const ref = args.ref;
+      const meta = await beginOperation(ctx, args, async (baseOf): Promise<StoredOp> => {
+        if (kind === "lock" || kind === "unlock") return { kind, ref };
+        const baseRevisionId = await baseOf(ref);
+        return kind === "split" ? { kind, ref, baseRevisionId, details: {} } : { kind, ref, baseRevisionId };
+      });
+      const revisionIds = await SINGLE_RECORD_OPS[kind](ctx, ref, meta);
+      return { proposalId: meta.proposalId, revisionIds };
+    },
+  });
+}
+
 // ---------- the operations ----------
 
 /** Hide: remove from public discovery, preserving identity/history/tracking. */
-export const hideRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref;
-    const meta = await beginOperation(ctx, args, async (baseOf) => ({
-      kind: "hide",
-      ref,
-      baseRevisionId: await baseOf(ref),
-    }));
-    const revisionIds = await applyHide(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const hideRecord = singleRecordMutation("hide");
 
 /** Restore: reactivate a hidden record. Never reverses a merge. */
-export const restoreRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref;
-    const meta = await beginOperation(ctx, args, async (baseOf) => ({
-      kind: "restore",
-      ref,
-      baseRevisionId: await baseOf(ref),
-    }));
-    const revisionIds = await applyRestore(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const restoreRecord = singleRecordMutation("restore");
 
 /** Temporarily lock an active record against ordinary edits (disputes). */
-export const lockRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref;
-    const meta = await beginOperation(ctx, args, async () => ({
-      kind: "lock",
-      ref,
-    }));
-    const revisionIds = await applyLock(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const lockRecord = singleRecordMutation("lock");
 
-export const unlockRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref;
-    const meta = await beginOperation(ctx, args, async () => ({
-      kind: "unlock",
-      ref,
-    }));
-    const revisionIds = await applyUnlock(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const unlockRecord = singleRecordMutation("unlock");
 
 /**
  * Merge: pick the survivor, transfer observations, compatible relationships,
@@ -213,17 +185,4 @@ export const mergeRecords = mutation({
 });
 
 /** Split: the explicit reversal of a mistaken merge. */
-export const splitRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref;
-    const meta = await beginOperation(ctx, args, async (baseOf) => ({
-      kind: "split",
-      ref,
-      baseRevisionId: await baseOf(ref),
-      details: {},
-    }));
-    const revisionIds = await applySplit(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const splitRecord = singleRecordMutation("split");

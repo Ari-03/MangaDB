@@ -87,99 +87,77 @@ async function requireRecord(
   return doc;
 }
 
-// ---------- hide / restore ----------
+// ---------- hide / restore / lock / unlock ----------
+
+/**
+ * An operation that flips one field of one record: `refuse` throws unless
+ * the record may take it, then `patch` is written and `change` recorded as
+ * its Revision. Nothing else about the record changes.
+ */
+type Toggle = {
+  refuse: (doc: CatalogDoc, type: RecordRef["type"]) => void;
+  patch: { status: "hidden" | "active" } | { locked: true | undefined };
+  change: Change;
+};
+
+function toggleOp({ refuse, patch, change }: Toggle) {
+  return async (ctx: MutationCtx, ref: RecordRef, meta: OpMeta): Promise<Id<"revisions">[]> => {
+    const doc = await requireRecord(ctx, ref);
+    refuse(doc, ref.type);
+    await ctx.db.patch(ref.id, patch);
+    return [await recordRevision(ctx, ref, [change], meta)];
+  };
+}
 
 /**
  * Hide removes a record from public discovery while preserving its identity,
- * history, and every tracking reference — nothing but `status` changes. A
- * hidden record is locked against ordinary edits by its status.
+ * history, and every tracking reference. A hidden record is locked against
+ * ordinary edits by its status.
  */
-export async function applyHide(
-  ctx: MutationCtx,
-  ref: RecordRef,
-  meta: OpMeta,
-): Promise<Id<"revisions">[]> {
-  const doc = await requireRecord(ctx, ref);
-  if (doc.status !== "active") {
-    fail("badState", `Only active records can be hidden; this ${ref.type} is ${doc.status}.`);
-  }
-  if (doc.locked) fail("locked", "This record is temporarily locked — unlock it first.");
-  await ctx.db.patch(ref.id, { status: "hidden" });
-  return [
-    await recordRevision(
-      ctx,
-      ref,
-      [{ field: "status", before: "active", after: "hidden" }],
-      meta,
-    ),
-  ];
-}
+export const applyHide = toggleOp({
+  refuse: (doc, type) => {
+    if (doc.status !== "active") {
+      fail("badState", `Only active records can be hidden; this ${type} is ${doc.status}.`);
+    }
+    if (doc.locked) fail("locked", "This record is temporarily locked — unlock it first.");
+  },
+  patch: { status: "hidden" },
+  change: { field: "status", before: "active", after: "hidden" },
+});
 
 /** Restore reactivates a hidden record. It never reverses a merge (Split does). */
-export async function applyRestore(
-  ctx: MutationCtx,
-  ref: RecordRef,
-  meta: OpMeta,
-): Promise<Id<"revisions">[]> {
-  const doc = await requireRecord(ctx, ref);
-  if (doc.status === "merged") {
-    fail("badState", "A merged record is reversed only by an explicit Split — Restore cannot.");
-  }
-  if (doc.status !== "hidden") {
-    fail("badState", `Only hidden records can be restored; this ${ref.type} is ${doc.status}.`);
-  }
-  await ctx.db.patch(ref.id, { status: "active" });
-  return [
-    await recordRevision(
-      ctx,
-      ref,
-      [{ field: "status", before: "hidden", after: "active" }],
-      meta,
-    ),
-  ];
-}
-
-// ---------- temporary locks ----------
+export const applyRestore = toggleOp({
+  refuse: (doc, type) => {
+    if (doc.status === "merged") {
+      fail("badState", "A merged record is reversed only by an explicit Split — Restore cannot.");
+    }
+    if (doc.status !== "hidden") {
+      fail("badState", `Only hidden records can be restored; this ${type} is ${doc.status}.`);
+    }
+  },
+  patch: { status: "active" },
+  change: { field: "status", before: "hidden", after: "active" },
+});
 
 /** A Moderator's temporary lock on an active record (disputes, spec §5). */
-export async function applyLock(
-  ctx: MutationCtx,
-  ref: RecordRef,
-  meta: OpMeta,
-): Promise<Id<"revisions">[]> {
-  const doc = await requireRecord(ctx, ref);
-  if (doc.status !== "active") {
-    fail("badState", `A ${doc.status} record is already locked by its status.`);
-  }
-  if (doc.locked) fail("badState", "This record is already locked.");
-  await ctx.db.patch(ref.id, { locked: true });
-  return [
-    await recordRevision(
-      ctx,
-      ref,
-      [{ field: "locked", before: false, after: true }],
-      meta,
-    ),
-  ];
-}
+export const applyLock = toggleOp({
+  refuse: (doc) => {
+    if (doc.status !== "active") {
+      fail("badState", `A ${doc.status} record is already locked by its status.`);
+    }
+    if (doc.locked) fail("badState", "This record is already locked.");
+  },
+  patch: { locked: true },
+  change: { field: "locked", before: false, after: true },
+});
 
-export async function applyUnlock(
-  ctx: MutationCtx,
-  ref: RecordRef,
-  meta: OpMeta,
-): Promise<Id<"revisions">[]> {
-  const doc = await requireRecord(ctx, ref);
-  if (!doc.locked) fail("badState", "This record is not locked.");
-  await ctx.db.patch(ref.id, { locked: undefined });
-  return [
-    await recordRevision(
-      ctx,
-      ref,
-      [{ field: "locked", before: true, after: false }],
-      meta,
-    ),
-  ];
-}
+export const applyUnlock = toggleOp({
+  refuse: (doc) => {
+    if (!doc.locked) fail("badState", "This record is not locked.");
+  },
+  patch: { locked: undefined },
+  change: { field: "locked", before: true, after: false },
+});
 
 // ---------- the merge transfer engine ----------
 
@@ -2182,6 +2160,16 @@ export async function applySplit(
   }
   return revisions;
 }
+
+/** The operations on one record, by their Proposal op kind. */
+export const SINGLE_RECORD_OPS = {
+  hide: applyHide,
+  restore: applyRestore,
+  split: applySplit,
+  lock: applyLock,
+  unlock: applyUnlock,
+};
+export type SingleRecordOp = keyof typeof SINGLE_RECORD_OPS;
 
 // ---------- impact preview ----------
 
