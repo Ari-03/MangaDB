@@ -20,6 +20,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
+import { bundleReleases } from "./collection";
 import { getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
@@ -196,14 +197,7 @@ export const myUpcoming = query({
     const derivedOwned = new Set<Id<"releases">>();
     for (const { doc, state } of bundleEntries.values()) {
       if (state !== "owned") continue;
-      const memberships = await ctx.db
-        .query("bundleMemberships")
-        .withIndex("by_bundle", (q) => q.eq("bundleId", doc._id))
-        .collect();
-      for (const membership of memberships) {
-        const release = await getActive(ctx, "releases", membership.releaseId);
-        if (release) derivedOwned.add(release._id);
-      }
+      for (const release of await bundleReleases(ctx, doc._id)) derivedOwned.add(release._id);
     }
 
     // Candidate Releases, deduplicated by document: the followed-Series

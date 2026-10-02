@@ -22,7 +22,7 @@
 import { ConvexError, v, type Infer, type ObjectType } from "convex/values";
 
 import { internal } from "./_generated/api";
-import { activeVolumes, recountCatalog } from "./catalog";
+import { activeVolumes, recountCatalog, seriesEditions } from "./catalog";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalAction,
@@ -327,40 +327,10 @@ export const repackBlock = internalMutation({
 async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: number) {
   const volumes = await activeVolumes(ctx, series._id);
 
-  const editionIds = new Set<Id<"editions">>();
-  // Each Edition's first covered Volume, for the cover pick.
-  const firstPosition = new Map<Id<"editions">, number>();
-  for (const volume of volumes) {
-    const rows = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
-    for (const row of rows) {
-      // Only an active Edition is a book; a hidden one must not clear `bookless`.
-      const edition = await ctx.db.get(row.editionId);
-      if (!edition || edition.status !== "active") continue;
-      editionIds.add(row.editionId);
-      if (!firstPosition.has(row.editionId)) firstPosition.set(row.editionId, volume.position);
-    }
-  }
-  // Edition Line members whose Volumes are not mapped yet (Unmapped
-  // Packaging) still count as the Series' books — same walk as the series
-  // page (catalog.ts seriesPage).
-  const lines = await ctx.db
-    .query("editionLines")
-    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-    .collect();
-  for (const line of lines) {
-    if (line.status !== "active") continue;
-    const members = await ctx.db
-      .query("editions")
-      .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
-      .collect();
-    // Only an active member is a book; a hidden one must not clear `bookless`.
-    for (const member of members) {
-      if (member.status === "active") editionIds.add(member._id);
-    }
-  }
+  // The Series' books, Unmapped Packaging included; only an active Edition
+  // is a book, so a hidden one must not clear `bookless`. `firstPosition`
+  // (each Edition's first covered Volume) feeds the cover pick.
+  const { editions, firstPosition } = await seriesEditions(ctx, series._id, volumes);
 
   // Mature Series evidence (lib/mature.ts), gathered below only while the
   // Data Team has made no call and nothing has decided it yet.
@@ -380,7 +350,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   // A Bookless Series (no Edition at all) leaves the library: its stats row
   // goes and the Series carries the derived flag until a book lands. Derived
   // data, no Revision — like the release denorms.
-  if (editionIds.size === 0) {
+  if (editions.size === 0) {
     await settleMature();
     if (series.bookless !== true) await ctx.db.patch(series._id, { bookless: true });
     const stale = await seriesStatsRow(ctx, series._id);
@@ -402,9 +372,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   const collectors = new Set<string>();
   const today = todaySortKey();
 
-  for (const editionId of editionIds) {
-    const edition = await ctx.db.get(editionId);
-    if (!edition || edition.status !== "active") continue;
+  for (const [editionId, edition] of editions) {
     const publisher = await ctx.db.get(edition.publisherId);
     if (publisher && publisher.status === "active") {
       publishers.set(publisher.slug, { name: publisher.name, slug: publisher.slug });

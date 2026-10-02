@@ -80,9 +80,7 @@ async function entrySeries(
   seriesCache = new Map<Id<"series">, Doc<"series"> | null>(),
 ): Promise<Map<Id<"series">, Doc<"series">>> {
   const covered = new Map<Id<"series">, Doc<"series">>();
-  const addRelease = async (releaseId: Id<"releases">) => {
-    const release = await getActive(ctx, "releases", releaseId);
-    if (!release) return;
+  const addRelease = async (release: Doc<"releases">) => {
     for (const seriesId of release.seriesIds) {
       let series = seriesCache.get(seriesId);
       if (series === undefined) {
@@ -93,19 +91,31 @@ async function entrySeries(
     }
   };
   if (entry.releaseId) {
-    await addRelease(entry.releaseId);
+    const release = await getActive(ctx, "releases", entry.releaseId);
+    if (release) await addRelease(release);
   } else if (entry.bundleId) {
     const bundle = await getActive(ctx, "releaseBundles", entry.bundleId);
     if (!bundle) return covered;
-    const memberships = await ctx.db
-      .query("bundleMemberships")
-      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-      .collect();
-    for (const membership of memberships) {
-      await addRelease(membership.releaseId);
-    }
+    for (const release of await bundleReleases(ctx, bundle._id)) await addRelease(release);
   }
   return covered;
+}
+
+/**
+ * A Bundle's member Releases in membership-index order (not `order`), merges
+ * followed; hidden and deleted members drop out. Exported for follows.ts.
+ */
+export async function bundleReleases(ctx: QueryCtx, bundleId: Id<"releaseBundles">) {
+  const memberships = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+    .collect();
+  const releases = [];
+  for (const membership of memberships) {
+    const release = await getActive(ctx, "releases", membership.releaseId);
+    if (release) releases.push(release);
+  }
+  return releases;
 }
 
 /**
@@ -373,13 +383,8 @@ export const seriesEntries = query({
       } else if (row.bundleId && row.state === "owned") {
         const bundle = await getActive(ctx, "releaseBundles", row.bundleId);
         if (!bundle) continue;
-        const memberships = await ctx.db
-          .query("bundleMemberships")
-          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-          .collect();
-        for (const membership of memberships) {
-          const release = await getActive(ctx, "releases", membership.releaseId);
-          if (release && (await inSeries(release))) derivedOwned.add(release._id);
+        for (const release of await bundleReleases(ctx, bundle._id)) {
+          if (await inSeries(release)) derivedOwned.add(release._id);
         }
       }
     }

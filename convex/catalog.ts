@@ -488,6 +488,53 @@ export async function activeVolumes(ctx: QueryCtx, seriesId: Id<"series">) {
 }
 
 /**
+ * Every active Edition of a Series, in the order first met: those covering
+ * its active `volumes` (with the Position of the first Volume each covers),
+ * then Edition Line members whose volume range is not mapped yet (an
+ * omnibus of unknown extent still belongs to its line's reading path).
+ * Shared by the Series page and the Series library rebuild (seriesBrowse.ts),
+ * so both count the same books.
+ */
+export async function seriesEditions(
+  ctx: QueryCtx,
+  seriesId: Id<"series">,
+  volumes: Array<Doc<"volumes">>,
+) {
+  const editions = new Map<Id<"editions">, Doc<"editions">>();
+  const firstPosition = new Map<Id<"editions">, number>();
+  const seen = new Set<Id<"editions">>();
+  for (const volume of volumes) {
+    const rows = await ctx.db
+      .query("volumeCoverages")
+      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
+      .collect();
+    for (const row of rows) {
+      if (seen.has(row.editionId)) continue;
+      seen.add(row.editionId);
+      const edition = await ctx.db.get(row.editionId);
+      if (!edition || edition.status !== "active") continue;
+      editions.set(edition._id, edition);
+      firstPosition.set(edition._id, volume.position);
+    }
+  }
+  const lines = await ctx.db
+    .query("editionLines")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
+  for (const line of lines) {
+    if (line.status !== "active") continue;
+    const members = await ctx.db
+      .query("editions")
+      .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+      .collect();
+    for (const member of members) {
+      if (member.status === "active" && !editions.has(member._id)) editions.set(member._id, member);
+    }
+  }
+  return { editions, firstPosition };
+}
+
+/**
  * Everything the Series page renders, shaped as the Reading Path hierarchy
  * validated in prototype #16 (spec §10): the canonical Volume sequence leads
  * (ordered by Volume Position — the Label is display-only); each
@@ -566,34 +613,8 @@ export const seriesPage = query({
     const volumeDocs = await activeVolumes(ctx, series._id);
     const volumeById = new Map(volumeDocs.map((doc) => [doc._id, doc]));
 
-    // Every Edition of the Series: those covering its Volumes, plus Edition
-    // Line members whose volume range is not mapped yet (an omnibus of
-    // unknown extent still belongs to its line's reading path).
-    const editionIds = new Set<Id<"editions">>();
-    for (const volume of volumeDocs) {
-      const rows = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-        .collect();
-      for (const row of rows) editionIds.add(row.editionId);
-    }
-    const lines = await ctx.db
-      .query("editionLines")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .collect();
-    for (const line of lines) {
-      if (line.status !== "active") continue;
-      const members = await ctx.db
-        .query("editions")
-        .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
-        .collect();
-      for (const member of members) editionIds.add(member._id);
-    }
-
     const editions = [];
-    for (const editionId of editionIds) {
-      const edition = await ctx.db.get(editionId);
-      if (!edition || edition.status !== "active") continue;
+    for (const edition of (await seriesEditions(ctx, series._id, volumeDocs)).editions.values()) {
       const publisher = await ctx.db.get(edition.publisherId);
       const line = edition.editionLineId
         ? await ctx.db.get(edition.editionLineId)
