@@ -94,12 +94,10 @@ function StateButtons({
 export function ReleaseCollectionControls({
   releaseId,
 }: {
-  releaseId: string;
+  releaseId: Id<"releases">;
 }) {
   if (!convexClient) return null;
-  // Release rows carry the Convex document id serialized through the SSR
-  // loader; re-brand it for the typed function references.
-  return <ReleaseControlsInner releaseId={releaseId as Id<"releases">} />;
+  return <ReleaseControlsInner releaseId={releaseId} />;
 }
 
 function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
@@ -187,9 +185,9 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
 // ---------- Bundle page controls ----------
 
 /** Collection controls on the Bundle page; renders nothing signed out. */
-export function BundleCollectionControls({ bundleId }: { bundleId: string }) {
+export function BundleCollectionControls({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
   if (!convexClient) return null;
-  return <BundleControlsInner bundleId={bundleId as Id<"releaseBundles">} />;
+  return <BundleControlsInner bundleId={bundleId} />;
 }
 
 function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {

@@ -13,6 +13,7 @@
 
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
@@ -41,7 +42,10 @@ export const STATUS_ORDER: ReadingStatus[] = [
   "dropped",
 ];
 
-export type SeriesSuggestion = { seriesId: Id<"series">; title: string };
+/** A Series a reading write suggests a status for (reading.completePass and kin). */
+export type SeriesSuggestion = FunctionReturnType<
+  typeof api.reading.completePass
+>["suggestCompleted"][number];
 
 /**
  * The fully-read prompt (spec §3): a completion that leaves every Volume of
@@ -284,11 +288,9 @@ function VolumeReadCountInner({
  * not know here, so both wait while any "Read all" run is still marking
  * (useRunLock): its later batch could otherwise re-mark an undone Volume.
  */
-export function ReleasePassControls({ releaseId }: { releaseId: string }) {
+export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }) {
   if (!convexClient) return null;
-  // Release rows carry the Convex document id serialized through the SSR
-  // loader; re-brand it for the typed function references.
-  return <ReleasePassControlsInner releaseId={releaseId as Id<"releases">} />;
+  return <ReleasePassControlsInner releaseId={releaseId} />;
 }
 
 function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {

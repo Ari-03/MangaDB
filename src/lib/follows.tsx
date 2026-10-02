@@ -10,7 +10,6 @@ import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
 import { track } from "~/lib/analytics";
 import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate, plural } from "~/lib/format";
@@ -18,7 +17,10 @@ import { sortKeyMonth, todaySortKey } from "~/lib/month";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
-export type FollowSuggestion = { seriesId: Id<"series">; title: string };
+/** A Series a collection write suggests following (collection.setReleaseEntry and kin). */
+export type FollowSuggestion = FunctionReturnType<
+  typeof api.collection.setReleaseEntry
+>["suggestFollow"][number];
 
 // ---------- Series page follow toggle ----------
 

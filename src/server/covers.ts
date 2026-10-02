@@ -58,7 +58,7 @@ export async function coverResponse(request: Request): Promise<Response | null> 
   const isbn13 = match[1]!;
 
   // Edge cache first. Keyed on the bare path so query strings can't bust it.
-  const cache = (caches as unknown as { default: Cache }).default;
+  const cache = caches.default;
   const cacheKey = new Request(`${url.origin}${url.pathname}`);
   // A failed read is a miss: the cache may cost a lookup, never the art.
   const cached = await cache.match(cacheKey).catch((error: unknown) => {

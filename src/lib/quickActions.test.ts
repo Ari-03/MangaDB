@@ -227,7 +227,7 @@ async function seed(t: ReturnType<typeof convexTest>, count: number) {
       });
       books.push({
         publicId: 5000 + i,
-        releases: [{ id: releaseId as string, format: "physical" as const }],
+        releases: [{ id: releaseId, format: "physical" as const }],
         coverage: [{ volumePublicId: 1000 + i, extent: "complete" as const }],
       });
     }
@@ -270,7 +270,7 @@ async function addOmnibus(t: ReturnType<typeof convexTest>, positions: number[])
     });
     return {
       publicId: 9000,
-      releases: [{ id: releaseId as string, format: "physical" as const }],
+      releases: [{ id: releaseId, format: "physical" as const }],
       coverage: positions.map((position) => ({
         volumePublicId: 999 + position,
         extent: "complete" as const,

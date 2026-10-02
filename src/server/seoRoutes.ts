@@ -264,7 +264,7 @@ async function cachedChildSitemap(
   data: SitemapData | null,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const cache = (caches as unknown as { default: Cache }).default;
+  const cache = caches.default;
   const cacheKey = new Request(`${url.origin}${url.pathname}`);
   // A failed read is a miss, as a failed write is only logged: the cache
   // may cost a regeneration, never the sitemap.

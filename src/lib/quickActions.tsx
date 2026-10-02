@@ -79,7 +79,7 @@ export function useSeriesOverlay(seriesPublicId: number): SeriesOverlay | null {
 /** The Series-page book shape the overlay is read against. */
 export type OverlayBook = {
   publicId: number;
-  releases: ReadonlyArray<{ id: string; format: "physical" | "digital" }>;
+  releases: ReadonlyArray<{ id: Id<"releases">; format: "physical" | "digital" }>;
   coverage: ReadonlyArray<{ volumePublicId: number; extent: "complete" | "partial" }>;
 };
 
@@ -90,15 +90,13 @@ export type OverlayBook = {
  * first — so a quick click lands where the Edition page's controls would.
  */
 export function quickBookFor(book: OverlayBook, overlay: SeriesOverlay): QuickBook {
-  const ids = book.releases.map((release) => release.id as Id<"releases">);
+  const ids = book.releases.map((release) => release.id);
   const entry = overlay.entries.find((row) => ids.includes(row.releaseId)) ?? null;
   const preferred =
     overlay.formatPreference === "both" ? "physical" : overlay.formatPreference;
   const target =
     entry?.releaseId ??
-    (book.releases.find((release) => release.format === preferred)?.id as
-      | Id<"releases">
-      | undefined) ??
+    book.releases.find((release) => release.format === preferred)?.id ??
     ids[0] ??
     null;
   const complete = book.coverage.filter((cov) => cov.extent === "complete");
