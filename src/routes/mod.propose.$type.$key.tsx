@@ -19,7 +19,7 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The Editor update-proposal form (ticket #32, spec §5): edits become a
+ * The Editor update-proposal form (spec §5): edits become a
  * Draft Proposal; submission validates, requires a change comment (and
  * source evidence for factual changes), and lands the immutable Proposal
  * Version In Review in the shared queue. Renders from the same registry the

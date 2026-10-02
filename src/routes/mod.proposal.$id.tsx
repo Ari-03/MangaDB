@@ -12,7 +12,7 @@ import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
 import { convexClient } from "~/providers";
 
 /**
- * The proposal review page (ticket #32, spec §5). A Moderator reviews the
+ * The proposal review page (spec §5). A Moderator reviews the
  * exact immutable version — grouped before/after per record, evidence beside
  * the changes, base Revisions, structural impacts of creates — and approves,
  * rejects, or requests changes. The author submits, withdraws, or rebases.
@@ -98,7 +98,7 @@ function OpsList({ ops }: { ops: RenderedOps }) {
             </>
           ) : (
             <p>
-              {/* Sensitive catalog operations (ticket #33) render as a
+              {/* Sensitive catalog operations render as a
                   one-line summary; their full impact preview lives on the
                   record's manage panel. */}
               <strong>{op.summary}</strong>

@@ -1,4 +1,4 @@
-// Series Follows + My Upcoming Releases UI (ticket #29, spec §3), rendered
+// Series Follows + My Upcoming Releases UI (spec §3), rendered
 // as a signed-in overlay like the collection and reading slices: signed-out
 // viewers get null from the follow queries, so the public pages render
 // identically without the controls. Follows are always private in v1 —

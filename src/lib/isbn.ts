@@ -1,7 +1,7 @@
-// ISBN recognition for search (ticket #38, spec §8/§11): a query the user
+// ISBN recognition for search (spec §8/§11): a query the user
 // types into /search that is a valid ISBN never runs a text search — it
 // redirects through the `/isbn/{isbn}` route, which owns resolution to the
-// owning Edition (or Bundle) page (ticket #23). Recognition is strict
+// owning Edition (or Bundle) page. Recognition is strict
 // (checksum-verified, and 978/979-prefixed for ISBN-13) so a numeric title
 // query is never hijacked by a near-miss.
 

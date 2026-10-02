@@ -1,4 +1,4 @@
-// Shared render pieces for the Volume and Edition pages (ticket #23): the
+// Shared render pieces for the Volume and Edition pages: the
 // Release row (publication facts, ISBNs, Variants beneath, Bundle
 // cross-links; the page shows one description above, not one per row), the
 // coverage chip listing, and the note naming the Series a borrowed synopsis
@@ -96,9 +96,9 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
         ) : null}
       </div>
       <div className="release-side">
-        {/* Collection Entry controls (#27); render nothing signed out. */}
+        {/* Collection Entry controls; render nothing signed out. */}
         <ReleaseCollectionControls releaseId={release.id} />
-        {/* Release Progress pass controls (#28); render nothing signed out. */}
+        {/* Release Progress pass controls; render nothing signed out. */}
         <ReleasePassControls releaseId={release.id} />
       </div>
     </li>

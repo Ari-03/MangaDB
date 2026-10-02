@@ -1,4 +1,4 @@
-/* Home page (#21/#22) — the Bookshelf hero and its shelves. Owner: home port.
+/* Home page — the Bookshelf hero and its shelves.
    Composes shell.css (.section/.btn) and covers.css (.shelf/.cover/.caption);
    only the hero's own furniture lives here. */
 

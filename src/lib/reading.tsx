@@ -1,8 +1,6 @@
-// Reading tracking UI (ticket #28, spec §3), rendered as a signed-in overlay
-// on the public catalog pages: the Series Reading Status picker, per-Volume
-// read counts, and Release Progress pass controls. Everything fetches through
-// the reactive Convex client; signed-out viewers get null from the tracking
-// queries, so the public pages render identically without the controls.
+// Reading tracking UI (spec §3): the Series Reading Status picker,
+// per-Volume read counts, and Release Progress pass controls. A signed-in
+// overlay on the catalog pages, like lib/collection.tsx.
 //
 // The prompt rules from the glossary hold throughout: starting a pass or
 // finishing everything only ever *suggests* a status change — the suggestion

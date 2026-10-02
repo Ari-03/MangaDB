@@ -5,9 +5,9 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { pageHead } from "~/lib/seo";
 
 /**
- * The "about the data" page (ticket #40, spec §7): where the catalog comes
+ * The "about the data" page (spec §7): where the catalog comes
  * from, the honest digital-coverage note, the ANN attribution its license
- * requires, and the cover takedown contact (#13). Static, indexable.
+ * requires, and the cover takedown contact. Static, indexable.
  *
  * Set as one readable column (~68ch) — this is the only page on the site that
  * is read rather than browsed, so it gets no shelves, only the display face.

@@ -13,7 +13,7 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The sensitive-operations panel (ticket #33, spec §5): Hide, Restore,
+ * The sensitive-operations panel (spec §5): Hide, Restore,
  * Merge, Split, and temporary Locks for one record. Every operation shows
  * the impact preview, demands a written reason, and requires an explicit
  * confirmation checkbox before its button enables — the mutations enforce

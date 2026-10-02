@@ -39,7 +39,7 @@ import { slugParams } from "~/lib/slug";
 import { SeriesShelfItem } from "~/lib/shelfItem";
 
 // The upcoming lane's horizon: the three months after this one (~a 90-day
-// shelf, prototype #17). The Releases browser owns everything beyond it.
+// shelf). The Releases browser owns everything beyond it.
 const LANE_HORIZON_MONTHS = 3;
 /** Top series shown: the publisher's biggest active series. */
 const TOP_SERIES = 12;
@@ -47,7 +47,7 @@ const TOP_SERIES = 12;
 const SHELF_PREVIEW = 12;
 
 /**
- * The Publisher Spotlight page (ticket #25, spec §10/§11): `/publisher/{slug}`
+ * The Publisher Spotlight page (spec §10/§11): `/publisher/{slug}`
  * is a publisher-led profile. Identity and a few numbers first, then this
  * month's books (still to come, then already out), the publisher's top
  * series, and what lands in the months after, each book once however many
@@ -103,7 +103,7 @@ export const Route = createFileRoute("/publisher/$slug")({
     };
   },
   // Title/description formulas, canonical link, and BreadcrumbList +
-  // Organization JSON-LD (spec §11, ticket #39).
+  // Organization JSON-LD (spec §11).
   head: ({ loaderData }) => {
     if (!loaderData) return {};
     const { publisher } = loaderData;
@@ -243,8 +243,8 @@ function PublisherPage() {
               ))}
             </p>
           ) : null}
-          {/* The clear route into the main Releases browser, pre-filtered
-              (prototype #17): cross-publisher comparison lives there. */}
+          {/* The clear route into the main Releases browser, pre-filtered:
+              cross-publisher comparison lives there. */}
           <p className="pub-cta">
             <Link
               className="btn btn-primary"
@@ -377,7 +377,7 @@ function PublisherPage() {
         ) : null}
       </section>
 
-      {/* The moderator/administrator edit entry point (#31); publishers are
+      {/* The moderator/administrator edit entry point; publishers are
           keyed by slug in the edit form. */}
       <ModEditLink type="publisher" editKey={publisher.slug} />
     </main>

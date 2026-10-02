@@ -269,7 +269,7 @@ function CommentsQueueLinkInner() {
 /**
  * The maintenance entry point on a record page: Moderators and
  * Administrators get the direct edit (`/mod/edit`); Editors get the update
- * proposal (`/mod/propose`, ticket #32) whose submission lands In Review.
+ * proposal (`/mod/propose`) whose submission lands In Review.
  */
 export function ModEditLink(props: { type: string; editKey: string }) {
   if (!convexClient) return null;
@@ -285,7 +285,7 @@ function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) 
         <Link to="/mod/edit/$type/$key" params={{ type, key: editKey }}>
           Edit this record
         </Link>
-        {/* The sensitive-operations panel (ticket #33): hide/restore,
+        {/* The sensitive-operations panel: hide/restore,
             merge/split, temporary locks. */}
         <Link to="/mod/manage/$type/$key" params={{ type, key: editKey }}>
           Manage (hide / merge / lock)
@@ -306,9 +306,9 @@ function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) 
 }
 
 /**
- * The atomic multi-record proposal entry point on a Series page (ticket
- * #32): any data-team member can propose a new Volume + Edition + Release
- * in one temp-ID Proposal.
+ * The atomic multi-record proposal entry point on a Series page: any
+ * data-team member can propose a new Volume + Edition + Release in one
+ * temp-ID Proposal.
  */
 export function ProposeNewRecordsLink(props: { seriesPublicId: number }) {
   if (!convexClient) return null;

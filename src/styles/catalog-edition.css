@@ -1,6 +1,6 @@
-/* Edition, Bundle, Publisher Spotlight pages (#23/#25), the shared catalog
+/* Edition, Bundle, Publisher Spotlight pages, the shared catalog
    Release row + coverage chips (lib/catalogRows.tsx), and the personal
-   collection controls (#27). Owner: catalog-edition port.
+   collection controls.
 
    The Release row and the collection controls also render on the Volume page,
    which another page file owns: everything here is therefore scoped under
@@ -373,7 +373,7 @@
   justify-content: flex-end;
 }
 
-/* --- Publisher Spotlight (#25) ------------------------------------------ */
+/* --- Publisher Spotlight ------------------------------------------ */
 
 .pub-hero {
   display: grid;
@@ -520,7 +520,7 @@
   color: var(--text-mute);
 }
 
-/* --- Personal collection (#27) ------------------------------------------
+/* --- Personal collection ------------------------------------------
    Exactly one state per entry, so the control is one segmented switch rather
    than three independent toggles. The pressed look keys off aria-pressed, so
    what is announced and what is drawn cannot drift apart. */

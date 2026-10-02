@@ -1,4 +1,4 @@
-// Search as you type (ticket #38 follow-up): the header search box as a
+// Search as you type: the header search box as a
 // combobox that offers live suggestions from `api.catalog.suggest` — Series
 // with their jackets, "Did you mean" near misses for typos, Publishers, and
 // a last row into the full /search page. Needs the reactive Convex client;

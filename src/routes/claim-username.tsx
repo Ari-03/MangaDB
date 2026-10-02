@@ -20,7 +20,7 @@ const fetchSignedIn = createServerFn({ method: "GET" }).handler(
 );
 
 /**
- * The forced first-sign-in step (ticket #26) and the username-change screen.
+ * The forced first-sign-in step and the username-change screen.
  * Claiming atomically creates the Convex User just in time (convex/users.ts);
  * changing releases the old name immediately. All policy — format, reserved
  * list, case-insensitive uniqueness — is enforced in the mutation; this form

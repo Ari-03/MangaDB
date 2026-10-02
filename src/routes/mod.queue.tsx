@@ -9,7 +9,7 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The shared review queue (ticket #32, spec §5): every In-Review Proposal,
+ * The shared review queue (spec §5): every In-Review Proposal,
  * oldest first, Data-Team-visible only. Filterable by operation, record
  * type, author/source, age, warnings, and staleness; claims are shown so
  * reviewers coordinate without exclusive authority. Never indexed.

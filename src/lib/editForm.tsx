@@ -1,8 +1,8 @@
 // Shared form plumbing for the record edit surfaces: the Moderator direct
-// edit (/mod/edit, ticket #31) and the Editor update proposal (/mod/propose,
-// ticket #32). Everything edits as strings keyed by field name; the submit
-// handlers shape typed values that the Convex mutations re-validate against
-// the same registry (convex/lib/moderationFields.ts).
+// edit (/mod/edit) and the Editor update proposal (/mod/propose).
+// Everything edits as strings keyed by field name; the submit handlers shape
+// typed values that the Convex mutations re-validate against the same
+// registry (convex/lib/moderationFields.ts).
 
 import {
   EDITABLE_FIELDS,

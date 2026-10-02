@@ -14,7 +14,7 @@ import {
 } from "~/lib/releasesBrowser";
 
 /**
- * `/releases` — the Release Agenda (ticket #24, spec §10): the first-visit
+ * `/releases` — the Release Agenda (spec §10): the first-visit
  * default of the Releases browser. A cover-led chronological list of the
  * current month's Canonical Releases, grouped and anchored by publication
  * date, each row showing cover, Volume label, Format, and Publisher.

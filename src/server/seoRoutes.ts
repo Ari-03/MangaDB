@@ -1,4 +1,4 @@
-// On-demand sitemaps + robots.txt (ticket #39, spec §11), served from the
+// On-demand sitemaps + robots.txt (spec §11), served from the
 // custom Workers entry (src/server.ts) alongside the canonical-host redirect:
 // `/sitemap.xml` is an index of per-entity child sitemaps (series, volumes,
 // editions, publishers, bundles, months) containing exactly the indexable

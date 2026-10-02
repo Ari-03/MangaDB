@@ -9,7 +9,7 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The atomic multi-record proposal (ticket #32, spec §5): one Proposal that
+ * The atomic multi-record proposal (spec §5): one Proposal that
  * creates a new Volume, an Edition covering it, and a Release — wired
  * together with temp-IDs so approval lands all three (plus coverage) in one
  * mutation, or nothing. Data-Team-only; never indexed.

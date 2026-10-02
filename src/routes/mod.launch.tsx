@@ -13,7 +13,7 @@ import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
 /**
- * The launch dashboard (ticket #40, spec §7): seed-stage progress and
+ * The launch dashboard (spec §7): seed-stage progress and
  * controls, the quality-gate samples and duplicate sweep, Bootstrap Mode,
  * the correction-loop attestation, and the computed launch-ready checklist.
  * Data-Team-visible; the actions are Moderator/Administrator-gated

@@ -9,7 +9,7 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * Role governance (ticket #31, spec §4/§5): the data-team roster, the
+ * Role governance (spec §4/§5): the data-team roster, the
  * appoint/revoke/suspend/reinstate actions, and the permanent audit trail.
  * Administrators appoint Moderators; Moderators appoint Editors; every
  * change lands in the append-only roleAudit table. The initial Administrator

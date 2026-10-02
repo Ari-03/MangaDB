@@ -22,7 +22,7 @@ import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
 
 /**
- * The Bundle page (ticket #23, spec §2/§11): `/bundle/{id}/{slug}`,
+ * The Bundle page (spec §2/§11): `/bundle/{id}/{slug}`,
  * server-rendered from Convex. A Release Bundle is a purchasable box set
  * with its own publication facts (box-set ISBN, date, price); its member
  * Releases keep their individual identities, so each member links back to
@@ -46,7 +46,7 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
     return page;
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // BreadcrumbList JSON-LD (spec §11, ticket #39). Facts lead; the Bundle's
+  // BreadcrumbList JSON-LD (spec §11). Facts lead; the Bundle's
   // publisher blurb is the fallback.
   head: ({ loaderData }) => {
     if (!loaderData) return {};
@@ -108,7 +108,7 @@ function BundlePage() {
               lazy={false}
             />
           </div>
-          {/* Collection Entry controls (#27); render nothing signed out.
+          {/* Collection Entry controls; render nothing signed out.
               Owning the box set confers Derived Ownership on every member. */}
           <BundleCollectionControls bundleId={bundle.id} />
         </div>
@@ -209,7 +209,7 @@ function BundlePage() {
         </>
       ) : null}
 
-      {/* Public revision history + the moderator edit entry point (#31). */}
+      {/* Public revision history + the moderator edit entry point. */}
       <RecordHistory type="releaseBundle" publicId={bundle.publicId} />
       <ModEditLink type="releaseBundle" editKey={String(bundle.publicId)} />
     </main>

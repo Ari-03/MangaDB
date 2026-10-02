@@ -1,4 +1,4 @@
-// Month arithmetic for the Releases browser (ticket #24): `/releases/{yyyy-mm}`
+// Month arithmetic for the Releases browser: `/releases/{yyyy-mm}`
 // is the month-anchored URL form (spec §11 — the browser paginates by month
 // URL, never `?page=N`). All calendar math is UTC so SSR and hydration agree.
 
@@ -44,7 +44,7 @@ export function currentMonth(now: Date = new Date()): YearMonth {
 }
 
 // yyyymmdd for today (UTC), shared with the Convex side; it lower-bounds the
-// Publisher Spotlight's upcoming lane (ticket #25) among others. Which Series
+// Publisher Spotlight's upcoming lane among others. Which Series
 // library timing filters count back from it (timingNeedsToday) rides along.
 export { timingNeedsToday, todaySortKey } from "../../convex/lib/dates";
 

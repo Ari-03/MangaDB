@@ -1,4 +1,4 @@
-// Tracking-visibility UI (ticket #30, spec §3). Two surfaces:
+// Tracking-visibility UI (spec §3). Two surfaces:
 // - SharingSettings on /me: the separate Ownership and Reading defaults
 //   (private until explicitly opened) and the link to the public profile.
 // - SeriesVisibilityControls on the Series page: the per-Series overrides,

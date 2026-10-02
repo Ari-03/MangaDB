@@ -20,7 +20,7 @@ import { editionPath } from "~/lib/slug";
 
 /**
  * `/releases/{yyyy-mm}` — the Month Grid sibling of the Release Agenda
- * (ticket #24, spec §10): the same month window of Canonical Releases
+ * (spec §10): the same month window of Canonical Releases
  * rendered month-at-a-glance, each release on its publication date.
  *
  * `?view=agenda` renders the Agenda for this month instead, so past and
@@ -51,7 +51,7 @@ export const Route = createFileRoute("/releases/$month")({
   // noindex/follow. The canonical always points at the bare month URL, so no
   // query-string variant — including a stray `?page=N` — is ever indexed.
   // JSON-LD: BreadcrumbList + an ItemList of the month's Releases, each
-  // linking its Edition page anchored at the Release row (ticket #39).
+  // linking its Edition page anchored at the Release row.
   head: ({ loaderData, match }) => {
     if (!loaderData) return {};
     const { anchor, data } = loaderData;

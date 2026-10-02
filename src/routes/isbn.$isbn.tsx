@@ -6,7 +6,7 @@ import { normalizeIsbn } from "~/lib/isbn";
 import { bundlePath, editionPath } from "~/lib/slug";
 
 /**
- * `/isbn/{isbn}` (ticket #23, spec §11): the ISBN entry point. A valid
+ * `/isbn/{isbn}` (spec §11): the ISBN entry point. A valid
  * ISBN-10/13 (separators tolerated) 301s to the owning Edition page anchored
  * at the matching Release row; a box-set ISBN 301s to its Bundle page. A
  * Release match wins any conflict — the resolution order lives in the Convex

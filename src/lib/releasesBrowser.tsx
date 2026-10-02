@@ -1,4 +1,4 @@
-// Shared UI for the Releases browser (ticket #24, spec §10): the Agenda
+// Shared UI for the Releases browser (spec §10): the Agenda
 // (`/releases`) and the Month Grid (`/releases/{yyyy-mm}`) are sibling views
 // over the same month window of Canonical Releases, sharing the Format,
 // Publisher, and followed-Series filters. View + filter state is entirely in
@@ -8,7 +8,7 @@
 // The routes load a month once, unfiltered, and every filter applies in
 // memory here, so switching filters or views never waits on the network.
 //
-// Followed Series (ticket #29) are a subtle marker + a filter, never a
+// Followed Series are a subtle marker + a filter, never a
 // separate section. Follows are personal, so the marker and filter are a
 // signed-in client-side overlay: the SSR month window stays public and
 // identical for everyone, and `?followed=true` views are noindex (spec §11).
@@ -45,7 +45,7 @@ type ReleaseFormat = "physical" | "digital";
 export type BrowseFilters = {
   format?: ReleaseFormat;
   publisher?: string;
-  /** Only releases from followed Series (#29); a personal, noindex view. */
+  /** Only releases from followed Series; a personal, noindex view. */
   followed?: true;
 };
 
@@ -510,9 +510,8 @@ function groupByDay(releases: Array<BrowseRelease>) {
 }
 
 /**
- * The Agenda's per-day anchor, so the Month Grid can link a day straight to
- * its section. Month-qualified because the Publisher page stacks several
- * months of AgendaView on one document.
+ * The Agenda's per-day anchor, month-qualified, so the Month Grid can link a
+ * day straight to its section.
  */
 function dayAnchorId(anchor: YearMonth, day: number | null): string {
   return `day-${monthParam(anchor)}-${day === null ? "tba" : String(day).padStart(2, "0")}`;
@@ -520,11 +519,7 @@ function dayAnchorId(anchor: YearMonth, day: number | null): string {
 
 // ---------- Agenda (spec §10: cover-led chronological default) ----------
 
-/**
- * The cover-led day-grouped release list. Exported for the Publisher
- * Spotlight's upcoming lane (ticket #25), which renders the same rows
- * month by month (without the followed overlay).
- */
+/** The cover-led day-grouped release list, followed Series marked. */
 function AgendaView({
   anchor,
   releases,
@@ -579,7 +574,7 @@ function isFollowed(
   );
 }
 
-/** The subtle followed-Series marker (#29) — never a separate section. */
+/** The subtle followed-Series marker — never a separate section. */
 function FollowedMarker() {
   return (
     <span
@@ -663,7 +658,7 @@ function ReleaseRow({
         </p>
         <div className="rel-meta">
           {release.publisher ? (
-            // The Publisher Spotlight page (ticket #25, spec §11).
+            // The Publisher Spotlight page (spec §11).
             <Link to="/publisher/$slug" params={{ slug: release.publisher.slug }}>
               {release.publisher.name}
             </Link>

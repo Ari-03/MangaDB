@@ -1,4 +1,4 @@
-/* Search (#38), auth + account (#26), tracking visibility + public profiles (#30), series follows + my upcoming (#29), about-the-data (#40). Owner: account port.
+/* Search, auth + account, tracking visibility + public profiles, series follows + my upcoming, about-the-data.
    These are the quiet side rooms of the shelf: one display title, a hairline
    under it, and the shared cover/shelf vocabulary doing the rest. Anything
    with a Release or a Volume behind it is drawn as a book, never as a link
@@ -417,7 +417,7 @@
 }
 [data-theme="light"] .form-error { --danger: #a8371a; }
 
-/* --- Tracking visibility (#30): segmented pills -------------------------- */
+/* --- Tracking visibility: segmented pills -------------------------- */
 
 .sharing-settings { display: grid; gap: 18px; }
 .sharing-lede {
@@ -488,7 +488,7 @@
 }
 .sharing-profile-link a:hover { border-bottom-color: var(--accent); }
 
-/* --- /search (#38) ------------------------------------------------------- */
+/* --- /search ------------------------------------------------------- */
 
 .search-page .acct-head { border-bottom: 0; padding-bottom: 6px; }
 
@@ -840,7 +840,7 @@
 .username-form button[type="submit"]:disabled:hover { background: var(--accent); }
 .username-hint { font-size: 0.82rem; color: var(--text-mute); font-weight: 400; }
 
-/* --- /about-the-data (#40): one readable column -------------------------- */
+/* --- /about-the-data: one readable column -------------------------- */
 
 /* one measure for every block, so the hairlines under the headings and the
    text they head end on the same line (a `ch` measure would not: the display

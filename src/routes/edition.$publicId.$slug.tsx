@@ -30,7 +30,7 @@ import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { editionPath, parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 
 /**
- * The Edition page — the book detail page (ticket #23, spec §2/§10/§11):
+ * The Edition page — the book detail page (spec §2/§10/§11):
  * `/edition/{id}/{slug}`, server-rendered from Convex. The header carries
  * the book's one Edition Description (CONTEXT.md), labelled when it is only
  * the Series synopsis. Release rows differ only in Format/Binding, each
@@ -95,7 +95,7 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
     return { ...page, rating };
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // JSON-LD (spec §11, ticket #39): BreadcrumbList plus one Book per Release
+  // JSON-LD (spec §11): BreadcrumbList plus one Book per Release
   // row — Releases have no page of their own, so each Book's URL is this
   // Edition page anchored at its row. The description leads with facts
   // (publisher, date, ISBN), falling back to the Edition Description when it
@@ -385,7 +385,7 @@ function EditionPage() {
         </section>
       ) : null}
 
-      {/* Public revision history + the moderator edit entry point (#31). */}
+      {/* Public revision history + the moderator edit entry point. */}
       <RecordHistory type="edition" publicId={edition.publicId} />
       <ModEditLink type="edition" editKey={String(edition.publicId)} />
       <ModReleaseEditLinks

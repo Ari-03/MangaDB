@@ -76,7 +76,7 @@ export const Route = createFileRoute("/")({
     }).catch(() => null);
     return { stats, series, month, todaySort, releases, nextReleases, jackets };
   },
-  // Canonical + social card for the home page (ticket #39); the title and
+  // Canonical + social card for the home page; the title and
   // description templates live in the root route's defaults.
   head: () =>
     pageHead({

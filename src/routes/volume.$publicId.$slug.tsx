@@ -20,7 +20,7 @@ import { pageHead, truncateDescription, volumeTitleTag } from "~/lib/seo";
 import { parsePublicId, seriesPath, slugParams, volumePath } from "~/lib/slug";
 
 /**
- * The Volume page (ticket #23): `/volume/{id}/{slug}`, server-rendered from
+ * The Volume page: `/volume/{id}/{slug}`, server-rendered from
  * Convex. It reveals every Release covering this Volume, grouped under its
  * Edition, with complete and partial coverage listed distinctly — including
  * the omnibus case, whose full ordered Coverage shows what else it spans.
@@ -61,7 +61,7 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
     return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // BreadcrumbList JSON-LD (spec §11, ticket #39). The description is the
+  // BreadcrumbList JSON-LD (spec §11). The description is the
   // Volume's own (its Synopsis or a single-volume Edition's blurb), falling
   // back to fact assembly; the Series synopsis fallback is not about this
   // Volume, so it never becomes the meta description.
@@ -165,11 +165,11 @@ function VolumePage() {
             out (or with nothing owned or read), leaving the card's blocks
             empty — CSS hides it then. */}
         <div className="track-card">
-          {/* Volume ownership (#27): displayed purely through the owned
+          {/* Volume ownership: displayed purely through the owned
               Releases covering it — direct or via an Owned Bundle; no
               stored Volume state. */}
           <VolumeOwnership volumePublicId={volume.publicId} />
-          {/* Durable, edition-independent read count (#28). */}
+          {/* Durable, edition-independent read count. */}
           <VolumeReadCount
             seriesPublicId={series.publicId}
             volumePublicId={volume.publicId}
@@ -286,7 +286,7 @@ function VolumePage() {
         <CommentsSection target={ratingTarget} initial={page.comments} noun="volume" />
       ) : null}
 
-      {/* Public revision history + the moderator edit entry point (#31). */}
+      {/* Public revision history + the moderator edit entry point. */}
       <RecordHistory type="volume" publicId={volume.publicId} />
       <ModEditLink type="volume" editKey={String(volume.publicId)} />
     </main>

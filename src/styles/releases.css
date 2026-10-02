@@ -1,7 +1,6 @@
-/* Releases browser: Agenda + Month Grid (#24). Owner: releases port.
+/* Releases browser: Agenda + Month Grid.
    Composes the shared vocabulary in tokens/shell/covers: .chip, .select,
-   .notice, .cover + .cover-ph, .cover-link, .star. Prototype sections 9
-   (toolbar), 10 (agenda) and 11 (month grid) of 05-bookshelf. */
+   .notice, .cover + .cover-ph, .cover-link, .star. */
 
 .releases-page { padding-bottom: 8px; }
 /* Empty window, sign-in prompt, unconfigured Convex: the notice replaces the

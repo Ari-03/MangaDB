@@ -1,4 +1,4 @@
-// The SEO layer (ticket #39, spec §11): formula-generated titles and meta
+// The SEO layer (spec §11): formula-generated titles and meta
 // descriptions per page type, cover-led OG/Twitter cards, canonical URLs, and
 // JSON-LD builders. All metadata is generated — no hand-written metadata in
 // v1 — so retitling under the branding item is a template edit here, never a
@@ -37,7 +37,7 @@ export function truncateDescription(text: string, max = 160): string {
   return `${cut.slice(0, lastSpace > max / 2 ? lastSpace : max - 1).trimEnd()}…`;
 }
 
-// ---------- title templates (issue #19's formulas, verbatim) ----------
+// ---------- title templates ----------
 
 export function seriesTitleTag(title: string): string {
   return `${title} – English Manga Volumes & Release Dates | ${SITE_NAME}`;

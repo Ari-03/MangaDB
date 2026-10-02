@@ -37,7 +37,7 @@ import { SeriesVisibilityControls } from "~/lib/sharing";
 import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 
 /**
- * The Series page (ticket #22): `/series/{id}/{slug}`, server-rendered from
+ * The Series page: `/series/{id}/{slug}`, server-rendered from
  * Convex. The Series' Editions are grouped into reading paths — the standard
  * run per publisher, then each Edition Line (Omnibus, Deluxe, …); the picker
  * shows each path's first book and `?edition=` opens that path as a shelf of
@@ -80,7 +80,7 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
     return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // BreadcrumbList + BookSeries JSON-LD (spec §11, ticket #39).
+  // BreadcrumbList + BookSeries JSON-LD (spec §11).
   head: ({ loaderData }) => {
     if (!loaderData) return {};
     const { series, volumes, coverUrl } = loaderData;
@@ -185,7 +185,7 @@ function SeriesPage() {
         {/* The viewer's take, under the cover: their private Rating (the
             chip in the body shows the public average it feeds), their own
             Review, then Follow (the explicit toggle for future-release
-            interest, #29) beside the private Favorite. A grid item of its
+            interest) beside the private Favorite. A grid item of its
             own, so opening the review form can give it the full width. */}
         <TakePanel target={ratingTarget} noun="series">
           <SeriesFollowControls seriesPublicId={series.publicId} />
@@ -309,8 +309,8 @@ function SeriesPage() {
               hides the bar then, so the public page keeps the hero clean. */}
           <div className="owner-bar">
             <div className="track-group track-group--reading">
-              {/* Series Reading Status is set only here, by explicit choice
-                  (#28); the tracking prompts never change it without
+              {/* Series Reading Status is set only here, by explicit choice;
+                  the tracking prompts never change it without
                   confirmation. Progress counts read Volumes, not entries. */}
               <SeriesReadingControls seriesPublicId={series.publicId} />
               <SeriesReadingProgress
@@ -319,7 +319,7 @@ function SeriesPage() {
               />
             </div>
             <div className="track-group track-group--sharing">
-              {/* Per-Series visibility overrides for the public profile (#30),
+              {/* Per-Series visibility overrides for the public profile,
                   in a popover so the bar never reflows. */}
               <SeriesVisibilityControls seriesPublicId={series.publicId} />
             </div>
@@ -403,10 +403,10 @@ function SeriesPage() {
       ) : null}
 
       {/* Partially imported Series show as-is; every Series page carries the
-          report affordance feeding the proposal queue (#40, spec §7). */}
+          report affordance feeding the proposal queue (spec §7). */}
       <SeriesReportAffordance seriesPublicId={series.publicId} />
 
-      {/* Public revision history + the data-team entry points (#31/#32). */}
+      {/* Public revision history + the data-team entry points. */}
       <RecordHistory type="series" publicId={series.publicId} />
       <ModEditLink type="series" editKey={String(series.publicId)} />
       <ProposeNewRecordsLink seriesPublicId={series.publicId} />

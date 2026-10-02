@@ -1,4 +1,4 @@
-/* Design tokens + base element styles for the Bookshelf look (ported from prototypes/site-redesign/05-bookshelf). Dark is the default; light is opt-in via html[data-theme="light"], set before paint by the boot script in __root.tsx. */
+/* Design tokens + base element styles for the Bookshelf look. Dark is the default; light is opt-in via html[data-theme="light"], set before paint by the boot script in __root.tsx. */
 /* --- 1. Tokens ----------------------------------------------------------- */
 
 /* Dark is the default. Light is opt-in via [data-theme="light"], set from

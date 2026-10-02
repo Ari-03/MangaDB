@@ -2,7 +2,7 @@
 // a jacketed cover when art is on file, otherwise an unjacketed book in
 // coloured cloth carrying the title — never a broken image, never fabricated
 // art. Collection state is worn on the cover itself as a badge, and the
-// followed-Series marker (#29) sits in the opposite corner.
+// followed-Series marker sits in the opposite corner.
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
@@ -118,7 +118,7 @@ type CoverProps = {
   numbered?: { series: string; number: string };
   /** Collection badges, usually `<CoverBadge>`s. */
   badges?: ReactNode;
-  /** True when the viewer follows this Series (the ★ marker, #29). */
+  /** True when the viewer follows this Series (the ★ marker). */
   followed?: boolean;
   /** `false` for the first covers above the fold. Defaults to lazy. */
   lazy?: boolean;

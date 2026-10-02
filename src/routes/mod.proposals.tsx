@@ -7,7 +7,7 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The viewer's own proposals (ticket #32): drafts to return to, In-Review
+ * The viewer's own proposals: drafts to return to, In-Review
  * submissions to watch, and decisions. Data-Team-only; never indexed.
  */
 export const Route = createFileRoute("/mod/proposals")({

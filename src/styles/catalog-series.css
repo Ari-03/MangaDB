@@ -1,6 +1,6 @@
-/* Series + Volume pages (#22/#23) — the Reading Path. Also the reading
-   tracking controls (#28) and the per-Series report affordance (#40), whose
-   markup lives in lib/reading.tsx and lib/report.tsx. Owner: catalog-series.
+/* Series + Volume pages — the Reading Path. Also the reading
+   tracking controls and the per-Series report affordance, whose
+   markup lives in lib/reading.tsx and lib/report.tsx.
 
    The shape of both pages: a book standing on a ledge on the left, its facts
    on the right; the Series page then offers its editions and the selected
@@ -340,7 +340,7 @@
   color: var(--text-mute);
 }
 
-/* --- Report affordance (#40) -------------------------------------------- */
+/* --- Report affordance -------------------------------------------- */
 
 .series-report {
   margin-top: 54px;
@@ -502,7 +502,7 @@
 }
 .vol-edition .coverage-chips { margin: 0 0 12px; }
 
-/* --- Reading passes and prompts (#28) -----------------------------------
+/* --- Reading passes and prompts -----------------------------------
    A pass is a reading attempt through one Release; nothing here ever writes
    a Reading Status on its own, so every suggestion is a prompt with an
    explicit button. */

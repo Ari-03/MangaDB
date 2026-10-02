@@ -22,7 +22,7 @@ import { useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**
- * The Administrator/Moderator direct-edit form (ticket #31, spec §5): the
+ * The Administrator/Moderator direct-edit form (spec §5): the
  * save is an immediately approved Proposal Version — the single write path —
  * producing one immutable public Revision on the record. The form renders
  * from the same field registry the mutation validates against

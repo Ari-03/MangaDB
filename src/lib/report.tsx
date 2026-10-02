@@ -1,5 +1,5 @@
 // The per-Series "see something missing/wrong? → report" affordance
-// (ticket #40, spec §7). Renders on every Series page — partially imported
+// (spec §7). Renders on every Series page — partially imported
 // Series show publicly as-is, and this is their correction on-ramp into the
 // proposal queue. The closed state is static (SSR renders it identically
 // for everyone); opening it reveals the report form signed in, or a sign-in

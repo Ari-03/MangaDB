@@ -1,4 +1,4 @@
-// Personal collection UI (ticket #27, spec §3), rendered as a signed-in
+// Personal collection UI (spec §3), rendered as a signed-in
 // overlay on the public catalog pages: Wanted / Ordered / Owned toggles on
 // every Release row and Bundle page, the pinned-Variant picker, Derived
 // Ownership badges, the Volume ownership summary, and the library's
@@ -103,7 +103,7 @@ export function ReleaseCollectionControls({
 function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
   const data = useQuery(api.collection.entryForRelease, { releaseId });
   const setEntry = useMutation(api.collection.setReleaseEntry);
-  // The post-first-entry follow suggestion (#29) the last mutation returned;
+  // The post-first-entry follow suggestion the last mutation returned;
   // ephemeral — following and permanent dismissal go through FollowPrompt.
   const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
   const lock = useRunLock(
@@ -193,7 +193,7 @@ export function BundleCollectionControls({ bundleId }: { bundleId: Id<"releaseBu
 function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
   const data = useQuery(api.collection.entryForBundle, { bundleId });
   const setEntry = useMutation(api.collection.setBundleEntry);
-  // Follow suggestions (#29) for the member Releases' Series.
+  // Follow suggestions for the member Releases' Series.
   const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
   if (!data) return null;
   return (

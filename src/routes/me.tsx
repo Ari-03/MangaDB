@@ -31,10 +31,10 @@ const fetchViewerState = createServerFn({ method: "GET" }).handler(
 );
 
 /**
- * Gated /me shell (ticket #26): the catalog stays fully public; everything
+ * Gated /me shell: the catalog stays fully public; everything
  * under /me requires a signed-in viewer whose username claim is complete.
  * First sign-in is bounced to /claim-username before anything personal renders.
- * The tracking slices (#7) mount their pages under this layout.
+ * The tracking slices mount their pages under this layout.
  */
 export const Route = createFileRoute("/me")({
   beforeLoad: async () => {

@@ -8,7 +8,7 @@ import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The Data Team imports dashboard (ticket #37, spec §6): every Approved
+ * The Data Team imports dashboard (spec §6): every Approved
  * Source with its cadence and health flag — an unhealthy source (three
  * consecutive failed runs) is flagged loudly — plus inspectable Import Run
  * history: source, timing, records seen/changed, and errors. Never indexed.
