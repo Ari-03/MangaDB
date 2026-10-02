@@ -20,9 +20,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
-import { getActive } from "./lib/merges";
+import { getActive, requireActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
-import { requireActiveSeries } from "./reading";
 import { joinBrowseRows } from "./releases";
 
 // My Upcoming scans the uncapped future horizon (spec §7) over by_date; the
@@ -317,7 +316,7 @@ export const setSeriesFollow = mutation({
   args: { seriesId: v.id("series"), following: v.boolean() },
   handler: async (ctx, { seriesId, following }) => {
     const user = await requireUser(ctx);
-    const series = await requireActiveSeries(ctx, seriesId);
+    const series = await requireActive(ctx, "series", seriesId, "Series");
     const state = await seriesStateRow(ctx, user._id, series._id);
     if (state) {
       await ctx.db.patch(state._id, { following });
@@ -342,7 +341,7 @@ export const dismissFollowPrompt = mutation({
   args: { seriesId: v.id("series") },
   handler: async (ctx, { seriesId }) => {
     const user = await requireUser(ctx);
-    const series = await requireActiveSeries(ctx, seriesId);
+    const series = await requireActive(ctx, "series", seriesId, "Series");
     const state = await seriesStateRow(ctx, user._id, series._id);
     if (state) {
       await ctx.db.patch(state._id, { followPromptDismissed: true });

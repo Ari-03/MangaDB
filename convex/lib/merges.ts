@@ -56,3 +56,21 @@ export async function getActive<T extends MergeableTable>(
 ): Promise<Doc<T> | null> {
   return await followMerges(ctx, table, await ctx.db.get(id));
 }
+
+/**
+ * The active survivor of a stored record (by ID or as read), for writes:
+ * throws `notFound` ("{label} not found.") when it is unknown or hidden.
+ */
+export async function requireActive<T extends MergeableTable>(
+  ctx: QueryCtx,
+  table: T,
+  stored: Id<T> | Doc<T> | null,
+  label: string,
+): Promise<Doc<T>> {
+  const doc = typeof stored === "string" ? await ctx.db.get(stored) : stored;
+  const active = await followMerges(ctx, table, doc);
+  if (!active) {
+    throw new ConvexError({ code: "notFound", message: `${label} not found.` });
+  }
+  return active;
+}

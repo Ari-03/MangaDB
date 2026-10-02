@@ -23,7 +23,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
-import { followMerges, getActive } from "./lib/merges";
+import { followMerges, getActive, requireActive } from "./lib/merges";
 import { releaseLink, variantName } from "./collection";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { showMatureArg, visibleTo } from "./lib/mature";
@@ -31,7 +31,6 @@ import { FEATURES } from "./lib/features";
 import { omnibusEdition, ratingRow, targetOfRow, type TargetId } from "./lib/ratings";
 import { volumeTitle } from "./lib/titles";
 import { normalizeUsername } from "./lib/usernames";
-import { requireActiveSeries } from "./reading";
 
 // Mirrors the visibility union in schema.ts.
 const visibilityValidator = v.union(v.literal("public"), v.literal("private"));
@@ -195,7 +194,7 @@ export const setSeriesVisibility = mutation({
   },
   handler: async (ctx, { seriesId, kind, visibility }) => {
     const user = await requireUser(ctx);
-    const series = await requireActiveSeries(ctx, seriesId);
+    const series = await requireActive(ctx, "series", seriesId, "Series");
     const override = visibility === "default" ? undefined : visibility;
     const patch =
       kind === "ownership"

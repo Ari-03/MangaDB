@@ -22,7 +22,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { editionCoverage } from "./catalogPages";
-import { followMerges, getActive } from "./lib/merges";
+import { getActive, requireActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { releaseAnchor } from "./lib/titles";
@@ -37,30 +37,6 @@ const readingStatusValidator = v.union(
 );
 
 // ---------- shared lookups ----------
-
-/** The Release resolved through merges; throws when unknown or hidden. */
-export async function requireActiveRelease(
-  ctx: QueryCtx,
-  releaseId: Id<"releases">,
-): Promise<Doc<"releases">> {
-  const release = await getActive(ctx, "releases", releaseId);
-  if (!release) {
-    throw new ConvexError({ code: "notFound", message: "Release not found." });
-  }
-  return release;
-}
-
-/** The Series resolved through merges; throws when unknown or hidden. */
-export async function requireActiveSeries(
-  ctx: QueryCtx,
-  seriesId: Id<"series">,
-): Promise<Doc<"series">> {
-  const series = await getActive(ctx, "series", seriesId);
-  if (!series) {
-    throw new ConvexError({ code: "notFound", message: "Series not found." });
-  }
-  return series;
-}
 
 async function seriesStateRow(
   ctx: QueryCtx,
@@ -371,7 +347,7 @@ export const setSeriesReadingStatus = mutation({
   },
   handler: async (ctx, { seriesId, status }) => {
     const user = await requireUser(ctx);
-    const series = await requireActiveSeries(ctx, seriesId);
+    const series = await requireActive(ctx, "series", seriesId, "Series");
     const state = await seriesStateRow(ctx, user._id, series._id);
     if (state) {
       await ctx.db.patch(state._id, { readingStatus: status });
@@ -398,7 +374,7 @@ export const startPass = mutation({
   args: { releaseId: v.id("releases") },
   handler: async (ctx, { releaseId }) => {
     const user = await requireUser(ctx);
-    const release = await requireActiveRelease(ctx, releaseId);
+    const release = await requireActive(ctx, "releases", releaseId, "Release");
 
     const existing = await passRowFor(ctx, user._id, release._id);
     if (!existing) {
@@ -433,7 +409,7 @@ export const setPassPercent = mutation({
   args: { releaseId: v.id("releases"), percent: v.number() },
   handler: async (ctx, { releaseId, percent }) => {
     const user = await requireUser(ctx);
-    const release = await requireActiveRelease(ctx, releaseId);
+    const release = await requireActive(ctx, "releases", releaseId, "Release");
     if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
       throw new ConvexError({
         code: "badPercent",
@@ -463,7 +439,7 @@ export const completePass = mutation({
   args: { releaseId: v.id("releases") },
   handler: async (ctx, { releaseId }) => {
     const user = await requireUser(ctx);
-    const release = await requireActiveRelease(ctx, releaseId);
+    const release = await requireActive(ctx, "releases", releaseId, "Release");
     const pass = await passRowFor(ctx, user._id, release._id);
     if (!pass) {
       throw new ConvexError({ code: "noPass", message: "No active reading pass." });
@@ -520,7 +496,7 @@ export const undoCompletion = mutation({
   args: { releaseId: v.id("releases"), completedAt: v.number() },
   handler: async (ctx, { releaseId, completedAt }) => {
     const user = await requireUser(ctx);
-    const release = await requireActiveRelease(ctx, releaseId);
+    const release = await requireActive(ctx, "releases", releaseId, "Release");
 
     let decremented = 0;
     for (const volume of await completelyCoveredVolumes(ctx, release)) {
@@ -554,7 +530,7 @@ export const cancelPass = mutation({
   args: { releaseId: v.id("releases") },
   handler: async (ctx, { releaseId }) => {
     const user = await requireUser(ctx);
-    const release = await requireActiveRelease(ctx, releaseId);
+    const release = await requireActive(ctx, "releases", releaseId, "Release");
     const pass = await passRowFor(ctx, user._id, release._id);
     if (pass) await ctx.db.delete(pass._id);
     return null;
@@ -572,10 +548,7 @@ async function writeVolumeReadCount(
   toCount: (current: number) => number,
 ) {
   const user = await requireUser(ctx);
-  const volume = await getActive(ctx, "volumes", volumeId);
-  if (!volume) {
-    throw new ConvexError({ code: "notFound", message: "Volume not found." });
-  }
+  const volume = await requireActive(ctx, "volumes", volumeId, "Volume");
   const progress = await volumeProgressRow(ctx, user._id, volume._id);
   const readCount = toCount(progress?.readCount ?? 0);
   if (!Number.isInteger(readCount) || readCount < 0) {
@@ -660,10 +633,7 @@ async function writeEditionRead(
     .query("editions")
     .withIndex("by_publicId", (q) => q.eq("publicId", editionPublicId))
     .unique();
-  const edition = await followMerges(ctx, "editions", stored);
-  if (!edition) {
-    throw new ConvexError({ code: "notFound", message: "Edition not found." });
-  }
+  const edition = await requireActive(ctx, "editions", stored, "Edition");
   const rows = await ctx.db
     .query("volumeCoverages")
     .withIndex("by_edition", (q) => q.eq("editionId", edition._id))

@@ -21,12 +21,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { editionCoverage } from "./catalogPages";
-import { followMerges, getActive } from "./lib/merges";
+import { followMerges, getActive, requireActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
-import { requireActiveRelease } from "./reading";
 
 /** Batch marking (the library's "Own all") stops here; nobody shelves more in one click. */
 export const MANY_ENTRIES_CAP = 200;
@@ -39,18 +38,6 @@ const stateValidator = v.union(
 );
 
 // ---------- shared lookups ----------
-
-/** The Bundle resolved through merges; throws when unknown or hidden. */
-async function requireActiveBundle(
-  ctx: QueryCtx,
-  bundleId: Id<"releaseBundles">,
-): Promise<Doc<"releaseBundles">> {
-  const bundle = await getActive(ctx, "releaseBundles", bundleId);
-  if (!bundle) {
-    throw new ConvexError({ code: "notFound", message: "Bundle not found." });
-  }
-  return bundle;
-}
 
 /** The one direct entry for (user, release) — at most one by invariant. */
 async function releaseEntryRow(
@@ -696,7 +683,7 @@ async function writeReleaseEntry(
   state: Doc<"collectionEntries">["state"] | undefined,
   variant: Id<"releaseVariants"> | undefined | "keep",
 ) {
-  const release = await requireActiveRelease(ctx, releaseId);
+  const release = await requireActive(ctx, "releases", releaseId, "Release");
   const existing = await releaseEntryRow(ctx, user._id, release._id);
   if (!state) {
     if (existing) await ctx.db.delete(existing._id);
@@ -812,7 +799,7 @@ export const setBundleEntry = mutation({
   },
   handler: async (ctx, { bundleId, state }) => {
     const user = await requireUser(ctx);
-    const bundle = await requireActiveBundle(ctx, bundleId);
+    const bundle = await requireActive(ctx, "releaseBundles", bundleId, "Bundle");
 
     const existing = await bundleEntryRow(ctx, user._id, bundle._id);
     if (!state) {
