@@ -386,21 +386,40 @@ function pageField(html: string, label: string): string | undefined {
   return new RegExp(`<b>${escaped}:</b>([\\s\\S]*?)(?:<br\\s*/?>|</p>|<p\\b)`, "i").exec(html)?.[1];
 }
 
+/** The `<p><small>(added on …, modified on …)</small></p>` after a page's fields. */
+const ADDED_ON = /<p>\s*<small>\s*\(added on\b/i;
+const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
+
 /**
  * The page's Description, cleaned to one paragraph. It opens with a `<br>`
  * and spans paragraphs, so `pageField` cannot read it. Seen live
  * (2026-10-02) in two shapes: older pages run the text inline
  * (`<b>Description:</b><br>Text<br>\n<br>More</p>`), newer ones close the
- * paragraph and carry it in `<div class="simple-html">`. Either way it ends
- * at the `<small>(added on …)</small>` trailer (or the entry link / next
- * field when that is missing). ANN's newer copy sprinkles zero-width spaces
- * after punctuation; they go too.
+ * paragraph and carry it in `<div class="simple-html">Text</div>`. The
+ * field ends at the "added on" trailer, so markup inside the text (a list,
+ * an inline `<small>`, a bold "Note:") never cuts it short: the div runs to
+ * its last `</div>`, inline text to its closing `</p>`. Without a trailer
+ * both stop at the first close. ANN's newer copy sprinkles zero-width
+ * spaces after punctuation, sometimes as entities: they go after decoding.
  */
 function pageDescription(html: string): string | undefined {
-  const raw = /<b>Description:<\/b>([\s\S]*?)(?:<small\b|<ul\b|<fieldset\b|<b>[^<]{1,40}:<\/b>|$)/i.exec(
-    html,
-  )?.[1];
-  return raw !== undefined ? cleanBlurb(raw.replace(/[​-‍﻿]/g, "")) : undefined;
+  const label = /<b>Description:<\/b>/i.exec(html);
+  if (!label) return undefined;
+  const rest = html.slice(label.index + label[0].length);
+  const trailer = rest.search(ADDED_ON);
+  const field = trailer >= 0 ? rest.slice(0, trailer) : rest;
+  const div = (
+    trailer >= 0
+      ? /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*)<\/div>/i
+      : /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*?)<\/div>/i
+  ).exec(field)?.[1];
+  const inline =
+    trailer >= 0 ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
+  const text = cleanBlurb(div ?? inline)
+    ?.replace(ZERO_WIDTH, "")
+    .replace(/ {2,}/g, " ")
+    .trim();
+  return text || undefined;
 }
 
 /**

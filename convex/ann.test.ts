@@ -1969,4 +1969,151 @@ describe("ann — release-page descriptions", () => {
     expect(pageRequests).toEqual(["10949"]);
     expect(await descriptionOf(t, ids["2"]!)).toBe("Volume two.");
   });
+
+  /** Advance the clock a minute per read, so a link's time budget runs out. */
+  function slowClock() {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 61_000));
+  }
+  async function runScheduled(t: TestT) {
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+  }
+  const pageOf = async (t: TestT, annId: number) =>
+    ((await obsFor(t, annId))!.snapshot as { page?: Record<string, unknown> }).page;
+
+  it("a Description stored while the line was unlinked reaches the Release linked later", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubAnn([LINES], describedPages);
+    await sync(t, { releasePages: false });
+    // No publisher row yet: the pages are read and held, text stored.
+    await syncPages(t);
+    expect(await pageOf(t, 10949)).toMatchObject({ description: "Volume two.", descriptionChecked: true });
+    expect((await obsFor(t, 10949))!.recordRef).toBeUndefined();
+
+    // Another source creates the book; the next mirror links it by ISBN.
+    const vizId = await seedPublisher(t, "VIZ Media", "viz-media");
+    const releaseId = await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      const volume = (await ctx.db.query("volumes").collect()).find((v) => v.label === "2")!;
+      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 9, publisherId: vizId });
+      await ctx.db.insert("volumeCoverages", { editionId, volumeId: volume._id, order: 1, extent: "complete" });
+      return await ctx.db.insert("releases", {
+        status: "active",
+        editionId,
+        format: "physical",
+        language: "en",
+        isbn13: "9781569319024",
+        publisherId: vizId,
+        seriesIds: [series._id],
+      });
+    });
+    pageRequests.length = 0;
+    await sync(t, { releasePages: false });
+    expect((await obsFor(t, 10949))!.recordRef).toEqual({ type: "release", id: releaseId });
+    expect(await descriptionOf(t, releaseId)).toBe("Volume two.");
+
+    // Blank again (an override cleared, say): the backfill offers the
+    // stored text without a fetch.
+    await t.run(async (ctx) => ctx.db.patch(releaseId, { description: undefined }));
+    expect(await backfill(t)).toMatchObject({ fetched: 0, filled: 1 });
+    expect(pageRequests).toEqual([]);
+    expect(await descriptionOf(t, releaseId)).toBe("Volume two.");
+  });
+
+  it("caps description refetches per page-pass run", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    await syncPages(t, { maxRefetches: 2, maxFetches: 1 });
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    // Across the run's links: two refetches, the third waits for the next run.
+    expect(pageRequests).toHaveLength(2);
+    const blank = async () =>
+      (await Promise.all(Object.values(ids).map((id) => descriptionOf(t, id)))).filter((d) => d === null);
+    expect(await blank()).toHaveLength(1);
+    pageRequests.length = 0;
+    await syncPages(t, { maxRefetches: 2 });
+    expect(pageRequests).toHaveLength(1);
+    expect(await blank()).toHaveLength(0);
+  });
+
+  it("the page pass hands off when a link runs out of time", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    slowClock();
+    expect(await syncPages(t)).toMatchObject({ continued: true, fetched: 1 });
+    await runScheduled(t);
+    expect([...pageRequests].sort()).toEqual(["10948", "10949", "10950"]);
+    for (const id of Object.values(ids)) expect(await descriptionOf(t, id)).not.toBeNull();
+  });
+
+  it("the backfill continues after its time budget without repeating a page", async () => {
+    const t = makeT();
+    const ids = await linkedCatalog(t, describedPages, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    slowClock();
+    expect(await backfill(t)).toMatchObject({ fetched: 1, filled: 1, continued: true });
+    await runScheduled(t);
+    expect([...pageRequests].sort()).toEqual(["10948", "10949", "10950"]);
+    for (const id of Object.values(ids)) expect(await descriptionOf(t, id)).not.toBeNull();
+  });
+
+  it("the backfill refuses to run beside an ANN Import Run", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const result = await backfill(t);
+    expect(result).toMatchObject({ fetched: 0, filled: 0, continued: false });
+    expect(result.stopped).toMatch(/ANN Import Run .* is running/);
+    expect(pageRequests).toEqual([]);
+  });
+
+  it("the backfill keeps stored pages on failed fetches and stops when ANN is down", async () => {
+    const t = makeT();
+    const plain = { 10948: pageFor(10948), 10949: pageFor(10949), 10950: pageFor(10950) };
+    await linkedCatalog(t, plain, [{ label: "1" }, { label: "2" }, { label: "3" }]);
+    // Pages read before descriptions were: ok, never checked.
+    await syncPages(t);
+    for (const annId of [10948, 10949, 10950]) {
+      const obs = (await obsFor(t, annId))!;
+      const snapshot = obs.snapshot as { page: Record<string, unknown> };
+      const { descriptionChecked: _, ...older } = snapshot.page;
+      await t.run(async (ctx) => ctx.db.patch(obs._id, { snapshot: { ...snapshot, page: older } }));
+    }
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      pageRequests.push(String(input));
+      return new Response("Forbidden", { status: 403 });
+    });
+    pageRequests.length = 0;
+    const walk = await backfill(t);
+    expect(walk).toMatchObject({ fetched: 3, filled: 0 });
+    expect(walk.stopped).toBeUndefined();
+    expect(await pageOf(t, 10948)).toMatchObject({
+      status: "ok",
+      isbn13: "9781569319017",
+      refetchFailed: { status: "error" },
+    });
+    // The failed refetch waits out its retry window.
+    expect(await backfill(t)).toMatchObject({ fetched: 0 });
+
+    const many = ["10948", "10949", "10950", "1", "2", "3", "4"];
+    const result = await backfill(t, { annIds: many });
+    expect(result).toMatchObject({ fetched: 5, continued: false });
+    expect(result.stopped).toMatch(/ANN looks down/);
+  });
+
+  it("the backfill never un-withdraws a line", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    const obs = (await obsFor(t, 10948))!;
+    await t.run(async (ctx) => ctx.db.patch(obs._id, { withdrawn: true }));
+    await backfill(t, { annIds: ["10948"] });
+    const after = (await obsFor(t, 10948))!;
+    expect(after.withdrawn).toBe(true);
+    expect(after.snapshot).toEqual(obs.snapshot);
+  });
 });

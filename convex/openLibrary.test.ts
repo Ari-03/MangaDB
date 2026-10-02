@@ -699,6 +699,93 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
 });
 
 describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
+  const proposalsInReview = (t: TestT) =>
+    t.run(async (ctx) => (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview").length);
+
+  /** Unlinked editions first, then ANN's Releases carrying their ISBNs. */
+  async function lateReleases(t: TestT, editions: Array<Record<string, unknown>>) {
+    await seedRegistry(t);
+    stubDump(editions);
+    await sync(t);
+    const { releaseId, publisherId, seriesId } = await buildSkeleton(t, { withRelease: true });
+    const isbns = editions.map((e) => (e.isbn_13 as string[])[0]!);
+    const ids: Id<"releases">[] = [releaseId!];
+    await t.run(async (ctx) => {
+      const first = (await ctx.db.get(releaseId!))!;
+      await ctx.db.patch(first._id, { isbn13: isbns[0] });
+      for (const isbn13 of isbns.slice(1)) {
+        ids.push(
+          await ctx.db.insert("releases", {
+            status: "active",
+            editionId: first.editionId,
+            format: "digital",
+            language: "en",
+            isbn13,
+            publisherId,
+            seriesIds: [seriesId],
+          }),
+        );
+      }
+    });
+    return ids;
+  }
+
+  it("never queues a review against text another weak source (ANN) wrote first", async () => {
+    const t = makeT();
+    const [releaseId] = await lateReleases(t, [{ ...CHAINSAW_22, description: "OL's blurb." }]);
+    // ANN's release page described the book first (weak, like OL).
+    await t.run(async (ctx) => {
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "ann" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: releaseId! },
+        seq: 1,
+        proposalId,
+        author: { kind: "source", sourceKey: "ann" },
+        changes: [{ field: "description", before: undefined, after: "ANN's text." }],
+        comment: "Imported from Anime News Network Encyclopedia.",
+      });
+      await ctx.db.patch(releaseId!, { description: "ANN's text." });
+    });
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({ linked: 1 });
+    expect(await proposalsInReview(t)).toBe(0);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(releaseId!))!.description).toBe("ANN's text.");
+      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
+      expect(obs.conflicts?.find((c) => c.field === "description")).toMatchObject({
+        offered: "OL's blurb.",
+        reason: expect.stringContaining("another weak source"),
+      });
+    });
+  });
+
+  it("continues in a fresh action after its time budget", async () => {
+    const t = makeT();
+    const ids = await lateReleases(t, [
+      { ...CHAINSAW_22, description: "One." },
+      { ...CHAINSAW_22, key: "/books/OL2M", isbn_13: ["9781974766529"], description: "Two." },
+      { ...CHAINSAW_22, key: "/books/OL3M", isbn_13: ["9781974766536"], description: "Three." },
+    ]);
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 61_000));
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      replayed: 1,
+      continued: true,
+    });
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      const texts = await Promise.all(ids.map(async (id) => (await ctx.db.get(id))!.description));
+      expect(texts.sort()).toEqual(["One.", "Three.", "Two."]);
+    });
+    expect(await proposalsInReview(t)).toBe(0);
+  });
+
   it("fills a Release created after its edition was observed, keeps existing text, creates nothing", async () => {
     const t = makeT();
     await seedRegistry(t);
@@ -770,6 +857,7 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
       continued: false,
     });
     expect(await counts()).toEqual(before);
+    expect(await proposalsInReview(t)).toBe(0);
     await t.run(async (ctx) => {
       expect((await ctx.db.get(releaseId!))!.description).toBe("Denji's back.");
       expect((await ctx.db.get(described))!.description).toBe("The publisher's copy.");

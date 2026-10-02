@@ -229,9 +229,10 @@ queries in `convex/catalogPages.ts`, read by the route loaders through
   Label) stays visibly separate from Edition Line numbering throughout.
   Under the title sits one description: the Volume Synopsis, else the
   representative blurb of the Editions that are ordinary books of this one
-  whole Volume ("From the {publisher} edition"; omnibuses, split parts and
-  Edition Line packaging never lend theirs), else the Series synopsis
-  labelled "About the series".
+  whole Volume ("From the {publisher} edition", a publishing Publisher's
+  ahead of a defunct one's; omnibuses, split parts and Edition Line
+  packaging never lend theirs), else the Series synopsis labelled "About
+  {series}".
 - **`/edition/{id}/{slug}`** is the book detail page: one **Edition
   Description** in the header, then Release rows differing only in
   Format/Binding, each with ISBN-13/10, date, price, its Release Variants
@@ -240,7 +241,7 @@ queries in `convex/catalogPages.ts`, read by the route loaders through
   (`convex/lib/descriptions.ts`): a Human Override first, then physical
   before digital, earliest date, longest text. A blurbless Edition of one
   whole Volume falls back to that Volume Synopsis, anything else to the
-  Series synopsis labelled "About the series". Editions have no stored
+  Series synopsis labelled "About {series}". Editions have no stored
   name — the page title is composed from series + Edition Line + position
   or covered Volumes (`convex/lib/titles.ts`),
   and the slug is computed from that composed title. Releases have no page
@@ -1196,13 +1197,20 @@ page, satisfying ANN's attribution license. `npx convex run ann:sync '{}'`
 The page's **Description** (publisher copy entered by ANN contributors)
 becomes the Release Description at weak authority, on create and on link,
 and only for a Release with no description and no Human Override on it.
-A linked line whose Release lacks one, and whose stored page was never
-read for one, is refetched once by the page pass (within its per-link
-budget); a page without a Description is marked checked and never
-refetched for it. To fill the existing Releases in bulk instead, run the
+A page read while its line was unlinked keeps its Description, which
+reaches the Release once the mirror links the line. A linked line whose
+Release lacks one, and whose stored page was never read for one, is
+refetched once by the page pass, at most 2,000 per run (each action link
+also hands off after 6 minutes); a page without a Description is marked
+checked and never refetched for it, and a failed refetch never replaces a
+stored page. To fill the existing Releases in bulk instead, run the
 operator backfill (1 req/s, continues itself, ignores the enabled flag):
 `npx convex run ann:backfillDescriptions '{"limit": 300}'`, or
-`'{"annIds": ["10948", "23227"]}'` for specific release pages.
+`'{"annIds": ["10948", "23227"]}'` for specific release pages. It refuses
+to start while an ANN Import Run is running, stops after 5 failed fetches
+in a row, and never touches a withdrawn line. Seven Seas re-reads a book
+whose description an aggregator wrote, so its own blurb still replaces
+ANN's or Open Library's.
 
 **PRH API** (`convex/prh.ts`, parsers `convex/lib/prh.ts`; daily +
 weekly full sweep). The authoritative date/ISBN/price overlay on
@@ -1280,8 +1288,10 @@ own. `npx convex run openLibrary:replayDescriptions '{"limit": 500}'`
 re-applies the stored, unlinked editions that carry a description and
 whose ISBN an active Release now holds, through the same `applyEdition`
 path, with no network access: they link by ISBN and fill a blank
-description; nothing is created. Run it before `ann:backfillDescriptions`
-so the two weak sources never offer different text to one Release.
+description; nothing is created. Where ANN described the Release first,
+the Open Library text is only recorded on its observation: two weak
+sources' descriptions never queue a review, so the replay and
+`ann:backfillDescriptions` can run in either order.
 
 **Yen Press** (`convex/yenPress.ts`, parsers `convex/lib/yenPress.ts`;
 daily; post-v1). Yen is Hachette-distributed, so PRH never carried it.

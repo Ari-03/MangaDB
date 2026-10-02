@@ -421,6 +421,68 @@ describe("sevenSeas.sync — observations over repeated runs", () => {
     });
   });
 
+  it("replaces an aggregator's description with its own blurb, even with the listing unchanged", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    // The Release lost its text, then ANN's release page filled it (weak)
+    // before Seven Seas re-read the book.
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      const proposalId = await ctx.db.insert("proposals", {
+        author: { kind: "source", sourceKey: "ann" },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: release._id },
+        seq: 99,
+        proposalId,
+        author: { kind: "source", sourceKey: "ann" },
+        changes: [{ field: "description", before: undefined, after: "ANN's summary." }],
+        comment: "Imported from Anime News Network Encyclopedia.",
+      });
+      await ctx.db.patch(release._id, { description: "ANN's summary." });
+    });
+    expect(await sync(t)).toMatchObject({ recordsChanged: 1 });
+    const description = () =>
+      t.run(async (ctx) => (await ctx.db.query("releases").collect())[0]!.description);
+    expect(await description()).toBe("Alpha’s first adventure.");
+    // Its own text now: the unchanged short-circuit is back.
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+
+    // A human's text is never re-read for.
+    await t.run(async (ctx) => {
+      const release = (await ctx.db.query("releases").collect())[0]!;
+      const userId = await ctx.db.insert("users", {
+        clerkSubject: "editor",
+        username: "Editor",
+        usernameNormalized: "editor",
+        role: "editor",
+        formatPreference: "both",
+        ownershipVisibility: "private",
+        readingVisibility: "private",
+      });
+      const editorProposal = await ctx.db.insert("proposals", {
+        author: { kind: "user", userId },
+        state: "approved",
+        currentVersionNo: 1,
+      });
+      await ctx.db.insert("revisions", {
+        ref: { type: "release", id: release._id },
+        seq: 200,
+        proposalId: editorProposal,
+        author: { kind: "user", userId },
+        changes: [{ field: "description", before: undefined, after: "An Editor's text." }],
+        comment: "Edited.",
+      });
+      await ctx.db.patch(release._id, { description: "An Editor's text." });
+    });
+    expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
+    expect(await description()).toBe("An Editor's text.");
+  });
+
   it("keeps append-only history and auto-updates authoritative fields on change", async () => {
     const t = convexTest(schema);
     await seedRegistry(t, true);

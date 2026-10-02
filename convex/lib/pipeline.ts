@@ -31,6 +31,8 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { getSourceByKey } from "../importSources";
+import { authorityRank } from "./authority";
 import { canonicalLabel } from "./bookTitle";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { getObservation, upsertObservation } from "./observations";
@@ -571,6 +573,47 @@ export function blurbWanted(release: Doc<"releases">): boolean {
     release.description === undefined &&
     !release.overriddenFields?.includes("description")
   );
+}
+
+/**
+ * Whether `sourceKey`'s blurb would replace this Release's description:
+ * it has none (`blurbWanted`), or its text was last written by a source
+ * ranking below `sourceKey` for descriptions — an aggregator (ANN, Open
+ * Library) filled the blank before the publisher's own page was re-read.
+ * A human's text, a Human Override, unattributed text and a locked Release
+ * are never wanted. How a first-party adapter that only re-reads pages for
+ * a missing blurb (Seven Seas) still replaces aggregator copy.
+ */
+export async function blurbOutranked(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+  sourceKey: string,
+): Promise<boolean> {
+  if (blurbWanted(release)) return true;
+  if (
+    release.status !== "active" ||
+    release.locked ||
+    release.overriddenFields?.includes("description")
+  ) {
+    return false;
+  }
+  const history = ctx.db
+    .query("revisions")
+    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
+    .order("desc");
+  for await (const revision of history) {
+    if (!revision.changes.some((change) => change.field === "description")) continue;
+    if (revision.author.kind !== "source") return false;
+    const [incoming, incumbent] = await Promise.all([
+      getSourceByKey(ctx, sourceKey),
+      getSourceByKey(ctx, revision.author.sourceKey),
+    ]);
+    return (
+      authorityRank(incumbent?.fieldAuthority, "description") <
+      authorityRank(incoming?.fieldAuthority, "description")
+    );
+  }
+  return false;
 }
 
 type PublisherRef = { name: string; slug: string; parentSlug?: string };

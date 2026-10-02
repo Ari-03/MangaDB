@@ -360,6 +360,39 @@ describe("parseReleasePage", () => {
     expect(ebook).not.toMatch(/[\u200B-\u200D\uFEFF]|added on/);
   });
 
+  // Synthetic shapes inside the real pages' field markup.
+  const inlineField = (text: string) =>
+    ROMANCE_DAWN_PAGE.replace(
+      /<p class="easyread-width">[\s\S]*?<\/p><p><small>/,
+      `<p class="easyread-width"><b>Description:</b><br>${text}</p><p><small>`,
+    );
+  const divField = (text: string) =>
+    EBOOK_PAGE.replace(
+      /<div class="simple-html">[\s\S]*?<\/div><p><\/p>/,
+      `<div class="simple-html">${text}</div><p></p>`,
+    );
+
+  it("keeps markup inside the Description from cutting it short", () => {
+    expect(parseReleasePage(inlineField("Includes:<ul><li>Volume 1</li><li>Volume 2</li></ul>"))?.description).toBe(
+      "Includes: Volume 1 Volume 2",
+    );
+    expect(
+      parseReleasePage(inlineField("Pirates <small>(and ninjas)</small> sail.<br><b>Note:</b> Bonus story."))
+        ?.description,
+    ).toBe("Pirates (and ninjas) sail. Note: Bonus story.");
+    expect(
+      parseReleasePage(divField("<p>Part one.</p><div>Part <small>two</small>.</div><ul><li>A list</li></ul>"))
+        ?.description,
+    ).toBe("Part one. Part two. A list");
+  });
+
+  it("strips zero-width spaces, entity-encoded ones too", () => {
+    expect(parseReleasePage(divField("Luffy,&#8203; Zoro,\u200b and Nami&#x200B;."))?.description).toBe(
+      "Luffy, Zoro, and Nami.",
+    );
+    expect(parseReleasePage(divField("&#8203;"))?.description).toBeUndefined();
+  });
+
   it("has no description when the page has none", () => {
     const field = /<p class="easyread-width">[\s\S]*?<\/p>/;
     expect(field.test(ROMANCE_DAWN_PAGE)).toBe(true);

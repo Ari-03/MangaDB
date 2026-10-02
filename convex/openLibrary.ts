@@ -15,10 +15,12 @@
 //   with an imprint label: ["SHONEN JUMP", "viz media"]); library rebinds
 //   never count; and a Volume gets at most one OpenLibrary leaf per
 //   (publisher, format) — another ISBN there is a reprint or duplicate
-// - it never creates a Series, Volume, or Publisher, and never queues
-//   review proposals — OpenLibrary is crowd-sourced and weak-titled, so an
-//   ambiguous or structure-shaped record is simply recorded on its
-//   observation and waits for stronger sources
+// - it never creates a Series, Volume, or Publisher, and never queues a
+//   match or creation review — OpenLibrary is crowd-sourced and
+//   weak-titled, so an ambiguous or structure-shaped record is simply
+//   recorded on its observation and waits for stronger sources. Its blurb
+//   never queues against another weak source's (ANN's) either: the first
+//   text stays (lib/authority.ts)
 // - no withdrawal pass: the streamed file is an operator-filtered slice of
 //   the dump, so absence from it is never evidence
 //
@@ -565,7 +567,8 @@ type ReplayResult = {
  * through `applyEdition`, exactly as the next dump pass would apply them,
  * but without the dump: the matching ladder links each to the Release that
  * now holds its ISBN and fills at OpenLibrary's weak rank (a blank
- * description fills; existing text, any source's or a human's, stays). No
+ * description fills; existing text, any source's or a human's, stays, and
+ * text ANN wrote first is never queued against). No
  * new write path: only editions whose ISBN an active Release holds are
  * replayed (`unlinkedDescribedEditions`), so nothing is created. One
  * mutation per edition; `limit` caps the editions replayed in total.
@@ -598,7 +601,8 @@ export const replayDescriptions = internalAction({
       );
       for (const snapshot of batch.snapshots) {
         if (replayed >= limit) break;
-        if (Date.now() - started > REPLAY_BUDGET_MS) {
+        // Every link replays at least one edition before it may hand off.
+        if (replayed > (args.replayed ?? 0) && Date.now() - started > REPLAY_BUDGET_MS) {
           await ctx.scheduler.runAfter(0, internal.openLibrary.replayDescriptions, {
             limit: args.limit,
             after: cursor ?? undefined,

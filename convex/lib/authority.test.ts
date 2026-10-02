@@ -299,4 +299,23 @@ describe("the description category", () => {
       }),
     ).toBe("queue");
   });
+
+  it("(g) two different weak sources never queue: the first text stays", () => {
+    const weak = { incomingRank: 1, offered: "An OpenLibrary blurb." };
+    expect(blurb({ ...weak, incomingSourceKey: "openlibrary", incumbent: src("ann", 1) })).toBe(
+      "recordOnly",
+    );
+    expect(
+      blurb({ ...weak, field: "synopsis", incomingSourceKey: "ann", incumbent: src("openlibrary", 1) }),
+    ).toBe("recordOnly");
+    // Still a queue: two records of one weak source, a Human Override, and
+    // equal rank above weak.
+    expect(blurb({ ...weak, incomingSourceKey: "openlibrary", incumbent: src("openlibrary", 1) })).toBe(
+      "queue",
+    );
+    expect(
+      blurb({ ...weak, incomingSourceKey: "openlibrary", overridden: true, incumbent: src("ann", 1) }),
+    ).toBe("queue");
+    expect(blurb({ incomingSourceKey: "prh", incomingRank: 2, incumbent: src("prh2", 2) })).toBe("queue");
+  });
 });
