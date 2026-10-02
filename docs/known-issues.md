@@ -68,12 +68,44 @@ is fixed.
   R2 is served indefinitely, so a publisher's corrected jacket does not
   reach the site without deleting the object.
 
+- **A disabled source can keep writing for the rest of a run.** The Seven
+  Seas apply path stops as soon as its registry row is disabled. Kodansha,
+  ANN and Open Library do not, because their apply mutations also serve
+  the backlist crawl and the operator backfills, which must ignore the
+  flag. The fix passes the run id into the apply mutation and stops only
+  scheduled runs.
+- **Three copies of the apply ladder.** `applyBook` in
+  `convex/sevenSeas.ts`, its mirror in `convex/kodansha.ts` and
+  `applyCatalogTitle` in `convex/lib/catalogTitle.ts` run the same
+  sequence and have drifted once already (Seven Seas lacked the
+  removed-Series check). They should become one ladder with per-source
+  options.
+
+## Moderation
+
+- **The last-Administrator guard in `roles.suspend` cannot fire.**
+  Self-suspension is refused first, so the acting Administrator always
+  stays active. The guard is dead code, or the rule it was meant to
+  enforce (for example on role revocation) is missing.
+- **A suspended user's public profile still shows.** `sharing.publicProfile`
+  has no suspension check.
+
 ## Decisions waiting on the owner
 
 - **Disjoint ISBNs as proof of another work.** `workMatch`
   (`convex/lib/matching.ts`) calls a title match a different work when both
   sides hold ISBNs in a shared format and share none. That is a policy
   choice, not a fact.
+- **One-time code that may have finished.** The operator backfills
+  `people:backfillAnnCredits`, `ann:backfillDescriptions` and
+  `openLibrary:replayDescriptions`, the repair entry kinds used only by
+  the sandbox plan, and the dev seed (`convex/seed.ts`) can go once the
+  owner confirms they are no longer needed.
+- **The "Convex not configured" mode.** About 38 components guard against
+  a missing `VITE_CONVEX_URL`, although every environment sets it and
+  `/mod/packaging` already crashes without it. Failing at boot would
+  remove the guards.
+- **No formatter or linter.** Line width runs from 80 to 200 columns.
 
 ## Operator tools
 
