@@ -37,14 +37,6 @@ describe("clampStep", () => {
     expect(clampStep(7.4, "point10")).toBe(7);
     expect(clampStep(3.5, "star5")).toBe(4);
   });
-
-  it("round-trips every step of every format through fromFormat and toFormat", () => {
-    for (const format of SCORE_FORMATS) {
-      for (let step = 1; step <= FORMAT_STEPS[format]; step++) {
-        expect(toFormat(fromFormat(clampStep(step, format), format), format)).toBe(step);
-      }
-    }
-  });
 });
 
 describe("fromFormat", () => {
@@ -81,9 +73,10 @@ describe("toFormat", () => {
     expect([49, 50, 75].map((s) => toFormat(s, "smiley3"))).toEqual([1, 2, 3]);
   });
 
-  it("round-trips every step of every format", () => {
+  it("round-trips every step of every format, which clampStep leaves alone", () => {
     for (const format of SCORE_FORMATS) {
       for (let step = 1; step <= FORMAT_STEPS[format]; step++) {
+        expect(clampStep(step, format)).toBe(step);
         const score = fromFormat(step, format);
         expect(isValidScore(score)).toBe(true);
         expect(toFormat(score, format)).toBe(step);
