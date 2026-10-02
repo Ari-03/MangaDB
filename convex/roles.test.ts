@@ -3,7 +3,6 @@
 // suspension, the permanent audit trail, and the promise that revocation
 // never rewrites past attribution.
 
-import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
@@ -96,7 +95,7 @@ describe("roles.appoint", () => {
         t
           .withIdentity({ subject })
           .mutation(api.roles.appoint, { username: "dave", role: "editor" }),
-      ).rejects.toThrow(ConvexError);
+      ).rejects.toMatchObject({ data: { code: "forbidden" } });
     }
   });
 
@@ -224,13 +223,33 @@ describe("roles.suspend / reinstate", () => {
     );
   });
 
-  it("refuses self-suspension and suspending the last Administrator", async () => {
+  it("refuses self-suspension, even with a second Administrator active", async () => {
     const t = makeT();
     await withAdmin(t);
     const asAdmin = t.withIdentity({ subject: ADMIN });
+    await asAdmin.mutation(api.roles.appoint, { username: "dave", role: "administrator" });
     await expect(
       asAdmin.mutation(api.roles.suspend, { username: "alice", reason: "no" }),
-    ).rejects.toThrow(ConvexError);
+    ).rejects.toMatchObject({ data: { code: "forbidden" } });
+  });
+
+  // The last-Administrator guard cannot fire through suspend: the acting
+  // Administrator is active and never the target (self-suspension is refused
+  // first), so at least two stay active. Revocation exercises it above.
+  it("lets an Administrator suspend another Administrator while one stays active", async () => {
+    const t = makeT();
+    await withAdmin(t);
+    const asAdmin = t.withIdentity({ subject: ADMIN });
+    await asAdmin.mutation(api.roles.appoint, { username: "dave", role: "administrator" });
+    await asAdmin.mutation(api.roles.suspend, { username: "dave", reason: "under review" });
+    await expect(
+      t.withIdentity({ subject: PLAIN }).query(api.roles.roster, {}),
+    ).rejects.toMatchObject({ data: { code: "suspended" } });
+    expect(await asAdmin.query(api.roles.roster, {})).toContainEqual({
+      username: "dave",
+      role: "administrator",
+      suspended: true,
+    });
   });
 });
 
@@ -244,7 +263,7 @@ describe("roles.roster & auditLog", () => {
 
     await expect(
       t.withIdentity({ subject: PLAIN }).query(api.roles.roster, {}),
-    ).rejects.toThrow(ConvexError);
+    ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
     const roster = await t
       .withIdentity({ subject: ADMIN })
