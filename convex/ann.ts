@@ -890,10 +890,11 @@ const DEFAULT_MAX_FETCHES = 300;
 const DESCRIPTION_REFETCHES_PER_RUN = 2000;
 /**
  * Wall-clock work per action link before it hands off (actions run ≤10
- * min): during an ANN outage each failing fetch backs off for about a
- * minute, so the fetch count alone cannot keep a link under the ceiling.
+ * min): during an ANN outage one rate-limited fetch can back off for up to
+ * ~4 minutes, so the fetch count alone cannot keep a link under the
+ * ceiling, and the budget leaves room for one such fetch after it.
  */
-const LINK_BUDGET_MS = 6 * 60 * 1000;
+const LINK_BUDGET_MS = 5 * 60 * 1000;
 
 // Distributor strings that are prose imprints: their lines never create
 // manga Releases, whatever their designator says.
@@ -1597,20 +1598,35 @@ export const descriptionlessLines = internalQuery({
   },
 });
 
-/** Why the backfill must not fetch now: an ANN Import Run is running. */
+/**
+ * A "running" ANN Import Run older than this is stranded (its chain died
+ * without closing it), not live: a full mirror plus page pass takes hours.
+ */
+const STRANDED_RUN_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * The latest ANN Import Run when it is still "running": its id and age.
+ * The backfill decides whether it blocks (`STRANDED_RUN_MS`).
+ */
 export const annRunInProgress = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<string | null> => {
+  args: { now: v.number() },
+  handler: async (ctx, { now }) => {
     const latest = await ctx.db
       .query("importRuns")
       .withIndex("by_source", (q) => q.eq("sourceKey", SOURCE_KEY))
       .order("desc")
       .first();
     return latest?.status === "running"
-      ? `An ANN Import Run (${latest._id}) is running; the backfill would double the request rate to ANN. Rerun it once the run finishes.`
+      ? { runId: latest._id, ageMs: now - latest._creationTime }
       : null;
   },
 });
+
+/** "3 h 12 min" for a refusal message. */
+function age(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
 
 type BackfillResult = {
   /** Pages fetched so far, across every link of the chain. */
@@ -1638,10 +1654,12 @@ type BackfillResult = {
  * the limit is spent; safe to rerun.
  *
  * Polite by construction: it refuses to run while an ANN Import Run is
- * running (the two would double the request rate), stops after
- * BACKFILL_MAX_FAILURES consecutive failed fetches (ANN is down; a failed
- * refetch never replaces a stored page), and never touches a withdrawn
- * line. Like people.backfillAnnCredits this is an explicit operator
+ * running (the two would double the request rate) unless that run is older
+ * than STRANDED_RUN_MS (a dead chain, not a live crawl), stops after
+ * BACKFILL_MAX_FAILURES consecutive failed fetches across its links (ANN
+ * is down; a failed refetch never replaces a stored page), and never
+ * touches a withdrawn line. A stop is logged with its reason, since a
+ * continuation link's return value is seen by nobody. Like people.backfillAnnCredits this is an explicit operator
  * command: it runs whatever the source's enabled flag says and opens no
  * Import Run.
  *
@@ -1658,6 +1676,8 @@ export const backfillDescriptions = internalAction({
     after: v.optional(v.string()),
     fetched: v.optional(v.number()),
     filled: v.optional(v.number()),
+    /** Consecutive failed fetches so far, so the breaker spans hand-offs. */
+    failures: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<BackfillResult> => {
     const started = Date.now();
@@ -1665,7 +1685,7 @@ export const backfillDescriptions = internalAction({
     const limit = args.limit ?? Number.POSITIVE_INFINITY;
     let fetched = args.fetched ?? 0;
     let filled = args.filled ?? 0;
-    let failures = 0;
+    let failures = args.failures ?? 0;
     let handled = 0;
     const errors: string[] = [];
     const result = (extra: { continued: boolean; stopped?: string }) => ({
@@ -1674,9 +1694,25 @@ export const backfillDescriptions = internalAction({
       errors,
       ...extra,
     });
+    const stop = (stopped: string) => {
+      console.warn(`[ann.backfillDescriptions] stopped: ${stopped}`);
+      return result({ continued: false, stopped });
+    };
 
-    const running: string | null = await ctx.runQuery(internal.ann.annRunInProgress, {});
-    if (running !== null) return result({ continued: false, stopped: running });
+    const running: { runId: Id<"importRuns">; ageMs: number } | null = await ctx.runQuery(
+      internal.ann.annRunInProgress,
+      { now: Date.now() },
+    );
+    if (running !== null && running.ageMs <= STRANDED_RUN_MS) {
+      return stop(
+        `An ANN Import Run (${running.runId}, started ${age(running.ageMs)} ago) is running; the backfill would double the request rate to ANN. Rerun it once the run finishes.`,
+      );
+    }
+    if (running !== null) {
+      console.warn(
+        `[ann.backfillDescriptions] ignoring stranded ANN Import Run ${running.runId} (started ${age(running.ageMs)} ago)`,
+      );
+    }
 
     // Offer a line's Description: from a fresh fetch, or (`fetch` false)
     // from its stored page.
@@ -1707,6 +1743,7 @@ export const backfillDescriptions = internalAction({
         politeDelayMs: args.politeDelayMs,
         fetched,
         filled,
+        failures,
         ...rest,
       });
       return result({ continued: true });
@@ -1718,7 +1755,7 @@ export const backfillDescriptions = internalAction({
         if (outOfTime()) return await continueWith({ annIds: ids.slice(i) });
         await fill(ids[i]!, true);
         const stopped = down();
-        if (stopped) return result({ continued: false, stopped });
+        if (stopped) return stop(stopped);
       }
       return result({ continued: false });
     }
@@ -1737,7 +1774,7 @@ export const backfillDescriptions = internalAction({
         await fill(line.annId, line.fetch);
         cursor = line.sourceRecordId;
         const stopped = down();
-        if (stopped) return result({ continued: false, stopped });
+        if (stopped) return stop(stopped);
       }
       if (batch.next === null) break;
       cursor = batch.next;

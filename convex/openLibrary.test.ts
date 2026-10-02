@@ -757,9 +757,77 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
       const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
       expect(obs.conflicts?.find((c) => c.field === "description")).toMatchObject({
         offered: "OL's blurb.",
-        reason: expect.stringContaining("another weak source"),
+        reason: expect.stringContaining("another weak record"),
       });
     });
+  });
+
+  it("hands off during a long scan that finds nothing", async () => {
+    const t = makeT();
+    const ids = await lateReleases(t, [{ ...CHAINSAW_22, description: "Late." }]);
+    // 200+ observations sorting before the edition, none worth a replay.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 205; i++) {
+        await ctx.db.insert("sourceObservations", {
+          sourceKey: "openlibrary",
+          sourceRecordId: `/books/OL0${String(i).padStart(4, "0")}M`,
+          snapshot: { kind: "olEdition", key: `/books/OL0${i}M` },
+          lastSeenAt: 0,
+          withdrawn: false,
+        });
+      }
+    });
+    // Each clock read is past the budget: the first scan alone ends the link.
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 6 * 60_000));
+    expect(await t.action(internal.openLibrary.replayDescriptions, {})).toMatchObject({
+      replayed: 0,
+      continued: true,
+    });
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(ids[0]!))!.description).toBe("Late.");
+    });
+  });
+
+  it("skips an edition whose ISBN the matcher already declined", async () => {
+    const t = makeT();
+    const [releaseId] = await lateReleases(t, [
+      { ...CHAINSAW_22, title: "Something Else Entirely, Vol. 22", description: "Elsewhere." },
+    ]);
+    const replay = () => t.action(internal.openLibrary.replayDescriptions, {});
+    expect(await replay()).toMatchObject({ replayed: 1, linked: 0 });
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect())[0]!;
+      expect(obs.recordRef).toBeUndefined();
+      expect(obs.conflicts?.[0]?.reason).toContain("unmatched (rung 2)");
+      expect((await ctx.db.get(releaseId!))!.description).toBeUndefined();
+    });
+    expect(await replay()).toMatchObject({ replayed: 0 });
+  });
+
+  it("two editions of one ISBN never queue over their blurbs; an edition updates its own", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    const OTHER = { ...CHAINSAW_22, key: "/books/OL2M", description: "Edition two's blurb." };
+    stubDump([{ ...CHAINSAW_22, description: "Edition one's blurb." }, OTHER]);
+    await sync(t);
+    const description = () => t.run(async (ctx) => (await ctx.db.get(releaseId!))!.description);
+    expect(await description()).toBe("Edition one's blurb.");
+    expect(await proposalsInReview(t)).toBe(0);
+    await t.run(async (ctx) => {
+      const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === OTHER.key)!;
+      expect(obs.conflicts?.find((c) => c.field === "description")?.reason).toContain("another weak record");
+    });
+    // The edition that wrote the text revises it: an own fact, applied.
+    stubDump([{ ...CHAINSAW_22, description: "Edition one, revised." }]);
+    await sync(t);
+    expect(await description()).toBe("Edition one, revised.");
+    expect(await proposalsInReview(t)).toBe(0);
   });
 
   it("continues in a fresh action after its time budget", async () => {

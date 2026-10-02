@@ -110,6 +110,9 @@ function stubAnn(manga: FixtureManga[], pages: Record<number, string> = {}) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // A failed test must not leak a mocked clock or console into the next.
+  vi.restoreAllMocks();
+  vi.useRealTimers();
   pageRequests.length = 0;
   reportRequests.length = 0;
 });
@@ -1973,7 +1976,7 @@ describe("ann — release-page descriptions", () => {
   /** Advance the clock a minute per read, so a link's time budget runs out. */
   function slowClock() {
     let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => (now += 61_000));
+    return vi.spyOn(Date, "now").mockImplementation(() => (now += 61_000));
   }
   async function runScheduled(t: TestT) {
     vi.restoreAllMocks();
@@ -2068,8 +2071,47 @@ describe("ann — release-page descriptions", () => {
     await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
     const result = await backfill(t);
     expect(result).toMatchObject({ fetched: 0, filled: 0, continued: false });
-    expect(result.stopped).toMatch(/ANN Import Run .* is running/);
+    expect(result.stopped).toMatch(/ANN Import Run .*started \d+ min ago\) is running/);
     expect(pageRequests).toEqual([]);
+  });
+
+  it("the backfill treats a run older than 12 hours as stranded", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const later = Date.now() + 13 * 60 * 60 * 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => later);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await backfill(t);
+    expect(result).toMatchObject({ fetched: 1, filled: 1 });
+    expect(result.stopped).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ignoring stranded ANN Import Run .* \(started 13 h 0 min ago\)/));
+    vi.restoreAllMocks();
+  });
+
+  it("the backfill's breaker counts failures across hand-offs and logs its stop", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      pageRequests.push(String(input));
+      return new Response("Forbidden", { status: 403 });
+    });
+    const clock = slowClock();
+    expect(await backfill(t, { annIds: ["1", "2", "3", "4", "5", "6", "7"] })).toMatchObject({
+      fetched: 1,
+      continued: true,
+    });
+    clock.mockRestore();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
+    // One failure in the first link, four in the next: five in a row, stop.
+    expect(pageRequests).toHaveLength(5);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/backfillDescriptions\] stopped: ANN looks down: 5 page fetches/),
+    );
+    warn.mockRestore();
   });
 
   it("the backfill keeps stored pages on failed fetches and stops when ANN is down", async () => {

@@ -19,8 +19,8 @@
 //   match or creation review — OpenLibrary is crowd-sourced and
 //   weak-titled, so an ambiguous or structure-shaped record is simply
 //   recorded on its observation and waits for stronger sources. Its blurb
-//   never queues against another weak source's (ANN's) either: the first
-//   text stays (lib/authority.ts)
+//   never queues against weak text another record wrote (ANN's, another
+//   edition's) either: the first text stays (lib/authority.ts)
 // - no withdrawal pass: the streamed file is an operator-filtered slice of
 //   the dump, so absence from it is never evidence
 //
@@ -509,7 +509,10 @@ const REPLAY_SCAN = 200;
 /** Editions handed to the action per lookup. */
 const REPLAY_BATCH = 25;
 /** Work per action before it continues in a fresh one (actions run ≤10 min). */
-const REPLAY_BUDGET_MS = 6 * 60 * 1000;
+const REPLAY_BUDGET_MS = 5 * 60 * 1000;
+
+/** The matcher's own note on an edition its ISBN rung declined (applyEdition). */
+const ISBN_RUNG_DECLINED = "unmatched (rung 2):";
 
 /**
  * Up to REPLAY_BATCH stored snapshots after `after`, by edition key, that
@@ -517,7 +520,9 @@ const REPLAY_BUDGET_MS = 6 * 60 * 1000;
  * (merged rows answered by their survivor) holds — and where to look next
  * (null once exhausted). The ISBN condition keeps the replay to its
  * purpose: applyEdition's rung ② then links or flags that Release and never
- * reaches the rung-⑤ leaf creation.
+ * reaches the rung-⑤ leaf creation. An edition whose latest apply already
+ * declined that ISBN (`match` note: shared ISBN, dissimilar title, hidden
+ * Release) is skipped: replaying it would decline again.
  */
 export const unlinkedDescribedEditions = internalQuery({
   args: { after: v.union(v.string(), v.null()) },
@@ -537,6 +542,10 @@ export const unlinkedDescribedEditions = internalQuery({
       if (doc.recordRef !== undefined) continue;
       const snapshot = doc.snapshot as OlEditionSnapshot;
       if (snapshot.description === undefined || snapshot.isbn13 === undefined) continue;
+      const declined = doc.conflicts?.some(
+        (c) => c.field === "match" && c.reason.startsWith(ISBN_RUNG_DECLINED),
+      );
+      if (declined) continue;
       const isbn13 = snapshot.isbn13;
       const holders = await ctx.db
         .query("releases")
@@ -572,8 +581,14 @@ type ReplayResult = {
  * new write path: only editions whose ISBN an active Release holds are
  * replayed (`unlinkedDescribedEditions`), so nothing is created. One
  * mutation per edition; `limit` caps the editions replayed in total.
- * Continues itself until done; safe to rerun. An explicit operator command:
- * it runs whatever the source's enabled flag says and opens no Import Run.
+ * Continues itself until done (the budget is checked while scanning too,
+ * since most observations do not qualify); safe to rerun. An edition the
+ * matcher declines (a shared ISBN, a dissimilar title) stays unlinked with
+ * its `match` note, and a rerun skips it rather than replaying it again;
+ * each replay bumps the observation's `lastSeenAt`, as a dump pass would.
+ * The monthly dump pass still retries declined editions. An explicit
+ * operator command: it runs whatever the source's enabled flag says and
+ * opens no Import Run.
  *
  *   npx convex run openLibrary:replayDescriptions '{"limit": 500}'
  */
@@ -594,7 +609,22 @@ export const replayDescriptions = internalAction({
     // `cursor` trails the last edition handled, so a continuation resumes
     // right after it.
     let cursor: string | null = args.after ?? null;
+    let scanned = false;
+    const outOfTime = () => Date.now() - started > REPLAY_BUDGET_MS;
+    const handOff = async (): Promise<ReplayResult> => {
+      await ctx.scheduler.runAfter(0, internal.openLibrary.replayDescriptions, {
+        limit: args.limit,
+        after: cursor ?? undefined,
+        replayed,
+        linked,
+      });
+      return { replayed, linked, errors, continued: true };
+    };
     while (replayed < limit) {
+      // A long scan finding nothing hands off too: each lookup advances the
+      // cursor, so every link makes progress.
+      if (scanned && outOfTime()) return await handOff();
+      scanned = true;
       const batch: { snapshots: OlEditionSnapshot[]; next: string | null } = await ctx.runQuery(
         internal.openLibrary.unlinkedDescribedEditions,
         { after: cursor },
@@ -602,15 +632,7 @@ export const replayDescriptions = internalAction({
       for (const snapshot of batch.snapshots) {
         if (replayed >= limit) break;
         // Every link replays at least one edition before it may hand off.
-        if (replayed > (args.replayed ?? 0) && Date.now() - started > REPLAY_BUDGET_MS) {
-          await ctx.scheduler.runAfter(0, internal.openLibrary.replayDescriptions, {
-            limit: args.limit,
-            after: cursor ?? undefined,
-            replayed,
-            linked,
-          });
-          return { replayed, linked, errors, continued: true };
-        }
+        if (replayed > (args.replayed ?? 0) && outOfTime()) return await handOff();
         replayed++;
         try {
           const result = await applyRetrying(ctx, internal.openLibrary.applyEdition, { snapshot });

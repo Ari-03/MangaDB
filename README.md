@@ -1201,14 +1201,15 @@ A page read while its line was unlinked keeps its Description, which
 reaches the Release once the mirror links the line. A linked line whose
 Release lacks one, and whose stored page was never read for one, is
 refetched once by the page pass, at most 2,000 per run (each action link
-also hands off after 6 minutes); a page without a Description is marked
+also hands off after 5 minutes); a page without a Description is marked
 checked and never refetched for it, and a failed refetch never replaces a
 stored page. To fill the existing Releases in bulk instead, run the
 operator backfill (1 req/s, continues itself, ignores the enabled flag):
 `npx convex run ann:backfillDescriptions '{"limit": 300}'`, or
 `'{"annIds": ["10948", "23227"]}'` for specific release pages. It refuses
-to start while an ANN Import Run is running, stops after 5 failed fetches
-in a row, and never touches a withdrawn line. Seven Seas re-reads a book
+to start while an ANN Import Run is running (one older than 12 hours counts
+as stranded and is ignored), stops after 5 failed fetches in a row across
+its continuations, logs why it stopped, and never touches a withdrawn line. Seven Seas re-reads a book
 whose description an aggregator wrote, so its own blurb still replaces
 ANN's or Open Library's.
 
@@ -1288,10 +1289,15 @@ own. `npx convex run openLibrary:replayDescriptions '{"limit": 500}'`
 re-applies the stored, unlinked editions that carry a description and
 whose ISBN an active Release now holds, through the same `applyEdition`
 path, with no network access: they link by ISBN and fill a blank
-description; nothing is created. Where ANN described the Release first,
-the Open Library text is only recorded on its observation: two weak
-sources' descriptions never queue a review, so the replay and
-`ann:backfillDescriptions` can run in either order.
+description; nothing is created. Where ANN (or another Open Library edition of
+the same ISBN) described the Release first, the Open Library text is only
+recorded on its observation: weak descriptions from different records
+never queue a review, so the replay and
+`ann:backfillDescriptions` are safe in either order. Run the ANN backfill
+first all the same: the first weak text to fill a blank keeps it, and ANN's
+is the publisher's back-cover copy while Open Library's is contributor-written
+and uneven (on staging, One Piece Vol 1 got the Open Library text because the
+replay ran first).
 
 **Yen Press** (`convex/yenPress.ts`, parsers `convex/lib/yenPress.ts`;
 daily; post-v1). Yen is Hachette-distributed, so PRH never carried it.
