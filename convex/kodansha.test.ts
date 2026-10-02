@@ -6,13 +6,22 @@
 // The backlist crawl runs against trimmed live pages (lib/__fixtures__).
 
 import { readFileSync } from "node:fs";
-import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { MIN_COVER_BYTES } from "./lib/covers";
-import schema from "./schema";
+import {
+  insertCoverage,
+  insertEdition,
+  insertObservation,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+  seedCatalog,
+} from "./test.factories";
+import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
 
 const BASE = "https://kodansha.us";
 
@@ -88,18 +97,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   requested.length = 0;
 });
-
-function makeT() {
-  return convexTest(schema);
-}
-type TestT = ReturnType<typeof makeT>;
-
-async function seedRegistry(t: TestT, bootstrap: boolean) {
-  await t.mutation(internal.importSources.seedRegistry, {});
-  await t.mutation(internal.importSources.setBootstrapModeInternal, {
-    on: bootstrap,
-  });
-}
 
 const sync = (t: TestT) => t.action(internal.kodansha.sync, { politeDelayMs: 0 });
 
@@ -258,15 +255,7 @@ describe("kodansha.sync — hidden Series stay hidden", () => {
     it(`records the volume on its observation only (${bootstrap ? "Bootstrap Mode" : "steady state"})`, async () => {
       const t = makeT();
       await seedRegistry(t, bootstrap);
-      await t.run((ctx) =>
-        ctx.db.insert("series", {
-          status: "hidden",
-          publicId: 14761,
-          title: IRUMA.series,
-          altTitles: [],
-          searchText: IRUMA.series,
-        }),
-      );
+      await t.run((ctx) => insertSeries(ctx, { status: "hidden", publicId: 14761, title: IRUMA.series }));
       stubSite([{ ...IRUMA, formats: ["print"] }]);
       await sync(t);
       await sync(t);
@@ -300,44 +289,14 @@ describe("kodansha.sync — series resolution and publishers", () => {
     publisher?: { name: string; slug: string },
   ) {
     return await t.run(async (ctx) => {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title,
-        altTitles: [],
-        searchText: title,
-      });
-      const publisherId = publisher
-        ? await ctx.db.insert("publishers", { status: "active", ...publisher })
-        : null;
+      const seriesId = await insertSeries(ctx, { title });
+      const publisherId = publisher ? await insertPublisher(ctx, publisher) : null;
       for (const label of labels) {
-        const volumeId = await ctx.db.insert("volumes", {
-          status: "active",
-          publicId: Number(label),
-          seriesId,
-          position: Number(label),
-          label,
-        });
+        const volumeId = await insertVolume(ctx, { seriesId, position: Number(label) });
         if (publisherId === null) continue;
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: Number(label),
-          publisherId,
-        });
-        await ctx.db.insert("volumeCoverages", {
-          editionId,
-          volumeId,
-          order: 1,
-          extent: "complete",
-        });
-        await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
-          publisherId,
-          seriesIds: [seriesId],
-        });
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] });
       }
       return seriesId;
     });
@@ -922,46 +881,13 @@ describe("kodansha.backlistSync — the crawl", () => {
     const t = makeT();
     await seedBacklist(t, false);
     // A PRH-created paperback of Blue Lock 1 (no Kodansha observation yet).
-    const printId = await t.run(async (ctx) => {
-      const kodansha = await ctx.db
-        .query("publishers")
-        .withIndex("by_slug", (q) => q.eq("slug", "kodansha"))
-        .unique();
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Blue Lock",
-        altTitles: [],
-        searchText: "Blue Lock",
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 1,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 1,
-        publisherId: kodansha!._id,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId,
-        order: 1,
-        extent: "complete",
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13: "9781646516544",
-        publisherId: kodansha!._id,
-        seriesIds: [seriesId],
-      });
-    });
+    const { releaseId: printId } = await t.run((ctx) =>
+      seedCatalog(ctx, {
+        publisher: { slug: "kodansha" },
+        series: { title: "Blue Lock" },
+        release: { isbn13: "9781646516544" },
+      }),
+    );
     stubBacklist([BLUE_LOCK], {
       ...BACKLIST_PAGES,
       "series/blue-lock/": seriesPage("blue-lock", "Blue Lock", ["volume-1"]),
@@ -1239,27 +1165,10 @@ describe("kodansha.backlistSync — the crawl", () => {
         .query("publishers")
         .withIndex("by_slug", (q) => q.eq("slug", "kodansha"))
         .unique();
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Blue Lock",
-        altTitles: [],
-        searchText: "Blue Lock",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 1,
-        publisherId: kodansha!._id,
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn13: "9798888778210",
-        publisherId: kodansha!._id,
-        seriesIds: [seriesId],
-      });
+      const publisherId = kodansha!._id;
+      const seriesId = await insertSeries(ctx, { title: "Blue Lock" });
+      const editionId = await insertEdition(ctx, { publisherId });
+      return await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], isbn13: "9798888778210" });
     });
     // A changed listing stamp re-crawls the series whole.
     vi.unstubAllGlobals();
@@ -1325,15 +1234,7 @@ describe("Kodansha scope gate — both feeds", () => {
     const t = makeT();
     await seedBacklist(t, false);
     // The scope repair hid the earlier picture-book Series.
-    await t.run(async (ctx) => {
-      await ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 9,
-        title: "Cells at Work! Picture Book",
-        altTitles: [],
-        searchText: "Cells at Work! Picture Book",
-      });
-    });
+    await t.run((ctx) => insertSeries(ctx, { status: "hidden", title: "Cells at Work! Picture Book" }));
     const listed = {
       slug: "cells-at-work-picture-book",
       name: "Cells at Work! Picture Book",
@@ -1373,38 +1274,14 @@ describe("Kodansha scope gate — both feeds", () => {
     };
     // Simulate the pre-gate import: the observation already links a Release.
     const releaseId = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Kodansha",
-        slug: "kodansha",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 1,
-        title: "Cells at Work! Picture Book",
-        altTitles: [],
-        searchText: "Cells at Work! Picture Book",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 1,
-        publisherId,
-      });
-      const id = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        publisherId,
-        seriesIds: [seriesId],
-      });
-      await ctx.db.insert("sourceObservations", {
+      const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+      const seriesId = await insertSeries(ctx, { status: "hidden", title: "Cells at Work! Picture Book" });
+      const editionId = await insertEdition(ctx, { publisherId });
+      const id = await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] });
+      await insertObservation(ctx, {
         sourceKey: "kodansha",
         sourceRecordId: "cells-at-work-picture-book/volume-4#physical",
-        snapshot: {},
         recordRef: { type: "release", id },
-        lastSeenAt: 0,
-        withdrawn: false,
       });
       return id;
     });
@@ -1429,9 +1306,7 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     expect(await backlist(t, { maxFetches: 1 })).toMatchObject({
       continued: true,
     });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();
       expect(run?.status).toBe("failed");
@@ -1538,9 +1413,7 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
     // A one-fetch budget: each link finishes the series it started, then chains.
     const first = await backlist(t, { maxFetches: 1 });
     expect(first).toMatchObject({ continued: true, seriesCrawled: 1 });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs).toHaveLength(1);
@@ -1586,11 +1459,6 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
   });
 
   it('disabling the row stops a scheduled crawl as "stopped"; a forced one finishes', async () => {
-    const drain = async (t: TestT) => {
-      vi.useFakeTimers();
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
-      vi.useRealTimers();
-    };
     const off = (t: TestT) =>
       t.mutation(internal.importSources.setEnabledInternal, {
         key: "kodansha-backlist",
@@ -1913,43 +1781,16 @@ describe("kodansha.backlistSync — per-binding identity survives page order (B0
   });
 });
 
-/** Blue Lock volume 1 as an ISBN-less Release another source made, in this Binding and language. */
-async function insertIsbnLessVolume1(t: TestT, binding: string, language = "en") {
-  return await t.run(async (ctx) => {
-    const publisher = await ctx.db
-      .query("publishers")
-      .withIndex("by_slug", (q) => q.eq("slug", "kodansha"))
-      .unique();
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 101,
-      title: "Blue Lock",
-      altTitles: [],
-      searchText: "Blue Lock",
-    });
-    const volumeId = await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: 102,
-      seriesId,
-      label: "1",
-      position: 1,
-    });
-    const editionId = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 103,
-      publisherId: publisher!._id,
-    });
-    await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-    return await ctx.db.insert("releases", {
-      status: "active",
-      editionId,
-      publisherId: publisher!._id,
-      seriesIds: [seriesId],
-      format: "physical",
-      binding,
-      language,
-    });
-  });
+/** Blue Lock volume 1 as an ISBN-less Release another source made under Kodansha, in this Binding and language. */
+async function insertIsbnLessVolume1(t: TestT, binding: Doc<"releases">["binding"], language = "en") {
+  const { releaseId } = await t.run((ctx) =>
+    seedCatalog(ctx, {
+      publisher: { slug: "kodansha" },
+      series: { title: "Blue Lock" },
+      release: { binding, language },
+    }),
+  );
+  return releaseId;
 }
 
 describe("kodansha.backlistSync — Binding and language reach the matching ladder (B14)", () => {
