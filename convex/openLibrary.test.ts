@@ -4,12 +4,21 @@
 // structure — plus the leaf-Release boundary (how VIZ releases materialize
 // under the ANN backbone), weak-date handling, and chained streaming.
 
-import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
+import {
+  insertCoverage,
+  insertEdition,
+  insertObservation,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertSourceRevision,
+  insertVolume,
+} from "./test.factories";
+import { drain, makeT, seedRegistry, type TestT } from "./test.helpers";
 
 const DUMP_URL = "https://dumps.example.org/filtered.txt";
 
@@ -39,66 +48,23 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function makeT() {
-  return convexTest(schema);
-}
-type TestT = ReturnType<typeof makeT>;
-
-async function seedRegistry(t: TestT) {
-  await t.mutation(internal.importSources.seedRegistry, {});
-}
-
 const sync = (t: TestT, args: object = {}) => t.action(internal.openLibrary.sync, { ...args });
 
 /** The ANN-built skeleton + a VIZ publisher row: series, volumes 1-2, and
  * (optionally) an existing ISBN-less release covering volume 1. */
 async function buildSkeleton(t: TestT, opts: { withRelease: boolean }) {
   return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "VIZ Media",
-      slug: "viz-media",
-    });
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Chainsaw Man",
-      altTitles: [],
-      searchText: "Chainsaw Man",
-    });
+    const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+    const seriesId = await insertSeries(ctx, { publicId: 1, title: "Chainsaw Man" });
     const volumeIds: Id<"volumes">[] = [];
     for (const label of ["21", "22"]) {
-      volumeIds.push(
-        await ctx.db.insert("volumes", {
-          status: "active",
-          publicId: Number(label),
-          seriesId,
-          position: Number(label),
-          label,
-        }),
-      );
+      volumeIds.push(await insertVolume(ctx, { publicId: Number(label), seriesId, position: Number(label) }));
     }
     let releaseId: Id<"releases"> | null = null;
     if (opts.withRelease) {
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 1,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId: volumeIds[1]!,
-        order: 1,
-        extent: "complete",
-      });
-      releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        publisherId,
-        seriesIds: [seriesId],
-      });
+      const editionId = await insertEdition(ctx, { publicId: 1, publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: volumeIds[1]! });
+      releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] });
     }
     return { publisherId, seriesId, volumeIds, releaseId };
   });
@@ -219,15 +185,7 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     await buildSkeleton(t, { withRelease: false });
     // "Chainsaw Man 21" is its own Series here (no Volume split), so the
     // bare split onto "Chainsaw Man" Vol. 21 must never happen.
-    await t.run(async (ctx) => {
-      await ctx.db.insert("series", {
-        status: "active",
-        publicId: 2,
-        title: "Chainsaw Man 21",
-        altTitles: [],
-        searchText: "Chainsaw Man 21",
-      });
-    });
+    await t.run((ctx) => insertSeries(ctx, { publicId: 2, title: "Chainsaw Man 21" }));
     stubDump([{ ...CHAINSAW_22, title: "Chainsaw Man 21", isbn_13: ["9781974700035"] }]);
     await sync(t);
     await t.run(async (ctx) => {
@@ -253,23 +211,10 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     const { releaseId } = await buildSkeleton(t, { withRelease: true });
     // ANN (standard) already set the date.
     await t.run(async (ctx) => {
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "ann" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
-        ref: { type: "release", id: releaseId! } as never,
-        seq: 1,
-        proposalId,
-        author: { kind: "source", sourceKey: "ann" },
-        changes: [
-          {
-            field: "pubDate",
-            after: { year: 2026, month: 10, day: 6, sort: 20261006 },
-          },
-        ],
-        comment: "Imported from the Anime News Network Encyclopedia.",
+      await insertSourceRevision(ctx, {
+        ref: { type: "release", id: releaseId! },
+        sourceKey: "ann",
+        changes: [{ field: "pubDate", after: { year: 2026, month: 10, day: 6, sort: 20261006 } }],
       });
       await ctx.db.patch(releaseId!, {
         pubDate: { year: 2026, month: 10, day: 6, sort: 20261006 },
@@ -301,18 +246,11 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     // A publisher feed (authoritative) replaced it; OL's rewrite stays on
     // its observation.
     await t.run(async (ctx) => {
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "sevenseas" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
-        ref: { type: "release", id: releaseId! } as never,
+      await insertSourceRevision(ctx, {
+        ref: { type: "release", id: releaseId! },
+        sourceKey: "sevenseas",
         seq: 10,
-        proposalId,
-        author: { kind: "source", sourceKey: "sevenseas" },
         changes: [{ field: "description", after: "The publisher's copy." }],
-        comment: "Imported from Seven Seas Entertainment.",
       });
       await ctx.db.patch(releaseId!, { description: "The publisher's copy." });
     });
@@ -381,15 +319,14 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     await seedRegistry(t);
     await buildSkeleton(t, { withRelease: false });
     // Yen Press recorded this ISBN as a light novel (its own category).
-    await t.run(async (ctx) => {
-      await ctx.db.insert("sourceObservations", {
+    await t.run((ctx) =>
+      insertObservation(ctx, {
         sourceKey: "yenpress",
         sourceRecordId: "9781974766512",
         snapshot: { outOfScope: "category light-novels" },
         lastSeenAt: 1,
-        withdrawn: false,
-      });
-    });
+      }),
+    );
     stubDump([CHAINSAW_22]);
     await sync(t);
     await t.run(async (ctx) => {
@@ -473,9 +410,7 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     ]);
     const first = await sync(t, { maxLines: 2 });
     expect(first).toMatchObject({ continued: true, nextLine: 2 });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs).toHaveLength(1);
@@ -546,43 +481,20 @@ describe("openLibrary.sync — a volume title split across title + subtitle keep
    * physical paperback Release. */
   async function buildKingdomHearts(t: TestT, opts: { parent: boolean; sequel: boolean }) {
     return await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Kodansha",
-        slug: "kodansha",
-      });
+      const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
       const addSeries = async (publicId: number, title: string, label?: string) => {
-        const seriesId = await ctx.db.insert("series", {
-          status: "active",
-          publicId,
-          title,
-          altTitles: [],
-          searchText: title,
-        });
-        const volumeId = await ctx.db.insert("volumes", {
-          status: "active",
+        const seriesId = await insertSeries(ctx, { publicId, title });
+        const volumeId = await insertVolume(ctx, {
           publicId,
           seriesId,
           position: label !== undefined ? Number(label) : 1,
-          ...(label !== undefined ? { label } : {}),
+          label,
         });
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId,
-          publisherId,
-        });
-        await ctx.db.insert("volumeCoverages", {
+        const editionId = await insertEdition(ctx, { publicId, publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        return await insertRelease(ctx, {
           editionId,
-          volumeId,
-          order: 1,
-          extent: "complete",
-        });
-        return await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
           binding: "paperback",
-          language: "en",
           publisherId,
           seriesIds: [seriesId],
         });
@@ -715,11 +627,9 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
       await ctx.db.patch(first._id, { isbn13: isbns[0] });
       for (const isbn13 of isbns.slice(1)) {
         ids.push(
-          await ctx.db.insert("releases", {
-            status: "active",
+          await insertRelease(ctx, {
             editionId: first.editionId,
             format: "digital",
-            language: "en",
             isbn13,
             publisherId,
             seriesIds: [seriesId],
@@ -735,18 +645,10 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
     const [releaseId] = await lateReleases(t, [{ ...CHAINSAW_22, description: "OL's blurb." }]);
     // ANN's release page described the book first (weak, like OL).
     await t.run(async (ctx) => {
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "ann" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
+      await insertSourceRevision(ctx, {
         ref: { type: "release", id: releaseId! },
-        seq: 1,
-        proposalId,
-        author: { kind: "source", sourceKey: "ann" },
+        sourceKey: "ann",
         changes: [{ field: "description", before: undefined, after: "ANN's text." }],
-        comment: "Imported from Anime News Network Encyclopedia.",
       });
       await ctx.db.patch(releaseId!, { description: "ANN's text." });
     });
@@ -768,12 +670,10 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
     // 200+ observations sorting before the edition, none worth a replay.
     await t.run(async (ctx) => {
       for (let i = 0; i < 205; i++) {
-        await ctx.db.insert("sourceObservations", {
+        await insertObservation(ctx, {
           sourceKey: "openlibrary",
           sourceRecordId: `/books/OL0${String(i).padStart(4, "0")}M`,
           snapshot: { kind: "olEdition", key: `/books/OL0${i}M` },
-          lastSeenAt: 0,
-          withdrawn: false,
         });
       }
     });
@@ -785,9 +685,7 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
       continued: true,
     });
     vi.restoreAllMocks();
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       expect((await ctx.db.get(ids[0]!))!.description).toBe("Late.");
     });
@@ -844,9 +742,7 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
       continued: true,
     });
     vi.restoreAllMocks();
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const texts = await Promise.all(ids.map(async (id) => (await ctx.db.get(id))!.description));
       expect(texts.sort()).toEqual(["One.", "Three.", "Two."]);
@@ -885,28 +781,18 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
     const described = await t.run(async (ctx) => {
       const late = (await ctx.db.get(releaseId!))!;
       await ctx.db.patch(late._id, { isbn13: "9781974766512" });
-      const id = await ctx.db.insert("releases", {
-        status: "active",
+      const id = await insertRelease(ctx, {
         editionId: late.editionId,
         format: "digital",
-        language: "en",
         isbn13: "9781974766529",
         description: "The publisher's copy.",
         publisherId,
         seriesIds: [seriesId],
       });
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "sevenseas" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
-        ref: { type: "release", id } as never,
-        seq: 1,
-        proposalId,
-        author: { kind: "source", sourceKey: "sevenseas" },
+      await insertSourceRevision(ctx, {
+        ref: { type: "release", id },
+        sourceKey: "sevenseas",
         changes: [{ field: "description", after: "The publisher's copy." }],
-        comment: "Imported from Seven Seas Entertainment.",
       });
       return id;
     });
@@ -954,11 +840,9 @@ describe("openLibrary.replayDescriptions — stored editions, no dump", () => {
     await t.run(async (ctx) => {
       const release = (await ctx.db.get(releaseId!))!;
       await ctx.db.patch(release._id, { isbn13: "9781974766512" });
-      await ctx.db.insert("releases", {
-        status: "active",
+      await insertRelease(ctx, {
         editionId: release.editionId,
         format: "digital",
-        language: "en",
         isbn13: "9781974766529",
         publisherId,
         seriesIds: [seriesId],
