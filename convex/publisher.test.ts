@@ -1,10 +1,20 @@
-import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
 import { boardWindow, LANE_CAP, nearMonths } from "./publisher";
+import { pubDate } from "./test.catalog";
+import {
+  insertCoverage,
+  insertEdition,
+  insertEditionLine,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+  seedCatalog,
+} from "./test.factories";
+import { makeT, type TestT } from "./test.helpers";
 
 // Lane bounds for every test: "today" is Aug 19 2026, horizon end of Nov 2026
 // (~3 months), matching what the route computes.
@@ -16,82 +26,33 @@ const bounds = { todaySort: TODAY, horizonSort: HORIZON };
 // a this-month day-TBA row, a dated row today, later months, and rows that
 // must stay out (already published, past the horizon, hidden, year-only).
 async function seeded() {
-  const t = convexTest(schema);
+  const t = makeT();
   const ids = await t.run(async (ctx) => {
-    const viz = await ctx.db.insert("publishers", {
-      status: "active",
+    const viz = await insertPublisher(ctx, {
       name: "VIZ Media",
       slug: "viz-media",
       description: "Publisher profile blurb.",
     });
-    await ctx.db.insert("publishers", {
-      status: "hidden",
-      name: "Hidden Press",
-      slug: "hidden-press",
+    await insertPublisher(ctx, { status: "hidden", name: "Hidden Press", slug: "hidden-press" });
+    // In the lane: this month, day TBA.
+    const { seriesId: series, editionId: edition } = await seedCatalog(ctx, {
+      publisher: viz,
+      series: { title: "Tokyo Ghoul" },
+      release: { pubDate: pubDate(20260800) },
     });
-
-    const series = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Tokyo Ghoul",
-      altTitles: [],
-      searchText: "Tokyo Ghoul",
-    });
-    const volume = await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: 1,
-      seriesId: series,
-      position: 1,
-      label: "1",
-    });
-    const edition = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 1,
-      publisherId: viz,
-    });
-    await ctx.db.insert("volumeCoverages", {
-      editionId: edition,
-      volumeId: volume,
-      order: 1,
-      extent: "complete",
-    });
-
-    const release = async (args: {
-      date: { year: number; month?: number; day?: number };
-      status?: "active" | "hidden";
-      publisherId?: Id<"publishers">;
-    }) => {
-      const { year, month, day } = args.date;
-      await ctx.db.insert("releases", {
-        status: args.status ?? "active",
-        editionId: edition,
-        format: "physical",
-        language: "en",
-        pubDate: {
-          year,
-          month,
-          day,
-          sort: year * 10000 + (month ?? 0) * 100 + (day ?? 0),
-        },
-        publisherId: args.publisherId ?? viz,
-        seriesIds: [series],
-      });
-    };
+    const release = (sort: number, status: "active" | "hidden" = "active") =>
+      insertRelease(ctx, { status, editionId: edition, publisherId: viz, seriesIds: [series], pubDate: pubDate(sort) });
 
     // In the lane:
-    await release({ date: { year: 2026, month: 8 } }); // this month, day TBA
-    await release({ date: { year: 2026, month: 8, day: 19 } }); // today
-    await release({ date: { year: 2026, month: 9, day: 1 } });
-    await release({ date: { year: 2026, month: 11, day: 30 } }); // horizon edge
+    await release(20260819); // today
+    await release(20260901);
+    await release(20261130); // horizon edge
     // Out of the lane:
-    await release({ date: { year: 2026, month: 8, day: 4 } }); // already out
-    await release({ date: { year: 2026, month: 7, day: 31 } }); // last month
-    await release({ date: { year: 2026, month: 12, day: 5 } }); // past horizon
-    await release({ date: { year: 2026 } }); // year-only: no month window
-    await release({
-      date: { year: 2026, month: 9, day: 15 },
-      status: "hidden",
-    });
+    await release(20260804); // already out
+    await release(20260731); // last month
+    await release(20261205); // past horizon
+    await release(20260000); // year-only: no month window
+    await release(20260915, "hidden");
 
     return { viz, edition, series };
   });
@@ -131,13 +92,11 @@ describe("publisher.publisherPage", () => {
     const { t, ids } = await seeded();
     await t.run(async (ctx) => {
       for (const format of ["digital", "physical"] as const) {
-        await ctx.db.insert("releases", {
-          status: "active",
+        await insertRelease(ctx, {
           editionId: ids.edition,
           format,
-          binding: format === "physical" ? "hardcover" : undefined,
-          language: "en",
-          pubDate: { year: 2026, month: 10, day: 6, sort: 20261006 },
+          ...(format === "physical" ? { binding: "hardcover" as const } : {}),
+          pubDate: pubDate(20261006),
           publisherId: ids.viz,
           seriesIds: [ids.series],
         });
@@ -158,17 +117,11 @@ describe("publisher.publisherPage", () => {
     await t.run(async (ctx) => {
       for (let day = 1; day <= LANE_CAP; day++) {
         // A book each: one Edition's releases in a month would fold into one.
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: 100 + day,
-          publisherId: ids.viz,
-        });
-        await ctx.db.insert("releases", {
-          status: "active",
+        const editionId = await insertEdition(ctx, { publisherId: ids.viz });
+        await insertRelease(ctx, {
           editionId,
           format: "digital",
-          language: "en",
-          pubDate: { year: 2026, month: 10, day, sort: 20261000 + day },
+          pubDate: pubDate(20261000 + day),
           publisherId: ids.viz,
           seriesIds: [ids.series],
         });
@@ -199,7 +152,7 @@ describe("publisher.publisherPage", () => {
   it("301s a merged Publisher's slug to its survivor's", async () => {
     const { t, ids } = await seeded();
     await t.run(async (ctx) => {
-      const loser = await ctx.db.insert("publishers", {
+      const loser = await insertPublisher(ctx, {
         status: "merged",
         mergedIntoId: ids.viz,
         name: "VIZ LLC",
@@ -241,24 +194,11 @@ describe("publisher.publisherPage", () => {
   it("drops lane rows whose Edition or Series is hidden", async () => {
     const { t, ids } = await seeded();
     await t.run(async (ctx) => {
-      const hiddenSeries = await ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 9,
-        title: "Gone",
-        altTitles: [],
-        searchText: "Gone",
-      });
-      const hiddenEdition = await ctx.db.insert("editions", {
-        status: "hidden",
-        publicId: 9,
-        publisherId: ids.viz,
-      });
-      await ctx.db.insert("releases", {
-        status: "active",
+      const hiddenSeries = await insertSeries(ctx, { status: "hidden", title: "Gone" });
+      const hiddenEdition = await insertEdition(ctx, { status: "hidden", publisherId: ids.viz });
+      await insertRelease(ctx, {
         editionId: hiddenEdition,
-        format: "physical",
-        language: "en",
-        pubDate: { year: 2026, month: 9, day: 8, sort: 20260908 },
+        pubDate: pubDate(20260908),
         publisherId: ids.viz,
         seriesIds: [hiddenSeries],
       });
@@ -287,25 +227,12 @@ describe("publisher.publisherPage", () => {
 
 describe("publisherPage — imprint family", () => {
   async function family() {
-    const t = convexTest(schema);
+    const t = makeT();
     await t.run(async (ctx) => {
-      const sevenSeas = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Seven Seas Entertainment",
-        slug: "seven-seas",
-      });
-      for (const [name, slug] of [
-        ["Steamship", "steamship"],
-        ["Ghost Ship", "ghost-ship"],
-      ] as const) {
-        await ctx.db.insert("publishers", {
-          status: "active",
-          name,
-          slug,
-          parentPublisherId: sevenSeas,
-        });
-      }
-      await ctx.db.insert("publishers", {
+      const sevenSeas = await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+      await insertPublisher(ctx, { name: "Steamship", slug: "steamship", parentPublisherId: sevenSeas });
+      await insertPublisher(ctx, { name: "Ghost Ship", slug: "ghost-ship", parentPublisherId: sevenSeas });
+      await insertPublisher(ctx, {
         status: "hidden",
         name: "Waves of Color",
         slug: "waves-of-color",
@@ -345,61 +272,26 @@ describe("publisher.monthBoard", () => {
   // one with only August activity round out the directory. Hidden rows and
   // other months stay out of the counts.
   async function board() {
-    const t = convexTest(schema);
-    await t.run(async (ctx) => {
-      const sevenSeas = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Seven Seas Entertainment",
-        slug: "seven-seas",
-      });
-      const ghostShip = await ctx.db.insert("publishers", {
-        status: "active",
+    const t = makeT();
+    const ids = await t.run(async (ctx) => {
+      const sevenSeas = await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+      const ghostShip = await insertPublisher(ctx, {
         name: "Ghost Ship",
         slug: "ghost-ship",
         parentPublisherId: sevenSeas,
       });
-      const tokyopop = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Tokyopop",
-        slug: "tokyopop",
-      });
-      await ctx.db.insert("publishers", {
-        status: "active",
-        name: "CMX",
-        slug: "cmx",
-        defunct: true,
-      });
-      await ctx.db.insert("publishers", {
-        status: "hidden",
-        name: "Hidden Press",
-        slug: "hidden-press",
-      });
+      const tokyopop = await insertPublisher(ctx, { name: "Tokyopop", slug: "tokyopop" });
+      const cmx = await insertPublisher(ctx, { name: "CMX", slug: "cmx", defunct: true });
+      await insertPublisher(ctx, { status: "hidden", name: "Hidden Press", slug: "hidden-press" });
 
-      let publicId = 0;
       // One Series with the given Volume positions; returns Volume IDs.
       const seriesWith = async (title: string, positions: number[]) => {
-        const seriesId = await ctx.db.insert("series", {
-          status: "active",
-          publicId: ++publicId,
-          title,
-          altTitles: [],
-          searchText: title,
-        });
+        const seriesId = await insertSeries(ctx, { title });
         const volumes = [];
-        for (const position of positions) {
-          volumes.push(
-            await ctx.db.insert("volumes", {
-              status: "active",
-              publicId: ++publicId,
-              seriesId,
-              position,
-              label: String(position),
-            }),
-          );
-        }
+        for (const position of positions) volumes.push(await insertVolume(ctx, { seriesId, position }));
         return { seriesId, volumes };
       };
-      // An Edition covering one Volume, with one Release per date given.
+      // An Edition covering one Volume, with one Release on the given date.
       const release = async (args: {
         publisherId: Id<"publishers">;
         series: { seriesId: Id<"series">; volumes: Array<Id<"volumes">> };
@@ -410,37 +302,20 @@ describe("publisher.monthBoard", () => {
         status?: "active" | "hidden";
         isbn13?: string;
       }) => {
+        const { seriesId } = args.series;
         const editionLineId = args.lineName
-          ? await ctx.db.insert("editionLines", {
-              status: "active",
-              seriesId: args.series.seriesId,
-              publisherId: args.publisherId,
-              name: args.lineName,
-            })
+          ? await insertEditionLine(ctx, { seriesId, publisherId: args.publisherId, name: args.lineName })
           : undefined;
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: ++publicId,
-          publisherId: args.publisherId,
-          editionLineId,
-        });
-        await ctx.db.insert("volumeCoverages", {
-          editionId,
-          volumeId: args.series.volumes[args.volume]!,
-          order: 1,
-          extent: "complete",
-        });
-        const year = Math.floor(args.sort / 10000);
-        const month = Math.floor(args.sort / 100) % 100;
-        await ctx.db.insert("releases", {
+        const editionId = await insertEdition(ctx, { publisherId: args.publisherId, editionLineId });
+        await insertCoverage(ctx, { editionId, volumeId: args.series.volumes[args.volume]! });
+        await insertRelease(ctx, {
           status: args.status ?? "active",
           editionId,
           format: args.format ?? "physical",
-          language: "en",
           isbn13: args.isbn13,
-          pubDate: { year, month, day: args.sort % 100, sort: args.sort },
+          pubDate: pubDate(args.sort),
           publisherId: args.publisherId,
-          seriesIds: [args.series.seriesId],
+          seriesIds: [seriesId],
         });
       };
 
@@ -464,12 +339,13 @@ describe("publisher.monthBoard", () => {
       await release({ publisherId: tokyopop, series: august, volume: 0, sort: 20260804 });
       // Ghost Ship, September.
       await release({ publisherId: ghostShip, series: ghostly, volume: 0, sort: 20260922, format: "digital" });
+      return { tokyopop, cmx };
     });
-    return t;
+    return { t, ids };
   }
 
   it("groups the month by Publisher, busiest first, with counts and a delta", async () => {
-    const t = await board();
+    const { t } = await board();
     const { board: cards } = await t.query(api.publisher.monthBoard, {
       year: 2026,
       month: 9,
@@ -513,7 +389,7 @@ describe("publisher.monthBoard", () => {
   });
 
   it("lists every active Publisher A–Z, imprints nested, defunct flagged", async () => {
-    const t = await board();
+    const { t } = await board();
     const { directory } = await t.query(api.publisher.monthBoard, {
       year: 2026,
       month: 9,
@@ -535,20 +411,14 @@ describe("publisher.monthBoard", () => {
   });
 
   it("wraps January's delta to the previous December", async () => {
-    const t = await board();
+    const { t } = await board();
     await t.run(async (ctx) => {
       // Copies of an existing (visible) Seven Seas Release, re-dated.
       const [template] = await ctx.db.query("releases").take(1);
       if (!template) throw new Error("fixture has releases");
       const { _id, _creationTime, ...fields } = template;
-      for (const [month, sort] of [
-        [12, 20251210],
-        [1, 20260105],
-      ] as const) {
-        await ctx.db.insert("releases", {
-          ...fields,
-          pubDate: { year: Math.floor(sort / 10000), month, day: sort % 100, sort },
-        });
+      for (const sort of [20251210, 20260105]) {
+        await ctx.db.insert("releases", { ...fields, pubDate: pubDate(sort) });
       }
     });
     const { board: cards } = await t.query(api.publisher.monthBoard, {
@@ -559,48 +429,21 @@ describe("publisher.monthBoard", () => {
   });
 
   it("counts a digital Release of an old Vol. 1 as a backfill, not a new series", async () => {
-    const t = await board();
+    const { t, ids } = await board();
     await t.run(async (ctx) => {
       // Tokyopop: Vol. 1 in print in 2019, its digital Release this month.
-      const [tokyopop] = await ctx.db
-        .query("publishers")
-        .withIndex("by_slug", (q) => q.eq("slug", "tokyopop"))
-        .take(1);
-      if (!tokyopop) throw new Error("fixture has Tokyopop");
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 900,
-        title: "Backfilled",
-        altTitles: [],
-        searchText: "Backfilled",
+      const { editionId, seriesId } = await seedCatalog(ctx, {
+        publisher: ids.tokyopop,
+        series: { title: "Backfilled" },
+        release: { pubDate: pubDate(20190305) },
       });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 901,
-        seriesId,
-        position: 1,
-        label: "1",
+      await insertRelease(ctx, {
+        editionId,
+        format: "digital",
+        pubDate: pubDate(20260910),
+        publisherId: ids.tokyopop,
+        seriesIds: [seriesId],
       });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 902,
-        publisherId: tokyopop._id,
-      });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-      for (const [format, sort] of [
-        ["physical", 20190305],
-        ["digital", 20260910],
-      ] as const) {
-        await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format,
-          language: "en",
-          pubDate: { year: Math.floor(sort / 10000), month: Math.floor(sort / 100) % 100, day: sort % 100, sort },
-          publisherId: tokyopop._id,
-          seriesIds: [seriesId],
-        });
-      }
     });
     const { board: cards } = await t.query(api.publisher.monthBoard, { year: 2026, month: 9 });
     const card = cards.find((c) => c.publisher.slug === "tokyopop");
@@ -610,54 +453,23 @@ describe("publisher.monthBoard", () => {
   });
 
   it("does not read a year-only date this year as an earlier Release", async () => {
-    const t = await board();
+    const { t, ids } = await board();
     await t.run(async (ctx) => {
-      const [tokyopop] = await ctx.db
-        .query("publishers")
-        .withIndex("by_slug", (q) => q.eq("slug", "tokyopop"))
-        .take(1);
-      if (!tokyopop) throw new Error("fixture has Tokyopop");
       // Two Vol. 1 Editions printing this September, each with a digital
       // sibling dated less precisely: "2026" (could be September) and
       // "July 2026" (genuinely earlier).
-      const cases = [
-        { publicId: 910, sibling: { year: 2026, sort: 20260000 } },
-        { publicId: 920, sibling: { year: 2026, month: 7, sort: 20260700 } },
-      ];
-      for (const { publicId, sibling } of cases) {
-        const seriesId = await ctx.db.insert("series", {
-          status: "active",
-          publicId,
-          title: `Series ${publicId}`,
-          altTitles: [],
-          searchText: `Series ${publicId}`,
+      for (const sibling of [20260000, 20260700]) {
+        const { editionId, seriesId } = await seedCatalog(ctx, {
+          publisher: ids.tokyopop,
+          release: { pubDate: pubDate(20260916) },
         });
-        const volumeId = await ctx.db.insert("volumes", {
-          status: "active",
-          publicId: publicId + 1,
-          seriesId,
-          position: 1,
-          label: "1",
-        });
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: publicId + 2,
-          publisherId: tokyopop._id,
-        });
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-        const base = {
-          status: "active" as const,
+        await insertRelease(ctx, {
           editionId,
-          language: "en",
-          publisherId: tokyopop._id,
+          format: "digital",
+          pubDate: pubDate(sibling),
+          publisherId: ids.tokyopop,
           seriesIds: [seriesId],
-        };
-        await ctx.db.insert("releases", {
-          ...base,
-          format: "physical",
-          pubDate: { year: 2026, month: 9, day: 16, sort: 20260916 },
         });
-        await ctx.db.insert("releases", { ...base, format: "digital", pubDate: sibling });
       }
     });
     const { board: cards } = await t.query(api.publisher.monthBoard, { year: 2026, month: 9 });
@@ -670,47 +482,18 @@ describe("publisher.monthBoard", () => {
   });
 
   it("does not count a relaunched Vol. 1 of an established Series as new", async () => {
-    const t = await board();
+    const { t, ids } = await board();
     await t.run(async (ctx) => {
-      const [tokyopop] = await ctx.db
-        .query("publishers")
-        .withIndex("by_slug", (q) => q.eq("slug", "tokyopop"))
-        .take(1);
-      const [cmx] = await ctx.db
-        .query("publishers")
-        .withIndex("by_slug", (q) => q.eq("slug", "cmx"))
-        .take(1);
-      if (!tokyopop || !cmx) throw new Error("fixture has Tokyopop and CMX");
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 930,
-        title: "Rescued",
-        altTitles: [],
-        searchText: "Rescued",
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 931,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
+      const seriesId = await insertSeries(ctx, { title: "Rescued" });
+      const volumeId = await insertVolume(ctx, { seriesId });
       // CMX's Vol. 1 in 2005, and Tokyopop's new standard Vol. 1 this month.
-      for (const [publicId, publisherId, sort] of [
-        [932, cmx._id, 20050412],
-        [933, tokyopop._id, 20260915],
+      for (const [publisherId, sort] of [
+        [ids.cmx, 20050412],
+        [ids.tokyopop, 20260915],
       ] as const) {
-        const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-        await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
-          pubDate: { year: Math.floor(sort / 10000), month: Math.floor(sort / 100) % 100, day: sort % 100, sort },
-          publisherId,
-          seriesIds: [seriesId],
-        });
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        await insertRelease(ctx, { editionId, pubDate: pubDate(sort), publisherId, seriesIds: [seriesId] });
       }
     });
     const tokyopopCard = async () =>
@@ -724,7 +507,7 @@ describe("publisher.monthBoard", () => {
   });
 
   it("reads a malformed month as an empty board, directory intact", async () => {
-    const t = await board();
+    const { t } = await board();
     const result = await t.query(api.publisher.monthBoard, { year: 2026, month: 13 });
     expect(result.board).toEqual([]);
     expect(result.directory).toHaveLength(3);
@@ -736,36 +519,18 @@ describe("publisher precomputed boards", () => {
 
   // A Publisher with one September 2026 release; `more` adds another.
   async function catalog() {
-    const t = convexTest(schema);
+    const t = makeT();
     const ids = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Yen Press",
-        slug: "yen-press",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Spice and Wolf",
-        altTitles: [],
-        searchText: "Spice and Wolf",
-      });
+      const publisherId = await insertPublisher(ctx, { name: "Yen Press", slug: "yen-press" });
+      const seriesId = await insertSeries(ctx, { title: "Spice and Wolf" });
       return { publisherId, seriesId };
     });
-    let publicId = 10;
     const more = (sort: number) =>
       t.run(async (ctx) => {
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: ++publicId,
-          publisherId: ids.publisherId,
-        });
-        await ctx.db.insert("releases", {
-          status: "active",
+        const editionId = await insertEdition(ctx, { publisherId: ids.publisherId });
+        await insertRelease(ctx, {
           editionId,
-          format: "physical",
-          language: "en",
-          pubDate: { year: 2026, month: Math.floor(sort / 100) % 100, day: sort % 100, sort },
+          pubDate: pubDate(sort),
           publisherId: ids.publisherId,
           seriesIds: [ids.seriesId],
         });
@@ -775,7 +540,7 @@ describe("publisher precomputed boards", () => {
   }
 
   const september = { year: 2026, month: 9 };
-  const releasesIn = async (t: ReturnType<typeof convexTest>) =>
+  const releasesIn = async (t: TestT) =>
     (await t.query(api.publisher.monthBoard, september)).board[0]?.releases ?? 0;
 
   it("keeps January of last year through December two years out", () => {
