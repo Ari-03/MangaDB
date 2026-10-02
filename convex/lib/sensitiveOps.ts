@@ -2268,17 +2268,17 @@ export async function impactOf(
 ): Promise<ImpactRow[]> {
   const rows: ImpactRow[] = [];
   const add = (label: string, count: number) => rows.push({ label, count });
+  // Most rows are the size of one indexed query.
+  const count = async (label: string, query: { collect(): Promise<unknown[]> }) =>
+    add(label, (await query.collect()).length);
 
-  add(
+  await count(
     "Source observations",
-    (
-      await ctx.db
-        .query("sourceObservations")
-        .withIndex("by_record", (q) =>
-          q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id as never),
-        )
-        .collect()
-    ).length,
+    ctx.db
+      .query("sourceObservations")
+      .withIndex("by_record", (q) =>
+        q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id as never),
+      ),
   );
   add("Public revisions", (await revisionsOf(ctx, ref)).length);
 
@@ -2307,23 +2307,10 @@ export async function impactOf(
           (l) => l.publisherId === id,
         ).length,
       );
-      add(
-        "Editions",
-        (
-          await ctx.db
-            .query("editions")
-            .withIndex("by_publisher", (q) => q.eq("publisherId", id))
-            .collect()
-        ).length,
-      );
-      add(
+      await count("Editions", ctx.db.query("editions").withIndex("by_publisher", (q) => q.eq("publisherId", id)));
+      await count(
         "Releases",
-        (
-          await ctx.db
-            .query("releases")
-            .withIndex("by_publisher_date", (q) => q.eq("publisherId", id))
-            .collect()
-        ).length,
+        ctx.db.query("releases").withIndex("by_publisher_date", (q) => q.eq("publisherId", id)),
       );
       add(
         "Bundles",
@@ -2334,37 +2321,16 @@ export async function impactOf(
       break;
     }
     case "seriesFamily": {
-      add(
+      await count(
         "Member series",
-        (
-          await ctx.db
-            .query("series")
-            .withIndex("by_family", (q) => q.eq("familyId", ref.id as Id<"seriesFamilies">))
-            .collect()
-        ).length,
+        ctx.db.query("series").withIndex("by_family", (q) => q.eq("familyId", ref.id as Id<"seriesFamilies">)),
       );
       break;
     }
     case "series": {
       const id = ref.id as Id<"series">;
-      add(
-        "Volumes",
-        (
-          await ctx.db
-            .query("volumes")
-            .withIndex("by_series", (q) => q.eq("seriesId", id))
-            .collect()
-        ).length,
-      );
-      add(
-        "Edition lines",
-        (
-          await ctx.db
-            .query("editionLines")
-            .withIndex("by_series", (q) => q.eq("seriesId", id))
-            .collect()
-        ).length,
-      );
+      await count("Volumes", ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", id)));
+      await count("Edition lines", ctx.db.query("editionLines").withIndex("by_series", (q) => q.eq("seriesId", id)));
       const fromEdges = await ctx.db
         .query("seriesRelationships")
         .withIndex("by_from", (q) => q.eq("fromSeriesId", id))
@@ -2374,74 +2340,39 @@ export async function impactOf(
         .withIndex("by_to", (q) => q.eq("toSeriesId", id))
         .collect();
       add("Relationship edges", fromEdges.length + toEdges.length);
-      add(
+      await count(
         "User series states (follows, reading, visibility)",
-        (
-          await ctx.db
-            .query("userSeriesStates")
-            .withIndex("by_series", (q) => q.eq("seriesId", id))
-            .collect()
-        ).length,
+        ctx.db.query("userSeriesStates").withIndex("by_series", (q) => q.eq("seriesId", id)),
       );
-      add(
+      await count(
         "Reading passes",
-        (
-          await ctx.db
-            .query("releaseProgress")
-            .withIndex("by_series", (q) => q.eq("seriesId", id))
-            .collect()
-        ).length,
+        ctx.db.query("releaseProgress").withIndex("by_series", (q) => q.eq("seriesId", id)),
       );
-      add(
+      await count(
         "Volume read counts",
-        (
-          await ctx.db
-            .query("volumeProgress")
-            .withIndex("by_series", (q) => q.eq("seriesId", id))
-            .collect()
-        ).length,
+        ctx.db.query("volumeProgress").withIndex("by_series", (q) => q.eq("seriesId", id)),
       );
       add("Ratings", (await ratingsOf(ctx, { kind: "series", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "series", id })).length);
-      add(
+      await count(
         "Favorites (of the series and its volumes)",
-        (
-          await ctx.db
-            .query("favorites")
-            .withIndex("by_series", (q) => q.eq("seriesId", id))
-            .collect()
-        ).length,
+        ctx.db.query("favorites").withIndex("by_series", (q) => q.eq("seriesId", id)),
       );
-      add(
+      await count(
         "Comments (on the series and its volumes)",
-        (
-          await ctx.db
-            .query("comments")
-            .withIndex("by_series", (q) => q.eq("seriesId", id))
-            .collect()
-        ).length,
+        ctx.db.query("comments").withIndex("by_series", (q) => q.eq("seriesId", id)),
       );
       break;
     }
     case "volume": {
       const id = ref.id as Id<"volumes">;
-      add(
+      await count(
         "Coverage rows (editions covering this volume)",
-        (
-          await ctx.db
-            .query("volumeCoverages")
-            .withIndex("by_volume", (q) => q.eq("volumeId", id))
-            .collect()
-        ).length,
+        ctx.db.query("volumeCoverages").withIndex("by_volume", (q) => q.eq("volumeId", id)),
       );
-      add(
+      await count(
         "Volume read counts",
-        (
-          await ctx.db
-            .query("volumeProgress")
-            .withIndex("by_volume", (q) => q.eq("volumeId", id))
-            .collect()
-        ).length,
+        ctx.db.query("volumeProgress").withIndex("by_volume", (q) => q.eq("volumeId", id)),
       );
       add("Ratings", (await ratingsOf(ctx, { kind: "volume", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "volume", id })).length);
@@ -2449,108 +2380,43 @@ export async function impactOf(
         "Ratings, reviews and favorites of two-volume omnibuses (move to the survivor if the other Volume is merged)",
         await collapsibleTakes(ctx, id),
       );
-      add(
-        "Favorites",
-        (
-          await ctx.db
-            .query("favorites")
-            .withIndex("by_volume", (q) => q.eq("volumeId", id))
-            .collect()
-        ).length,
-      );
-      add(
-        "Comments",
-        (
-          await ctx.db
-            .query("comments")
-            .withIndex("by_volume", (q) => q.eq("volumeId", id))
-            .collect()
-        ).length,
-      );
+      await count("Favorites", ctx.db.query("favorites").withIndex("by_volume", (q) => q.eq("volumeId", id)));
+      await count("Comments", ctx.db.query("comments").withIndex("by_volume", (q) => q.eq("volumeId", id)));
       break;
     }
     case "editionLine": {
-      add(
+      await count(
         "Editions in this line",
-        (
-          await ctx.db
-            .query("editions")
-            .withIndex("by_line", (q) => q.eq("editionLineId", ref.id as Id<"editionLines">))
-            .collect()
-        ).length,
+        ctx.db.query("editions").withIndex("by_line", (q) => q.eq("editionLineId", ref.id as Id<"editionLines">)),
       );
       break;
     }
     case "edition": {
       const id = ref.id as Id<"editions">;
-      add(
+      await count(
         "Coverage rows",
-        (
-          await ctx.db
-            .query("volumeCoverages")
-            .withIndex("by_edition", (q) => q.eq("editionId", id))
-            .collect()
-        ).length,
+        ctx.db.query("volumeCoverages").withIndex("by_edition", (q) => q.eq("editionId", id)),
       );
-      add(
-        "Releases",
-        (
-          await ctx.db
-            .query("releases")
-            .withIndex("by_edition", (q) => q.eq("editionId", id))
-            .collect()
-        ).length,
-      );
+      await count("Releases", ctx.db.query("releases").withIndex("by_edition", (q) => q.eq("editionId", id)));
       add("Ratings", (await ratingsOf(ctx, { kind: "edition", id })).length);
       add("Reviews", (await reviewsOf(ctx, { kind: "edition", id })).length);
-      add(
-        "Favorites",
-        (
-          await ctx.db
-            .query("favorites")
-            .withIndex("by_edition", (q) => q.eq("editionId", id))
-            .collect()
-        ).length,
-      );
+      await count("Favorites", ctx.db.query("favorites").withIndex("by_edition", (q) => q.eq("editionId", id)));
       break;
     }
     case "release": {
       const id = ref.id as Id<"releases">;
-      add(
-        "Variants",
-        (
-          await ctx.db
-            .query("releaseVariants")
-            .withIndex("by_release", (q) => q.eq("releaseId", id))
-            .collect()
-        ).length,
-      );
-      add(
+      await count("Variants", ctx.db.query("releaseVariants").withIndex("by_release", (q) => q.eq("releaseId", id)));
+      await count(
         "Bundle memberships",
-        (
-          await ctx.db
-            .query("bundleMemberships")
-            .withIndex("by_release", (q) => q.eq("releaseId", id))
-            .collect()
-        ).length,
+        ctx.db.query("bundleMemberships").withIndex("by_release", (q) => q.eq("releaseId", id)),
       );
-      add(
+      await count(
         "Collection entries",
-        (
-          await ctx.db
-            .query("collectionEntries")
-            .withIndex("by_release", (q) => q.eq("releaseId", id))
-            .collect()
-        ).length,
+        ctx.db.query("collectionEntries").withIndex("by_release", (q) => q.eq("releaseId", id)),
       );
-      add(
+      await count(
         "Reading passes",
-        (
-          await ctx.db
-            .query("releaseProgress")
-            .withIndex("by_release", (q) => q.eq("releaseId", id))
-            .collect()
-        ).length,
+        ctx.db.query("releaseProgress").withIndex("by_release", (q) => q.eq("releaseId", id)),
       );
       break;
     }
@@ -2572,23 +2438,13 @@ export async function impactOf(
     }
     case "releaseBundle": {
       const id = ref.id as Id<"releaseBundles">;
-      add(
+      await count(
         "Member releases",
-        (
-          await ctx.db
-            .query("bundleMemberships")
-            .withIndex("by_bundle", (q) => q.eq("bundleId", id))
-            .collect()
-        ).length,
+        ctx.db.query("bundleMemberships").withIndex("by_bundle", (q) => q.eq("bundleId", id)),
       );
-      add(
+      await count(
         "Collection entries",
-        (
-          await ctx.db
-            .query("collectionEntries")
-            .withIndex("by_bundle", (q) => q.eq("bundleId", id))
-            .collect()
-        ).length,
+        ctx.db.query("collectionEntries").withIndex("by_bundle", (q) => q.eq("bundleId", id)),
       );
       break;
     }
