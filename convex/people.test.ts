@@ -2,10 +2,10 @@ import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { AnnCredit } from "./lib/ann";
 import { workMatch } from "./lib/matching";
-import { mergeRoles, nameKey, roleFor } from "./people";
+import { matchPerson, mergeRoles, nameKey, nearKeys, roleFor } from "./people";
 import schema from "./schema";
 
 // A PRH line that makes the parser throw, standing in for any failure of
@@ -432,9 +432,13 @@ describe("people.rebuild publisher credits", () => {
     expect(await personNamed(t, "Someone Else")).toEqual([]);
   });
 
-  it("credits nobody for a name two people share", async () => {
+  it("keeps a name two ANN people share on a name-only person of its own", async () => {
     const { t, ids } = await publisherCatalog();
-    expect(await creditLines(t, ids.keiShort)).toEqual([]);
+    expect(await creditLines(t, ids.keiShort)).toEqual(["Kei Sato: author (creators)"]);
+    const keis = await t.run(async (ctx) =>
+      (await ctx.db.query("people").collect()).filter((p) => p.nameKey === nameKey("Kei Sato")),
+    );
+    expect(keis.map((p) => p.annId ?? null).sort()).toEqual(["3", "4", null]);
   });
 
   it("gives nothing for withdrawn observations, hidden Series, or a Release in two Series", async () => {
@@ -539,14 +543,10 @@ describe("people.rebuild publisher credits", () => {
         withdrawn: false,
       }),
     );
-    await t.mutation(internal.people.applyPrhLines, {
+    await t.mutation(internal.people.publisherBatch, {
+      sourceKey: "prh",
+      after: null,
       rebuiltAt: Date.now() + 1000,
-      series: [
-        {
-          seriesId: ids.marriage,
-          lines: [{ seriesId: ids.marriage, line: "Peko Watanabe", count: 1, lastSeenAt: 0, createdAt: 0 }],
-        },
-      ],
     });
     expect(await creditLines(t, ids.marriage)).toEqual(["Peko Watanabe: author (prh)"]);
   });
@@ -576,11 +576,10 @@ describe("people.rebuild publisher credits", () => {
       return id;
     });
     await t.action(internal.people.rebuild, {});
-    // ANN's id 51 got a row of its own; the name-only row, never adopted and
-    // credited nowhere, was pruned.
+    // ANN's id 51 got a row of its own; the name-only row was not adopted.
     const keis = await personNamed(t, "Kei Tanaka");
-    expect(keis.map((p) => p.annId ?? null).sort()).toEqual(["50", "51"]);
-    expect(keis.some((p) => p._id === nameOnly)).toBe(false);
+    expect(keis.map((p) => p.annId ?? null).sort()).toEqual(["50", "51", null]);
+    expect(keis.find((p) => p._id === nameOnly)?.annId).toBeUndefined();
   });
 
   it("shows no ANN link on the page of a person only publishers name", async () => {
@@ -640,19 +639,32 @@ async function variantCatalog() {
     const nomiya = await series("How My Cute Girlfriend and I Started a Love Story");
     const sirius = await series("Sirius: Twin Stars");
     const dumbbells = await series("How Heavy are the Dumbbells You Lift?");
-    // A tie goes to the line seen most recently.
+    const kurosagi = await series("The Kurosagi Corpse Delivery Service");
+    const berserk = await series("Berserk");
+    const twins = await series("Twin Pens");
+    // Near spellings of one name: a tie goes to the one seen most recently.
     await book(hellbound, "Written by Yeon Sang-Ho. Illustrated by Choi Gyu-Seok.", 1);
     await book(hellbound, "Written by Yeon Sang-Ho. Illustrated by Choe Gyu-Seok.", 2, true);
     await book(sirius, "Ana C. Sánchez", 2);
     await book(sirius, "Aaa Sánchez", 1, true);
-    // The more common line wins, however recent the other.
+    // The more common spelling wins, however recent the other.
     await book(nomiya, "Rion Nomiya", 1);
     await book(nomiya, "Rion Nomiya", 1, true);
     await book(nomiya, "Reon Nomiya", 9, true);
-    // Lines naming the same people count together: Maam twice beats the bare line.
+    // Spellings of one key are one person; a role beats role-less.
     await book(dumbbells, "Yabako Sandrovich; Illustrated by Maam", 1);
     await book(dumbbells, "Yabako Sandrovich", 5);
     await book(dumbbells, "Yabako Sandrovich; Illustrated by MAAM", 2, true);
+    // Volumes that leave out a co-creator or a role don't take them away.
+    await book(kurosagi, "Eiji Otsuka", 3);
+    await book(kurosagi, "Eiji Otsuka", 3, true);
+    await book(kurosagi, "Written by Eiji Otsuka. Illustrated by Housui Yamazaki.", 1, true);
+    await book(berserk, "Kentaro Miura", 3);
+    await book(berserk, "Kentaro Miura", 3, true);
+    await book(berserk, "Written and Illustrated by Kentaro Miura.", 1, true);
+    // Near names on one line are two people.
+    await book(twins, "Story by Yuki Sato; Art by Yuka Sato", 1);
+    await book(twins, "Story by Yuki Sato; Art by Yuka Sato", 1, true);
     for (let i = 0; i < 200; i++) {
       await ctx.db.insert("sourceObservations", {
         sourceKey: "prh",
@@ -662,7 +674,7 @@ async function variantCatalog() {
         withdrawn: true,
       });
     }
-    return { hellbound, nomiya, sirius, dumbbells };
+    return { hellbound, nomiya, sirius, dumbbells, kurosagi, berserk, twins };
   });
   await t.action(internal.people.rebuild, {});
   return { t, ids };
@@ -684,7 +696,22 @@ describe("people.rebuild when the publisher pass fails", () => {
         .unique();
       await ctx.db.patch(ruin!._id, { snapshot: { kind: "prhTitle", author: "THROW" } });
     });
+    // A name-only person marked uncredited by an earlier run: prunable, but
+    // only by a rebuild whose publisher pass completed.
+    const marked = await t.run((ctx) =>
+      ctx.db.insert("people", {
+        publicId: 30000,
+        name: "Marked Earlier",
+        nameKey: nameKey("Marked Earlier"),
+        seriesCount: 0,
+        originalCount: 0,
+        coverUrl: null,
+        coverIsbn: null,
+        creditlessSince: 1,
+      }),
+    );
     await expect(t.action(internal.people.rebuild, {})).rejects.toThrow("publisher pass failed");
+    expect(await t.run((ctx) => ctx.db.get(marked))).not.toBeNull();
     // ANN's stale row is gone and the stats saw it; Kodansha's rows, which the
     // failed pass never reached to restamp, stay.
     expect(await creditLines(t, ids.onePiece)).toEqual([]);
@@ -707,7 +734,7 @@ describe("people.rebuild across actions", () => {
 });
 
 describe("people.rebuild PRH lines", () => {
-  it("credits each Series from its most common PRH line, one spelling per person", async () => {
+  it("credits the union of a Series' PRH lines, near spellings collapsed to the most used", async () => {
     const { t, ids } = await variantCatalog();
     expect(await creditLines(t, ids.hellbound)).toEqual([
       "Choe Gyu-Seok: art (prh)",
@@ -716,12 +743,26 @@ describe("people.rebuild PRH lines", () => {
     expect(await creditLines(t, ids.sirius)).toEqual(["Ana C. Sánchez: author (prh)"]);
     expect(await creditLines(t, ids.nomiya)).toEqual(["Rion Nomiya: author (prh)"]);
     expect(await creditLines(t, ids.dumbbells)).toEqual([
-      "MAAM: art (prh)",
+      "Maam: art (prh)",
       "Yabako Sandrovich: story (prh)",
     ]);
-    // The losing spellings left no person behind.
+    expect(await creditLines(t, ids.kurosagi)).toEqual([
+      "Eiji Otsuka: story (prh)",
+      "Housui Yamazaki: art (prh)",
+    ]);
+    expect(await creditLines(t, ids.berserk)).toEqual(["Kentaro Miura: story_art (prh)"]);
+    expect(await creditLines(t, ids.twins)).toEqual([
+      "Yuka Sato: art (prh)",
+      "Yuki Sato: story (prh)",
+    ]);
+  });
+
+  it("keeps the losing spelling's person until a second run finds them still uncredited", async () => {
+    const { t } = await variantCatalog();
+    const [choi] = await personNamed(t, "Choi Gyu-Seok");
+    expect(choi?.creditlessSince).toBeDefined();
+    await t.action(internal.people.rebuild, {});
     expect(await personNamed(t, "Choi Gyu-Seok")).toEqual([]);
-    expect(await personNamed(t, "Reon Nomiya")).toEqual([]);
   });
 
   it("keeps every row id across rebuilds", async () => {
@@ -751,29 +792,41 @@ describe("people.rebuild name keys", () => {
         coverIsbn: null,
       }),
     );
-
-  it("rekeys legacy rows, gives a duplicate's credits to the ANN person, and prunes the orphan", async () => {
-    const { t, ids } = await publisherCatalog();
-    // Production before the long-vowel key: ANN's Kōji Kumeta, and the
-    // name-only Kouji Kumeta a Kodansha page made, keyed apart.
+  /** Make Kodansha's Shirow Short volume list these creators. */
+  const listOnShirowShort = async (t: TestT, creators: string[]) => {
     const volume = await observationOf(t, "kodansha", "shirow/v1#physical");
-    await t.run(async (ctx) => {
-      await ctx.db.insert(
-        "sourceObservations",
-        annObservation(ids.ghost, "9", [{ personId: "22407", name: "Kōji Kumeta", task: "Story & Art" }]),
-      );
-      await ctx.db.patch(volume._id, { snapshot: { kind: "kodanshaVolume", creators: ["Kouji Kumeta"] } });
-    });
+    await t.run((ctx) => ctx.db.patch(volume._id, { snapshot: { kind: "kodanshaVolume", creators } }));
+  };
+  /** Who a Series' rows credit, by person id. */
+  const creditedIds = (t: TestT, seriesId: Id<"series">) =>
+    t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("seriesCredits")
+          .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+          .collect()
+      ).map((row) => row.personId),
+    );
+
+  it("rekeys a legacy name-only row, so its name finds it again", async () => {
+    const { t, ids } = await publisherCatalog();
+    // Stored under the old rule, which spaced and kept long vowels; no ANN
+    // pass touches a name-only row.
+    const kumeta = await legacyPerson(t, { publicId: 4646, name: "Kouji Kumeta", nameKey: "kouji kumeta" });
+    await listOnShirowShort(t, ["Kouji Kumeta"]);
+    await t.action(internal.people.rebuild, {});
+    expect(await creditedIds(t, ids.shirowShort)).toEqual([kumeta]);
+    expect(await t.run((ctx) => ctx.db.get(kumeta))).toMatchObject({ nameKey: nameKey("Kouji Kumeta") });
+  });
+
+  it("gives a duplicate's credits to the ANN person, though the duplicate is older, and prunes it a run later", async () => {
+    const { t, ids } = await publisherCatalog();
+    const duplicate = await legacyPerson(t, { publicId: 4646, name: "Kouji Kumeta", nameKey: "kouji kumeta" });
     const ann = await legacyPerson(t, {
-      publicId: 3991,
+      publicId: 5000,
       name: "Kōji Kumeta",
       nameKey: "koji kumeta",
       annId: "22407",
-    });
-    const duplicate = await legacyPerson(t, {
-      publicId: 4646,
-      name: "Kouji Kumeta",
-      nameKey: "kouji kumeta",
     });
     await t.run((ctx) =>
       ctx.db.insert("seriesCredits", {
@@ -784,48 +837,63 @@ describe("people.rebuild name keys", () => {
         rebuiltAt: 0,
       }),
     );
+    await listOnShirowShort(t, ["Kouji Kumeta"]);
     await t.action(internal.people.rebuild, {});
-    expect(await creditLines(t, ids.shirowShort)).toEqual(["Kōji Kumeta: author (creators)"]);
-    const rows = await t.run(async (ctx) => [await ctx.db.get(ann), await ctx.db.get(duplicate)]);
-    expect(rows[0]).toMatchObject({ publicId: 3991, nameKey: nameKey("Kouji Kumeta") });
-    expect(rows[1]).toBeNull();
+    expect(await creditedIds(t, ids.shirowShort)).toEqual([ann]);
+    // Uncredited once: marked, not deleted.
+    expect(await t.run((ctx) => ctx.db.get(duplicate))).toMatchObject({
+      creditlessSince: expect.any(Number),
+    });
+    await t.action(internal.people.rebuild, {});
+    expect(await t.run((ctx) => ctx.db.get(duplicate))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(ann))).toMatchObject({ publicId: 5000 });
   });
 
   it("merges two name-only spellings into the earlier person", async () => {
     const { t, ids } = await publisherCatalog();
-    const volume = await observationOf(t, "kodansha", "shirow/v1#physical");
-    const [indoso] = await t.run(async (ctx) => {
-      await ctx.db.patch(volume._id, { snapshot: { kind: "kodanshaVolume", creators: ["Indo So"] } });
-      return [
-        await ctx.db.insert("people", {
-          publicId: 4547,
-          name: "Indoso",
-          nameKey: "indoso",
-          seriesCount: 1,
-          originalCount: 0,
-          coverUrl: null,
-          coverIsbn: null,
-        }),
-        await ctx.db.insert("people", {
-          publicId: 4697,
-          name: "Indo So",
-          nameKey: "indo so",
-          seriesCount: 1,
-          originalCount: 0,
-          coverUrl: null,
-          coverIsbn: null,
-        }),
-      ];
+    // Both stored under the old rule; only the rekey makes them one key.
+    const sekine = await legacyPerson(t, {
+      publicId: 4637,
+      name: "Koutarou Sekine",
+      nameKey: "koutarou sekine",
     });
+    await legacyPerson(t, { publicId: 4700, name: "Kotaro Sekine", nameKey: "kotaro sekine" });
+    await listOnShirowShort(t, ["Kotaro Sekine"]);
     await t.action(internal.people.rebuild, {});
-    expect(await creditLines(t, ids.shirowShort)).toEqual(["Indoso: author (creators)"]);
-    expect(await personNamed(t, "Indo So")).toEqual([]);
-    expect((await personNamed(t, "Indoso"))[0]?._id).toBe(indoso);
+    expect(await creditedIds(t, ids.shirowShort)).toEqual([sekine]);
   });
 
-  it("keeps a name ambiguous when two ANN people share its key", async () => {
+  it("prefers the exact spelling's ANN person over a folded namesake", async () => {
     const { t, ids } = await publisherCatalog();
-    const volume = await observationOf(t, "kodansha", "1122/v1#physical");
+    await t.run(async (ctx) => {
+      await ctx.db.insert(
+        "sourceObservations",
+        annObservation(ids.ghost, "12", [{ personId: "105703", name: "Ayumi Kanou", task: "Art" }]),
+      );
+      await ctx.db.insert(
+        "sourceObservations",
+        annObservation(ids.keiShort, "13", [{ personId: "999", name: "Ayumi Kano", task: "Art" }]),
+      );
+    });
+    await listOnShirowShort(t, ["Ayumi Kanou"]);
+    await t.action(internal.people.rebuild, {});
+    const kanou = await t.run((ctx) =>
+      ctx.db
+        .query("people")
+        .withIndex("by_annId", (q) => q.eq("annId", "105703"))
+        .unique(),
+    );
+    expect(await creditedIds(t, ids.shirowShort)).toEqual([kanou!._id]);
+    expect(await personNamed(t, "Ayumi Kanou")).toHaveLength(1);
+  });
+
+  it("keeps a name its own credit when ANN namesakes share its folded key", async () => {
+    const { t, ids } = await publisherCatalog();
+    // Production: ANN has two Johji Manabe; Kodansha's Joji Manabe already
+    // has a name-only person of their own, who keeps the credit and id.
+    await legacyPerson(t, { publicId: 287, name: "Johji Manabe", nameKey: "johji manabe", annId: "287" });
+    await legacyPerson(t, { publicId: 1123, name: "Johji Manabe", nameKey: "johji manabe", annId: "1123" });
+    const joji = await legacyPerson(t, { publicId: 4374, name: "Joji Manabe", nameKey: "joji manabe" });
     await t.run(async (ctx) => {
       await ctx.db.insert(
         "sourceObservations",
@@ -833,15 +901,20 @@ describe("people.rebuild name keys", () => {
       );
       await ctx.db.insert(
         "sourceObservations",
-        annObservation(ids.keiShort, "11", [{ personId: "287", name: "Joji Manabe", task: "Art" }]),
+        annObservation(ids.keiShort, "11", [{ personId: "287", name: "Johji Manabe", task: "Art" }]),
       );
-      await ctx.db.patch(volume._id, { snapshot: { kind: "kodanshaVolume", creators: ["Joji Manabe"] } });
     });
+    await listOnShirowShort(t, ["Joji Manabe", "Yuuki Kodama"]);
     await t.action(internal.people.rebuild, {});
-    expect(await creditLines(t, ids.marriage)).toEqual(["Co Author: author (creators)"]);
+    const credited = await creditedIds(t, ids.shirowShort);
+    expect(credited).toContain(joji);
+    expect(await creditLines(t, ids.shirowShort)).toEqual([
+      "Joji Manabe: author (creators)",
+      "Yuuki Kodama: author (creators)",
+    ]);
   });
 
-  it("keeps an ANN person with no credits, and prunes only name-only ones", async () => {
+  it("keeps an ANN person with no credits, and prunes name-only ones only a run later", async () => {
     const { t, ids } = await publisherCatalog();
     // Nothing credits ANN's Masamune Shirow or Kodansha's Co Author any more.
     const withdrawn = [
@@ -855,8 +928,47 @@ describe("people.rebuild name keys", () => {
     await t.action(internal.people.rebuild, {});
     expect(await creditLines(t, ids.ghost)).toEqual([]);
     expect(await creditLines(t, ids.shirowShort)).toEqual([]);
+    expect(await personNamed(t, "Co Author")).toMatchObject([{ creditlessSince: expect.any(Number) }]);
+    await t.action(internal.people.rebuild, {});
     expect(await personNamed(t, "Masamune Shirow")).toMatchObject([{ annId: "2", seriesCount: 0 }]);
     expect(await personNamed(t, "Co Author")).toEqual([]);
+  });
+
+  it("unmarks a person credited again before the second run, keeping their id", async () => {
+    const { t } = await publisherCatalog();
+    const volume = await observationOf(t, "kodansha", "1122/v2#physical");
+    const [coAuthor] = await personNamed(t, "Co Author");
+    await t.run((ctx) => ctx.db.patch(volume._id, { withdrawn: true }));
+    await t.action(internal.people.rebuild, {});
+    await t.run((ctx) => ctx.db.patch(volume._id, { withdrawn: false }));
+    await t.action(internal.people.rebuild, {});
+    await t.action(internal.people.rebuild, {});
+    const [again] = await personNamed(t, "Co Author");
+    expect(again?._id).toBe(coAuthor!._id);
+    expect(again?.creditlessSince).toBeUndefined();
+  });
+
+  it("deletes at most 100 people a run", async () => {
+    const { t } = await publisherCatalog();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 105; i++) {
+        await ctx.db.insert("people", {
+          publicId: 20000 + i,
+          name: `Gone ${i}`,
+          nameKey: nameKey(`Gone ${i}`),
+          seriesCount: 0,
+          originalCount: 0,
+          coverUrl: null,
+          coverIsbn: null,
+          creditlessSince: 1,
+        });
+      }
+    });
+    await t.action(internal.people.rebuild, {});
+    const left = await t.run(async (ctx) =>
+      (await ctx.db.query("people").collect()).filter((p) => p.name.startsWith("Gone ")),
+    );
+    expect(left).toHaveLength(5);
   });
 });
 
@@ -895,12 +1007,49 @@ describe("mergeRoles and nameKey", () => {
       ["Rampei Asio", "Rampei Ashio"],
       ["coolkyousinnjya", "Coolkyoushinja"],
       ["Indo So", "Indoso"],
-      ["Joji Manabe", "Johji Manabe"],
-      ["Yuuki Kodama", "Yūki Kodama"],
-      ["Yuu Shimizu", "Yū Shimizu"],
     ];
     for (const [publisher, ann] of pairs) expect(nameKey(publisher!)).toBe(nameKey(ann!));
-    expect(nameKey("Mika Ohara")).not.toBe(nameKey("Mika Hara"));
+    // "oh" before a vowel is not a long o.
+    expect(nameKey("Mika Ohara")).not.toBe(nameKey("Mika Oara"));
+  });
+
+  it("finds near spellings within one or two edits", () => {
+    expect(nearKeys(nameKey("Choe Gyu-Seok"), nameKey("Choi Gyu-Seok"))).toBe(true);
+    expect(nearKeys(nameKey("Ana C. Sánchez"), nameKey("Aaa Sánchez"))).toBe(true);
+    expect(nearKeys(nameKey("Kai"), nameKey("Kei"))).toBe(true);
+    expect(nearKeys(nameKey("Kai"), nameKey("Kou"))).toBe(false);
+    expect(nearKeys(nameKey("Yuki Sato"), nameKey("Yuki Sato"))).toBe(false);
+  });
+});
+
+describe("matchPerson", () => {
+  let publicId = 0;
+  const person = (name: string, annId?: string) =>
+    ({ publicId: ++publicId, name, ...(annId ? { annId } : {}) }) as Doc<"people">;
+
+  it("takes the exact spelling's ANN person, else the one ANN person the key finds", () => {
+    const kanou = person("Ayumi Kanou", "1");
+    const kano = person("Ayumi Kano", "2");
+    expect(matchPerson("Ayumi Kanou", [kano, kanou])).toBe(kanou);
+    const koji = person("Kōji Kumeta", "3");
+    const kouji = person("Kouji Kumeta");
+    expect(matchPerson("Kouji Kumeta", [kouji, koji])).toBe(koji);
+  });
+
+  it("takes the earliest name-only person when ANN has none", () => {
+    const indoso = person("Indoso");
+    const indoSo = person("Indo So");
+    expect(matchPerson("Indo So", [indoSo, indoso])).toBe(indoso);
+    expect(matchPerson("Indo So", [])).toBeNull();
+  });
+
+  it("keeps a name ANN namesakes share on its own name-only person", () => {
+    const a = person("Johji Manabe", "4");
+    const b = person("Johji Manabe", "5");
+    const joji = person("Joji Manabe");
+    expect(matchPerson("Joji Manabe", [a, b, joji])).toBe(joji);
+    expect(matchPerson("Joji Manabe", [a, b])).toBeNull();
+    expect(matchPerson("Johji Manabe", [a, b])).toBeNull();
   });
 });
 
