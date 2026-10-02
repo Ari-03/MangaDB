@@ -64,6 +64,7 @@ import type { MutationCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import {
   annMangaValidator,
+  cleanAnnDescription,
   parseApiResponse,
   parseReleasePage,
   parseReport,
@@ -1239,9 +1240,17 @@ function descriptionOffer(
   page: PageState | undefined,
   release: Doc<"releases">,
 ): { description?: string } {
-  return page?.description !== undefined && blurbWanted(release)
-    ? { description: page.description }
-    : {};
+  const description = pageDescriptionText(page);
+  return description !== undefined && blurbWanted(release) ? { description } : {};
+}
+
+/**
+ * A page's Description as it may be written to a Release: the stored text
+ * through `cleanAnnDescription`, so a page stored before the cleaner last
+ * changed never writes stale text (credit tails, chrome, mojibake).
+ */
+function pageDescriptionText(page: PageState | undefined): string | undefined {
+  return page?.description !== undefined ? cleanAnnDescription(page.description) : undefined;
 }
 
 /**
@@ -1400,7 +1409,7 @@ export const applyReleasePage = internalMutation({
             page.priceCents !== undefined
               ? { amountCents: page.priceCents, currency: "USD" }
               : undefined,
-          description: page.description,
+          description: pageDescriptionText(page),
           publisher: { name: publisher.name, slug: publisher.slug },
         },
         tagBootstrapUnreviewed: true,
@@ -1463,7 +1472,7 @@ export const applyReleasePage = internalMutation({
           page.priceCents !== undefined
             ? { amountCents: page.priceCents, currency: "USD" }
             : undefined,
-        description: page.description,
+        description: pageDescriptionText(page),
         publisher: { name: publisher.name, slug: publisher.slug },
       },
       tagBootstrapUnreviewed: false,
@@ -1588,7 +1597,7 @@ export const descriptionlessLines = internalQuery({
       if (!/^\d+$/.test(line.annId)) continue;
       const release = await ctx.db.get(doc.recordRef.id);
       if (release === null || !blurbWanted(release)) continue;
-      const stored = line.page?.description !== undefined;
+      const stored = pageDescriptionText(line.page) !== undefined;
       if (!stored && !descriptionRefetch(line.page, release, now)) continue;
       lines.push({ annId: line.annId, sourceRecordId: doc.sourceRecordId, fetch: !stored });
       if (lines.length === BACKFILL_BATCH) break;
@@ -1780,5 +1789,155 @@ export const backfillDescriptions = internalAction({
       cursor = batch.next;
     }
     return result({ continued: false });
+  },
+});
+
+// ---------- the description repair ----------
+
+/** Release-line observations examined per repair mutation. */
+const REPAIR_BATCH = 100;
+
+const repairCounts = v.object({
+  scanned: v.number(),
+  snapshotFixed: v.number(),
+  releaseUpdated: v.number(),
+  releaseCleared: v.number(),
+});
+type RepairCounts = typeof repairCounts.type;
+
+/**
+ * Whether ANN wrote the Release's current description: the latest Revision
+ * touching the field is ANN-authored. Anything else (a publisher's, Open
+ * Library's, a human's, unattributed text) is never repaired.
+ */
+async function annWroteDescription(ctx: MutationCtx, release: Doc<"releases">): Promise<boolean> {
+  const history = ctx.db
+    .query("revisions")
+    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
+    .order("desc");
+  for await (const revision of history) {
+    if (!revision.changes.some((change) => change.field === "description")) continue;
+    return revision.author.kind === "source" && revision.author.sourceKey === SOURCE_KEY;
+  }
+  return false;
+}
+
+/**
+ * One repair step over up to REPAIR_BATCH release lines after `after`: a
+ * stored page Description the current cleaner (`cleanAnnDescription`) now
+ * reads differently is rewritten on the snapshot (patched in place, no
+ * history row: it is the same fetch, re-read), and when the linked Release
+ * still shows exactly the old ANN text, the new text replaces it — or
+ * clears it when nothing remains — through reconcileFields, as the
+ * backfill writes it (ANN's own fact: one approved Proposal, its version,
+ * one Revision citing the release page). A Release with a Human Override,
+ * a lock, or any other text is left alone.
+ */
+export const repairDescriptionBatch = internalMutation({
+  args: { after: v.union(v.string(), v.null()) },
+  handler: async (ctx, { after }): Promise<{ counts: RepairCounts; next: string | null }> => {
+    const now = Date.now();
+    const counts: RepairCounts = { scanned: 0, snapshotFixed: 0, releaseUpdated: 0, releaseCleared: 0 };
+    const docs = await ctx.db
+      .query("sourceObservations")
+      .withIndex("by_source_record", (q) =>
+        q
+          .eq("sourceKey", SOURCE_KEY)
+          .gt("sourceRecordId", after ?? "release:")
+          .lt("sourceRecordId", "release;"),
+      )
+      .take(REPAIR_BATCH);
+    const source = await getSourceByKey(ctx, SOURCE_KEY);
+    for (const observation of docs) {
+      counts.scanned++;
+      const line = observation.snapshot as AnnReleaseSnapshot;
+      const old = line.page?.description;
+      if (line.page === undefined || old === undefined) continue;
+      const fixed = cleanAnnDescription(old);
+      if (fixed === old) continue;
+      const { description: _, ...rest } = line.page;
+      const page: PageState = fixed === undefined ? rest : { ...rest, description: fixed };
+      await ctx.db.patch(observation._id, { snapshot: { ...line, page } });
+      counts.snapshotFixed++;
+
+      if (observation.recordRef?.type !== "release") continue;
+      const release = await ctx.db.get(observation.recordRef.id);
+      if (
+        release === null ||
+        release.status !== "active" ||
+        release.locked ||
+        release.overriddenFields?.includes("description") ||
+        release.description !== old ||
+        !(await annWroteDescription(ctx, release))
+      ) {
+        continue;
+      }
+      const result = await reconcileFields(ctx, {
+        sourceKey: SOURCE_KEY,
+        ref: { type: "release", id: release._id },
+        doc: release,
+        offered: { description: fixed },
+        observation: { ...observation, snapshot: { ...line, page } },
+        citation: {
+          sourceName: source?.name ?? "Anime News Network Encyclopedia",
+          url: releaseUrl(line.annId),
+        },
+        now,
+      });
+      if (result.applied.includes("description")) {
+        if (fixed === undefined) counts.releaseCleared++;
+        else counts.releaseUpdated++;
+      }
+    }
+    const last = docs.at(-1);
+    return { counts, next: docs.length < REPAIR_BATCH || !last ? null : last.sourceRecordId };
+  },
+});
+
+/**
+ * Re-clean every stored ANN release-page Description with today's
+ * `cleanAnnDescription` (credit tails, page chrome, mojibake) and repair
+ * the Releases still showing the old ANN text (`repairDescriptionBatch`).
+ * No network. Weak text that filled a blank is never replaced by a
+ * refetch, so this is how already-written descriptions get fixed. Safe
+ * beside a running `backfillDescriptions` (each batch is one transaction,
+ * and a Release is only touched while it shows exactly the old ANN text)
+ * and safe to rerun: clean text cleans to itself. Continues itself across
+ * the action time limit; returns the counts so far.
+ *
+ *   npx convex run ann:repairDescriptions '{}'
+ */
+export const repairDescriptions = internalAction({
+  args: {
+    // ----- continuation state (never passed by callers) -----
+    after: v.optional(v.string()),
+    counts: v.optional(repairCounts),
+  },
+  handler: async (ctx, args): Promise<RepairCounts & { continued: boolean }> => {
+    const started = Date.now();
+    const counts: RepairCounts = args.counts ?? {
+      scanned: 0,
+      snapshotFixed: 0,
+      releaseUpdated: 0,
+      releaseCleared: 0,
+    };
+    let cursor: string | null = args.after ?? null;
+    for (;;) {
+      const batch: { counts: RepairCounts; next: string | null } = await applyRetrying(
+        ctx,
+        internal.ann.repairDescriptionBatch,
+        { after: cursor },
+      );
+      counts.scanned += batch.counts.scanned;
+      counts.snapshotFixed += batch.counts.snapshotFixed;
+      counts.releaseUpdated += batch.counts.releaseUpdated;
+      counts.releaseCleared += batch.counts.releaseCleared;
+      cursor = batch.next;
+      if (cursor === null) return { ...counts, continued: false };
+      if (Date.now() - started > LINK_BUDGET_MS) {
+        await ctx.scheduler.runAfter(0, internal.ann.repairDescriptions, { after: cursor, counts });
+        return { ...counts, continued: true };
+      }
+    }
   },
 });

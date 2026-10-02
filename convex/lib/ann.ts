@@ -25,7 +25,7 @@
 import { v, type Infer } from "convex/values";
 import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
 import { toIsbn13 } from "./openLibrary";
-import { cleanBlurb, cleanTitleText, decodeEntities, stripHtml } from "./text";
+import { cleanBlurb, cleanTitleText, decodeEntities, repairMojibake, stripHtml } from "./text";
 
 // ---------- the normalized snapshot ----------
 
@@ -390,6 +390,48 @@ function pageField(html: string, label: string): string | undefined {
 const ADDED_ON = /<p>\s*<small>\s*\(added on\b/i;
 const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
 
+// Site chrome ANN renders inside the Description field itself. A page with
+// no description (release 8116, seen 2026-10-02) carries only its review
+// link there: `<b>Description:</b><br><a href="0/0/reviews/new">Submit your
+// own review of this item.</a></p>`.
+const REVIEW_LINK = /<a\b[^>]*\breviews\/new\b[^>]*>[\s\S]*?<\/a>/gi;
+const CHROME = ["Submit your own review of this item."];
+
+// The credit sentence ANN appends to publisher copy ("… a friend or a foe?
+// Story and art by Eiichiro Oda."): the byline already shows it. A credit
+// phrase, then a short list of names: capitalized words joined by "and",
+// "&", "with", commas or slashes — never prose.
+const CREDIT_TAIL =
+  /(^|[.!?…"”’)]\s+)(?:story\s+(?:and|&)\s+art|written\s+and\s+illustrated|original\s+story|story|art|written|illustrated|created|script)\s+by\s+([^.!?]{1,80}?)\.?\s*$/i;
+const NAME_TOKEN = /^(?:\p{Lu}|\d)[\p{L}\p{M}'’-]*$/u;
+const NAME_JOINER = /^(?:and|&|with|\/)$/;
+
+/** Whether a credit's object reads as a list of names, not a phrase. */
+function isNameList(names: string): boolean {
+  const tokens = names.replace(/[,/]/g, " / ").split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.length <= 12 && tokens.every((t) => NAME_TOKEN.test(t) || NAME_JOINER.test(t));
+}
+
+/**
+ * The cleaner every ANN release-page description goes through, at parse
+ * time and again on stored text (`ann:repairDescriptions`), so it is
+ * idempotent and works on already-cleaned text: zero-width spaces and
+ * Windows-1252 mojibake repaired, ANN page chrome rejected, and up to two
+ * trailing credit sentences ("Story by X. Art by Y.") dropped. Undefined
+ * when nothing of the publisher's copy remains.
+ */
+export function cleanAnnDescription(text: string): string | undefined {
+  let out = repairMojibake(text.replace(ZERO_WIDTH, ""));
+  for (const chrome of CHROME) out = out.split(chrome).join(" ");
+  out = out.replace(/\s+/g, " ").trim();
+  for (let i = 0; i < 2; i++) {
+    const credit = CREDIT_TAIL.exec(out);
+    if (!credit || !isNameList(credit[2]!)) break;
+    out = out.slice(0, credit.index + credit[1]!.length).trim();
+  }
+  return out === "" ? undefined : out;
+}
+
 /**
  * The page's Description, cleaned to one paragraph. It opens with a `<br>`
  * and spans paragraphs, so `pageField` cannot read it. Seen live
@@ -399,15 +441,15 @@ const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
  * field ends at the "added on" trailer, so markup inside the text (a list,
  * an inline `<small>`, a bold "Note:") never cuts it short: the div runs to
  * its last `</div>`, inline text to its closing `</p>`. Without a trailer
- * both stop at the first close. ANN's newer copy sprinkles zero-width
- * spaces after punctuation, sometimes as entities: they go after decoding.
+ * both stop at the first close. The review link ANN puts in an empty field
+ * is dropped, and the text goes through `cleanAnnDescription`.
  */
 function pageDescription(html: string): string | undefined {
   const label = /<b>Description:<\/b>/i.exec(html);
   if (!label) return undefined;
   const rest = html.slice(label.index + label[0].length);
   const trailer = rest.search(ADDED_ON);
-  const field = trailer >= 0 ? rest.slice(0, trailer) : rest;
+  const field = (trailer >= 0 ? rest.slice(0, trailer) : rest).replace(REVIEW_LINK, "");
   const div = (
     trailer >= 0
       ? /^\s*(?:<br\s*\/?>)?\s*<\/p>\s*<div class="simple-html">([\s\S]*)<\/div>/i
@@ -415,11 +457,8 @@ function pageDescription(html: string): string | undefined {
   ).exec(field)?.[1];
   const inline =
     trailer >= 0 ? field.replace(/<\/p>\s*$/i, "") : (/^([\s\S]*?)<\/p>/i.exec(field)?.[1] ?? "");
-  const text = cleanBlurb(div ?? inline)
-    ?.replace(ZERO_WIDTH, "")
-    .replace(/ {2,}/g, " ")
-    .trim();
-  return text || undefined;
+  const text = cleanBlurb(div ?? inline);
+  return text !== undefined ? cleanAnnDescription(text) : undefined;
 }
 
 /**
