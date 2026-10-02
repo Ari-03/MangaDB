@@ -19,7 +19,7 @@
 //   are public content and listed whenever FEATURES.publicReviews is on
 //   (lib/features.ts). Both leave Mature Series out unless the viewer opted in.
 
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { activeVolumes, resolveActiveSeries } from "./catalog";

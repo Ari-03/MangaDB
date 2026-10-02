@@ -50,39 +50,6 @@ describe("catalog.stats", () => {
   });
 });
 
-describe("catalog.listSeries", () => {
-  it("lists active series in public-ID order, skipping hidden/merged", async () => {
-    const t = convexTest(schema);
-    await t.run(async (ctx) => {
-      await ctx.db.insert("series", {
-        status: "active",
-        publicId: 2,
-        title: "B",
-        altTitles: [],
-        searchText: "B",
-      });
-      await ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 3,
-        title: "Hidden",
-        altTitles: [],
-        searchText: "Hidden",
-      });
-      await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "A",
-        altTitles: [],
-        searchText: "A",
-      });
-    });
-    expect(await t.query(api.catalog.listSeries, {})).toEqual([
-      { publicId: 1, title: "A" },
-      { publicId: 2, title: "B" },
-    ]);
-  });
-});
-
 describe("catalog.search", () => {
   const seed = async (t: ReturnType<typeof convexTest>) => {
     await t.run(async (ctx) => {

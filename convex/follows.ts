@@ -18,7 +18,7 @@
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { bundleReleases } from "./collection";
 import { getActive, requireActive } from "./lib/merges";

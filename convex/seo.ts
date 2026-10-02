@@ -20,8 +20,6 @@ import { bundleMembers, editionCoverage } from "./catalogPages";
 import { listed } from "./lib/mature";
 import { volumeTitle } from "./lib/titles";
 
-export type SitemapEntity = "series" | "volume" | "edition" | "publisher" | "bundle";
-
 /** yyyymmdd-keyed months only: a year-only date (yyyy0000) has month 0. */
 const monthOf = (sort: number) => ({
   year: Math.floor(sort / 10000),

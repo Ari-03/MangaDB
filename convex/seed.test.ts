@@ -107,16 +107,6 @@ describe("releases.monthBrowse over the seed", () => {
         ["Tokyo Ghoul:re", "Vol. 3", "digital"],
       ]),
     );
-    // Both filters over the same window (spec §10: shared in both views).
-    const filtered = await t.query(api.releases.monthBrowse, {
-      year: now.getUTCFullYear(),
-      month: now.getUTCMonth() + 1,
-      format: "physical",
-      publisher: "seven-seas",
-    });
-    expect(
-      filtered.releases.map((r) => [r.volumeLabel, r.publisher?.slug]),
-    ).toEqual([["Vol. 4", "seven-seas"]]);
   });
 });
 

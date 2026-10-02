@@ -578,12 +578,11 @@ describe("seriesBrowse.rebuild — Bookless Series", () => {
       const rows = await ctx.db.query("seriesStats").collect();
       expect(rows.map((r) => r.title).sort()).toEqual(["The Quiet Cartographer", "Tokyo Ghoul"]);
     });
-    // Browse, search, the home list and the sitemap all skip it; the page itself still resolves.
+    // Browse, search and the sitemap all skip it; the page itself still resolves.
     const browse = await t.query(api.seriesBrowse.browse, { sort: "title" });
     expect(browse.items.map((i) => i.title)).not.toContain("Backbone Only");
     const search = await t.query(api.catalog.search, { query: "Backbone Only" });
     expect(JSON.stringify(search)).not.toContain("Backbone Only");
-    expect((await t.query(api.catalog.listSeries, {})).map((s) => s.title)).not.toContain("Backbone Only");
     const sitemap = await t.query(api.seo.sitemapPage, {
       entity: "series",
       paginationOpts: { numItems: 50, cursor: null },

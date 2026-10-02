@@ -25,11 +25,12 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { COUNT_CAP, PUBLISHER_SCAN_CAP } from "./catalog";
-import { followMerges, getActive } from "./lib/merges";
+import { getActive } from "./lib/merges";
 import {
   browseCache,
   joinBrowseRows,
   memoize,
+  resolvePublisher,
   WINDOW_CAP,
   type BrowseCache,
 } from "./releases";
@@ -44,30 +45,6 @@ import { seriesStatsRow } from "./seriesBrowse";
 // covers hidden-row attrition and formats folding into one book.
 export const LANE_CAP = 72;
 const LANE_SCAN_CAP = 300;
-
-/**
- * Find the Publisher a requested slug means: the current slug first, then the
- * rename-redirect table (spec §11), then merged docs to their survivor.
- * Returns the surviving active Publisher — the caller compares its slug to
- * the requested one to decide whether to 301 — or null for unknown/hidden.
- */
-async function resolveBySlug(
-  ctx: QueryCtx,
-  slug: string,
-): Promise<Doc<"publishers"> | null> {
-  let doc = await ctx.db
-    .query("publishers")
-    .withIndex("by_slug", (q) => q.eq("slug", slug))
-    .unique();
-  if (!doc) {
-    const redirect = await ctx.db
-      .query("publisherSlugRedirects")
-      .withIndex("by_fromSlug", (q) => q.eq("fromSlug", slug))
-      .unique();
-    doc = redirect ? await ctx.db.get(redirect.publisherId) : null;
-  }
-  return await followMerges(ctx, "publishers", doc);
-}
 
 type BrowseRow = Awaited<ReturnType<typeof joinBrowseRows>>[number];
 
@@ -130,7 +107,7 @@ export const publisherPage = query({
     ...showMatureArg,
   },
   handler: async (ctx, { slug, todaySort, horizonSort, showMature }) => {
-    const publisher = await resolveBySlug(ctx, slug);
+    const publisher = await resolvePublisher(ctx, slug);
     if (!publisher) return null;
     if (publisher.slug !== slug) {
       return { redirectTo: publisher.slug } as const;

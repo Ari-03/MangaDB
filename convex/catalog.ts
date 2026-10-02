@@ -109,23 +109,6 @@ export async function recountCatalog(ctx: ActionCtx): Promise<Record<CountedTabl
 }
 
 /**
- * Active Series in public-ID order, for the home page's browse list. Capped;
- * the real browse surface is the Releases browser (a later ticket).
- */
-export const listSeries = query({
-  args: showMatureArg,
-  handler: async (ctx, { showMature }) => {
-    const docs = await ctx.db
-      .query("series")
-      .withIndex("by_publicId")
-      .take(COUNT_CAP);
-    return docs
-      .filter((doc) => listed(doc, showMature))
-      .map((doc) => ({ publicId: doc.publicId, title: doc.title }));
-  },
-});
-
-/**
  * The newest Series in the catalog (highest public IDs) the viewer may
  * see (`listed`), each with a jacket for the home page's "recently added"
  * shelf. Small and bounded: the shelf

@@ -6,7 +6,6 @@
 // comments), so a Series merge can move every row of a Series through one
 // index.
 
-import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { editionCover } from "./catalogPages";
