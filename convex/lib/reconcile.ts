@@ -45,8 +45,6 @@ export type ReconcileResult = {
   changed: boolean;
   applied: string[];
   queued: string[];
-  recorded: string[];
-  suppressed: string[];
 };
 
 async function revisionsOf(ctx: MutationCtx, ref: ReconcileRef): Promise<Doc<"revisions">[]> {
@@ -128,8 +126,6 @@ export async function reconcileFields(
     changed: false,
     applied: [],
     queued: [],
-    recorded: [],
-    suppressed: [],
   };
 
   const registryCache = new Map<string, Doc<"approvedSources"> | null>();
@@ -268,9 +264,7 @@ export async function reconcileFields(
   // ----- queue bucket: one open In-Review conflict Proposal -----
   const unsuppressed: typeof queue = [];
   for (const change of queue) {
-    if (await isSuppressed(ctx, ref, change.field, args.sourceKey, change.after)) {
-      result.suppressed.push(change.field);
-    } else {
+    if (!(await isSuppressed(ctx, ref, change.field, args.sourceKey, change.after))) {
       unsuppressed.push(change);
     }
   }
@@ -361,7 +355,6 @@ export async function reconcileFields(
         })),
       ],
     });
-    result.recorded = recordOnly.map((c) => c.field);
   }
 
   return result;

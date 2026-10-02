@@ -551,7 +551,6 @@ export const IMPORT_LANGUAGE = "en";
 export type ReleasePayload = {
   format: "physical" | "digital";
   binding?: string;
-  language?: string;
   isbn13?: string;
   isbn10?: string;
   pubDate?: PartialDate;
@@ -1173,7 +1172,7 @@ export async function createCanonicalRecords(
     const releaseFields = {
       format: args.release.format,
       binding: args.release.binding,
-      language: args.release.language ?? IMPORT_LANGUAGE,
+      language: IMPORT_LANGUAGE,
       isbn13: args.release.isbn13,
       isbn10: args.release.isbn10,
       pubDate: args.release.pubDate,
@@ -1750,7 +1749,7 @@ export async function queueCreationProposal(
         editionId: "edition",
         format: args.release.format,
         binding: args.release.binding,
-        language: args.release.language ?? IMPORT_LANGUAGE,
+        language: IMPORT_LANGUAGE,
         isbn13: args.release.isbn13,
         isbn10: args.release.isbn10,
         pubDate: args.release.pubDate,
