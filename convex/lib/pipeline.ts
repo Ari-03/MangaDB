@@ -278,19 +278,30 @@ export async function linkSeriesObservation(
 }
 
 /**
- * The active Series a source's series link (`series:{key}`) names, a
- * merged one answered by its survivor; null without one. The read-only
- * half of `reconcileLinkedSeries`, for callers that only place a record.
+ * A source's series link (`series:{key}`) and the active Series it names,
+ * a merged one answered by its survivor; null without one.
+ */
+async function linkedSeries(
+  ctx: MutationCtx,
+  sourceKey: string,
+  seriesKey: string,
+): Promise<{ link: Doc<"sourceObservations">; series: Doc<"series"> } | null> {
+  const link = await getObservation(ctx, sourceKey, `series:${seriesKey}`);
+  if (link?.recordRef?.type !== "series") return null;
+  const series = await survivorOf<"series">(ctx, await ctx.db.get(link.recordRef.id));
+  return series?.status === "active" ? { link, series } : null;
+}
+
+/**
+ * The linked Series' id: the read-only half of `reconcileLinkedSeries`, for
+ * callers that only place a record.
  */
 export async function linkedSeriesId(
   ctx: MutationCtx,
   sourceKey: string,
   seriesKey: string,
 ): Promise<Id<"series"> | null> {
-  const seriesObs = await getObservation(ctx, sourceKey, `series:${seriesKey}`);
-  if (seriesObs?.recordRef?.type !== "series") return null;
-  const series = await survivorOf<"series">(ctx, await ctx.db.get(seriesObs.recordRef.id));
-  return series?.status === "active" ? series._id : null;
+  return (await linkedSeries(ctx, sourceKey, seriesKey))?.series._id ?? null;
 }
 
 /**
@@ -312,17 +323,12 @@ export async function reconcileLinkedSeries(
     now: number;
   },
 ): Promise<{ seriesId: Id<"series"> | null; changed: boolean }> {
-  let seriesObs = await getObservation(ctx, args.sourceKey, `series:${args.seriesKey}`);
-  if (seriesObs?.recordRef?.type !== "series") {
-    return { seriesId: null, changed: false };
-  }
+  const linked = await linkedSeries(ctx, args.sourceKey, args.seriesKey);
+  if (linked === null) return { seriesId: null, changed: false };
+  const { series } = linked;
+  let seriesObs = linked.link;
   // A repair merged the linked Series: the link follows it to the survivor.
-  const linked = await ctx.db.get(seriesObs.recordRef.id);
-  const series = await survivorOf<"series">(ctx, linked);
-  if (!series || series.status !== "active") {
-    return { seriesId: null, changed: false };
-  }
-  if (series._id !== linked?._id) {
+  if (series._id !== seriesObs.recordRef?.id) {
     await ctx.db.patch(seriesObs._id, {
       recordRef: { type: "series", id: series._id },
     });
@@ -387,12 +393,15 @@ async function publisherHouse(
   return row?.parentPublisherId !== undefined ? [row._id, row.parentPublisherId] : [publisherId];
 }
 
-/** Every publisher house the Series' Editions (any status) were published by. */
-async function seriesPublishers(
+/**
+ * Every Edition (any status) covering one of the Series' Volumes, once per
+ * coverage: an Edition covering several Volumes repeats.
+ */
+export async function seriesEditions(
   ctx: MutationCtx,
   seriesId: Id<"series">,
-): Promise<Set<Id<"publishers">>> {
-  const houses = new Set<Id<"publishers">>();
+): Promise<Doc<"editions">[]> {
+  const editions: Doc<"editions">[] = [];
   const volumes = await ctx.db
     .query("volumes")
     .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
@@ -404,9 +413,20 @@ async function seriesPublishers(
       .collect();
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
-      if (!edition) continue;
-      for (const id of await publisherHouse(ctx, edition.publisherId)) houses.add(id);
+      if (edition) editions.push(edition);
     }
+  }
+  return editions;
+}
+
+/** Every publisher house the Series' Editions (any status) were published by. */
+async function seriesPublishers(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+): Promise<Set<Id<"publishers">>> {
+  const houses = new Set<Id<"publishers">>();
+  for (const edition of await seriesEditions(ctx, seriesId)) {
+    for (const id of await publisherHouse(ctx, edition.publisherId)) houses.add(id);
   }
   return houses;
 }
@@ -920,6 +940,24 @@ async function findUnmappedSibling(
   return sibling?._id ?? null;
 }
 
+/** The Series' active Edition Line of this name (any case) for one publisher. */
+async function activeEditionLine(
+  ctx: MutationCtx,
+  args: { seriesId: Id<"series">; publisherId: Id<"publishers">; name: string },
+): Promise<Doc<"editionLines"> | undefined> {
+  const lines = await ctx.db
+    .query("editionLines")
+    .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
+    .collect();
+  const wanted = args.name.toLowerCase();
+  return lines.find(
+    (line) =>
+      line.status === "active" &&
+      line.publisherId === args.publisherId &&
+      line.name.toLowerCase() === wanted,
+  );
+}
+
 /** Find-or-create the base Series' Edition Line for one publisher (spec §2). */
 async function ensureEditionLine(
   ctx: MutationCtx,
@@ -931,17 +969,7 @@ async function ensureEditionLine(
   },
   created: CreatedRecord[],
 ): Promise<Id<"editionLines">> {
-  const lines = await ctx.db
-    .query("editionLines")
-    .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
-    .collect();
-  const wanted = args.name.toLowerCase();
-  const existing = lines.find(
-    (line) =>
-      line.status === "active" &&
-      line.publisherId === args.publisherId &&
-      line.name.toLowerCase() === wanted,
-  );
+  const existing = await activeEditionLine(ctx, args);
   if (existing) return existing._id;
   const id = await ctx.db.insert("editionLines", {
     status: "active",
@@ -1584,19 +1612,11 @@ async function queueEditionLine(
     .withIndex("by_slug", (q) => q.eq("slug", args.publisherSlug))
     .unique();
   if (args.seriesId !== null && publisher !== null) {
-    const seriesId = args.seriesId;
-    const wanted = args.name.toLowerCase();
-    const existing = (
-      await ctx.db
-        .query("editionLines")
-        .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-        .collect()
-    ).find(
-      (line) =>
-        line.status === "active" &&
-        line.publisherId === publisher._id &&
-        line.name.toLowerCase() === wanted,
-    );
+    const existing = await activeEditionLine(ctx, {
+      seriesId: args.seriesId,
+      publisherId: publisher._id,
+      name: args.name,
+    });
     if (existing) return existing._id;
   }
   args.ops.push({

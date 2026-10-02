@@ -93,6 +93,7 @@ import {
   removedSeriesFor,
   recordIsbnConflict,
   recordUnplaced,
+  seriesEditions,
   toPartialDate,
 } from "./lib/pipeline";
 import type { CanonicalPublisher } from "./lib/publishers";
@@ -1073,21 +1074,10 @@ async function publisherForSeries(
 ): Promise<CanonicalPublisher> {
   if (seriesId === null) return PUBLISHER;
   const slugs = new Set<string>();
-  const volumes = await ctx.db
-    .query("volumes")
-    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-    .collect();
-  for (const volume of volumes) {
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
-    for (const coverage of coverages) {
-      const edition = await ctx.db.get(coverage.editionId);
-      if (!edition || edition.status !== "active") continue;
-      const publisher = await ctx.db.get(edition.publisherId);
-      if (publisher) slugs.add(publisher.slug);
-    }
+  for (const edition of await seriesEditions(ctx, seriesId)) {
+    if (edition.status !== "active") continue;
+    const publisher = await ctx.db.get(edition.publisherId);
+    if (publisher) slugs.add(publisher.slug);
   }
   const vertical = (slug: string) => slug === "vertical" || slug === "vertical-comics";
   const kodansha = (slug: string) => slug === "kodansha" || slug === "kodansha-comics";

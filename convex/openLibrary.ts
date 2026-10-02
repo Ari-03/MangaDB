@@ -48,7 +48,7 @@ import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { runToContinue } from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
-import { labelsEqual, matchRelease, survivorOf, type ReleaseFact } from "./lib/matching";
+import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   createCanonicalRecords,
@@ -549,12 +549,7 @@ export const unlinkedDescribedEditions = internalQuery({
         (c) => c.field === "match" && c.reason.startsWith(ISBN_RUNG_DECLINED),
       );
       if (declined) continue;
-      const isbn13 = snapshot.isbn13;
-      const holders = await ctx.db
-        .query("releases")
-        .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-        .collect();
-      const resolved = await Promise.all(holders.map((r) => survivorOf<"releases">(ctx, r)));
+      const resolved = await isbnHolders(ctx, snapshot.isbn13);
       if (!resolved.some((release) => release?.status === "active")) continue;
       snapshots.push(snapshot);
       if (snapshots.length === REPLAY_BATCH) break;

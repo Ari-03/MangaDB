@@ -163,6 +163,21 @@ export async function survivorOf<T extends "series" | "volumes" | "releases">(
 }
 
 /**
+ * Every Release row carrying this ISBN-13, each merged one answered by its
+ * survivor (null where the merge chain dead-ends). Survivors can repeat.
+ */
+export async function isbnHolders(
+  ctx: QueryCtx | MutationCtx,
+  isbn13: string,
+): Promise<Array<Doc<"releases"> | null>> {
+  const rows = await ctx.db
+    .query("releases")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+    .collect();
+  return await Promise.all(rows.map((row) => survivorOf<"releases">(ctx, row)));
+}
+
+/**
  * Every Series whose title normalizes to the given one, merged rows
  * answered by their survivor, split by what they mean to an importer:
  * `active` (attach here) and `hidden` (an Editor removed this work — never
@@ -365,16 +380,9 @@ export async function matchRelease(
   // for review — an ISBN pointing at a dissimilar title is exactly the
   // situation a human must untangle, never an importer.
   if (fact.isbn13 !== undefined) {
-    const withIsbn = await ctx.db
-      .query("releases")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", fact.isbn13))
-      .collect();
-    // A merged Release answers as its survivor; a hidden one is an Editor's
-    // decision about this very book — a human looks before anything is
-    // created for it again.
-    const resolved = await Promise.all(
-      withIsbn.map((release) => survivorOf<"releases">(ctx, release)),
-    );
+    // A hidden holder is an Editor's decision about this very book — a
+    // human looks before anything is created for it again.
+    const resolved = await isbnHolders(ctx, fact.isbn13);
     // Multiple historical rows can resolve to the same survivor. Distinct
     // active survivors sharing an ISBN are ambiguous, regardless of title.
     const active = new Map<Id<"releases">, Doc<"releases">>();
