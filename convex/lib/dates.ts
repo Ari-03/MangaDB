@@ -11,6 +11,11 @@ export const datePartsValidator = v.object({
 });
 export type DateParts = Infer<typeof datePartsValidator>;
 
+/** The yyyymmdd sort key of a partial date, unknown parts zeroed (spec §8). */
+export function partialDateSort(date: DateParts): number {
+  return date.year * 10000 + (date.month ?? 0) * 100 + (date.day ?? 0);
+}
+
 /** A date known to the day. */
 export const fullDateValidator = v.object({ year: v.number(), month: v.number(), day: v.number() });
 export type FullDate = Infer<typeof fullDateValidator>;

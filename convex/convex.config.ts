@@ -4,8 +4,8 @@
 //
 // The PostHog component requires POSTHOG_PROJECT_TOKEN, so the app declares
 // it required and forwards it by reference: a push fails on a deployment that
-// has not set it. An empty value is accepted and turns analytics off (README
-// "Analytics (PostHog)" → Backend). Feature flags stay off: no personal API
+// has not set it. An empty value is accepted and turns analytics off (docs/configuration.md,
+// "Analytics (PostHog)"). Feature flags stay off: no personal API
 // key is forwarded, so the component's flag-refresh cron finds nothing to do.
 
 import posthog from "@posthog/convex/convex.config.js";

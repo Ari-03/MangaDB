@@ -26,7 +26,7 @@
 //
 // The raw editions dump is ~10 GB; scripts/filter-openlibrary-dump.mjs
 // narrows it offline to manga-relevant publishers, and the operator hosts
-// the filtered file at OPENLIBRARY_DUMP_URL (see README). The sync action
+// the filtered file at OPENLIBRARY_DUMP_URL (docs/imports.md). The sync action
 // streams it line by line and self-continues across Convex's action time
 // budget, carrying the Import Run.
 //

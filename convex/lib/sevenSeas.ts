@@ -138,7 +138,10 @@ export function parseUsDate(text: string): FullDate | undefined {
   const m = /([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/.exec(text);
   if (!m) return undefined;
   const month = monthFromName(m[1]!);
-  return month !== undefined ? calendarDay(Number(m[3]), month, Number(m[2])) : undefined;
+  const year = Number(m[3]);
+  // A year below 100 is a typo, never a release date.
+  if (month === undefined || year < 100) return undefined;
+  return calendarDay(year, month, Number(m[2]));
 }
 
 /** A `<b>Label:</b> value` line out of the volume-meta block. */

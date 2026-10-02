@@ -15,6 +15,7 @@
 
 import type { Infer } from "convex/values";
 import type { recordType } from "../schema";
+import { partialDateSort, type DateParts } from "./dates";
 
 export type RecordType = Infer<typeof recordType>;
 
@@ -162,14 +163,6 @@ export type Normalized =
 
 const invalid = (message: string): Normalized => ({ ok: false, message });
 
-/** Partial-precision date as submitted by the form (sort key added here). */
-export type PartialDateInput = { year: number; month?: number; day?: number };
-
-/** The yyyymmdd sort key with zeroed unknown parts (spec §8). */
-export function partialDateSort(date: PartialDateInput): number {
-  return date.year * 10000 + (date.month ?? 0) * 100 + (date.day ?? 0);
-}
-
 function normalizeString(
   descriptor: FieldDescriptor,
   raw: unknown,
@@ -221,7 +214,7 @@ function normalizePartialDate(raw: unknown): Normalized {
       return invalid("Day must be 1–31.");
     }
   }
-  const date: PartialDateInput = {
+  const date: DateParts = {
     year,
     ...(month !== undefined ? { month: month as number } : {}),
     ...(day !== undefined ? { day: day as number } : {}),

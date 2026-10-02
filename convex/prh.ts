@@ -17,7 +17,7 @@
 // uncapped full sweep; a listed entry the parser drops still counts as
 // present (notePresent), and one with no readable ISBN voids completeness.
 //
-// Configuration (no live key exists in this repo — see README):
+// Configuration (no live key exists in this repo — see docs/imports.md):
 //   PRH_API_KEY        the Enhanced API key (manual activation by PRH)
 //   PRH_IMPRINT_CODES  comma-separated imprint codes to mirror (verify the
 //                      codes against /title/domains/PRH.US/imprints once a

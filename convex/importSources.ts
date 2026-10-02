@@ -35,7 +35,7 @@ const fieldAuthority = v.record(v.string(), authorityLevel);
 // Every adapter exists (v1's five plus Yen Press and the
 // Kodansha backlist crawl), so every row seeds enabled;
 // PRH and OpenLibrary additionally need environment configuration (API
-// key/imprints, filtered-dump URL — see README) and skip gracefully as
+// key/imprints, filtered-dump URL — see docs/imports.md) and skip gracefully as
 // "unconfigured" until it is set. The `price` column extends the spec table
 // as plain registry data (that's the point of the registry): own-catalog
 // publishers and the distributor API are authoritative for their own list

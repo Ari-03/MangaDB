@@ -15,7 +15,8 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { editionCoverage, followMerges } from "./catalogPages";
+import { editionCoverage } from "./catalogPages";
+import { followMerges } from "./lib/merges";
 import { getSourceByKey } from "./importSources";
 import { recordRef, recordType } from "./schema";
 import { latestTouch } from "./lib/authority";

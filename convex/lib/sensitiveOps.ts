@@ -22,7 +22,8 @@
 
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { followMerges, primaryVolumeSeries } from "../catalogPages";
+import { primaryVolumeSeries } from "../catalogPages";
+import { followMerges } from "./merges";
 import {
   displayInfo,
   getCanonical,

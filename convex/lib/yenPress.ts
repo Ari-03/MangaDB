@@ -119,7 +119,10 @@ export function parseYenDate(text: string): FullDate | undefined {
   const m = /^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),\s*(\d{4})$/.exec(text.trim());
   if (!m) return undefined;
   const month = monthFromAbbreviation(m[1]!);
-  return month !== undefined ? calendarDay(Number(m[3]), month, Number(m[2])) : undefined;
+  const year = Number(m[3]);
+  // A year below 100 is a typo, never a release date.
+  if (month === undefined || year < 100) return undefined;
+  return calendarDay(year, month, Number(m[2]));
 }
 
 /** One "full details" block's labelled fields ("ISBN" → "979…"). */

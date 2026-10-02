@@ -33,7 +33,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
 import { canonicalLabel } from "./bookTitle";
-import type { DateParts } from "./dates";
+import { partialDateSort, type DateParts } from "./dates";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { getObservation, upsertObservation } from "./observations";
 import { allocatePublicId } from "./publicIds";
@@ -52,10 +52,7 @@ export type PartialDate = DateParts & { sort: number };
 
 /** Partial-precision date with its yyyymmdd sort key, zeroed unknown parts (spec §8). */
 export function toPartialDate(date: DateParts): PartialDate {
-  return {
-    ...date,
-    sort: date.year * 10000 + (date.month ?? 0) * 100 + (date.day ?? 0),
-  };
+  return { ...date, sort: partialDateSort(date) };
 }
 
 // A release that implies an Edition Line — deluxe, omnibus, n-in-1, box-set

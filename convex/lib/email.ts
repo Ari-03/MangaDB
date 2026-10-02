@@ -1,6 +1,6 @@
 // Administrator alert email (spec §6: runs & failure), sent via
 // the Resend HTTP API — the one email this app sends in v1, so a provider
-// SDK would be overkill. Configuration is three Convex env vars (README):
+// SDK would be overkill. Configuration is three Convex env vars (docs/configuration.md):
 //
 //   RESEND_API_KEY            the Resend API key
 //   IMPORT_ALERT_EMAIL_TO     the Administrator's address
@@ -34,7 +34,7 @@ export async function sendAdminEmail(args: {
     return {
       sent: false,
       reason:
-        "unconfigured (set RESEND_API_KEY and IMPORT_ALERT_EMAIL_TO — see README)",
+        "unconfigured (set RESEND_API_KEY and IMPORT_ALERT_EMAIL_TO — see docs/configuration.md)",
     };
   }
   const from = process.env.IMPORT_ALERT_EMAIL_FROM ?? DEFAULT_FROM;

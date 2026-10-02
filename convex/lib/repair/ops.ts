@@ -8,7 +8,7 @@
 
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
-import { followMerges } from "../../catalogPages";
+import { followMerges } from "../merges";
 import { allocatePublicId } from "../publicIds";
 import {
   DUPLICATE_SLUGS,
@@ -1523,7 +1523,7 @@ async function followVolume(
  * (reading.ts passSeriesId). The profile shows a pass only where its own
  * Series is public too, so re-filing one carries its reader's Reading
  * visibility from the Series it was filed under. Only stale rows move, so a
- * re-run heals any earlier move without carrying again (R16). A sweep
+ * re-run heals any earlier move without carrying again. A sweep
  * (bounded legs).
  */
 async function followRelease(

@@ -2,7 +2,7 @@
 # production, which waits for approval in the `production` GitHub environment.
 # "Run workflow" (or `gh workflow run deploy.yml`) deploys any branch, to
 # staging by default. Both environments hold the same secret names, so one
-# job serves both. README "Deployment" has the setup.
+# job serves both. docs/deployment.md has the setup.
 name: Deploy
 run-name: Deploy ${{ inputs.environment || 'production' }} from ${{ github.ref_name }}
 
@@ -86,14 +86,14 @@ jobs:
             if [ -z "${!name}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::The $TARGET environment is missing:$missing. See README \"Deployment\" for the one-time setup."
+            echo "::error::The $TARGET environment is missing:$missing. See docs/deployment.md for the one-time setup."
             exit 1
           fi
 
       # Reads the target Worker's deployments before Convex is pushed, so a bad
       # token, a wrong account ID, or a token scoped to the other Worker fails
       # with nothing deployed. It asks for one Worker, not the account's list,
-      # because each token is scoped to a single Worker (README "Deployment").
+      # because each token is scoped to a single Worker (docs/deployment.md).
       # It cannot prove every permission `wrangler deploy` needs.
       - name: Check Cloudflare credentials
         env:

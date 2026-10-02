@@ -22,9 +22,6 @@ import { isWholeSingleVolume } from "./lib/matching";
 import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
 import { creditsFor } from "./people";
 
-// Many modules still import `followMerges` from here.
-export { followMerges };
-
 // ---------- shared resolution & joins ----------
 
 /** `creditsFor` a Series known by its public ID. */
