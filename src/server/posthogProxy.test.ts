@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { posthogProxyResponse } from "./posthogProxy";
+import { stubEdgeCache } from "./test.cache";
 
 type Upstream = { url: string; init?: RequestInit };
 
@@ -9,18 +10,8 @@ let cached: Map<string, Response>;
 let upstreamStatus: number;
 beforeEach(() => {
   calls = [];
-  cached = new Map();
+  cached = stubEdgeCache();
   upstreamStatus = 200;
-  vi.stubGlobal("caches", {
-    default: {
-      match: async (req: Request) => cached.get(req.url),
-      // As the Workers cache does: only GETs may be stored.
-      put: async (req: Request, res: Response) => {
-        if (req.method !== "GET") throw new TypeError("Cannot cache response to non-GET request.");
-        cached.set(req.url, res);
-      },
-    },
-  });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {

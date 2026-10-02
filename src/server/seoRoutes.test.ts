@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SitemapData } from "./seoRoutes";
+import { stubBrokenEdgeCache, stubEdgeCache } from "./test.cache";
 
 // `waitUntil` collects the background cache writes.
 const background = vi.hoisted(() => [] as Promise<unknown>[]);
@@ -17,19 +18,9 @@ const {
   xmlEscape,
 } = await import("./seoRoutes");
 
-// The Workers edge cache, keyed by URL; like the real one, GETs only.
 let cached: Map<string, Response>;
 beforeEach(() => {
-  cached = new Map();
-  vi.stubGlobal("caches", {
-    default: {
-      match: async (req: Request) => cached.get(req.url)?.clone(),
-      put: async (req: Request, res: Response) => {
-        if (req.method !== "GET") throw new TypeError("Cannot cache response to non-GET request.");
-        cached.set(req.url, res);
-      },
-    },
-  });
+  cached = stubEdgeCache();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -203,14 +194,7 @@ describe("seoResponse", () => {
   });
 
   it("still serves the sitemap when the cache read fails", async () => {
-    vi.stubGlobal("caches", {
-      default: {
-        match: async () => {
-          throw new Error("cache read failed");
-        },
-        put: async () => {},
-      },
-    });
+    stubBrokenEdgeCache("read");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), fakeData());
     expect(res?.status).toBe(200);
@@ -220,14 +204,7 @@ describe("seoResponse", () => {
   });
 
   it("still serves the sitemap when the cache write fails", async () => {
-    vi.stubGlobal("caches", {
-      default: {
-        match: async () => undefined,
-        put: async () => {
-          throw new Error("cache write failed");
-        },
-      },
-    });
+    stubBrokenEdgeCache("write");
     const res = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), fakeData());
     expect(res?.status).toBe(200);
     await Promise.all(background);

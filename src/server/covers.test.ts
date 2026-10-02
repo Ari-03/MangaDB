@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import { stubBrokenEdgeCache, stubEdgeCache } from "./test.cache";
+
 // `env.COVERS` is set per test; `waitUntil` collects background work.
 const worker = vi.hoisted(() => ({
   env: {} as { COVERS?: unknown },
@@ -19,7 +21,7 @@ const status = (code: number) => () => new Response("x", { status: code });
 
 let upstreams: Array<() => Response>;
 beforeEach(() => {
-  vi.stubGlobal("caches", { default: { match: async () => undefined, put: async () => {} } });
+  stubEdgeCache();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => (upstreams.shift() ?? status(404))()),
@@ -104,14 +106,7 @@ describe("coverResponse", () => {
   });
 
   test("serves the response even when the edge-cache write fails", async () => {
-    vi.stubGlobal("caches", {
-      default: {
-        match: async () => undefined,
-        put: async () => {
-          throw new Error("cache write failed");
-        },
-      },
-    });
+    stubBrokenEdgeCache("write");
     upstreams = [image];
     expect((await get())?.status).toBe(200);
     await Promise.all(worker.background);
@@ -133,14 +128,7 @@ describe("coverResponse", () => {
 
 describe("coverResponse with a failing edge cache", () => {
   test("a failed cache read is a miss: the art is still served", async () => {
-    vi.stubGlobal("caches", {
-      default: {
-        match: async () => {
-          throw new Error("cache read failed");
-        },
-        put: async () => {},
-      },
-    });
+    stubBrokenEdgeCache("read");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     upstreams = [image];
     const res = await get();
