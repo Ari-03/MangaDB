@@ -29,11 +29,12 @@
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
+import { registryRow, runToContinue } from "./lib/importRuns";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { toPartialDate } from "./lib/pipeline";
@@ -110,32 +111,8 @@ export const sync = internalAction({
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("prh.sync", ctx, async () => {
       const linkStartedAt = Date.now();
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: SOURCE_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"prh\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
-      // A continuation link whose source was disabled or unconfigured between
-      // links must not leave its run open forever: close it as failed, saying why.
-      const closeResumed = async (why: string) => {
-        if (args.runId === undefined) return;
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId: args.runId,
-          status: "failed",
-          recordsSeen: args.seen ?? 0,
-          recordsChanged: args.changed ?? 0,
-          errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
-        });
-      };
-      if (!source.enabled) {
-        await closeResumed("the source was disabled.");
-        return { skipped: "disabled" as const };
-      }
+      const source = await registryRow(ctx, SOURCE_KEY);
+      if (!source.enabled && args.runId === undefined) return { skipped: "disabled" as const };
       const apiKey = process.env.PRH_API_KEY;
       const configured = (process.env.PRH_IMPRINT_CODES ?? "")
         .split(",")
@@ -146,15 +123,27 @@ export const sync = internalAction({
         console.warn(
           "[imports] PRH adapter is unconfigured (set PRH_API_KEY and PRH_IMPRINT_CODES) — skipping",
         );
-        await closeResumed("PRH_API_KEY / PRH_IMPRINT_CODES were removed.");
+        // A continuation whose configuration was removed between links must
+        // not leave its run open forever: close it as failed, saying why.
+        if (args.runId !== undefined) {
+          await ctx.runMutation(internal.imports.finishRun, {
+            runId: args.runId,
+            status: "failed",
+            recordsSeen: args.seen ?? 0,
+            recordsChanged: args.changed ?? 0,
+            errors: [
+              ...(args.errors ?? []),
+              "Stopped mid-run: PRH_API_KEY / PRH_IMPRINT_CODES were removed.",
+            ],
+          });
+        }
         return { skipped: "unconfigured" as const };
       }
       const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
-      const runId: Id<"importRuns"> =
-        args.runId ??
-        (await ctx.runMutation(internal.imports.startRun, {
-          sourceKey: SOURCE_KEY,
-        }));
+      // The shared gate: a scheduled run whose source is disabled between
+      // links closes as "stopped"; an operator-forced one finishes.
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
       const runStartedAt = args.runStartedAt ?? linkStartedAt;
       const delay = args.politeDelayMs ?? 350;
       const maxPages = args.maxPages ?? 50;

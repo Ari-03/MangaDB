@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import { MIN_COVER_BYTES } from "./lib/covers";
-import { normalizeBook, parseBookListing, parseBookPage } from "./lib/sevenSeas";
+import { normalizeBook, parseBookListing, parseBookPage, type BookSnapshot } from "./lib/sevenSeas";
 import schema from "./schema";
 
 const BASE = "https://sevenseasentertainment.com";
@@ -1114,6 +1114,36 @@ describe("sevenSeas.sync — failure handling", () => {
     expect(result).toEqual({ skipped: "disabled" });
     await t.run(async (ctx) => {
       expect(await ctx.db.query("importRuns").collect()).toHaveLength(0);
+    });
+  });
+
+  it("applies nothing once the source is disabled mid-run (the kill switch)", async () => {
+    const t = convexTest(schema);
+    await seedRegistry(t, true);
+    stubSite([ALPHA_1]);
+    await sync(t);
+    const sourceRecordId = String(ALPHA_1.id);
+    const stored = await t.run(async (ctx) => {
+      const source = (await ctx.db
+        .query("approvedSources")
+        .withIndex("by_key", (q) => q.eq("key", "sevenseas"))
+        .unique())!;
+      await ctx.db.patch(source._id, { enabled: false });
+      return (await ctx.db
+        .query("sourceObservations")
+        .withIndex("by_source_record", (q) =>
+          q.eq("sourceKey", "sevenseas").eq("sourceRecordId", sourceRecordId),
+        )
+        .unique())!;
+    });
+    const snapshot = { ...(stored.snapshot as BookSnapshot), title: "Alpha Manga Vol. 1 (Renamed)" };
+    expect(await t.mutation(internal.sevenSeas.applyBook, { sourceRecordId, snapshot })).toEqual({
+      status: "recordOnly",
+      changed: false,
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(stored._id))?.snapshot).toEqual(stored.snapshot);
+      expect(await ctx.db.query("observationSnapshots").collect()).toHaveLength(0);
     });
   });
 });

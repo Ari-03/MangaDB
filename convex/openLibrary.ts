@@ -46,7 +46,7 @@ import {
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { runToContinue } from "./lib/importRuns";
+import { MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
@@ -111,16 +111,7 @@ export const sync = internalAction({
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("openLibrary.sync", ctx, async () => {
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: SOURCE_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"openlibrary\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
+      const source = await registryRow(ctx, SOURCE_KEY);
       if (!source.enabled && args.runId === undefined) {
         return { skipped: "disabled" as const };
       }
@@ -213,7 +204,7 @@ export const sync = internalAction({
             runId,
             seen,
             changed,
-            errors: errors.slice(0, 50),
+            errors: errors.slice(0, MAX_CARRIED_ERRORS),
           });
           return {
             runId,

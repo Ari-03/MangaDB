@@ -40,7 +40,7 @@
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import {
   internalAction,
   internalMutation,
@@ -48,10 +48,10 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
-import { coverKey, coverRequest, storeCover, type CoverRequest, type StoredCovers } from "./lib/covers";
+import { coverKey, coverRequest, type CoverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { runToContinue } from "./lib/importRuns";
+import { MAX_CARRIED_ERRORS, registryRow, runToContinue, storeRunCover } from "./lib/importRuns";
 import {
   baseRecordId,
   crawlMode,
@@ -121,8 +121,6 @@ const DEFAULT_MAX_FETCHES = 200;
 const PLAN_CHUNK = 100;
 /** Listing pages read before giving up (1,170 series = 12 pages). */
 const MAX_LISTING_PAGES = 40;
-/** Errors carried across continuation links. */
-const MAX_CARRIED_ERRORS = 50;
 
 // ---------- the daily window ----------
 
@@ -149,16 +147,7 @@ export const sync = internalAction({
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("kodansha.sync", ctx, async () => {
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: SOURCE_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"kodansha\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
+      const source = await registryRow(ctx, SOURCE_KEY);
       if (!source.enabled) return { skipped: "disabled" as const };
 
       const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
@@ -206,16 +195,16 @@ export const sync = internalAction({
               errors.push(`review ${recordId}: ${result.reason ?? "conflict"}`);
             }
             if (result.cover) {
-              try {
-                const notice = await storeCover(ctx, covers, {
+              await storeRunCover(
+                ctx,
+                covers,
+                {
                   ...result.cover,
                   attribution: source.attribution ?? PUBLISHER.name,
                   delayMs: delay,
-                });
-                if (notice) errors.push(`cover ${recordId}: ${notice}`);
-              } catch (e) {
-                errors.push(`cover ${recordId}: ${errorMessage(e)}`);
-              }
+                },
+                { label: recordId, errors },
+              );
             }
           } catch (e) {
             failures++;
@@ -423,16 +412,7 @@ export const backlistSync = internalAction({
   },
   handler: async (ctx, args): Promise<BacklistResult> =>
     withExceptionCapture("kodansha.backlistSync", ctx, async () => {
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: BACKLIST_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"kodansha-backlist\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
+      const source = await registryRow(ctx, BACKLIST_KEY);
       // The shared gate: disabling the row stops a scheduled crawl at its next
       // link (the run closes as "stopped"); an operator-forced run finishes.
       const runId = await runToContinue(ctx, source, args);
@@ -569,17 +549,17 @@ export const backlistSync = internalAction({
                         fetchedHere++;
                         fetchedTotal++;
                       }
-                      try {
-                        const notice = await storeCover(ctx, covers, {
+                      const stored = await storeRunCover(
+                        ctx,
+                        covers,
+                        {
                           ...result.cover,
                           attribution: source.attribution ?? PUBLISHER.name,
                           delayMs: delay,
-                        });
-                        if (notice) errors.push(`cover ${recordId}: ${notice}`);
-                      } catch (e) {
-                        if (!recheck.includes(volumeSlug)) recheck.push(volumeSlug);
-                        errors.push(`cover ${recordId}: ${errorMessage(e)}`);
-                      }
+                        },
+                        { label: recordId, errors },
+                      );
+                      if (!stored && !recheck.includes(volumeSlug)) recheck.push(volumeSlug);
                     }
                   } catch (e) {
                     // Retried at the next weekly check, not the 180-day refresh.

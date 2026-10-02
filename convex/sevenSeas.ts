@@ -24,11 +24,11 @@ import { getBootstrapMode, getSourceByKey } from "./importSources";
 import {
   coverKey,
   coverRequest,
-  storeCover,
   type CoverRequest,
   type StoredCovers,
 } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
+import { registryRow, storeRunCover } from "./lib/importRuns";
 import { applyRetrying } from "./lib/occ";
 import { parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { inferCoverage } from "./lib/coverage";
@@ -104,16 +104,7 @@ export const sync = internalAction({
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("sevenSeas.sync", ctx, async () => {
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: SOURCE_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"sevenseas\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
+      const source = await registryRow(ctx, SOURCE_KEY);
       if (!source.enabled) return { skipped: "disabled" as const };
 
       const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
@@ -192,16 +183,16 @@ export const sync = internalAction({
               // after its apply committed): retry just the art, paced by its
               // own budget so it never starves book-page fetches.
               if (note.cover && (covers.has(coverKey(note.cover)) || coverBudget-- > 0)) {
-                try {
-                  const notice = await storeCover(ctx, covers, {
+                await storeRunCover(
+                  ctx,
+                  covers,
+                  {
                     ...note.cover,
                     attribution: source.attribution ?? PUBLISHER.name,
                     delayMs: delay,
-                  });
-                  if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
-                } catch (e) {
-                  errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
-                }
+                  },
+                  { label: listing.slug, errors },
+                );
               }
               continue;
             }
@@ -239,16 +230,16 @@ export const sync = internalAction({
               }
 
               if (result.cover) {
-                try {
-                  const notice = await storeCover(ctx, covers, {
+                await storeRunCover(
+                  ctx,
+                  covers,
+                  {
                     ...result.cover,
                     attribution: source.attribution ?? PUBLISHER.name,
                     delayMs: delay,
-                  });
-                  if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
-                } catch (e) {
-                  errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
-                }
+                  },
+                  { label: listing.slug, errors },
+                );
               }
             } catch (e) {
               // A removed page (404) is a notice, not a failure: the book stays
@@ -542,6 +533,10 @@ export const applyBook = internalMutation({
   handler: async (ctx, { sourceRecordId, snapshot }): Promise<ApplyResult> => {
     const now = Date.now();
     const source = await getSourceByKey(ctx, SOURCE_KEY);
+    // Kill switch, as in applyCatalogTitle: disabling the source stops an
+    // in-flight sync's applies too, not just the next run's gate. Seven Seas
+    // has no operator-forced runs, so nothing else applies through here.
+    if (source && !source.enabled) return { status: "recordOnly", changed: false };
     const sourceName = source?.name ?? PUBLISHER.name;
     const citation = { sourceName, url: snapshot.url };
 

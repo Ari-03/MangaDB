@@ -1029,7 +1029,9 @@ describe("prh.sync — continuation links", () => {
     });
   });
 
-  it("closes a resumed run when the source was disabled between links", async () => {
+  // The shared gate (lib/importRuns.ts runToContinue): a scheduled run stops
+  // without counting against the source's health, as the other sources do.
+  it('closes a scheduled run as "stopped" when the source was disabled between links', async () => {
     const t = makeT();
     await seedRegistry(t, true);
     stubApi([
@@ -1045,8 +1047,27 @@ describe("prh.sync — continuation links", () => {
     await t.run(async (ctx) => {
       if (!("runId" in first)) throw new Error("Expected an import run");
       const run = await ctx.db.get(first.runId);
-      expect(run?.status).toBe("failed");
-      expect(run?.errors?.some((e) => e.includes("disabled"))).toBe(true);
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+      expect(run!.errors.at(-1)).toMatch(/disabled mid-run/);
+      const source = await ctx.db
+        .query("approvedSources")
+        .withIndex("by_key", (q) => q.eq("key", "prh"))
+        .unique();
+      expect(source?.consecutiveFailures ?? 0).toBe(0);
+    });
+  });
+
+  it("finishes an operator-forced run on a disabled source", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
+    expect(await sync(t)).toEqual({ skipped: "disabled" });
+    stubApi([{ isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
+    const result = await sync(t, { runId });
+    expect(result).toMatchObject({ runId, recordsSeen: 1 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(runId))?.status).toBe("succeeded");
     });
   });
 
