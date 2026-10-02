@@ -402,7 +402,7 @@ describe("people.rebuild publisher credits", () => {
     ]);
     const [peko] = await personNamed(t, "Peko Watanabe");
     // A role-less author made the Series, so it counts toward the Authors tab.
-    expect(peko).toMatchObject({ nameKey: "peko watanabe", seriesCount: 1, originalCount: 0 });
+    expect(peko).toMatchObject({ nameKey: nameKey("Peko Watanabe"), seriesCount: 1, originalCount: 0 });
     expect(peko?.annId).toBeUndefined();
   });
 
@@ -539,10 +539,14 @@ describe("people.rebuild publisher credits", () => {
         withdrawn: false,
       }),
     );
-    await t.mutation(internal.people.publisherBatch, {
-      sourceKey: "prh",
-      after: null,
+    await t.mutation(internal.people.applyPrhLines, {
       rebuiltAt: Date.now() + 1000,
+      series: [
+        {
+          seriesId: ids.marriage,
+          lines: [{ seriesId: ids.marriage, line: "Peko Watanabe", count: 1, lastSeenAt: 0, createdAt: 0 }],
+        },
+      ],
     });
     expect(await creditLines(t, ids.marriage)).toEqual(["Peko Watanabe: author (prh)"]);
   });
@@ -572,9 +576,11 @@ describe("people.rebuild publisher credits", () => {
       return id;
     });
     await t.action(internal.people.rebuild, {});
+    // ANN's id 51 got a row of its own; the name-only row, never adopted and
+    // credited nowhere, was pruned.
     const keis = await personNamed(t, "Kei Tanaka");
-    expect(keis.map((p) => p.annId ?? null).sort()).toEqual(["50", "51", null]);
-    expect(keis.find((p) => p._id === nameOnly)?.annId).toBeUndefined();
+    expect(keis.map((p) => p.annId ?? null).sort()).toEqual(["50", "51"]);
+    expect(keis.some((p) => p._id === nameOnly)).toBe(false);
   });
 
   it("shows no ANN link on the page of a person only publishers name", async () => {
@@ -585,11 +591,11 @@ describe("people.rebuild publisher credits", () => {
   });
 });
 
-// One PRH Series whose author lines give Gou Tanabe a role-less credit on
-// one book and "art" on another, with a batch boundary between them, in
-// both orders. Filler observations (withdrawn) push the second book into
-// the next batch.
-async function twoBatchCatalog() {
+// PRH Series whose volumes spell a name two ways, from the production
+// check, with a batch boundary inside each Series' observations: filler
+// observations (withdrawn) push the later books into the next batch.
+// `seen` is the observation's lastSeenAt.
+async function variantCatalog() {
   const t = convexTest(schema);
   const ids = await t.run(async (ctx) => {
     const publisherId = await ctx.db.insert("publishers", {
@@ -598,6 +604,7 @@ async function twoBatchCatalog() {
       slug: "dark-horse",
     });
     let publicId = 0;
+    let isbn = 0;
     const series = (title: string) =>
       ctx.db.insert("series", {
         status: "active",
@@ -606,7 +613,7 @@ async function twoBatchCatalog() {
         altTitles: [],
         searchText: title,
       });
-    const book = async (seriesId: Id<"series">, isbn: string, author: string) => {
+    const book = async (seriesId: Id<"series">, author: string, seen: number, late = false) => {
       const editionId = await ctx.db.insert("editions", {
         status: "active",
         publicId: ++publicId,
@@ -622,17 +629,30 @@ async function twoBatchCatalog() {
       });
       await ctx.db.insert("sourceObservations", {
         sourceKey: "prh",
-        sourceRecordId: isbn,
+        sourceRecordId: `${late ? "9789" : "9780"}${String(++isbn).padStart(9, "0")}`,
         recordRef: { type: "release", id: releaseId },
         snapshot: { kind: "prhTitle", author },
-        lastSeenAt: 0,
+        lastSeenAt: seen,
         withdrawn: false,
       });
     };
-    const authorFirst = await series("At the Mountains of Madness");
-    const artFirst = await series("The Hound");
-    await book(authorFirst, "9780000000001", "Gou Tanabe");
-    await book(artFirst, "9780000000002", "Adaptation and Artwork by Gou Tanabe");
+    const hellbound = await series("The Hellbound");
+    const nomiya = await series("How My Cute Girlfriend and I Started a Love Story");
+    const sirius = await series("Sirius: Twin Stars");
+    const dumbbells = await series("How Heavy are the Dumbbells You Lift?");
+    // A tie goes to the line seen most recently.
+    await book(hellbound, "Written by Yeon Sang-Ho. Illustrated by Choi Gyu-Seok.", 1);
+    await book(hellbound, "Written by Yeon Sang-Ho. Illustrated by Choe Gyu-Seok.", 2, true);
+    await book(sirius, "Ana C. Sánchez", 2);
+    await book(sirius, "Aaa Sánchez", 1, true);
+    // The more common line wins, however recent the other.
+    await book(nomiya, "Rion Nomiya", 1);
+    await book(nomiya, "Rion Nomiya", 1, true);
+    await book(nomiya, "Reon Nomiya", 9, true);
+    // Lines naming the same people count together: Maam twice beats the bare line.
+    await book(dumbbells, "Yabako Sandrovich; Illustrated by Maam", 1);
+    await book(dumbbells, "Yabako Sandrovich", 5);
+    await book(dumbbells, "Yabako Sandrovich; Illustrated by MAAM", 2, true);
     for (let i = 0; i < 200; i++) {
       await ctx.db.insert("sourceObservations", {
         sourceKey: "prh",
@@ -642,9 +662,7 @@ async function twoBatchCatalog() {
         withdrawn: true,
       });
     }
-    await book(authorFirst, "9789999999998", "Adaptation and Artwork by Gou Tanabe");
-    await book(artFirst, "9789999999999", "Gou Tanabe");
-    return { authorFirst, artFirst };
+    return { hellbound, nomiya, sirius, dumbbells };
   });
   await t.action(internal.people.rebuild, {});
   return { t, ids };
@@ -688,32 +706,157 @@ describe("people.rebuild across actions", () => {
   });
 });
 
-describe("people.rebuild across publisher batches", () => {
-  it("keeps one row per person through a run, whichever role comes first", async () => {
-    const { t, ids } = await twoBatchCatalog();
+describe("people.rebuild PRH lines", () => {
+  it("credits each Series from its most common PRH line, one spelling per person", async () => {
+    const { t, ids } = await variantCatalog();
+    expect(await creditLines(t, ids.hellbound)).toEqual([
+      "Choe Gyu-Seok: art (prh)",
+      "Yeon Sang-Ho: story (prh)",
+    ]);
+    expect(await creditLines(t, ids.sirius)).toEqual(["Ana C. Sánchez: author (prh)"]);
+    expect(await creditLines(t, ids.nomiya)).toEqual(["Rion Nomiya: author (prh)"]);
+    expect(await creditLines(t, ids.dumbbells)).toEqual([
+      "MAAM: art (prh)",
+      "Yabako Sandrovich: story (prh)",
+    ]);
+    // The losing spellings left no person behind.
+    expect(await personNamed(t, "Choi Gyu-Seok")).toEqual([]);
+    expect(await personNamed(t, "Reon Nomiya")).toEqual([]);
+  });
+
+  it("keeps every row id across rebuilds", async () => {
+    const { t } = await variantCatalog();
     const rows = () =>
       t.run(async (ctx) =>
         (await ctx.db.query("seriesCredits").collect()).map((row) => `${row._id} ${row.role}`).sort(),
       );
-    expect(await creditLines(t, ids.authorFirst)).toEqual(["Gou Tanabe: art (prh)"]);
-    expect(await creditLines(t, ids.artFirst)).toEqual(["Gou Tanabe: art (prh)"]);
     const before = await rows();
-    // A later run, batch by batch: no row is added or replaced in between.
-    const rebuiltAt = Date.now() + 1000;
-    let after: string | null = null;
-    let batches = 0;
-    for (;;) {
-      const batch: { next: string | null } = await t.mutation(internal.people.publisherBatch, {
-        sourceKey: "prh",
-        after,
-        rebuiltAt,
-      });
-      batches++;
-      expect(await rows()).toEqual(before);
-      if (batch.next === null) break;
-      after = batch.next;
-    }
-    expect(batches).toBe(2);
+    await t.action(internal.people.rebuild, {});
+    expect(await rows()).toEqual(before);
+  });
+});
+
+describe("people.rebuild name keys", () => {
+  /** A people row as an older rebuild left it, with whatever key it stored. */
+  const legacyPerson = (
+    t: TestT,
+    fields: { publicId: number; name: string; nameKey: string; annId?: string },
+  ) =>
+    t.run((ctx) =>
+      ctx.db.insert("people", {
+        ...fields,
+        seriesCount: 1,
+        originalCount: 0,
+        coverUrl: null,
+        coverIsbn: null,
+      }),
+    );
+
+  it("rekeys legacy rows, gives a duplicate's credits to the ANN person, and prunes the orphan", async () => {
+    const { t, ids } = await publisherCatalog();
+    // Production before the long-vowel key: ANN's Kōji Kumeta, and the
+    // name-only Kouji Kumeta a Kodansha page made, keyed apart.
+    const volume = await observationOf(t, "kodansha", "shirow/v1#physical");
+    await t.run(async (ctx) => {
+      await ctx.db.insert(
+        "sourceObservations",
+        annObservation(ids.ghost, "9", [{ personId: "22407", name: "Kōji Kumeta", task: "Story & Art" }]),
+      );
+      await ctx.db.patch(volume._id, { snapshot: { kind: "kodanshaVolume", creators: ["Kouji Kumeta"] } });
+    });
+    const ann = await legacyPerson(t, {
+      publicId: 3991,
+      name: "Kōji Kumeta",
+      nameKey: "koji kumeta",
+      annId: "22407",
+    });
+    const duplicate = await legacyPerson(t, {
+      publicId: 4646,
+      name: "Kouji Kumeta",
+      nameKey: "kouji kumeta",
+    });
+    await t.run((ctx) =>
+      ctx.db.insert("seriesCredits", {
+        seriesId: ids.shirowShort,
+        personId: duplicate,
+        role: "author",
+        source: "creators",
+        rebuiltAt: 0,
+      }),
+    );
+    await t.action(internal.people.rebuild, {});
+    expect(await creditLines(t, ids.shirowShort)).toEqual(["Kōji Kumeta: author (creators)"]);
+    const rows = await t.run(async (ctx) => [await ctx.db.get(ann), await ctx.db.get(duplicate)]);
+    expect(rows[0]).toMatchObject({ publicId: 3991, nameKey: nameKey("Kouji Kumeta") });
+    expect(rows[1]).toBeNull();
+  });
+
+  it("merges two name-only spellings into the earlier person", async () => {
+    const { t, ids } = await publisherCatalog();
+    const volume = await observationOf(t, "kodansha", "shirow/v1#physical");
+    const [indoso] = await t.run(async (ctx) => {
+      await ctx.db.patch(volume._id, { snapshot: { kind: "kodanshaVolume", creators: ["Indo So"] } });
+      return [
+        await ctx.db.insert("people", {
+          publicId: 4547,
+          name: "Indoso",
+          nameKey: "indoso",
+          seriesCount: 1,
+          originalCount: 0,
+          coverUrl: null,
+          coverIsbn: null,
+        }),
+        await ctx.db.insert("people", {
+          publicId: 4697,
+          name: "Indo So",
+          nameKey: "indo so",
+          seriesCount: 1,
+          originalCount: 0,
+          coverUrl: null,
+          coverIsbn: null,
+        }),
+      ];
+    });
+    await t.action(internal.people.rebuild, {});
+    expect(await creditLines(t, ids.shirowShort)).toEqual(["Indoso: author (creators)"]);
+    expect(await personNamed(t, "Indo So")).toEqual([]);
+    expect((await personNamed(t, "Indoso"))[0]?._id).toBe(indoso);
+  });
+
+  it("keeps a name ambiguous when two ANN people share its key", async () => {
+    const { t, ids } = await publisherCatalog();
+    const volume = await observationOf(t, "kodansha", "1122/v1#physical");
+    await t.run(async (ctx) => {
+      await ctx.db.insert(
+        "sourceObservations",
+        annObservation(ids.ghost, "10", [{ personId: "1123", name: "Johji Manabe", task: "Art" }]),
+      );
+      await ctx.db.insert(
+        "sourceObservations",
+        annObservation(ids.keiShort, "11", [{ personId: "287", name: "Joji Manabe", task: "Art" }]),
+      );
+      await ctx.db.patch(volume._id, { snapshot: { kind: "kodanshaVolume", creators: ["Joji Manabe"] } });
+    });
+    await t.action(internal.people.rebuild, {});
+    expect(await creditLines(t, ids.marriage)).toEqual(["Co Author: author (creators)"]);
+  });
+
+  it("keeps an ANN person with no credits, and prunes only name-only ones", async () => {
+    const { t, ids } = await publisherCatalog();
+    // Nothing credits ANN's Masamune Shirow or Kodansha's Co Author any more.
+    const withdrawn = [
+      await observationOf(t, "ann", "manga:2"),
+      await observationOf(t, "kodansha", "shirow/v1#physical"),
+      await observationOf(t, "kodansha", "1122/v2#physical"),
+    ];
+    await t.run(async (ctx) => {
+      for (const observation of withdrawn) await ctx.db.patch(observation._id, { withdrawn: true });
+    });
+    await t.action(internal.people.rebuild, {});
+    expect(await creditLines(t, ids.ghost)).toEqual([]);
+    expect(await creditLines(t, ids.shirowShort)).toEqual([]);
+    expect(await personNamed(t, "Masamune Shirow")).toMatchObject([{ annId: "2", seriesCount: 0 }]);
+    expect(await personNamed(t, "Co Author")).toEqual([]);
   });
 });
 
@@ -732,6 +875,32 @@ describe("mergeRoles and nameKey", () => {
     expect(nameKey("In-Wan Youn")).toBe(nameKey("Inwan Youn"));
     expect(nameKey("Dr. Pepperco")).toBe(nameKey("Dr pepperco"));
     expect(nameKey("Tetsuya Chiba")).not.toBe(nameKey("Tetsuya Chiba Jr"));
+  });
+
+  it("folds long vowels, Kunrei spellings, and spacing", () => {
+    // Pairs from the production check: a publisher's spelling, then ANN's.
+    const pairs = [
+      ["Kouji Kumeta", "Kōji Kumeta"],
+      ["Toru Fujisawa", "Tohru Fujisawa"],
+      ["Koutarou Sekine", "Kōtarō Sekine"],
+      ["Kyouta Shibano", "Kyōta Shibano"],
+      ["Koala Omugi", "Koala Ohmugi"],
+      ["Ryuuou", "Ryūō"],
+      ["Natsu Hyuuga", "Hyūganatsu"],
+      ["Touko Amekawa", "Tōko Amekawa"],
+      ["Youhei Yasumura", "Yōhei Yasumura"],
+      ["Touki Yanagimi", "Tōki Yanagimi"],
+      ["Tohru Tagura", "Tōru Tagura"],
+      ["Singyougaku", "Shingyougaku"],
+      ["Rampei Asio", "Rampei Ashio"],
+      ["coolkyousinnjya", "Coolkyoushinja"],
+      ["Indo So", "Indoso"],
+      ["Joji Manabe", "Johji Manabe"],
+      ["Yuuki Kodama", "Yūki Kodama"],
+      ["Yuu Shimizu", "Yū Shimizu"],
+    ];
+    for (const [publisher, ann] of pairs) expect(nameKey(publisher!)).toBe(nameKey(ann!));
+    expect(nameKey("Mika Ohara")).not.toBe(nameKey("Mika Hara"));
   });
 });
 
