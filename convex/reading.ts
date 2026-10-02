@@ -23,6 +23,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { resolveActiveSeries } from "./catalog";
 import { editionCoverage } from "./catalogPages";
 import { getActive, requireActive } from "./lib/merges";
+import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { releaseAnchor } from "./lib/titles";
@@ -38,19 +39,6 @@ const readingStatusValidator = v.union(
 );
 
 // ---------- shared lookups ----------
-
-async function seriesStateRow(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  seriesId: Id<"series">,
-) {
-  return await ctx.db
-    .query("userSeriesStates")
-    .withIndex("by_user_series", (q) =>
-      q.eq("userId", userId).eq("seriesId", seriesId),
-    )
-    .unique();
-}
 
 async function volumeProgressRow(
   ctx: QueryCtx,
@@ -346,18 +334,8 @@ export const setSeriesReadingStatus = mutation({
   handler: async (ctx, { seriesId, status }) => {
     const user = await requireUser(ctx);
     const series = await requireActive(ctx, "series", seriesId, "Series");
-    const state = await seriesStateRow(ctx, user._id, series._id);
-    if (state) {
-      await ctx.db.patch(state._id, { readingStatus: status });
-    } else if (status) {
-      await ctx.db.insert("userSeriesStates", {
-        userId: user._id,
-        seriesId: series._id,
-        readingStatus: status,
-        following: false,
-        followPromptDismissed: false,
-      });
-    }
+    const create = status !== undefined;
+    await writeSeriesState(ctx, user._id, series._id, { readingStatus: status }, create);
     return { readingStatus: status ?? null };
   },
 });

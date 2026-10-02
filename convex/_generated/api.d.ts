@@ -62,6 +62,7 @@ import type * as lib_roles from "../lib/roles.js";
 import type * as lib_scoreFormat from "../lib/scoreFormat.js";
 import type * as lib_searchMatch from "../lib/searchMatch.js";
 import type * as lib_sensitiveOps from "../lib/sensitiveOps.js";
+import type * as lib_seriesStates from "../lib/seriesStates.js";
 import type * as lib_sevenSeas from "../lib/sevenSeas.js";
 import type * as lib_text from "../lib/text.js";
 import type * as lib_titles from "../lib/titles.js";
@@ -153,6 +154,7 @@ declare const fullApi: ApiFromModules<{
   "lib/scoreFormat": typeof lib_scoreFormat;
   "lib/searchMatch": typeof lib_searchMatch;
   "lib/sensitiveOps": typeof lib_sensitiveOps;
+  "lib/seriesStates": typeof lib_seriesStates;
   "lib/sevenSeas": typeof lib_sevenSeas;
   "lib/text": typeof lib_text;
   "lib/titles": typeof lib_titles;

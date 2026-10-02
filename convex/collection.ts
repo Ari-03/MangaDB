@@ -22,6 +22,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { resolveActiveSeries } from "./catalog";
 import { editionCoverage, publisherLink } from "./catalogPages";
 import { followMerges, getActive, requireActive } from "./lib/merges";
+import { seriesStateRow } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { editionPathKey } from "./lib/editionGroups";
@@ -150,12 +151,7 @@ async function followSuggestions(
   const suggestions = [];
   for (const [seriesId, series] of target) {
     if (alreadyCovered.has(seriesId)) continue;
-    const state = await ctx.db
-      .query("userSeriesStates")
-      .withIndex("by_user_series", (q) =>
-        q.eq("userId", userId).eq("seriesId", seriesId),
-      )
-      .unique();
+    const state = await seriesStateRow(ctx, userId, seriesId);
     if (state?.following || state?.followPromptDismissed) continue;
     suggestions.push({ seriesId, title: series.title });
   }

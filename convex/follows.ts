@@ -21,6 +21,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { getActive, requireActive } from "./lib/merges";
+import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { joinBrowseRows } from "./releases";
 import { seriesStatsRow } from "./seriesBrowse";
@@ -28,19 +29,6 @@ import { seriesStatsRow } from "./seriesBrowse";
 // My Upcoming scans the uncapped future horizon (spec §7) over by_date; the
 // cap guards pathology and is surfaced as `capped` so the view can say so.
 export const UPCOMING_SCAN_CAP = 4000;
-
-async function seriesStateRow(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  seriesId: Id<"series">,
-) {
-  return await ctx.db
-    .query("userSeriesStates")
-    .withIndex("by_user_series", (q) =>
-      q.eq("userId", userId).eq("seriesId", seriesId),
-    )
-    .unique();
-}
 
 // ---------- queries ----------
 
@@ -315,17 +303,7 @@ export const setSeriesFollow = mutation({
   handler: async (ctx, { seriesId, following }) => {
     const user = await requireUser(ctx);
     const series = await requireActive(ctx, "series", seriesId, "Series");
-    const state = await seriesStateRow(ctx, user._id, series._id);
-    if (state) {
-      await ctx.db.patch(state._id, { following });
-    } else if (following) {
-      await ctx.db.insert("userSeriesStates", {
-        userId: user._id,
-        seriesId: series._id,
-        following: true,
-        followPromptDismissed: false,
-      });
-    }
+    await writeSeriesState(ctx, user._id, series._id, { following }, following);
     return { following };
   },
 });
@@ -340,17 +318,7 @@ export const dismissFollowPrompt = mutation({
   handler: async (ctx, { seriesId }) => {
     const user = await requireUser(ctx);
     const series = await requireActive(ctx, "series", seriesId, "Series");
-    const state = await seriesStateRow(ctx, user._id, series._id);
-    if (state) {
-      await ctx.db.patch(state._id, { followPromptDismissed: true });
-    } else {
-      await ctx.db.insert("userSeriesStates", {
-        userId: user._id,
-        seriesId: series._id,
-        following: false,
-        followPromptDismissed: true,
-      });
-    }
+    await writeSeriesState(ctx, user._id, series._id, { followPromptDismissed: true }, true);
     return null;
   },
 });

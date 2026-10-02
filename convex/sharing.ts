@@ -24,6 +24,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { followMerges, getActive, requireActive } from "./lib/merges";
+import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { releaseLink, variantName } from "./collection";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { showMatureArg, visibleTo } from "./lib/mature";
@@ -200,25 +201,8 @@ export const setSeriesVisibility = mutation({
       kind === "ownership"
         ? { ownershipVisibility: override }
         : { readingVisibility: override };
-
-    const state = await ctx.db
-      .query("userSeriesStates")
-      .withIndex("by_user_series", (q) =>
-        q.eq("userId", user._id).eq("seriesId", series._id),
-      )
-      .unique();
-    if (state) {
-      // Patching with undefined clears the override back to the default.
-      await ctx.db.patch(state._id, patch);
-    } else if (override) {
-      await ctx.db.insert("userSeriesStates", {
-        userId: user._id,
-        seriesId: series._id,
-        following: false,
-        followPromptDismissed: false,
-        ...patch,
-      });
-    }
+    // Patching with undefined clears the override back to the default.
+    await writeSeriesState(ctx, user._id, series._id, patch, override !== undefined);
     return { kind, visibility };
   },
 });
@@ -239,12 +223,7 @@ export const seriesVisibility = query({
     const series = await resolveActiveSeries(ctx, seriesPublicId);
     if (!series) return null;
 
-    const state = await ctx.db
-      .query("userSeriesStates")
-      .withIndex("by_user_series", (q) =>
-        q.eq("userId", user._id).eq("seriesId", series._id),
-      )
-      .unique();
+    const state = await seriesStateRow(ctx, user._id, series._id);
     return {
       seriesId: series._id,
       username: user.username,
