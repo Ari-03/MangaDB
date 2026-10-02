@@ -6,7 +6,6 @@
 // adapter run against a stubbed yenpress.com — no network.
 
 import { readFileSync } from "node:fs";
-import { convexTest, type TestConvex } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
@@ -17,7 +16,8 @@ import {
   parseYenDate,
   toSnapshots,
 } from "./lib/yenPress";
-import schema from "./schema";
+import { insertBundle, insertObservation, insertPublisher, insertSeries } from "./test.factories";
+import { bundleMembers, drain, makeT, seedRegistry, type TestT } from "./test.helpers";
 
 // Trimmed first-party HTML fetched 2026-09-26; only fields used by the parser.
 const liveFixture = (name: string) =>
@@ -221,30 +221,27 @@ afterEach(() => {
   requested.length = 0;
 });
 
-async function seed(t: ReturnType<typeof convexTest>) {
-  await t.mutation(internal.importSources.seedRegistry, {});
-  await t.mutation(internal.importSources.setBootstrapModeInternal, {
-    on: true,
-  });
+/** The registry in Bootstrap Mode, and the launch publishers Yen's books file under. */
+async function seed(t: TestT) {
+  await seedRegistry(t, true);
   await t.mutation(internal.launch.seedPublishers, {});
 }
 
-const sync = (t: ReturnType<typeof convexTest>, args: object = {}) =>
+const sync = (t: TestT, args: object = {}) =>
   t.action(internal.yenPress.sync, { politeDelayMs: 0, ...args });
 
 describe("yenPress.booksToFetch", () => {
   it("fetches a page when a newly listed format has no observation yet", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const now = Date.UTC(2026, 8, 25);
-    await t.run(async (ctx) => {
-      await ctx.db.insert("sourceObservations", {
+    await t.run((ctx) =>
+      insertObservation(ctx, {
         sourceKey: "yenpress",
         sourceRecordId: "9798855438611",
         snapshot: { onsale: { year: 2020, month: 1, day: 1 }, mature: false },
         lastSeenAt: now,
-        withdrawn: false,
-      });
-    });
+      }),
+    );
     const plan = (books: string[][]) => t.query(internal.yenPress.booksToFetch, { books, now });
     // Print alone is fresh; print + a digital ISBN never seen is due.
     expect(await plan([["9798855438611"]])).toEqual({ due: [], boxes: [] });
@@ -254,30 +251,20 @@ describe("yenPress.booksToFetch", () => {
   // Standards 2: the planner names fresh linked boxes, so the sync can
   // reconcile each in its own mutation; a due box is simply re-read.
   it("reports fresh linked boxes apart from the pages due", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const now = Date.UTC(2026, 8, 25);
     await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Yen Press",
-        slug: "yen-press",
-      });
-      const bundleId = await ctx.db.insert("releaseBundles", {
-        status: "active",
-        publicId: 1,
-        name: "Mignon Box Set (Vol. 1-2)",
-        publisherId,
-      });
+      const publisherId = await insertPublisher(ctx, { name: "Yen Press", slug: "yen-press" });
+      const bundleId = await insertBundle(ctx, { name: "Mignon Box Set (Vol. 1-2)", publisherId });
       for (const [isbn, lastSeenAt] of [
         ["9798400906855", now],
         ["9798400906862", 0],
       ] as const) {
-        await ctx.db.insert("sourceObservations", {
+        await insertObservation(ctx, {
           sourceKey: "yenpress",
           sourceRecordId: isbn,
           snapshot: { onsale: { year: 2020, month: 1, day: 1 }, mature: false },
           lastSeenAt,
-          withdrawn: false,
           recordRef: { type: "releaseBundle", id: bundleId },
         });
       }
@@ -292,14 +279,8 @@ describe("yenPress.booksToFetch", () => {
 });
 
 describe("yenPress.sync — disabling a source", () => {
-  const drain = async (t: ReturnType<typeof convexTest>) => {
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
-  };
-
   it("stops a scheduled run at its next link once the source is disabled", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     stubYen({
       [MANGA_URL]: MANGA_PAGE,
@@ -325,7 +306,7 @@ describe("yenPress.sync — disabling a source", () => {
   });
 
   it("finishes a run an operator forced on the disabled source", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     await t.mutation(internal.importSources.setEnabledInternal, {
       key: "yenpress",
@@ -356,7 +337,7 @@ describe("yenPress.sync", () => {
   it.each([1, 300])(
     "fetches separate format pages sharing a slug with a budget of %i",
     async (maxFetches) => {
-      const t = convexTest(schema);
+      const t = makeT();
       await seed(t);
       const printUrl = "https://yenpress.com/titles/9780759528598-nightschool-vol-1";
       const digitalUrl = "https://yenpress.com/titles/9780316213691-nightschool-vol-1";
@@ -371,9 +352,7 @@ describe("yenPress.sync", () => {
         );
       });
       await sync(t, { maxFetches });
-      vi.useFakeTimers();
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
-      vi.useRealTimers();
+      await drain(t);
       expect(requested.filter((url) => url.includes("/titles/")).sort()).toEqual(
         [digitalUrl, printUrl].sort(),
       );
@@ -388,13 +367,11 @@ describe("yenPress.sync", () => {
   );
 
   it("carries page failure through continuation", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     stubYen({ [MANGA_URL]: "<html>Broken template</html>", [DELUXE_URL]: DELUXE_PAGE });
     await sync(t, { maxFetches: 1 });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();
       expect(run!.status).toBe("failed");
@@ -403,7 +380,7 @@ describe("yenPress.sync", () => {
   });
 
   it("notes a removed title page (HTTP 404) without failing the run", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     // The manga's digital URL is in the sitemap but its page is gone.
     stubYen({ [DELUXE_URL]: DELUXE_PAGE });
@@ -418,14 +395,14 @@ describe("yenPress.sync", () => {
   });
 
   it("fails a sitemap response that silently lost its titles", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     vi.stubGlobal("fetch", async () => new Response("<html>Temporarily unavailable</html>"));
     expect(await sync(t)).toMatchObject({ failed: true, recordsSeen: 0 });
   });
 
   it("creates JY manga releases under its own imprint", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     const url = "https://yenpress.com/titles/9781975327453-little-witch-academia-vol-1-manga";
     const snapshots = toSnapshots(parseTitlePage(liveFixture("little-witch-academia"))!, url);
@@ -443,7 +420,7 @@ describe("yenPress.sync", () => {
   });
 
   it("carries the blurb into new Releases and fills it on linked ones", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     const url = "https://yenpress.com/titles/9781975357429-little-witch-academia-vol-3-manga";
     const page = parseTitlePage(liveFixture("little-witch-academia-3"))!;
@@ -465,7 +442,7 @@ describe("yenPress.sync", () => {
   });
 
   it("creates in-scope books under Yen's publisher rows, once per page, never novels", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     stubYen({
       [MANGA_URL]: MANGA_PAGE,
@@ -514,7 +491,7 @@ describe("yenPress.sync", () => {
   });
 
   it("is incremental: fresh books are not refetched, and a small budget chains", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     stubYen({
       [MANGA_URL]: MANGA_PAGE,
@@ -524,9 +501,7 @@ describe("yenPress.sync", () => {
 
     const first = await sync(t, { maxFetches: 1 });
     expect(first).toMatchObject({ continued: true, fetched: 1 });
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
+    await drain(t);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();
       expect(run).toMatchObject({ status: "succeeded" });
@@ -570,36 +545,18 @@ const MIGNON_BOX = {
 };
 
 /** Seed the registry (Bootstrap Mode) and the Mignon Series. */
-async function seedMignon(t: ReturnType<typeof convexTest>) {
+async function seedMignon(t: TestT) {
   await seed(t);
-  await t.run((ctx) =>
-    ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Mignon",
-      altTitles: [],
-      searchText: "Mignon",
-    }),
-  );
+  await t.run((ctx) => insertSeries(ctx, { title: "Mignon" }));
 }
 
-/** The one bundle's member ISBNs and orders in page order. */
-const mignonMembers = (t: TestConvex<typeof schema>) =>
-  t.run(async (ctx) => {
-    const [bundle, ...more] = await ctx.db.query("releaseBundles").collect();
-    expect(more).toHaveLength(0);
-    const rows = await ctx.db
-      .query("bundleMemberships")
-      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
-      .collect();
-    return await Promise.all(
-      rows.map(async (row) => `${(await ctx.db.get(row.releaseId))!.isbn13}@${row.order}`),
-    );
-  });
+/** The one bundle's member ISBNs and orders (`isbn@order`) in page order. */
+const mignonMembers = async (t: TestT) =>
+  (await bundleMembers(t)).map((member) => `${member.release.isbn13}@${member.order}`);
 
 describe("yenPress.applyTitle — a box set gains members that arrive after it (B15)", () => {
   it("an unchanged box re-applied after its books arrive links them", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedMignon(t);
     expect(await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX })).toMatchObject({
       status: "created",
@@ -614,15 +571,8 @@ describe("yenPress.applyTitle — a box set gains members that arrive after it (
       status: "updated",
       changed: true,
     });
-    await t.run(async (ctx) => {
-      const [bundle] = await ctx.db.query("releaseBundles").collect();
-      const rows = await ctx.db
-        .query("bundleMemberships")
-        .withIndex("by_bundle", (q) => q.eq("bundleId", bundle!._id))
-        .collect();
-      const members = await Promise.all(rows.map((row) => ctx.db.get(row.releaseId)));
-      expect(members.map((release) => release!.isbn13)).toEqual(["9781975300012", "9781975300029"]);
-    });
+    const members = await bundleMembers(t);
+    expect(members.map((member) => member.release.isbn13)).toEqual(["9781975300012", "9781975300029"]);
     expect(await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX })).toMatchObject({
       status: "unchanged",
     });
@@ -633,7 +583,7 @@ describe("yenPress.applyTitle — a box set gains members that arrive after it (
 // Bundle does not have goes to review instead.
 describe("yenPress.applyTitle — a linked box keeps its canonical identity (W08)", () => {
   it("a paperback box re-applied as digital adds no digital member", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedMignon(t);
     await t.mutation(internal.yenPress.applyTitle, { snapshot: mignonBook("9781975300012", "1") });
     await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX });
@@ -655,7 +605,7 @@ describe("yenPress.reconcileLinkedBox", () => {
   // W09: backlist boxes are filled here, so a legacy compact order (the
   // baseline importer stored a lone Vol. 2 at order 1) is renumbered.
   it("fills a legacy box by label position, renumbering its compact order", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedMignon(t);
     await t.mutation(internal.yenPress.applyTitle, { snapshot: mignonBook("9781975300029", "2") });
     await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX });
@@ -671,7 +621,7 @@ describe("yenPress.reconcileLinkedBox", () => {
   });
 
   it("adds nothing for a Release, or while the source is disabled", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seedMignon(t);
     await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX });
     await t.mutation(internal.yenPress.applyTitle, { snapshot: mignonBook("9781975300012", "1") });
@@ -719,28 +669,12 @@ describe("yenPress.sync — a fresh box set gains members that arrived after it 
     [VOL_2_URL]: titlePage("Alpha Adventures, Vol. 2", "9781975300029"),
   };
   /** The one box's members, by their Releases' ISBNs in bundle order. */
-  const boxMembers = (t: ReturnType<typeof convexTest>) =>
-    t.run(async (ctx) => {
-      const [bundle, ...more] = await ctx.db.query("releaseBundles").collect();
-      expect(more).toHaveLength(0);
-      const rows = (await ctx.db.query("bundleMemberships").collect())
-        .filter((row) => row.bundleId === bundle!._id)
-        .sort((a, b) => a.order - b.order);
-      return await Promise.all(rows.map(async (row) => (await ctx.db.get(row.releaseId))!.isbn13));
-    });
+  const boxMembers = async (t: TestT) => (await bundleMembers(t)).map((member) => member.release.isbn13);
 
   it("links the late books on the next run, without fetching the box page", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
-    await t.run((ctx) =>
-      ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Alpha Adventures",
-        altTitles: [],
-        searchText: "Alpha Adventures",
-      }),
-    );
+    await t.run((ctx) => insertSeries(ctx, { title: "Alpha Adventures" }));
     stubYen(pages);
     await sync(t);
     // The box was applied first: its books did not exist yet.
@@ -758,7 +692,7 @@ describe("yenPress.sync — a fresh box set gains members that arrived after it 
   });
 
   it("links the late books of every fresh box, one box at a time", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     // The same three pages for a second Series, under valid Beta ISBNs.
     const betaIsbn = (html: string) =>
@@ -773,32 +707,20 @@ describe("yenPress.sync — a fresh box set gains members that arrived after it 
       ]),
     );
     await t.run(async (ctx) => {
-      for (const title of ["Alpha Adventures", "Beta Adventures"]) {
-        await ctx.db.insert("series", {
-          status: "active",
-          publicId: 1,
-          title,
-          altTitles: [],
-          searchText: title,
-        });
-      }
+      for (const title of ["Alpha Adventures", "Beta Adventures"]) await insertSeries(ctx, { title });
     });
     stubYen({ ...pages, ...betaPages });
     await sync(t);
-    const members = () =>
-      t.run(async (ctx) => {
-        const bundles = await ctx.db.query("releaseBundles").collect();
-        return await Promise.all(
-          bundles.map(async (bundle) => {
-            const rows = await ctx.db
-              .query("bundleMemberships")
-              .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-              .collect();
-            const releases = await Promise.all(rows.map((row) => ctx.db.get(row.releaseId)));
-            return [bundle.name, releases.map((release) => release!.isbn13)] as const;
-          }),
-        );
-      });
+    /** Each box's name and its members' ISBNs in bundle order. */
+    const members = async () => {
+      const bundles = await t.run((ctx) => ctx.db.query("releaseBundles").collect());
+      return await Promise.all(
+        bundles.map(async (bundle) => {
+          const rows = await bundleMembers(t, bundle._id);
+          return [bundle.name, rows.map((row) => row.release.isbn13)] as const;
+        }),
+      );
+    };
     expect(await members()).toEqual([
       ["Alpha Adventures Box Set (Vol. 1-2)", []],
       ["Beta Adventures Box Set (Vol. 1-2)", []],
@@ -817,7 +739,7 @@ describe("yenPress.sync — a fresh box set gains members that arrived after it 
 // inventing the Volume it skips.
 describe("yenPress.applyTitle — a gapped coverage statement is never widened (R12)", () => {
   it("a blurb collecting Volumes 1 and 3 leaves the book Unmapped Packaging", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     const page = {
       ...parseTitlePage(DELUXE_PAGE)!,
@@ -836,7 +758,7 @@ describe("yenPress.applyTitle — a gapped coverage statement is never widened (
   });
 
   it("a bare gapped list with no collect-verb leaves the book Unmapped Packaging", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     const page = {
       ...parseTitlePage(DELUXE_PAGE)!,
@@ -849,11 +771,13 @@ describe("yenPress.applyTitle — a gapped coverage statement is never widened (
     await t.run(async (ctx) => {
       expect(await ctx.db.query("volumes").collect()).toHaveLength(0);
       expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(0);
+      const editions = await ctx.db.query("editions").collect();
+      expect(editions.map((e) => e.coverageUnmapped)).toEqual([true]);
     });
   });
 
   it("a title listing Volumes 1 & 3 leaves the book Unmapped Packaging", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await seed(t);
     const page = { ...parseTitlePage(DELUXE_PAGE)!, title: "Battle Royale 3-in-1 Edition 1 (Vol. 1 & 3)" };
     for (const snapshot of toSnapshots(page, DELUXE_URL)) {
@@ -861,7 +785,9 @@ describe("yenPress.applyTitle — a gapped coverage statement is never widened (
     }
     await t.run(async (ctx) => {
       expect(await ctx.db.query("volumes").collect()).toHaveLength(0);
-      expect(await ctx.db.query("editions").collect()).toHaveLength(1);
+      expect(await ctx.db.query("volumeCoverages").collect()).toHaveLength(0);
+      const editions = await ctx.db.query("editions").collect();
+      expect(editions.map((e) => e.coverageUnmapped)).toEqual([true]);
     });
   });
 });
