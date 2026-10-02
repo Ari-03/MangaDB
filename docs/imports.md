@@ -353,8 +353,8 @@ registry and starts every enabled source that is due by its cadence string
 A source whose last run is still `running` is skipped. A failed run
 resumes at the next cadence.
 
-**Disabling a source** stops its scheduled chain at the next link (ANN, Yen
-Press, Open Library and the Kodansha backlist share the gate in
+**Disabling a source** stops its scheduled chain at the next link (ANN, PRH,
+Yen Press, Open Library and the Kodansha backlist share the gate in
 `convex/lib/importRuns.ts`). Runs a sync opens itself are marked
 `automatic`, and a continuation that finds its source disabled closes the
 run as `stopped`. A run an operator forces with `imports:startRun`, then

@@ -12,6 +12,7 @@ import {
   editDraft,
   fieldValue,
   freshDraft,
+  isRecordType,
   type FormState,
 } from "./editForm";
 
@@ -25,6 +26,14 @@ function descriptor(name: string): FieldDescriptor {
 function overTheWire(change: { field: string; value: unknown }) {
   return jsonToConvex(convexToJson(change as never)) as Record<string, unknown>;
 }
+
+describe("isRecordType", () => {
+  it("accepts a record type and refuses names every object inherits", () => {
+    expect(isRecordType("series")).toBe(true);
+    expect(isRecordType("constructor")).toBe(false);
+    expect(isRecordType("toString")).toBe(false);
+  });
+});
 
 describe("fieldValue clearing (audit B29)", () => {
   const cases: Array<{ name: string; state: FormState }> = [

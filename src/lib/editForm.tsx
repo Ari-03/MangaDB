@@ -10,9 +10,12 @@ import {
   type RecordType,
 } from "../../convex/lib/moderationFields";
 
-/** Whether a `$type` route segment names an editable record type. */
+/**
+ * Whether a `$type` route segment names an editable record type. Own keys
+ * only: `in` would also accept "constructor" and "toString".
+ */
 export function isRecordType(raw: string): raw is RecordType {
-  return raw in EDITABLE_FIELDS;
+  return Object.hasOwn(EDITABLE_FIELDS, raw);
 }
 
 export type FormState = Record<string, string>;
