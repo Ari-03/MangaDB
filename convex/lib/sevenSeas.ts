@@ -1,4 +1,4 @@
-// Seven Seas parsing & normalization (ticket #34, spec §6/§7): pure
+// Seven Seas parsing & normalization (spec §6/§7): pure
 // functions from the source's wire formats to the normalized snapshot the
 // import pipeline stores on Source Observations. Two formats feed one book:
 //

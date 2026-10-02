@@ -1,4 +1,4 @@
-// The PRH API adapter (ticket #36, spec §6/§7): overlays authoritative
+// The PRH API adapter (spec §6/§7): overlays authoritative
 // onsale dates and ISBNs on PRH-distributed records — Kodansha, Seven Seas,
 // Dark Horse, Square Enix, Denpa, Vertical Comics, and the rest of PRH
 // Publisher Services (VIZ is not PRH-distributed). The API only returns
@@ -24,11 +24,8 @@
 //                      key is active)
 // Without both, a run is skipped as "unconfigured" — never a failure.
 //
-// Only the imprint-scoped path filters: the flat /titles endpoint silently
-// IGNORES its `imprint` and `onsaleFrom` params (re-verified live
-// 2026-09-25: every "imprint=" query returns the whole ~313k-title domain,
-// and sorting that set 504s). Future mode therefore pages an imprint
-// newest-first and cuts off at today client-side.
+// The API cannot filter by date (lib/prh.ts), so future mode pages an
+// imprint newest-first and cuts off at today client-side.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -232,7 +229,7 @@ export const sync = internalAction({
               throw new Error("PRH returned an empty page before its reported record count");
             }
 
-            // A listed entry is present whether or not it parsed (B09): bump
+            // A listed entry is present whether or not it parsed: bump
             // its observation's last-seen so a full sweep never withdraws a
             // record PRH still lists. An entry with no readable ISBN could be
             // any record, so the sweep can no longer prove absence.

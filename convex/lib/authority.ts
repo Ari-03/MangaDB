@@ -1,4 +1,4 @@
-// Authority conflict rules (ticket #35, spec §6): pure decisions about what
+// Authority conflict rules (spec §6): pure decisions about what
 // an import may do when a source's observed value disagrees with the
 // canonical one. The registry's per-field authority map is the input —
 // rules stay data-driven, so a registry edit ("rules change") re-routes the

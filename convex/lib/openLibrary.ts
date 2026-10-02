@@ -1,4 +1,4 @@
-// OpenLibrary dump parsing (ticket #36, spec §6/§7): pure functions from
+// OpenLibrary dump parsing (spec §6/§7): pure functions from
 // the monthly editions bulk-dump format to normalized snapshots. Dump lines
 // are five tab-separated columns — type, key, revision, last_modified, and
 // the edition JSON (https://openlibrary.org/developers/dumps); the raw dump

@@ -1,4 +1,4 @@
-// Administrator alert email (ticket #37, spec §6: runs & failure), sent via
+// Administrator alert email (spec §6: runs & failure), sent via
 // the Resend HTTP API — the one email this app sends in v1, so a provider
 // SDK would be overkill. Configuration is three Convex env vars (README):
 //

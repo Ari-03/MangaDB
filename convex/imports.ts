@@ -1,4 +1,4 @@
-// Shared import machinery (tickets #34/#37, spec §6): Import Run logging,
+// Shared import machinery (spec §6): Import Run logging,
 // the cadence dispatcher that turns registry rows into scheduled adapter
 // runs, the post-sweep withdrawal pass (with its possible-cancellation
 // review), source-health alert email, the Data Team dashboard queries, and
@@ -140,7 +140,7 @@ async function captureRunFinished(
 }
 
 /** Recent runs of one source (or all), newest first — Data Team inspection
- * of source, timing, records seen/changed, and errors (spec §6, #37). */
+ * of source, timing, records seen/changed, and errors (spec §6). */
 export const recentRuns = query({
   args: { sourceKey: v.optional(v.string()), limit: v.optional(v.number()) },
   handler: async (ctx, { sourceKey, limit }) => {
@@ -158,7 +158,7 @@ export const recentRuns = query({
 });
 
 /**
- * The Data Team dashboard's source table (#37): every registry row with its
+ * The Data Team dashboard's source table: every registry row with its
  * health flag and last-run summary, unhealthy sources first.
  */
 export const dashboard = query({
@@ -200,7 +200,7 @@ export const dashboard = query({
   },
 });
 
-// ---------- health alert email (spec §6: runs & failure, #37) ----------
+// ---------- health alert email (spec §6: runs & failure) ----------
 
 /**
  * Email the Administrator about a source-health transition. Scheduled by
@@ -278,7 +278,7 @@ export function isDue(
 
 // The code half of the registry: which adapter action serves each source
 // key. A registry row without an adapter is inert data until its adapter
-// ships. All five v1 sources (tickets #34/#36), Yen Press, and the Kodansha
+// ships. All five v1 sources, Yen Press, and the Kodansha
 // backlist crawl have adapters;
 // adapters take only optional tuning args, so dispatching with {} is valid.
 const ADAPTERS: Record<
@@ -437,7 +437,7 @@ export const attachCover = internalMutation({
   },
 });
 
-// ---------- withdrawal (spec §6: observations, #37) ----------
+// ---------- withdrawal (spec §6: observations) ----------
 
 /**
  * Is this partial-precision date still (possibly) in the future? Compares
@@ -501,7 +501,7 @@ async function queueWithdrawalReview(
  * (spec §6: suppression holds until the value, observation, or rules
  * change) — if the record ever reappears, its conflicts get a fresh look.
  * A withdrawn observation whose linked Release is still future-dated queues
- * a possible-cancellation review (#37).
+ * a possible-cancellation review.
  */
 export const markWithdrawn = internalMutation({
   args: { sourceKey: v.string(), notSeenSince: v.number() },

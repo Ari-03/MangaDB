@@ -1,4 +1,4 @@
-// The Approved Source registry (ticket #34, spec §6): registry rows are
+// The Approved Source registry (spec §6): registry rows are
 // data, not code — a source's scope, per-field authority map, cadence,
 // enablement, and attribution are all editable through `upsert` (or the
 // Convex dashboard) with no schema or code change. Adapters are the only
@@ -32,7 +32,7 @@ const fieldAuthority = v.record(v.string(), authorityLevel);
 // The v1 authority table from spec §6, as seed data. `seedRegistry` only
 // inserts missing keys — it never overwrites a row an Administrator edited
 // (existing deployments flip sources on via `upsert` or the dashboard).
-// Every adapter exists (v1's five, tickets #34/#36, plus Yen Press and the
+// Every adapter exists (v1's five plus Yen Press and the
 // Kodansha backlist crawl), so every row seeds enabled;
 // PRH and OpenLibrary additionally need environment configuration (API
 // key/imprints, filtered-dump URL — see README) and skip gracefully as
@@ -275,8 +275,8 @@ const ALERT_ERROR_LINES = 5;
  * Record a run outcome on the source: three consecutive failures flip it
  * unhealthy, the first success flips it back and resets the streak. Each
  * transition — and only the transition, never a repeat while the state
- * holds — schedules exactly one Administrator alert email (#37,
- * imports.healthAlert) and one PostHog `source_unhealthy`/`source_recovered`
+ * holds — schedules exactly one Administrator alert email
+ * (imports.healthAlert) and one PostHog `source_unhealthy`/`source_recovered`
  * event: the flip and the scheduling commit atomically in this mutation, and
  * the guards below never fire twice for one state.
  */

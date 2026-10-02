@@ -1,30 +1,13 @@
-// The Seven Seas adapter (ticket #34, spec §6/§7) — the import pipeline
-// proven end to end on one source. The sync action pages through the WP
+// The Seven Seas adapter (spec §6/§7). The sync action pages through the WP
 // REST catalog (`wp/v2/books`) using `modified_gmt` as the change signal,
 // fetches the book page for new/changed records, normalizes it
-// (lib/sevenSeas.ts), and hands each snapshot to `applyBook`:
-//
-//   observation upsert (latest snapshot + append-only history)
-//     → the full matching ladder (lib/matching.ts): ① stored link ·
-//       ② ISBN-13 + title sanity · ③ publisher+title+label+format with
-//       exactly one candidate · ④ title-only always reviews · ⑤ create.
-//       Ambiguity always queues flagged; the importer never merges.
-//     → linked records reconcile field-by-field under the authority rules
-//       (lib/reconcile.ts): auto-update, queue a conflict Proposal, or
-//       record on the observation only. Human Overrides stay sticky.
-//     → the creation path emits a system-authored, immediately approved
-//       Proposal creating Series/Volume/Edition/Release with public
-//       importer-authored Revisions citing the source name + record URL.
-//     → in steady state, a brand-new Series, multi-Volume Coverage, or an
-//       Edition-Line-shaped release queues an In-Review Proposal carrying
-//       its Edition Line instead; in Bootstrap Mode those records are
-//       created directly and tagged bootstrap-unreviewed (spec §7).
-//     → a box set is a Release Bundle; once linked, it picks up members
-//       whose books arrived after it, on every listing that notes it.
-//     → packaging an older planner left unplaced is replayed once from its
-//       stored snapshot, without its page, paced by the detail budget.
-//     → a relisted book retires the cancellation review its withdrawal
-//       queued (lib/observations.ts markSeen).
+// (lib/sevenSeas.ts), and hands each snapshot to `applyBook`, which runs
+// the shared matching ladder and creation path (lib/matching.ts,
+// lib/pipeline.ts). Seven Seas specifics: series links are keyed by the
+// site's series slug, a box set becomes a Release Bundle that picks up
+// members whose books arrived after it on every listing that notes it, and
+// packaging an older planner left unplaced is replayed once from its
+// stored snapshot, without its page, paced by the detail budget.
 //
 // Covers land in Convex file storage as {storageId, sourceUrl, attribution}
 // through the shared attach path (lib/covers.ts `storeCover`), and are
@@ -377,10 +360,10 @@ export const noteListing = internalMutation({
         ? { needsDetail: false }
         : { needsDetail: false, review: conflict };
     }
-    // Packaging an older planner left unplaced (B19) is replayed from its
+    // Packaging an older planner left unplaced is replayed from its
     // stored snapshot: the page is unchanged, only the verdict is stale. The
     // title's shape comes from today's parser, as normalizeBook reads it, so
-    // a snapshot stored before the parser marked a gapped list (R12) never
+    // a snapshot stored before the parser marked a gapped list never
     // replays its stale packaging. The action paces replays with the detail
     // budget.
     if (obs.recordRef === undefined && obs.queuedProposalId === undefined && staleVerdict(obs)) {
@@ -474,7 +457,7 @@ function reconcileSeries(
 
 /**
  * Whether an unplaced observation carries a verdict a planner older than the
- * blurb, the line's size and Unmapped Packaging recorded (B19). Only those
+ * blurb, the line's size and Unmapped Packaging recorded. Only those
  * texts replay: a replay links, queues, or overwrites them with a verdict of
  * today's planner (unplacedVerdict, a hidden Series' note), none of which
  * replays again, so each observation replays at most once. No verdict at

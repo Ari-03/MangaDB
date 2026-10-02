@@ -1,4 +1,4 @@
-// The Kodansha adapter (ticket #36, spec §6/§7): Kodansha's own catalog
+// The Kodansha adapter (spec §6/§7): Kodansha's own catalog
 // through the shared pipeline, from two feeds that share one observation
 // per (volume, format) and one apply path (`applyVolume`: observation →
 // matching ladder → authority reconciliation → creation/queue, as in

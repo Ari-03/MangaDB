@@ -1,7 +1,6 @@
-// Source-agnostic apply machinery for import adapters (tickets #34/#36,
-// spec §6/§7): everything between a source's normalized snapshot and the
-// canonical catalog that is not source-specific. Extracted from the Seven
-// Seas adapter so Kodansha, ANN, PRH, and OpenLibrary run the exact same
+// Source-agnostic apply machinery for import adapters (spec §6/§7):
+// everything between a source's normalized snapshot and the canonical
+// catalog that is not source-specific, so every adapter runs the same
 // pipeline:
 //
 // - partial-date normalization with the yyyymmdd sort key (spec §8)
@@ -1638,7 +1637,7 @@ async function queueEditionLine(
  * temp-ID create ops for whatever does not exist yet (Series, Volumes,
  * Edition Line, Edition, Release), evidence citing the observation, the gate
  * or matching-ladder flag in the change comment.
- * These land in the shared review queue (proposals.ts, #32); a Moderator's
+ * These land in the shared review queue (proposals.ts); a Moderator's
  * approval applies the ops via the creation registry. The observation
  * remembers the proposal (queuedProposalId) so an unchanged snapshot never
  * re-queues — not while one is open, and not after a rejection.

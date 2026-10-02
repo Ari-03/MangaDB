@@ -1,4 +1,4 @@
-// The matching ladder (ticket #35, spec §6), source-agnostic. Rung ① — the
+// The matching ladder (spec §6), source-agnostic. Rung ① — the
 // persisted source-id link on the observation — is the caller's fast path
 // (a rename at the source is then a field conflict, never a failed match);
 // this module resolves everything below it, strongest first:

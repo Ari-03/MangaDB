@@ -1,4 +1,4 @@
-// Authority-gated field reconciliation (ticket #35, spec §6): what happens
+// Authority-gated field reconciliation (spec §6): what happens
 // after the matching ladder links an observation to a canonical record and
 // the source's offered values disagree with the canonical ones. Pure
 // decisions live in lib/authority.ts; this module resolves each field's
@@ -17,8 +17,9 @@
 // this record is retired, and so is a possible-cancellation review whose
 // withdrawal no longer applies (the source lists the record again).
 //
-// Source-agnostic: every adapter (Seven Seas today; Kodansha, PRH, ANN,
-// OpenLibrary later) funnels linked updates through reconcileFields.
+// Source-agnostic: every adapter funnels linked updates through
+// reconcileFields, and every importer-authored Proposal is written by
+// insertSourceProposal.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";

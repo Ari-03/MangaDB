@@ -1,4 +1,4 @@
-// Kodansha parsing & normalization (ticket #36, spec §6/§7): pure functions
+// Kodansha parsing & normalization (spec §6/§7): pure functions
 // from kodansha.us to the normalized snapshots the import pipeline stores on
 // Source Observations. Two feeds share them:
 //

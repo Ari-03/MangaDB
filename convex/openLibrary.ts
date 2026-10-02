@@ -1,4 +1,4 @@
-// The OpenLibrary adapter (ticket #36, spec §6/§7): the monthly bulk-dump
+// The OpenLibrary adapter (spec §6/§7): the monthly bulk-dump
 // pass — seeding stage ④ and the steady-state ISBN fill. OpenLibrary's flat
 // records only match *into* the existing skeleton and never define Series
 // structure:

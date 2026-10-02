@@ -1,4 +1,4 @@
-// Source Observation bookkeeping (ticket #34, spec §6): identity is
+// Source Observation bookkeeping (spec §6): identity is
 // (source, source-record-id); `snapshot` holds the latest normalized form —
 // what reconciliation reads — and every superseded snapshot is retained
 // append-only in observationSnapshots. Unchanged fetches bump last-seen
