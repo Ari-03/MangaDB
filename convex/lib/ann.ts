@@ -437,8 +437,13 @@ const SENTENCE_END = /[.!?…"”’)]$/;
 const MAX_CLAUSES = 4;
 const MAX_NAME_WORDS = 8;
 
-/** Words in a credit role starting at `at`, then "by" (repeats allowed: "by by"); 0 when none. */
+/**
+ * Words in a credit role starting at `at`, then "by" (repeats allowed: "by
+ * by"); 0 when none. An ALL-CAPS role ("CREATED BY ACCIDENT, …") is a
+ * shouted sentence, never ANN's credit.
+ */
 function creditRoleAt(words: string[], at: number): number {
+  if (/^[A-Z]{2,}$/.test(words[at] ?? "")) return 0;
   for (const role of CREDIT_ROLES) {
     if (!role.every((part, k) => words[at + k]?.toLowerCase() === part)) continue;
     let end = at + role.length;
@@ -449,20 +454,27 @@ function creditRoleAt(words: string[], at: number): number {
   return 0;
 }
 
-/** Whether words[start..] is nothing but credit clauses: ROLE by NAMES (and ROLE by NAMES)*. */
-function isCreditTail(words: string[], start: number): boolean {
+type CreditClause = { role: string; names: number };
+
+/**
+ * The clauses of words[start..] when it is nothing but credit clauses:
+ * ROLE by NAMES (and ROLE by NAMES)*; null otherwise.
+ */
+function creditTail(words: string[], start: number): CreditClause[] | null {
+  const clauses: CreditClause[] = [];
   let at = start;
   for (let clause = 0; clause < MAX_CLAUSES; clause++) {
     const role = creditRoleAt(words, at);
-    if (role === 0) return false;
+    if (role === 0) return null;
+    const current = { role: words.slice(at, at + role).join(" ").toLowerCase(), names: 0 };
+    clauses.push(current);
     at += role;
-    let names = 0;
     for (;;) {
       const word = words[at];
-      if (word === undefined || !NAME_WORD.test(word.replace(/[.,;:!?]+$/, ""))) return false;
-      if (++names > MAX_NAME_WORDS) return false;
+      if (word === undefined || !NAME_WORD.test(word.replace(/[.,;:!?]+$/, ""))) return null;
+      if (++current.names > MAX_NAME_WORDS) return null;
       at++;
-      if (at === words.length) return true;
+      if (at === words.length) return clauses;
       const next = words[at]!;
       // "… and Art by Y": the joiner opens the next clause.
       if (NAME_JOINERS.has(next.toLowerCase()) && creditRoleAt(words, at + 1) > 0) {
@@ -475,7 +487,12 @@ function isCreditTail(words: string[], start: number): boolean {
       if (NAME_JOINERS.has(next.toLowerCase())) at++;
     }
   }
-  return false;
+  return null;
+}
+
+/** ANN's own fused role: "Story and art by", "Story & art by" (any case after "Story"). */
+function isStoryAndArt(clause: CreditClause): boolean {
+  return /^story (?:and|&) art by/.test(clause.role);
 }
 
 /** Whether words are a bare list of names ("Kazuo Koike", "X & Y"). */
@@ -492,9 +509,12 @@ function isNameList(words: string[]): boolean {
 const STORY_AND_TYPO = /^Story and (.+?) and Art by (.+)$/;
 
 /**
- * Drop a trailing credit tail (`isCreditTail`). It must start a sentence,
- * except a capitalized "Story and art by …" or "Story by …" glued to the
- * text before it.
+ * Drop a trailing credit tail (`creditTail`). It must start a sentence,
+ * except a capitalized "Story and art by …" glued to the text before it,
+ * or a tail of two or more clauses: a lone glued "Story by Moonlight" is
+ * prose. A single clause naming one word ("Created by God.", "Art by
+ * Committee.") is kept unless its role is ANN's fused "Story and art"
+ * ("Story and art by CLAMP.", every one-word credit in the sample).
  */
 function stripCreditTail(text: string): string {
   const words = text.split(" ");
@@ -505,17 +525,33 @@ function stripCreditTail(text: string): string {
       return words.slice(0, at).join(" ");
     }
     if (creditRoleAt(words, at) === 0) continue;
-    const gluedStory = words[at] === "Story" && /^(?:and|&|by)$/.test(words[at + 1] ?? "");
-    if ((opensSentence || gluedStory) && isCreditTail(words, at)) {
-      return words.slice(0, at).join(" ");
-    }
+    const clauses = creditTail(words, at);
+    if (clauses === null) continue;
+    const several = clauses.length >= 2;
+    const glued = words[at] === "Story" && isStoryAndArt(clauses[0]!);
+    if (!opensSentence && !glued && !several) continue;
+    if (!several && clauses[0]!.names === 1 && !isStoryAndArt(clauses[0]!)) continue;
+    return words.slice(0, at).join(" ");
   }
   return text;
 }
 
 // ANN's own release notes some contributors append after the copy
 // ("… Notes: Originally scheduled for 2006-07-31."): not the publisher's.
-const NOTES_TAIL = /([.!?…"”’)])\s+Notes:\s[\s\S]*$/;
+// Dropped when the note is about the release itself (it starts with a
+// capital and talks of ISBNs, printings, schedules, recalls, volumes) or
+// follows a credit tail; "Notes: none of this is what it seems." stays.
+const NOTES_TAIL = /([.!?…"”’)])\s+Notes:\s([\s\S]*)$/;
+const ANN_NOTE =
+  /^[A-Z][\s\S]*\b(?:ISBN|release[sd]?|reprint(?:ed)?|printing|edition|volume|scheduled|recalled|misprint|cover)\b/i;
+
+/** Drop ANN's trailing "Notes:" section when it is ANN's note (see NOTES_TAIL). */
+function stripNotesTail(text: string): string {
+  const notes = NOTES_TAIL.exec(text);
+  if (!notes) return text;
+  const before = text.slice(0, notes.index + notes[1]!.length);
+  return ANN_NOTE.test(notes[2]!) || stripCreditTail(before) !== before ? before : text;
+}
 
 /**
  * The cleaner every ANN release-page description goes through, at parse
@@ -528,7 +564,7 @@ const NOTES_TAIL = /([.!?…"”’)])\s+Notes:\s[\s\S]*$/;
 export function cleanAnnDescription(text: string): string | undefined {
   let out = repairMojibake(text.replace(ZERO_WIDTH, ""));
   for (const chrome of CHROME) out = out.split(chrome).join(" ");
-  out = out.replace(/\s+/g, " ").trim().replace(NOTES_TAIL, "$1");
+  out = stripNotesTail(out.replace(/\s+/g, " ").trim());
   out = stripCreditTail(out).trim();
   return out === "" ? undefined : out;
 }

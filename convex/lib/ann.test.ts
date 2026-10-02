@@ -469,6 +469,32 @@ describe("cleanAnnDescription", () => {
     ).toBe("Insights from an E.R. physician");
   });
 
+  it("keeps prose that only looks like a credit", () => {
+    for (const text of [
+      // Glued mid-sentence with one clause: prose, not ANN's credit.
+      "Their journey begins a Love Story by Moonlight.",
+      "She paints a Story by Candlelight.",
+      // One common-noun word after a plain role.
+      "It all started here. Created by God.",
+      "The plan was doomed. Art by Committee.",
+      "Every letter matters. Written by Hand.",
+      // A shouted sentence.
+      "The lab burns. CREATED BY ACCIDENT, THE CLONE SEEKS REVENGE.",
+      // A "Notes:" line that is the publisher's copy.
+      "A mystery unfolds. Notes: none of this is what it seems.",
+    ]) {
+      expect(cleanAnnDescription(text)).toBe(text);
+    }
+  });
+
+  it("still drops glued credits ANN writes: fused story-and-art, or two clauses", () => {
+    expect(cleanAnnDescription("The end of her Story and art by Akihisa Ikeda.")).toBe("The end of her");
+    expect(cleanAnnDescription("A one-shot. Story and art by CLAMP.")).toBe("A one-shot.");
+    expect(cleanAnnDescription("A sequel. Notes: This volume despite being numbered as the first volume contains material from the 10th volume of the Japanese release.")).toBe(
+      "A sequel.",
+    );
+  });
+
   it("keeps the endings it cannot read as names (the six leftovers in the sample)", () => {
     for (const ending of [
       "Story and art by atsushi Suzumi.",
