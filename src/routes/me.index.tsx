@@ -245,14 +245,17 @@ function ShelfCountInner({ shelf }: { shelf: EntryState }) {
  * Clerk identity and every MangaDB record, then the local session is dropped.
  */
 function DeleteAccount() {
+  if (!convexClient) return null;
+  return <DeleteAccountInner />;
+}
+
+function DeleteAccountInner() {
   const clerk = useClerk();
   const navigate = useNavigate();
   const deleteAccount = useAction(api.users.deleteAccount);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  if (!convexClient) return null;
 
   const run = async () => {
     setBusy(true);
