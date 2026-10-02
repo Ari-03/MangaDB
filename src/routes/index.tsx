@@ -30,6 +30,7 @@ import {
 } from "~/lib/month";
 import { pageHead, SITE_NAME } from "~/lib/seo";
 import { slugify, slugParams } from "~/lib/slug";
+import { SeriesShelfItem } from "~/lib/shelfItem";
 import { coversOnFile } from "~/server/covers";
 
 /** Two ledges of the newest Series in the catalog. */
@@ -196,40 +197,12 @@ function Home() {
           {shelfSeries.length >= SERIES_SHELF_MIN ? (
             <div className="shelf">
               {shelfSeries.map((entry) => (
-                <div className="shelf-item" key={entry.publicId}>
-                  <div className="cover-wrap">
-                    <Link
-                      className="cover-link"
-                      to="/series/$publicId/$slug"
-                      params={{
-                        publicId: String(entry.publicId),
-                        slug: slugify(entry.title),
-                      }}
-                      tabIndex={-1}
-                      aria-hidden="true"
-                    >
-                      {/* The Series' first jacket (lib/covers.ts); a Series
-                          with no art on file is not shelved here. */}
-                      <Cover
-                        src={entry.coverUrl}
-                        isbn13={entry.coverIsbns}
-                        title={entry.title}
-                      />
-                    </Link>
-                  </div>
-                  <div className="caption">
-                    <Link
-                      className="caption-title"
-                      to="/series/$publicId/$slug"
-                      params={{
-                        publicId: String(entry.publicId),
-                        slug: slugify(entry.title),
-                      }}
-                    >
-                      {entry.title}
-                    </Link>
-                  </div>
-                </div>
+                // The Series' first jacket (lib/covers.ts); a Series with no
+                // art on file is not shelved here.
+                <SeriesShelfItem
+                  key={entry.publicId}
+                  series={{ ...entry, coverIsbn: entry.coverIsbns }}
+                />
               ))}
             </div>
           ) : (

@@ -36,6 +36,7 @@ import {
 } from "~/lib/seo";
 import { Breadcrumbs } from "~/lib/pageScaffold";
 import { slugParams } from "~/lib/slug";
+import { SeriesShelfItem } from "~/lib/shelfItem";
 
 // The upcoming lane's horizon: the three months after this one (~a 90-day
 // shelf, prototype #17). The Releases browser owns everything beyond it.
@@ -477,30 +478,11 @@ function BookItem({ book, eager }: { book: Book; eager: boolean }) {
 
 /** A top series: its jacket to the Series page, and how big it is. */
 function SeriesItem({ item }: { item: SeriesBrowseItem }) {
-  const params = slugParams(item.publicId, item.title);
   return (
-    <div className="shelf-item">
-      <div className="cover-wrap">
-        <Link
-          className="cover-link"
-          to="/series/$publicId/$slug"
-          params={params}
-          tabIndex={-1}
-          aria-hidden="true"
-        >
-          <Cover src={item.coverUrl} isbn13={item.coverIsbn} title={item.title} />
-        </Link>
+    <SeriesShelfItem series={item}>
+      <div className="caption-meta">
+        <span>{plural(item.volumeCount, "volume")}</span>
       </div>
-      <div className="caption">
-        <Link className="caption-title" to="/series/$publicId/$slug" params={params}>
-          {item.title}
-        </Link>
-        <div className="caption-meta">
-          <span>
-            {plural(item.volumeCount, "volume")}
-          </span>
-        </div>
-      </div>
-    </div>
+    </SeriesShelfItem>
   );
 }

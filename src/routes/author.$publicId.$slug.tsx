@@ -4,7 +4,7 @@ import { api } from "../../convex/_generated/api";
 import { ROLE_NAMES, type CreditRole } from "~/lib/byline";
 import { catalogQuery, type AuthorPageData } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
-import { Cover } from "~/lib/cover";
+import { SeriesShelfItem } from "~/lib/shelfItem";
 import { plural } from "~/lib/format";
 import {
   authorTitleTag,
@@ -12,7 +12,7 @@ import {
   personJsonLd,
 } from "~/lib/seo";
 import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
-import { authorPath, parsePublicId, slugParams } from "~/lib/slug";
+import { authorPath, parsePublicId } from "~/lib/slug";
 
 /**
  * An author page (`/author/{id}/{slug}`): everyone credited on a Series
@@ -150,43 +150,24 @@ function AuthorPage() {
 
 /** One Series on the author's shelf: jacket, title, their role, its size. */
 function AuthorSeriesItem({ entry, eager }: { entry: AuthorSeries; eager: boolean }) {
-  const params = slugParams(entry.publicId, entry.title);
   return (
-    <div className="shelf-item">
-      <div className="cover-wrap">
-        <Link
-          className="cover-link"
-          to="/series/$publicId/$slug"
-          params={params}
-          tabIndex={-1}
-          aria-hidden="true"
-        >
-          <Cover src={entry.coverUrl} isbn13={entry.coverIsbn} title={entry.title} lazy={!eager} />
-        </Link>
+    <SeriesShelfItem series={entry} lazy={!eager}>
+      <div className="caption-meta">
+        <span>{plural(entry.volumeCount, "vol")}</span>
+        {entry.publishers[0] ? (
+          <>
+            <span className="dot" />
+            <span>{entry.publishers.map((p) => p.name).join(", ")}</span>
+          </>
+        ) : null}
       </div>
-      <div className="caption">
-        <Link className="caption-title" to="/series/$publicId/$slug" params={params}>
-          {entry.title}
-        </Link>
-        <div className="caption-meta">
-          <span>
-            {plural(entry.volumeCount, "vol")}
+      <p className="caption-sub author-role-chips">
+        {entry.roles.map((role) => (
+          <span key={role} className="chip">
+            {ROLE_NAMES[role]}
           </span>
-          {entry.publishers[0] ? (
-            <>
-              <span className="dot" />
-              <span>{entry.publishers.map((p) => p.name).join(", ")}</span>
-            </>
-          ) : null}
-        </div>
-        <p className="caption-sub author-role-chips">
-          {entry.roles.map((role) => (
-            <span key={role} className="chip">
-              {ROLE_NAMES[role]}
-            </span>
-          ))}
-        </p>
-      </div>
-    </div>
+        ))}
+      </p>
+    </SeriesShelfItem>
   );
 }

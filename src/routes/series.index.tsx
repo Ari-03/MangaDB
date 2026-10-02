@@ -10,13 +10,12 @@ import {
   type SeriesBrowsePage,
   type SeriesFacets,
 } from "~/lib/catalogData";
-import { Cover } from "~/lib/cover";
+import { SeriesShelfItem } from "~/lib/shelfItem";
 import { plural } from "~/lib/format";
 import { MatureFilter, showMature } from "~/lib/mature";
 import { MONTH_NAMES, sortKeyMonth } from "~/lib/month";
 import { RatingLine } from "~/lib/ratings";
 import { pageHead, SITE_NAME } from "~/lib/seo";
-import { slugParams } from "~/lib/slug";
 import { useUrlDraft } from "~/lib/urlDraft";
 
 type SeriesSort = SeriesBrowseArgs["sort"];
@@ -826,45 +825,20 @@ function SeriesCard({
   sort: SeriesSort;
   eager: boolean;
 }) {
-  const params = slugParams(item.publicId, item.title);
   const publishers = item.publishers.map((publisher) => publisher.name).join(", ");
   return (
-    <div className="shelf-item">
-      <div className="cover-wrap">
-        {/* The cover repeats the title link, so it stays out of the tab order. */}
-        <Link
-          className="cover-link"
-          to="/series/$publicId/$slug"
-          params={params}
-          tabIndex={-1}
-          aria-hidden="true"
-        >
-          <Cover
-            src={item.coverUrl}
-            isbn13={item.coverIsbn}
-            title={item.title}
-            lazy={!eager}
-          />
-        </Link>
+    <SeriesShelfItem series={item} lazy={!eager}>
+      <div className="caption-meta">
+        <span>{plural(item.volumeCount, "vol")}</span>
+        {publishers ? (
+          <>
+            <span className="dot" />
+            <span>{publishers}</span>
+          </>
+        ) : null}
       </div>
-      <div className="caption">
-        <Link className="caption-title" to="/series/$publicId/$slug" params={params}>
-          {item.title}
-        </Link>
-        <div className="caption-meta">
-          <span>
-            {plural(item.volumeCount, "vol")}
-          </span>
-          {publishers ? (
-            <>
-              <span className="dot" />
-              <span>{publishers}</span>
-            </>
-          ) : null}
-        </div>
-        <SortDetail item={item} sort={sort} />
-      </div>
-    </div>
+      <SortDetail item={item} sort={sort} />
+    </SeriesShelfItem>
   );
 }
 
