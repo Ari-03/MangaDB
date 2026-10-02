@@ -872,11 +872,9 @@ describe("openLibrary.repairDescriptions — stored catalogue text, no network",
     const second = await t.run(async (ctx) => {
       const first = (await ctx.db.get(releaseId!))!;
       await ctx.db.patch(first._id, { isbn13: "9781974766512" });
-      return await ctx.db.insert("releases", {
-        status: "active",
+      return await insertRelease(ctx, {
         editionId: first.editionId,
         format: "digital",
-        language: "en",
         isbn13: "9781974766529",
         publisherId,
         seriesIds: [seriesId],
@@ -914,18 +912,10 @@ describe("openLibrary.repairDescriptions — stored catalogue text, no network",
 
     // A publisher's text is never Open Library's to repair.
     await t.run(async (ctx) => {
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "sevenseas" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
+      await insertSourceRevision(ctx, {
+        sourceKey: "sevenseas",
         ref: { type: "release", id: releaseId! },
-        seq: 99,
-        proposalId,
-        author: { kind: "source", sourceKey: "sevenseas" },
         changes: [{ field: "description", after: '"Ours."--Back cover.' }],
-        comment: "Imported from Seven Seas Entertainment.",
       });
       await ctx.db.patch(releaseId!, { description: '"Ours."--Back cover.' });
     });

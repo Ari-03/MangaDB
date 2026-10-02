@@ -440,7 +440,7 @@ describe("cleanAnnDescription", () => {
     expect(cleanAnnDescription('"Run!" Written and illustrated by Ken Akamatsu.')).toBe('"Run!"');
   });
 
-  // Real endings from the first 1,604 production descriptions.
+  // Real endings from production descriptions.
   it.each([
     "Story by Yumi Hotta and Art by Takeshi Obata.",
     "Story by Ken Akamatsu and art by RAN.",
@@ -467,59 +467,56 @@ describe("cleanAnnDescription", () => {
 
   it("drops only the fused credit glued to the copy before it", () => {
     expect(cleanAnnDescription("The end of her Story and art by Akihisa Ikeda.")).toBe("The end of her");
-    // Two clauses glued mid-sentence are no longer enough: one real credit
-    // in the raw sample stays, the price of never cutting prose.
+    // Two clauses glued mid-sentence stay: never cutting prose costs this
+    // one real credit.
     const glued = "Insights from an E.R. physician Story by Koshun Takami and art by Masayuki Taguchi.";
     expect(cleanAnnDescription(glued)).toBe(glued);
   });
 
-  it("never cuts a sentence that only contains credits (the over-cut on four live pages)", () => {
-    for (const text of [
-      "Here is the story of The Mandalorian, and his desperate quest to save the Child and himself. Based on the series created by Jon Favreau and written by Dave Filoni.",
-      "That is the desire to defeat his father! Created by Masashi Kishimoto and features story by Ukyo Kodachi and art by Mikio Ikemoto.",
-    ]) {
-      expect(cleanAnnDescription(text)).toBe(text);
-    }
+  it.each([
+    "Here is the story of The Mandalorian, and his desperate quest to save the Child and himself. Based on the series created by Jon Favreau and written by Dave Filoni.",
+    "That is the desire to defeat his father! Created by Masashi Kishimoto and features story by Ukyo Kodachi and art by Mikio Ikemoto.",
+  ])("never cuts credits out of the middle of a sentence: %j", (text) => {
+    expect(cleanAnnDescription(text)).toBe(text);
   });
 
-  it("drops a credit sentence with lower-case or odd names, ANN's typos and doubled prefixes", () => {
-    for (const ending of [
-      "Story by ufotable and Art by tartan check.",
-      "Story and art by atsushi Suzumi.",
-      "Story and art by est em.",
-      "Story and art by Oh! great.",
-      "Story by Girls und Panzer Projekt and Art by Ryohichi Saitaniya.",
-      "Story and art by Written by Koji Kumeta.",
-      "Sotyr and art by Julietta Suzuki.",
-      "Story and and art by You Higuri.",
-      "Written and art by Minako Narita.",
-      "Story and art by Kei Toume .",
-    ]) {
-      expect(cleanAnnDescription(`Will they win? ${ending}`)).toBe("Will they win?");
-    }
+  it.each([
+    "Story by ufotable and Art by tartan check.",
+    "Story and art by atsushi Suzumi.",
+    "Story and art by est em.",
+    "Story and art by Oh! great.",
+    "Story by Girls und Panzer Projekt and Art by Ryohichi Saitaniya.",
+    "Story and art by Written by Koji Kumeta.",
+    "Sotyr and art by Julietta Suzuki.",
+    "Story and and art by You Higuri.",
+    "Written and art by Minako Narita.",
+    "Story and art by Kei Toume .",
+  ])("drops a credit sentence with lower-case or odd names, a typo or a doubled prefix: %j", (ending) => {
+    expect(cleanAnnDescription(`Will they win? ${ending}`)).toBe("Will they win?");
+  });
+
+  it("drops a credit glued to the full stop before it", () => {
     expect(cleanAnnDescription("Teenage madness in this concluding volume.Story and art by Usamaru Furuya.")).toBe(
       "Teenage madness in this concluding volume.",
     );
   });
 
-  it("keeps a credit sentence that goes on as prose", () => {
-    for (const text of [
-      "Who is the traitor? Story and art by Mizumomoto and is created by Atlus.",
-      "Can she win him over? Story and Art by Rie Takada - creator of Wild Act.",
-      "Exciting adventures! Story and art by Kanan and others.",
-      "A tale for all. Story and art by everyone.",
-      // Constructed prose with lower-case "names": only the known name
-      // words (`LOWERCASE_NAME_WORDS`) pass.
-      "It began. Story by committee, art by accident.",
-      "It began. Script by day, art by night.",
-      "It began. Created by pure accident.",
-      "It began. Adapted by popular demand.",
-      "It began. Written by hand and illustrated by candlelight.",
-      "It began. Story and art by everyone involved.",
-      "A thriller . . .",
-    ]) {
-      expect(cleanAnnDescription(text)).toBe(text);
-    }
+  it.each([
+    "Who is the traitor? Story and art by Mizumomoto and is created by Atlus.",
+    "Can she win him over? Story and Art by Rie Takada - creator of Wild Act.",
+    "Exciting adventures! Story and art by Kanan and others.",
+    "A tale for all. Story and art by everyone.",
+    // Constructed prose with lower-case "names": only the known name
+    // words (`LOWERCASE_NAME_WORDS`) pass.
+    "It began. Story by committee, art by accident.",
+    "It began. Script by day, art by night.",
+    "It began. Created by pure accident.",
+    "It began. Adapted by popular demand.",
+    "It began. Written by hand and illustrated by candlelight.",
+    "It began. Story and art by everyone involved.",
+    "A thriller . . .",
+  ])("keeps a credit sentence that goes on as prose: %j", (text) => {
+    expect(cleanAnnDescription(text)).toBe(text);
   });
 
   it("drops ANN's fused credit when it opens the text", () => {
@@ -529,68 +526,62 @@ describe("cleanAnnDescription", () => {
     expect(cleanAnnDescription("Story and art by Oh!Great. FEARSOME FRIEND AND FOE On their mission!")).toBe(
       "FEARSOME FRIEND AND FOE On their mission!",
     );
-    // Not a fused credit, an initial, or nothing after it: kept.
-    for (const text of [
-      "Story by Taeko Watanabe. Romance between swordsmen.",
-      "Story and art by J. K. Smith. A tale.",
-      "Story and art by the sea. A tale.",
-    ]) {
-      expect(cleanAnnDescription(text)).toBe(text);
-    }
   });
 
-  it("keeps prose that only looks like a credit", () => {
-    for (const text of [
-      // Glued mid-sentence with one clause: prose, not ANN's credit.
-      "Their journey begins a Love Story by Moonlight.",
-      "She paints a Story by Candlelight.",
-      // One common-noun word after a plain role.
-      "It all started here. Created by God.",
-      "The plan was doomed. Art by Committee.",
-      "Every letter matters. Written by Hand.",
-      // A shouted sentence.
-      "The lab burns. CREATED BY ACCIDENT, THE CLONE SEEKS REVENGE.",
-      // A "Notes:" line that is the publisher's copy.
-      "A mystery unfolds. Notes: none of this is what it seems.",
-    ]) {
-      expect(cleanAnnDescription(text)).toBe(text);
-    }
+  it.each([
+    "Story by Taeko Watanabe. Romance between swordsmen.",
+    "Story and art by J. K. Smith. A tale.",
+    "Story and art by the sea. A tale.",
+  ])("keeps an opening credit that is not fused, has an initial, or names no one: %j", (text) => {
+    expect(cleanAnnDescription(text)).toBe(text);
   });
 
-  it("still drops glued credits ANN writes: fused story-and-art, or two clauses", () => {
-    expect(cleanAnnDescription("The end of her Story and art by Akihisa Ikeda.")).toBe("The end of her");
+  it.each([
+    // Glued mid-sentence with one clause: prose, not ANN's credit.
+    "Their journey begins a Love Story by Moonlight.",
+    "She paints a Story by Candlelight.",
+    // One common-noun word after a plain role.
+    "It all started here. Created by God.",
+    "The plan was doomed. Art by Committee.",
+    "Every letter matters. Written by Hand.",
+    // A shouted sentence.
+    "The lab burns. CREATED BY ACCIDENT, THE CLONE SEEKS REVENGE.",
+    // A "Notes:" line that is the publisher's copy.
+    "A mystery unfolds. Notes: none of this is what it seems.",
+  ])("keeps prose that only looks like a credit: %j", (text) => {
+    expect(cleanAnnDescription(text)).toBe(text);
+  });
+
+  it("drops a one-word fused credit and ANN's note about the release", () => {
     expect(cleanAnnDescription("A one-shot. Story and art by CLAMP.")).toBe("A one-shot.");
     expect(cleanAnnDescription("A sequel. Notes: This volume despite being numbered as the first volume contains material from the 10th volume of the Japanese release.")).toBe(
       "A sequel.",
     );
   });
 
-  it("keeps endings with other text after the credit", () => {
-    for (const ending of [
-      "Story and art by Osamu Tezuka. Harcover edition limited to only 1,500 copies",
-      "Story and art by Miwa Ueda. #75 - What's Hot Pick",
-      "Written and drawn by Yukito Kishiro. 232 pages.",
-    ]) {
-      const text = `Will they win? ${ending}`;
-      expect(cleanAnnDescription(text)).toBe(text);
-    }
+  it.each([
+    "Story and art by Osamu Tezuka. Harcover edition limited to only 1,500 copies",
+    "Story and art by Miwa Ueda. #75 - What's Hot Pick",
+    "Written and drawn by Yukito Kishiro. 232 pages.",
+  ])("keeps an ending with other text after the credit: %j", (ending) => {
+    const text = `Will they win? ${ending}`;
+    expect(cleanAnnDescription(text)).toBe(text);
   });
 
-  it("has nothing left when the text is only a credit or page chrome", () => {
-    expect(cleanAnnDescription("Story and art by Eiichiro Oda.")).toBeUndefined();
-    expect(cleanAnnDescription("Story and art by Yonezou Nekota.")).toBeUndefined();
-    expect(cleanAnnDescription("Submit your own review of this item.")).toBeUndefined();
-  });
+  it.each(["Story and art by Eiichiro Oda.", "Story and art by Yonezou Nekota.", "Submit your own review of this item."])(
+    "has nothing left of a text that is only a credit or page chrome: %j",
+    (text) => {
+      expect(cleanAnnDescription(text)).toBeUndefined();
+    },
+  );
 
-  it("keeps credits that are prose, mid-text, or not a sentence of their own", () => {
-    for (const text of [
-      "A tale. Story and art by Eiichiro Oda. Now in a deluxe edition.",
-      "A thriller. Art by the creator of the hit series.",
-      "The cover was created by hand.",
-      "A gripping tale created by fans and rewritten by many hands across the years.",
-    ]) {
-      expect(cleanAnnDescription(text)).toBe(text);
-    }
+  it.each([
+    "A tale. Story and art by Eiichiro Oda. Now in a deluxe edition.",
+    "A thriller. Art by the creator of the hit series.",
+    "The cover was created by hand.",
+    "A gripping tale created by fans and rewritten by many hands across the years.",
+  ])("keeps a credit that is prose, mid-text, or not a sentence of its own: %j", (text) => {
+    expect(cleanAnnDescription(text)).toBe(text);
   });
 
   it("repairs mojibake and is idempotent on clean text", () => {
@@ -664,40 +655,36 @@ describe("cleanAnnDescription: ANN's notes, C1 controls, entities and listing ju
     );
   });
 
-  it("rejects a description that is only retail or listing junk", () => {
-    for (const junk of [
-      "Book is in like-new condition.",
-      "Book is in excellent condition..It may has been previously used but well cared coz it doesn't show any marks/highlights..clean and crisp...glossy dust jacket..All orders ship with tracking for your convenience. Please do not hesitate to email us with any questions.",
-      "Will ship out as soon as we stock th",
-      "Find, shop, and buy computers, laptops, books, dvd, videos, games, video games, music, sporting goods, software, electronics, digital cameras, camcorders, toys, luggage, and dvd players at Buy.com",
-      "Retail Price: $14.95 No Longer Available For Purchase Free Canadian Shipping @ $250 Free US Economy Shipping @ $49",
-      "Publisher - SEVEN SEAS Genre - Action/Comedy Media - Printed Material Age Rating - 16+ (More Information) Page Count - 180 Date Available - Jun 9 2015 Product Availability - Pre-Order, Not Yet Shipping (More Information)",
-      "Book by Buronson",
-      "Book by Takaya, Yoshiki",
-      "Language:English.Pink Innocent 3",
-      "No further information has been provided for this title.",
-      "SCIENCE FICTION.",
-      "OVERSIZED GRAPHIC NOVEL",
-      "Manga trade style comic.",
-      "(2nd Ed)",
-    ]) {
-      expect(cleanAnnDescription(junk)).toBeUndefined();
-    }
+  it.each([
+    "Book is in like-new condition.",
+    "Book is in excellent condition..It may has been previously used but well cared coz it doesn't show any marks/highlights..clean and crisp...glossy dust jacket..All orders ship with tracking for your convenience. Please do not hesitate to email us with any questions.",
+    "Will ship out as soon as we stock th",
+    "Find, shop, and buy computers, laptops, books, dvd, videos, games, video games, music, sporting goods, software, electronics, digital cameras, camcorders, toys, luggage, and dvd players at Buy.com",
+    "Retail Price: $14.95 No Longer Available For Purchase Free Canadian Shipping @ $250 Free US Economy Shipping @ $49",
+    "Publisher - SEVEN SEAS Genre - Action/Comedy Media - Printed Material Age Rating - 16+ (More Information) Page Count - 180 Date Available - Jun 9 2015 Product Availability - Pre-Order, Not Yet Shipping (More Information)",
+    "Book by Buronson",
+    "Book by Takaya, Yoshiki",
+    "Language:English.Pink Innocent 3",
+    "No further information has been provided for this title.",
+    "SCIENCE FICTION.",
+    "OVERSIZED GRAPHIC NOVEL",
+    "Manga trade style comic.",
+    "(2nd Ed)",
+  ])("rejects a description that is only retail or listing junk: %j", (junk) => {
+    expect(cleanAnnDescription(junk)).toBeUndefined();
   });
 
-  it("keeps short blurbs and text that only mentions such words", () => {
-    for (const text of [
-      "Graphic novel. Cult classic.",
-      "Reads R to L (Japanese Style) for mature audiences.",
-      "I want to save the world with rice!",
-      "Ash is alarmed by Eiji's condition. Book is in his hands.",
-      "A Book by its cover.",
-      // Starting like the junk is not enough.
-      "Book by book, the legend grows.",
-      "Book is in mint condition, but the story inside is falling apart.",
-      "Will ship out his men at dawn.",
-    ]) {
-      expect(cleanAnnDescription(text)).toBe(text);
-    }
+  it.each([
+    "Graphic novel. Cult classic.",
+    "Reads R to L (Japanese Style) for mature audiences.",
+    "I want to save the world with rice!",
+    "Ash is alarmed by Eiji's condition. Book is in his hands.",
+    "A Book by its cover.",
+    // Starting like the junk is not enough.
+    "Book by book, the legend grows.",
+    "Book is in mint condition, but the story inside is falling apart.",
+    "Will ship out his men at dawn.",
+  ])("keeps a short blurb or text that only mentions junk words: %j", (text) => {
+    expect(cleanAnnDescription(text)).toBe(text);
   });
 });
