@@ -33,6 +33,17 @@ is fixed.
   while Settings is open. Maintained counters would fix it.
 - **No analytics opt-out.** posthog-js honours Do Not Track, but there is
   no opt-out toggle in Settings.
+- **`volumeProgress.seriesId` goes stale after a Split.** The field is set
+  when a row is inserted, and Split (`applySplit` in
+  `convex/lib/sensitiveOps.ts`) reverts only the repoints its merge
+  recorded. Merge Series B into A, read a Volume of B, then split B: the
+  row still names A. A Volume merge inside the merged Series followed by
+  the Split goes wrong the other way: the surviving Volume's row is put
+  back under B. `reading.myReading` groups read Volumes by this field, so
+  `/me` files the reading row under the wrong Series. Reads per Volume
+  (`seriesTracking`) are right. The `by_user_series` index on
+  `volumeProgress` cannot be trusted until Split re-derives the field from
+  each Volume's Series and existing rows are backfilled.
 
 ## Catalog and imports
 
@@ -68,12 +79,27 @@ is fixed.
   R2 is served indefinitely, so a publisher's corrected jacket does not
   reach the site without deleting the object.
 
-- **A disabled source can keep writing for the rest of a run.** The Seven
-  Seas apply path stops as soon as its registry row is disabled. Kodansha,
-  ANN and Open Library do not, because their apply mutations also serve
-  the backlist crawl and the operator backfills, which must ignore the
-  flag. The fix passes the run id into the apply mutation and stops only
-  scheduled runs.
+- **A disabled source can keep writing for the rest of a run.** Seven Seas,
+  Kodansha, ANN and Open Library check the registry flag only when a link
+  starts, so a link already running when the source is disabled keeps
+  writing to its end. Kodansha's, ANN's and Open Library's apply mutations
+  also serve the backlist crawl and the operator backfills, which must
+  ignore the flag. The fix passes the run id into the apply mutation and
+  stops only scheduled runs.
+- **A forced Yen Press run on a disabled source reports success.** The
+  shared gate (`runToContinue` in `convex/lib/importRuns.ts`) lets the
+  forced run through, and `applyCatalogTitle` (`convex/lib/catalogTitle.ts`)
+  refuses every apply while the source is disabled. The run fetches every
+  page, imports nothing and closes as `succeeded`.
+- **Disabling PRH inside the final link of a scheduled full sweep withdraws
+  what it was listing.** `applyCatalogTitle` refuses the rest of that
+  link's applies, so their observations never get a new last-seen time,
+  but `prh.sync` still runs `imports.markWithdrawn` at the end of a
+  complete sweep. Those observations are marked withdrawn, and a
+  future-dated Release among them gets a hide Proposal. The run closes as
+  `succeeded`. The fix for both this and the Yen Press entry is to carry
+  the run's automatic or forced state to the apply mutation, and to skip
+  the withdrawal pass when any apply was refused.
 - **Three copies of the apply ladder.** `applyBook` in
   `convex/sevenSeas.ts`, its mirror in `convex/kodansha.ts` and
   `applyCatalogTitle` in `convex/lib/catalogTitle.ts` run the same
@@ -106,6 +132,11 @@ is fixed.
   `/mod/packaging` already crashes without it. Failing at boot would
   remove the guards.
 - **No formatter or linter.** Line width runs from 80 to 200 columns.
+- **Reads on Volumes of a hidden Series.** Ratings refuse a Volume whose
+  Series is hidden (`activeVolume` in `convex/lib/ratings.ts`). Reading
+  does not: `reading.setVolumeReadCount`, `adjustVolumeReadCount`,
+  `setEditionRead`, `completePass` and `undoCompletion` all write such
+  Volumes. Whether reads on them should stay editable is the owner's call.
 
 ## Operator tools
 
