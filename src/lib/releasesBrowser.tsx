@@ -585,6 +585,7 @@ function FollowedMarker() {
     <span
       className="star"
       title="You follow this series"
+      role="img"
       aria-label="You follow this series"
     >
       ★

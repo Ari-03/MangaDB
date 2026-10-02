@@ -258,7 +258,7 @@ function CommentsQueueLinkInner() {
     <Link to="/mod/comments">
       Comments
       {pending > 0 ? (
-        <span className="mod-badge" aria-label={`${pending} awaiting review`}>
+        <span className="mod-badge" role="img" aria-label={`${pending} awaiting review`}>
           {pending >= 100 ? "100+" : pending}
         </span>
       ) : null}

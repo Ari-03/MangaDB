@@ -177,12 +177,12 @@ export function Cover({
           onError={() => fail(art)}
         />
       ) : numbered ? (
-        <span className="cover-ph cover-ph--numbered" style={style} aria-label={`${title} (no cover on file)`}>
+        <span className="cover-ph cover-ph--numbered" style={style} role="img" aria-label={`${title} (no cover on file)`}>
           <span className="cover-ph-series">{numbered.series}</span>
           <span className="cover-ph-num">{numbered.number}</span>
         </span>
       ) : (
-        <span className="cover-ph" style={style} aria-label={`${title} (no cover on file)`}>
+        <span className="cover-ph" style={style} role="img" aria-label={`${title} (no cover on file)`}>
           <span className="cover-ph-title">{title}</span>
           <span className="cover-ph-mark" aria-hidden="true">{foot?.[0] ?? ""}</span>
           {foot ? (
@@ -200,7 +200,7 @@ export function Cover({
         </span>
       ) : null}
       {followed ? (
-        <span className="cover-flag" title="You follow this series" aria-label="You follow this series">
+        <span className="cover-flag" title="You follow this series" role="img" aria-label="You follow this series">
           ★
         </span>
       ) : null}
