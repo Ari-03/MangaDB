@@ -59,6 +59,38 @@ describe("representativeDescription", () => {
     ).toBe("print");
   });
 
+  it("then a publishing Publisher's over a defunct one's, ahead of format and date", () => {
+    expect(
+      pick([
+        release({
+          id: "defunct",
+          description: "Old licensee's print blurb.",
+          pubDate: { year: 2004, sort: 20040000 },
+          publisherDefunct: true,
+        }),
+        release({
+          id: "current",
+          format: "digital",
+          description: "Current.",
+          pubDate: { year: 2020, sort: 20200000 },
+          publisherDefunct: false,
+        }),
+      ]),
+    ).toBe("current");
+    // An override still wins from a defunct Publisher.
+    expect(
+      pick([
+        release({ id: "current", description: "Current." }),
+        release({
+          id: "fixed",
+          description: "Fixed.",
+          publisherDefunct: true,
+          overriddenFields: ["description"],
+        }),
+      ]),
+    ).toBe("fixed");
+  });
+
   it("prefers physical over digital, whatever the dates and lengths", () => {
     expect(
       pick([

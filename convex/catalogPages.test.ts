@@ -369,6 +369,13 @@ describe("catalogPages.editionPage", () => {
   });
 });
 
+/** The seed Series' synopsis as a page's flagged, named fallback. */
+const SERIES_FALLBACK = {
+  source: "series",
+  text: "Series synopsis.",
+  series: { publicId: 1, title: "S" },
+};
+
 describe("Edition Description", () => {
   // The seed's standard Edition 21: r1 (physical) carries "Back-cover
   // blurb.", r2 (digital) is blank.
@@ -418,8 +425,73 @@ describe("Edition Description", () => {
     expect((await page(21))?.description).toEqual({ source: "volume", text: "Vol 1 synopsis." });
     // The omnibus (Vols 1–3) never borrows one Volume's, nor does the split
     // part of Vol 3: both fall to the Series synopsis, flagged as such.
-    expect((await page(22))?.description).toEqual({ source: "series", text: "Series synopsis." });
-    expect((await page(23))?.description).toEqual({ source: "series", text: "Series synopsis." });
+    expect((await page(22))?.description).toEqual(SERIES_FALLBACK);
+    expect((await page(23))?.description).toEqual(SERIES_FALLBACK);
+  });
+
+  it("never uses a hidden or merged Release's blurb", async () => {
+    const t = convexTest(schema);
+    const { publisherId, seriesId, standard, r1 } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(r1, { description: undefined });
+      await ctx.db.insert("releases", {
+        status: "hidden",
+        editionId: standard,
+        format: "physical",
+        language: "en",
+        description: "Hidden blurb.",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+      await ctx.db.insert("releases", {
+        status: "merged",
+        mergedIntoId: r1,
+        editionId: standard,
+        format: "physical",
+        language: "en",
+        description: "Merged blurb.",
+        publisherId,
+        seriesIds: [seriesId],
+      });
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
+    expect(page?.description).toBeNull();
+  });
+
+  it("does not borrow the remaining Volume's synopsis when one of two is hidden", async () => {
+    const t = convexTest(schema);
+    const { publisherId, seriesId, v1, v2 } = await seed(t);
+    await t.run(async (ctx) => {
+      const pair = await ctx.db.insert("editions", { status: "active", publicId: 27, publisherId });
+      await ctx.db.insert("volumeCoverages", { editionId: pair, volumeId: v1, order: 1, extent: "complete" });
+      await ctx.db.insert("volumeCoverages", { editionId: pair, volumeId: v2, order: 2, extent: "complete" });
+      await ctx.db.patch(v2, { status: "hidden" });
+      await ctx.db.patch(v1, { synopsis: "Vol 1 synopsis." });
+      await ctx.db.patch(seriesId, { synopsis: "Series synopsis." });
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 27 });
+    expect(page?.coverage.map((c) => c.volumePublicId)).toEqual([11]);
+    expect(page?.description).toEqual(SERIES_FALLBACK);
+  });
+
+  it("falls back to its line's Series synopsis for Unmapped Packaging", async () => {
+    const t = convexTest(schema);
+    const { publisherId, seriesId } = await seed(t);
+    await t.run(async (ctx) => {
+      const line = await ctx.db.query("editionLines").first();
+      await ctx.db.insert("editions", {
+        status: "active",
+        publicId: 28,
+        publisherId,
+        editionLineId: line!._id,
+        linePosition: "9",
+        coverageUnmapped: true,
+      });
+      await ctx.db.patch(seriesId, { synopsis: "Series synopsis." });
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 28 });
+    expect(page?.coverage).toEqual([]);
+    expect(page?.description).toEqual(SERIES_FALLBACK);
   });
 
   it("is null when nothing at all describes the book", async () => {
@@ -438,7 +510,7 @@ describe("Volume page description", () => {
    */
   async function seedLenders(t: ReturnType<typeof convexTest>) {
     const ids = await seed(t);
-    await t.run(async (ctx) => {
+    const lenders = await t.run(async (ctx) => {
       const { publisherId, seriesId, v1, v2, r3, r4 } = ids;
       await ctx.db.patch(r3, { description: "Omnibus blurb." });
       await ctx.db.patch(r4, { description: "Split blurb." });
@@ -484,8 +556,9 @@ describe("Volume page description", () => {
         publisherId: kodansha,
         seriesIds: [seriesId],
       });
+      return { kodansha, early };
     });
-    return ids;
+    return { ...ids, ...lenders };
   }
 
   const volume = (t: ReturnType<typeof convexTest>, publicId: number) =>
@@ -516,7 +589,45 @@ describe("Volume page description", () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(seriesId, { synopsis: "Series synopsis." });
     });
-    expect((await volume(t, 12))?.description).toEqual({ source: "series", text: "Series synopsis." });
+    expect((await volume(t, 12))?.description).toEqual(SERIES_FALLBACK);
+  });
+
+  it("skips a hidden lender Edition", async () => {
+    const t = convexTest(schema);
+    const { early } = await seedLenders(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(early, { status: "hidden" });
+    });
+    expect((await volume(t, 11))?.description).toEqual({
+      source: "edition",
+      text: "Back-cover blurb.",
+      edition: { publicId: 21, title: "S Vol 1", publisherName: "VIZ Media" },
+    });
+  });
+
+  it("names no Publisher for a lender whose Publisher is hidden", async () => {
+    const t = convexTest(schema);
+    const { kodansha } = await seedLenders(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(kodansha, { status: "hidden" });
+    });
+    expect((await volume(t, 11))?.description).toMatchObject({
+      source: "edition",
+      edition: { publicId: 26, publisherName: null },
+    });
+  });
+
+  it("ranks a publishing Publisher's blurb ahead of a defunct one's earlier book", async () => {
+    const t = convexTest(schema);
+    const { kodansha } = await seedLenders(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(kodansha, { defunct: true });
+    });
+    expect((await volume(t, 11))?.description).toMatchObject({
+      source: "edition",
+      text: "Back-cover blurb.",
+      edition: { publicId: 21 },
+    });
   });
 
   it("shows the Volume Synopsis ahead of any borrowed blurb", async () => {

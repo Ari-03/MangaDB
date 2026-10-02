@@ -4,7 +4,7 @@ import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
 import { Byline } from "~/lib/byline";
 import { catalogQuery, type VolumePageData } from "~/lib/catalogData";
-import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { AboutSeriesNote, CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
@@ -263,10 +263,10 @@ function VolumePage() {
                 </Link>
               </p>
             ) : description?.source === "series" ? (
-              <p className="note">About the series</p>
+              <AboutSeriesNote series={description.series} />
             ) : null}
             {description ? (
-              <p>{description.text}</p>
+              <p className="blurb-text">{description.text}</p>
             ) : (
               <p className="note">No description on file yet.</p>
             )}

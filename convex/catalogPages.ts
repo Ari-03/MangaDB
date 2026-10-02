@@ -296,12 +296,18 @@ async function editionReleases(ctx: QueryCtx, editionId: Id<"editions">) {
 
 /**
  * The Series synopsis as a page's last-resort description, flagged
- * `source: "series"` so the page labels it as being about the series
- * rather than the book.
+ * `source: "series"` and naming the Series so the page labels it "About
+ * {title}" rather than passing it off as the book's.
  */
 function seriesSynopsis(series: Doc<"series"> | null) {
   const text = series?.synopsis?.trim();
-  return text ? { source: "series" as const, text } : null;
+  return series && text
+    ? {
+        source: "series" as const,
+        text,
+        series: { publicId: series.publicId, title: series.title },
+      }
+    : null;
 }
 
 /**
@@ -351,8 +357,9 @@ async function editionDescription(
  * `description` is the Volume Synopsis; else the representative Release
  * Description among Editions that are ordinary books of this one whole
  * Volume (isWholeSingleVolume: no omnibus, split part or Edition Line
- * packaging lends its blurb), naming the Edition it came from; else the
- * Series synopsis, flagged as such.
+ * packaging lends its blurb; a publishing Publisher's Editions rank ahead
+ * of a defunct one's), naming the Edition it came from; else the Series
+ * synopsis, flagged as such.
  */
 export const volumePage = query({
   args: { publicId: v.number() },
@@ -374,7 +381,9 @@ export const volumePage = query({
     const synopsis = volume.synopsis?.trim();
     const editions = [];
     // Releases of whole single-volume Editions, the borrowable blurbs when
-    // there is no Volume Synopsis, and the Editions they belong to.
+    // there is no Volume Synopsis (each marked with whether its Publisher is
+    // defunct, so the current licensee's blurb leads), and the Editions they
+    // belong to.
     const lendingReleases = [];
     const lenders = new Map<Id<"editions">, { publicId: number; title: string; publisherName: string | null }>();
     for (const row of coveringRows) {
@@ -388,7 +397,8 @@ export const volumePage = query({
       const { title, lineName, coverage } = await editionCoverage(ctx, edition);
       const { docs, rows } = await editionReleases(ctx, edition._id);
       if (!synopsis && (await isWholeSingleVolume(ctx, edition))) {
-        lendingReleases.push(...docs);
+        const publisherDefunct = publisher?.defunct === true;
+        lendingReleases.push(...docs.map((doc) => ({ ...doc, publisherDefunct })));
         lenders.set(edition._id, {
           publicId: edition.publicId,
           title,

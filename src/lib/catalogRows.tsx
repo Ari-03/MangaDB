@@ -1,8 +1,9 @@
-// Shared render pieces for the catalog detail pages (ticket #23): the
+// Shared render pieces for the Volume and Edition pages (ticket #23): the
 // Release row (publication facts, ISBNs, Variants beneath, Bundle
-// cross-links; the page shows one description above, not one per row) and
-// the coverage chip listing. Used by the Volume, Edition and Bundle pages;
-// the Series page keeps its own lighter row.
+// cross-links; the page shows one description above, not one per row), the
+// coverage chip listing, and the note naming the Series a borrowed synopsis
+// is about. The Bundle page draws its own member rows and the Series page
+// its own lighter row.
 //
 // Classes live in styles/catalog-edition.css and are scoped under
 // `.release-row` / `.coverage-chips` so the Series page's lighter row keeps
@@ -104,6 +105,22 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
         <ReleasePassControls releaseId={release.id} />
       </div>
     </li>
+  );
+}
+
+/**
+ * The quiet label above a page's description when it is only the Series
+ * synopsis (convex/catalogPages.ts `seriesSynopsis`): "About {title}",
+ * linking the Series page, so it never reads as the book's own blurb.
+ */
+export function AboutSeriesNote({ series }: { series: { publicId: number; title: string } }) {
+  return (
+    <p className="note">
+      About{" "}
+      <Link to="/series/$publicId/$slug" params={slugParams(series.publicId, series.title)}>
+        {series.title}
+      </Link>
+    </p>
   );
 }
 

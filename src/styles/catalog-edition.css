@@ -104,9 +104,15 @@
   color: var(--text-dim);
   line-height: 1.68;
 }
-/* A borrowed description's source ("About the series") sits tight above it. */
+/* A borrowed description's source ("About {series}") sits tight above it. */
 .detail-blurb .note + p {
   margin-top: 6px;
+}
+/* An Edition or Volume description keeps the paragraph breaks a Moderator
+   typed (Edition and Volume pages; the Bundle blurb and Series synopsis
+   are untouched). */
+.blurb-text {
+  white-space: pre-line;
 }
 .detail-note {
   margin-top: 18px;

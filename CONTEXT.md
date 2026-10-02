@@ -31,7 +31,7 @@ The placement of a Volume within its Series' single canonical reading sequence. 
 The publisher-facing designation shown for a Volume, such as "7.5," "Side Story," or "Spring Log." It is not the Volume's identity or sort order.
 
 **Volume Synopsis**:
-An optional edition-independent summary of a Volume's content, curated by Editors. When absent, the Volume's page borrows the representative Release Description (ranked as for an Edition Description) among the Editions that cover that Volume alone and completely and belong to no Edition Line, naming the Edition it came from, and otherwise shows its Series' synopsis labelled as being about the series; an omnibus, a split part, or a line's packaging never lends its blurb.
+An optional edition-independent summary of a Volume's content, curated by Editors. When absent, the Volume's page borrows the representative Release Description (ranked as for an Edition Description, except that Editions from a Publisher still publishing come before a defunct one's, after any Human Override) among the Editions that cover that Volume alone and completely and belong to no Edition Line, naming the Edition it came from, and otherwise shows its Series' synopsis labelled as being about the series; an omnibus, a split part, or a line's packaging never lends its blurb.
 
 **Release**:
 A specific purchasable publication of an Edition — one Format, Binding where applicable, one language, and optional ISBN-10 and ISBN-13 identifiers. An unchanged reprint or the same digital publication sold by another retailer retains its Release identity; a change to those characteristics creates another Release.

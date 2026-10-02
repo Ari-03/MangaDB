@@ -8,7 +8,7 @@ import {
 import { api } from "../../convex/_generated/api";
 import { Byline } from "~/lib/byline";
 import { catalogQuery } from "~/lib/catalogData";
-import { CoverageChips, ReleaseRow } from "~/lib/catalogRows";
+import { AboutSeriesNote, CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { Cover } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
 import { ConcealArt } from "~/lib/mature";
@@ -100,7 +100,8 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
   // row — Releases have no page of their own, so each Book's URL is this
   // Edition page anchored at its row. The description leads with facts
   // (publisher, date, ISBN), falling back to the Edition Description when it
-  // is the book's own; that text is also each Book's `description`. The
+  // is the book's own; that text, truncated, is also each Book's
+  // `description`. The
   // Series synopsis fallback describes the series, not this book, so neither
   // uses it.
   head: ({ loaderData }) => {
@@ -115,6 +116,8 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
       first?.isbn13 ? `ISBN ${first.isbn13}` : null,
     ].filter((fact) => fact !== null);
     const blurb = description && description.source !== "series" ? description.text : null;
+    // Repeated on every Book, so cut short: the full text is on the page.
+    const bookDescription = blurb ? truncateDescription(blurb, 500) : null;
     return {
       ...pageHead({
         title: editionTitleTag(edition.title, edition.publisher?.name ?? null),
@@ -160,7 +163,7 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
               pubDate: release.pubDate,
               language: release.language,
               publisherName: edition.publisher?.name ?? null,
-              description: blurb,
+              description: bookDescription,
               // No art for crawlers on a Mature Series' page (lib/mature.tsx).
               coverUrl: mature ? null : release.coverUrl,
             }),
@@ -334,13 +337,13 @@ function EditionPage() {
           ) : null}
 
           {/* One description for the book, wherever it came from; the
-              Series synopsis says it is about the series. */}
+              Series synopsis names the series it is about. */}
           {description ? (
             <div className="detail-blurb">
               {description.source === "series" ? (
-                <p className="note">About the series</p>
+                <AboutSeriesNote series={description.series} />
               ) : null}
-              <p>{description.text}</p>
+              <p className="blurb-text">{description.text}</p>
             </div>
           ) : (
             <p className="detail-note">
