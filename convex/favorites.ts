@@ -66,8 +66,8 @@ async function favoriteRow(
 
 /**
  * Whether the viewer favorited a target, with the target's ID for `toggle`.
- * Null when signed out, username pending, or the target is unknown or
- * hidden, so the button renders nothing.
+ * Null without a viewer (viewerOrNull) or for an unknown or hidden target,
+ * so the button renders nothing.
  */
 export const isFavorite = query({
   args: { target: targetRefArg },
@@ -150,7 +150,7 @@ async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
  * Volume or omnibus Edition with its ID for `toggle`, title, cover, and
  * whether it is Mature (the view conceals that art unless the viewer opted
  * in). Favorites of hidden records, and of Editions no longer rated as one
- * book, are left out while so. Null when signed out or username pending.
+ * book, are left out while so. Null without a viewer.
  */
 export const mine = query({
   args: {},

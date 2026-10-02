@@ -1,4 +1,4 @@
-// The public Releases browser (ticket #24, spec §10): one month-window query
+// The public Releases browser (spec §10): one month-window query
 // serving both the Release Agenda (`/releases`) and the Month Grid
 // (`/releases/{yyyy-mm}`) over the same Canonical Releases. The pages load a
 // month and apply the Format and Publisher filters in memory, so changing a
@@ -183,7 +183,7 @@ export async function joinBrowseRows(
       // The row's canonical target (spec §11: a Release is a row on its
       // Edition page): Edition public ID + composed title for the link, the
       // Release's anchor within it. Month pages build their ItemList JSON-LD
-      // from these (ticket #39).
+      // from these.
       edition: {
         publicId: edition.publicId,
         title: editionTitle({

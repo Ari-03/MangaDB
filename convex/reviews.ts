@@ -155,8 +155,8 @@ export const hiddenList = query({
 
 /**
  * The viewer's own Review of a target (hidden or not) with the target's ID
- * for `save`. Null when signed out, username pending, or the target is
- * unknown, so the review form renders its signed-out prompt instead.
+ * for `save`. Null without a viewer (viewerOrNull) or for an unknown target,
+ * so the review form renders its signed-out prompt instead.
  */
 export const mine = query({
   args: { target: targetRefArg },

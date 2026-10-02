@@ -1,21 +1,9 @@
-// Reading tracking (ticket #28, spec §3): Series Reading Status, Release
-// Progress passes, and Volume Progress read counts.
-//
-// The invariants, straight from the glossary (CONTEXT.md):
-// - Series Reading Status is set only by explicit choice. The start-reading
-//   and completed-series prompts are suggestions computed here and rendered
-//   client-side; only setSeriesReadingStatus ever writes the status, and it
-//   runs only when the user picks or confirms.
-// - A Release Progress pass carries an optional 0–100% estimate. Reaching
-//   100% never completes anything — completePass is a separate, explicitly
-//   confirmed mutation.
-// - Confirmed completion increments Volume Progress (durable,
-//   edition-independent read counts) for every *completely* covered Volume;
-//   partial coverage is untouched. Another completed pass is a reread.
-// - Undo of the most recent completion decrements. The completion timestamp
-//   identifies the event: undo only decrements Volumes whose
-//   lastCompletedAt still matches, so a later reread makes the older undo a
-//   no-op for that Volume.
+// Reading tracking (CONTEXT.md: Series Reading Status, Release Progress,
+// Volume Progress): the status picker, passes, read counts and the /me
+// reading shelf. Only setSeriesReadingStatus writes a status; the
+// start-reading and completed-series prompts are suggestions the client
+// renders. Undo identifies a completion by its timestamp, so a later reread
+// makes an older undo a no-op for that Volume.
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -229,8 +217,7 @@ async function putVolumeProgress(
 /**
  * The viewer's tracking overlay for one Series page: reading status, every
  * active Volume with its read count, and the active passes in the Series.
- * Null when signed out, username pending, or the Series is unknown — the
- * public page renders identically, just without the personal controls.
+ * Null without a viewer (viewerOrNull) or for an unknown Series.
  */
 export const seriesTracking = query({
   args: { seriesPublicId: v.number() },
@@ -271,8 +258,8 @@ export const seriesTracking = query({
 });
 
 /**
- * The viewer's pass state for one Release row. Null when signed out (the
- * row shows no controls); otherwise `pass` is the active pass or null.
+ * The viewer's pass state for one Release row. Null without a viewer or for
+ * an unknown Release; otherwise `pass` is the active pass or null.
  */
 export const passForRelease = query({
   args: { releaseId: v.id("releases") },

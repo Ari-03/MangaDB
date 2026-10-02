@@ -1,4 +1,4 @@
-// Accounts (spec §9, ticket #26). Clerk owns credentials and sessions; the
+// Accounts (spec §9). Clerk owns credentials and sessions; the
 // Convex User is created just in time on first sign-in, keyed by the stable
 // Clerk subject — never email. Creation happens atomically with the required
 // username claim, so a signed-in visitor without a User row is exactly "first
@@ -33,7 +33,7 @@ export const viewer = query({
     return {
       needsUsername: false as const,
       username: user.username,
-      // Data-team role (ticket #31); gates the edit affordances client-side.
+      // Data-team role; gates the edit affordances client-side.
       // Authorization is always re-checked in the moderation functions.
       role: user.role ?? null,
       formatPreference: user.formatPreference,
@@ -48,7 +48,7 @@ export const viewer = query({
 
 /**
  * Claim (or change) the viewer's username. First claim creates the User just
- * in time with private-by-default visibility (#7). A change releases the old
+ * in time with private-by-default visibility. A change releases the old
  * name immediately — uniqueness is only ever the normalized-copy index lookup
  * at claim time, so the freed name is claimable in the next mutation.
  */
@@ -98,7 +98,7 @@ export const claimUsername = mutation({
 /**
  * Set the viewer's Physical/Digital/Both format preference (spec §3). It
  * scopes exactly one thing: which announced Releases from followed Series
- * appear in My Upcoming Releases (follows.myUpcoming, ticket #29). Wanted
+ * appear in My Upcoming Releases (follows.myUpcoming). Wanted
  * and Ordered entries always appear regardless.
  */
 export const setFormatPreference = mutation({

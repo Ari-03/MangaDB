@@ -1,4 +1,4 @@
-// Volume, Edition, and Bundle pages + /isbn resolution (ticket #23, spec §2,
+// Volume, Edition, and Bundle pages + /isbn resolution (spec §2,
 // §10, §11): the rest of the public catalog surface beyond the Series page
 // (catalog.ts). One query per page, each returning exactly the joined shape
 // its route renders; `isbnLookup` resolves an ISBN to its redirect target.
@@ -92,7 +92,7 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   const line = storedLine && storedLine.status === "active" ? storedLine : null;
   const lineName = line?.name ?? null;
 
-  // Maturity is the content's (B34, R15), judged through merges and before
+  // Maturity is the content's, judged through merges and before
   // any hiding: the Edition Line's Series and every covered Volume's Series
   // count though hidden Volumes, Series and lines drop out of the listing.
   const contentLine = await mergeSurvivor(ctx, "editionLines", storedLine);
@@ -311,7 +311,7 @@ async function editionDescription(
 // ---------- Volume page ----------
 
 /**
- * Everything the Volume page renders (spec §10, ticket #23): every Release
+ * Everything the Volume page renders (spec §10): every Release
  * covering this Volume grouped under its Edition, each Edition carrying its
  * extent for THIS Volume (`extentForVolume`) so the route lists complete and
  * partial coverage distinctly — including the omnibus case, where the full
@@ -412,7 +412,7 @@ export const volumePage = query({
 // ---------- Edition page ----------
 
 /**
- * The book detail page (spec §2/§10, ticket #23): the Edition's identity
+ * The book detail page (spec §2/§10): the Edition's identity
  * (composed title, Publisher, Edition Line membership + Edition Line
  * Position, ordered Volume Coverage with canonical positions kept separate),
  * its one Edition Description (`editionDescription`: `source` says whether
@@ -479,7 +479,7 @@ export const editionPage = query({
  * followed; hidden ones dropped) and the Edition's composed title, and
  * whether the box set is mature: an adult-only publisher's, or holding a
  * Mature Series' book. Maturity is judged through merges before hidden
- * members drop out (B35, R14), so hiding a member's Release or Edition never
+ * members drop out, so hiding a member's Release or Edition never
  * makes the box set general. Shared by `bundlePage` and the sitemap (seo.ts)
  * so both judge a box set alike.
  */
@@ -505,7 +505,7 @@ export async function bundleMembers(ctx: QueryCtx, bundle: Doc<"releaseBundles">
 }
 
 /**
- * The Bundle page (spec §2, ticket #23): the Release Bundle's own publication
+ * The Bundle page (spec §2): the Release Bundle's own publication
  * facts (box-set ISBN, date, price) and its member Releases in order, each
  * linking back to its Edition page anchored at the Release row, with the
  * pinned Release Variant named when the box set specifies one. Members whose
@@ -548,7 +548,7 @@ export const bundlePage = query({
 
     return {
       bundle: {
-        // Document id, for the signed-in collection controls (#27).
+        // Document id, for the signed-in collection controls.
         id: bundle._id,
         publicId: bundle.publicId,
         name: bundle.name,

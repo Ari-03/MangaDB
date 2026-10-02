@@ -1,9 +1,6 @@
-// Comments (CONTEXT.md: Comment, Comment Report, Shadowed User): short
-// public plain-text posts on a Series or Volume page, with one level of
-// replies. Post-moderated: a Comment is published on insert unless a hold
-// rule sends it to the Data Team's queue (/mod/comments) first, and three
-// distinct reports hide a published one until a Moderator decides. Every
-// Moderator decision lands in commentAudit.
+// Comments (CONTEXT.md: Comment, Comment Report, Shadowed User): posting
+// and replies, the hold rules, reports, the Data Team's queue
+// (/mod/comments), and commentAudit, where every Moderator decision lands.
 //
 // Visibility, per viewer:
 // - approved: everyone;

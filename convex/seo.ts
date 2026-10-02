@@ -1,4 +1,4 @@
-// Sitemap data (ticket #39, spec §11): per-entity pages of exactly the
+// Sitemap data (spec §11): per-entity pages of exactly the
 // indexable canonical records — Series, Volumes, Editions, Publishers, and
 // Bundles — plus the month range for the month-view sitemap. The server
 // route (src/server/sitemaps.ts) composes the canonical URLs from the titles

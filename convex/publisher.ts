@@ -1,4 +1,4 @@
-// The Publisher Spotlight page (ticket #25, spec §10/§11): `/publisher/{slug}`
+// The Publisher Spotlight page (spec §10/§11): `/publisher/{slug}`
 // is a publisher-led profile with a bounded upcoming-Releases lane and a clear
 // route into the main Releases browser. The cross-publisher overview is the
 // Publishers board (`/publishers`, monthBoard below): one month of the
@@ -38,7 +38,7 @@ import { showMatureArg, visibleTo } from "./lib/mature";
 import { withExceptionCapture } from "./lib/posthog";
 import { seriesStatsRow } from "./seriesBrowse";
 
-// The Spotlight's months after this one are bounded (prototype #17): at most
+// The Spotlight's months after this one are bounded: at most
 // LANE_CAP books within the horizon the route requests (~3 months), enough
 // for a busy publisher's next three months, which the page previews a dozen
 // at a time; the full calendar lives in the Releases browser. The scan cap

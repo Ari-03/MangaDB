@@ -1,20 +1,8 @@
-// Series Follows + My Upcoming Releases (ticket #29, spec §3).
-//
-// The invariants, straight from the glossary (CONTEXT.md):
-// - A Series Follow is an explicit choice, independent of Collection Entries
-//   and Volume Progress. Recording another tracking fact may *suggest* a
-//   follow (collection.ts returns the suggestion after a first Collection
-//   Entry in a Series) but never creates one without confirmation — only
-//   setSeriesFollow ever writes `following`.
-// - The post-first-entry prompt appears once per Series; dismissal is
-//   permanent (`followPromptDismissed`, written only by dismissFollowPrompt).
-// - My Upcoming Releases = announced future Canonical Releases from followed
-//   Series matching the user's Physical/Digital/Both preference, plus every
-//   future Wanted/Ordered Release *and Bundle* regardless of preference —
-//   deduplicated, Owned excluded (direct or derived), computed live and
-//   never stored.
-// - Follows are always private in v1: nothing here is readable for another
-//   user, and sharing.ts never exposes them.
+// Series Follows and My Upcoming Releases (CONTEXT.md). Only
+// setSeriesFollow writes `following` and only dismissFollowPrompt sets
+// `followPromptDismissed`; collection.ts merely suggests a follow. My
+// Upcoming is computed live, never stored. Follows stay private: sharing.ts
+// never exposes them.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -34,9 +22,8 @@ export const UPCOMING_SCAN_CAP = 4000;
 // ---------- queries ----------
 
 /**
- * The viewer's follow state for one Series page. Null when signed out,
- * username pending, or the Series is unknown — the public page renders
- * identically, just without the toggle.
+ * The viewer's follow state for one Series page. Null without a viewer
+ * (viewerOrNull) or for an unknown Series.
  */
 export const seriesFollow = query({
   args: { seriesPublicId: v.number() },
@@ -55,7 +42,7 @@ export const seriesFollow = query({
  * Releases browser's overlay for the subtle followed marker and the
  * followed-Series filter (both applied client-side, per the recorded spec §8
  * trade-off: array-containment filters run in memory, never on an index).
- * Null when signed out or username pending.
+ * Null without a viewer.
  */
 export const followedSeries = query({
   args: {},
@@ -80,8 +67,7 @@ export const followedSeries = query({
  * The Series the viewer follows, for the library's Following shelf: each
  * with its library cover and the next announced release date (0 when
  * nothing is announced) from seriesStats, falling back to the Series doc
- * when the rebuild has not stored a row yet. Null when signed out or
- * username pending.
+ * when the rebuild has not stored a row yet. Null without a viewer.
  */
 export const myFollowing = query({
   args: {},

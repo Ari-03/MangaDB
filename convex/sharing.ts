@@ -1,23 +1,10 @@
-// Tracking visibility + public profiles (ticket #30, spec §3): personal
-// tracking is private by default, with separate visibility defaults for
-// Ownership and Reading (on the User) plus per-Series overrides (on
-// userSeriesStates). `/u/{username}` is a current-state public profile.
-//
-// The invariants, straight from the glossary (CONTEXT.md):
-// - Tracking Visibility is a private-by-default sharing policy with separate
-//   defaults for Ownership and Reading and per-Series overrides — never
-//   configured for individual Volumes or Releases.
-// - Public Ownership shows Owned Releases, selected Variants, Bundles, and
-//   derived member ownership — never Wanted/Ordered entries.
-// - Public Reading shows Series Reading Status, active Release percentage,
-//   and Volume read counts.
-// - Series Follows always stay private in v1: nothing here ever reads or
-//   returns the following/followPromptDismissed fields.
-// - The profile is current-state only — no activity feed, no timestamps.
-// - Rated Series and omnibus Editions ride on the Reading visibility of
-//   their Series (a Rating is part of how the user reads a Series); Reviews
-//   are public content and listed whenever FEATURES.publicReviews is on
-//   (lib/features.ts). Both leave Mature Series out unless the viewer opted in.
+// Tracking Visibility and the public profile at /u/{username} (CONTEXT.md):
+// the two defaults (on the User), per-Series overrides (on
+// userSeriesStates), and the current-state profile they govern: Owned
+// entries only, never Wanted/Ordered or Follows, and no activity feed.
+// Rated Series and omnibus Editions ride on their Series' Reading
+// visibility; Reviews list while FEATURES.publicReviews is on
+// (lib/features.ts). Both leave Mature Series out unless the viewer opted in.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -211,9 +198,8 @@ export const setSeriesVisibility = mutation({
 
 /**
  * The viewer's visibility picture for one Series page: both defaults and both
- * overrides, plus the username for the "view your profile" link. Null when
- * signed out, username pending, or the Series is unknown — the public page
- * renders identically without the sharing controls.
+ * overrides, plus the username for the "view your profile" link. Null
+ * without a viewer (viewerOrNull) or for an unknown Series.
  */
 export const seriesVisibility = query({
   args: { seriesPublicId: v.number() },

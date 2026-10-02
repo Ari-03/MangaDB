@@ -150,7 +150,7 @@ export const recentSeries = query({
   },
 });
 
-// ---------- Search (ticket #38) ----------
+// ---------- Search ----------
 
 export const SEARCH_LIMIT = 20;
 // The publisher list is deliberately small (spec §8: "publishers via the
@@ -440,7 +440,7 @@ export const suggest = query({
   },
 });
 
-// ---------- Series page (ticket #22) ----------
+// ---------- Series page ----------
 
 /**
  * The active Series a public ID names, merges followed (lib/merges.ts): a
@@ -569,7 +569,7 @@ async function seriesFamily(ctx: QueryCtx, series: Doc<"series">) {
 
 /**
  * Everything the Series page renders, shaped as the Reading Path hierarchy
- * validated in prototype #16 (spec §10): the canonical Volume sequence leads
+ * (spec §10): the canonical Volume sequence leads
  * (ordered by Volume Position — the Label is display-only); each
  * Volume carries every covering Edition with its full ordered Coverage,
  * Edition Line membership, Releases, Variants, and Bundle cross-links.

@@ -29,7 +29,9 @@ export async function getUserBySubject(
 /**
  * The viewer's User for personal *queries*: null when signed out or the
  * username claim is pending, so overlay queries render as "nothing to show"
- * instead of erroring on public pages. Mutations use requireUser instead.
+ * instead of erroring on public pages, which render identically without the
+ * personal controls. Overlay queries are null "without a viewer" in this
+ * sense. Mutations use requireUser instead.
  */
 export async function viewerOrNull(
   ctx: QueryCtx | MutationCtx,

@@ -1,20 +1,8 @@
-// Personal collection (ticket #27, spec §3): Wanted / Ordered / Owned
-// Collection Entries on Releases and Bundles, variant pinning, computed
-// Derived Ownership, the per-Series overlay behind the shelf quick actions,
-// batch marking, and the library shelf on /me.
-//
-// The invariants, straight from the glossary (CONTEXT.md):
-// - A Collection Entry targets a Release or a Bundle, in exactly one of three
-//   states: Wanted | Ordered | Owned (Ordered includes preorders). Every
-//   transition is user-controlled — nothing here changes state as a side
-//   effect of anything.
-// - A Release entry may optionally identify a Release Variant (the alternate
-//   cover the user owns or wants).
-// - Owning a Bundle yields Derived Ownership of its member Releases —
-//   computed at read time, never stored — which coexists with direct entries.
-//   Removing the Bundle entry therefore never erases a direct entry.
-// - There is no stored Volume-ownership state: a Volume reads as owned
-//   through the owned Releases covering it (volumeOwnership below).
+// Personal collection (CONTEXT.md: Collection Entry, Derived Ownership):
+// entry writes on Releases and Bundles, the per-Release, per-Bundle and
+// per-Series overlays, Volume ownership, batch marking, and the library
+// shelf on /me. Every state change is the user's own; Derived Ownership is
+// computed at read time, and no Volume-ownership state is ever stored.
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -119,7 +107,7 @@ export async function bundleReleases(ctx: QueryCtx, bundleId: Id<"releaseBundles
 }
 
 /**
- * The one non-blocking follow prompt per Series (ticket #29, spec §3),
+ * The one non-blocking follow prompt per Series (spec §3),
  * computed once after *new* entries were inserted (one click, or a whole
  * batch): for each Series the new entries' targets cover, suggest a Series
  * Follow exactly when no older entry of the user covers it (so this is their
@@ -230,9 +218,8 @@ export async function releaseLink(ctx: QueryCtx, release: Doc<"releases">) {
 /**
  * The viewer's collection state for one Release row: the direct entry (state
  * + pinned Variant), the Release's active Variants for the picker, and any
- * Derived Ownership from Owned Bundles. Null when signed out, username
- * pending, or the Release is unknown — the public row renders identically,
- * just without the controls.
+ * Derived Ownership from Owned Bundles. Null without a viewer (viewerOrNull)
+ * or for an unknown Release.
  */
 export const entryForRelease = query({
   args: { releaseId: v.id("releases") },
@@ -264,8 +251,8 @@ export const entryForRelease = query({
 });
 
 /**
- * The viewer's collection state for one Bundle page. Null when signed out or
- * the Bundle is unknown; otherwise `entry` is the entry or null.
+ * The viewer's collection state for one Bundle page. Null without a viewer
+ * or for an unknown Bundle; otherwise `entry` is the entry or null.
  */
 export const entryForBundle = query({
   args: { bundleId: v.id("releaseBundles") },
@@ -284,8 +271,8 @@ export const entryForBundle = query({
  * covering it, direct or derived, since no Volume-ownership state is ever
  * stored (spec §3). Each item names its route: `via` is null for a direct
  * Owned entry and the owning Bundle for Derived Ownership; the same Release
- * appears once per route because the two coexist. Null when signed out or
- * the Volume is unknown.
+ * appears once per route because the two coexist. Null without a viewer or
+ * for an unknown Volume.
  */
 export const volumeOwnership = query({
   args: { volumePublicId: v.number() },
@@ -345,8 +332,7 @@ export const volumeOwnership = query({
  * Release of the Series (state + pinned Variant) and every Release owned
  * through an Owned Bundle (Derived Ownership, computed here as always), plus
  * the format preference the quick actions use to pick a Release when a book
- * has several. Null when signed out, username pending, or the Series is
- * unknown — the public shelf renders without badges or actions.
+ * has several. Null without a viewer or for an unknown Series.
  */
 export const seriesEntries = query({
   args: { seriesPublicId: v.number() },
@@ -657,7 +643,7 @@ export const myLibrary = query({
  * hidden since, so a state change never fails on it. Removal deletes only
  * the direct entry; Derived Ownership is computed, so it is untouchable from
  * here. Returns the inserted entry's id when this was a new entry, for the
- * caller to compute follow suggestions (ticket #29) once.
+ * caller to compute follow suggestions once.
  */
 async function writeReleaseEntry(
   ctx: MutationCtx,
@@ -707,7 +693,7 @@ async function writeReleaseEntry(
  * The one write path for a Release's Collection Entry (see
  * writeReleaseEntry): set the exact state with an optional pinned Variant, or
  * omit `state` to remove the entry. A first entry in a Series returns
- * `suggestFollow` (ticket #29) — a suggestion only.
+ * `suggestFollow` — a suggestion only.
  */
 export const setReleaseEntry = mutation({
   args: {
@@ -773,7 +759,7 @@ export const setManyReleaseEntries = mutation({
  * Release entry.
  *
  * Inserting a first Collection Entry in a Series (through the Bundle's
- * member Releases) returns `suggestFollow` (ticket #29) — a suggestion only.
+ * member Releases) returns `suggestFollow` — a suggestion only.
  */
 export const setBundleEntry = mutation({
   args: {
