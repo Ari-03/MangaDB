@@ -30,7 +30,6 @@
 // Series and none is refused, by merge or Split alike, since no override
 // governs tracking with no Series.
 
-import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { followMerges, primaryVolumeSeries } from "../catalogPages";
@@ -49,11 +48,8 @@ import {
   targetOfRow,
   type TargetId,
 } from "./ratings";
+import { fail } from "./errors";
 import { sameValue } from "./values";
-
-const fail = (code: string, message: string): never => {
-  throw new ConvexError({ code, message });
-};
 
 // ---------- revision plumbing ----------
 
@@ -94,7 +90,7 @@ async function requireRecord(
 ): Promise<CatalogDoc> {
   const doc = await getCanonical(ctx, ref);
   if (!doc) fail("notFound", `No such ${ref.type}.`);
-  return doc!;
+  return doc;
 }
 
 // ---------- hide / restore ----------
@@ -2161,7 +2157,7 @@ export async function applySplit(
   if (!latest) {
     fail("noManifest", "This merge predates manifests and cannot be split automatically.");
   }
-  const survivor = latest!.survivorRef as RecordRef;
+  const survivor = latest.survivorRef as RecordRef;
   const governed = await splitGovernance(ctx, ref, manifests);
 
   for (const manifest of manifests) {

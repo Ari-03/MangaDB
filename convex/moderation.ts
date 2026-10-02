@@ -7,7 +7,7 @@
 // (ticket #32) live in proposals.ts and reuse `applyUpdate`,
 // `validateChanges`, and the record plumbing exported here.
 
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   mutation,
@@ -19,6 +19,7 @@ import { editionCoverage, followMerges } from "./catalogPages";
 import { getSourceByKey } from "./importSources";
 import { recordRef } from "./schema";
 import { latestTouch } from "./lib/authority";
+import { fail } from "./lib/errors";
 import { ratedByDataTeam } from "./lib/mature";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
@@ -107,24 +108,12 @@ export function validateChanges(
   const changes: FieldChange[] = [];
   const next: Record<string, unknown> = {};
   for (const { field, value } of submitted) {
-    if (seen.has(field)) {
-      throw new ConvexError({
-        code: "invalidField",
-        message: `Field "${field}" appears twice.`,
-      });
-    }
+    if (seen.has(field)) fail("invalidField", `Field "${field}" appears twice.`);
     seen.add(field);
     const descriptor = fieldDescriptor(type, field);
-    if (!descriptor) {
-      throw new ConvexError({
-        code: "unknownField",
-        message: `"${field}" is not an editable field of a ${type}.`,
-      });
-    }
+    if (!descriptor) fail("unknownField", `"${field}" is not an editable field of a ${type}.`);
     const normalized = normalizeFieldValue(descriptor, value);
-    if (!normalized.ok) {
-      throw new ConvexError({ code: "invalidField", message: normalized.message });
-    }
+    if (!normalized.ok) fail("invalidField", normalized.message);
     const before = (doc as Record<string, unknown>)[field];
     next[field] = normalized.value;
     if (sameValue(before, normalized.value)) continue;
@@ -136,19 +125,11 @@ export function validateChanges(
     const release = doc as Doc<"releases">;
     const binding = "binding" in next ? next.binding : release.binding;
     if (release.format === "digital" && binding !== undefined) {
-      throw new ConvexError({
-        code: "invalidField",
-        message: "Binding applies only to physical releases.",
-      });
+      fail("invalidField", "Binding applies only to physical releases.");
     }
   }
 
-  if (changes.length === 0) {
-    throw new ConvexError({
-      code: "noChanges",
-      message: "Nothing changed — edit at least one field.",
-    });
-  }
+  if (changes.length === 0) fail("noChanges", "Nothing changed — edit at least one field.");
   return changes;
 }
 
@@ -181,11 +162,7 @@ export async function applyUpdate(
   // base change before approval requires an explicit rebase, never a silent
   // one. For a direct edit this surfaces as "reload and re-edit".
   if ((latest?._id ?? null) !== args.baseRevisionId) {
-    throw new ConvexError({
-      code: "stale",
-      message:
-        "This record changed since the edit was loaded. Reload and re-apply your change.",
-    });
+    fail("stale", "This record changed since the edit was loaded. Reload and re-apply your change.");
   }
 
   const patch: Record<string, unknown> = {};
@@ -258,29 +235,14 @@ export const submitDirectEdit = mutation({
     const ref = args.ref as RecordRef;
 
     const comment = args.comment.trim();
-    if (comment === "") {
-      throw new ConvexError({
-        code: "commentRequired",
-        message: "Every change needs a change comment.",
-      });
-    }
+    if (comment === "") fail("commentRequired", "Every change needs a change comment.");
 
     const doc = await getCanonical(ctx, ref);
-    if (!doc) {
-      throw new ConvexError({ code: "notFound", message: "No such record." });
-    }
+    if (!doc) fail("notFound", "No such record.");
     if (doc.status !== "active") {
-      throw new ConvexError({
-        code: "locked",
-        message: `This record is ${doc.status} and locked against ordinary edits.`,
-      });
+      fail("locked", `This record is ${doc.status} and locked against ordinary edits.`);
     }
-    if (doc.locked) {
-      throw new ConvexError({
-        code: "locked",
-        message: "This record is temporarily locked.",
-      });
-    }
+    if (doc.locked) fail("locked", "This record is temporarily locked.");
 
     const changes = validateChanges(ref.type, doc, args.changes);
     const author = {

@@ -23,9 +23,9 @@
 // Validation (`planCreateOps`) runs at draft save, submission, and approval;
 // application (`applyCreatePlan`) runs only inside the approval mutation.
 
-import { ConvexError } from "convex/values";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { fail } from "./errors";
 import { volumePositionFor } from "./pipeline";
 import { allocatePublicId } from "./publicIds";
 import { seriesSearchText } from "./searchMatch";
@@ -112,9 +112,10 @@ export type CreatePlan =
       };
     };
 
-const bad = (message: string): never => {
-  throw new ConvexError({ code: "invalidCreate", message });
-};
+/** Refuse a malformed create op. */
+function bad(message: string): never {
+  return fail("invalidCreate", message);
+}
 
 // ---------- field plumbing ----------
 
@@ -375,7 +376,7 @@ export async function planCreateOps(
           tempId: op.tempId,
           edition,
           fields: {
-            format: format as "physical" | "digital",
+            format,
             binding,
             language: language as string,
             isbn13,
@@ -434,9 +435,8 @@ async function checkIsbnAssignments(
   creates: IsbnClaim[],
   updates: IsbnUpdate[],
 ): Promise<void> {
-  const refuse = (involvesCreate: boolean, message: string): never => {
-    throw new ConvexError({ code: involvesCreate ? "invalidCreate" : "invalidField", message });
-  };
+  const refuse = (involvesCreate: boolean, message: string) =>
+    fail(involvesCreate ? "invalidCreate" : "invalidField", message);
   const rewritten = new Set(updates.map((update) => `${update.field}:${update.releaseId}`));
   const claims = [
     ...updates.flatMap(({ field, isbn }): IsbnClaim[] =>

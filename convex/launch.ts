@@ -8,7 +8,7 @@
 // (src/routes/about-the-data.tsx).
 
 import { paginationOptsValidator } from "convex/server";
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -21,14 +21,11 @@ import {
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import { todaySortKey } from "./lib/dates";
+import { fail } from "./lib/errors";
 import { ensurePublisher, publisherBySlug } from "./lib/pipeline";
 import { ADULT_ONLY_SLUGS, CANONICAL_PUBLISHERS, DEFUNCT_SLUGS } from "./lib/publishers";
 import { findDuplicatePairs, pairKeyOf, Reservoir, type SweepEntry } from "./lib/qa";
 import { requireDataTeam, requireModerator, requireRole } from "./lib/roles";
-
-const fail = (code: string, message: string): never => {
-  throw new ConvexError({ code, message });
-};
 
 // ---------- the four seed stages (spec §7) ----------
 

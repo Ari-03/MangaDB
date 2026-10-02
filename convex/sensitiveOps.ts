@@ -5,7 +5,7 @@
 // an immediately approved Proposal through the same apply functions the
 // review queue uses (lib/sensitiveOps.ts) — the single write path.
 
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import {
@@ -27,12 +27,9 @@ import {
   reversibleManifestOf,
   type OpMeta,
 } from "./lib/sensitiveOps";
+import { fail } from "./lib/errors";
 import { requireModerator } from "./lib/roles";
 import { recordRef } from "./schema";
-
-const fail = (code: string, message: string): never => {
-  throw new ConvexError({ code, message });
-};
 
 // ---------- the manage panel query ----------
 

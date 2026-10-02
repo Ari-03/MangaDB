@@ -4,10 +4,10 @@
 // Role checks always read the live User doc — the role is never baked into a
 // session — and suspension removes privileges immediately.
 
-import { ConvexError } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { requireUser } from "./auth";
+import { fail } from "./errors";
 
 export type DataRole = NonNullable<Doc<"users">["role"]>;
 
@@ -34,10 +34,7 @@ export async function requireRole(
 ): Promise<Doc<"users">> {
   const user = await requireUser(ctx);
   if (!user.role || !roles.includes(user.role)) {
-    throw new ConvexError({
-      code: "forbidden",
-      message: "This action needs a data-team role you do not hold.",
-    });
+    fail("forbidden", "This action needs a data-team role you do not hold.");
   }
   return user;
 }
