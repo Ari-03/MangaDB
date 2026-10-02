@@ -4,7 +4,6 @@
 
 import { readFileSync } from "node:fs";
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
@@ -13,7 +12,9 @@ import { isMatureRating as kodanshaMature } from "./lib/kodansha";
 import { linkSeriesObservation } from "./lib/pipeline";
 import { normalizeBook, parseBookPage } from "./lib/sevenSeas";
 import { parseTitlePage, toSnapshots } from "./lib/yenPress";
-import schema from "./schema";
+import { pubDate } from "./test.catalog";
+import { insertObservation, insertPublisher, seedCatalog } from "./test.factories";
+import { alice, makeT, seedTeam, signedIn } from "./test.helpers";
 
 const yenFixture = (name: string) =>
   readFileSync(new URL(`./lib/__fixtures__/yenPress/${name}.html`, import.meta.url), "utf8");
@@ -69,48 +70,18 @@ describe("source age ratings", () => {
 // Two one-volume Series under one publisher, rebuilt: "Quiet" stays
 // general; "Heat" is what each test makes mature.
 async function seeded() {
-  const t = convexTest(schema);
+  const t = makeT();
   const ids = await t.run(async (ctx) => {
-    const publisher = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas",
-      slug: "seven-seas",
-    });
-    const adult = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Ghost Ship",
-      slug: "ghost-ship",
-    });
+    const publisher = await insertPublisher(ctx, { name: "Seven Seas", slug: "seven-seas" });
+    const adult = await insertPublisher(ctx, { name: "Ghost Ship", slug: "ghost-ship" });
     const mk = async (publicId: number, title: string) => {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId,
-        title,
-        altTitles: [],
-        searchText: title,
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId,
-        publisherId: publisher,
-      });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 0, extent: "complete" });
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        publisherId: publisher,
-        seriesIds: [seriesId],
-        format: "physical",
-        language: "en",
-        isbn13: `979888000000${publicId}`,
-        pubDate: { year: 2026, month: 9, day: 15, sort: 20260915 },
+      const { seriesId, editionId, releaseId } = await seedCatalog(ctx, {
+        publisher,
+        series: { publicId, title },
+        volume: { publicId },
+        edition: { publicId },
+        coverage: { order: 0 },
+        release: { isbn13: `979888000000${publicId}`, pubDate: pubDate(20260915) },
       });
       return { seriesId, editionId, releaseId };
     };
@@ -125,13 +96,11 @@ describe("deriving series.mature (seriesBrowse.rebuild)", () => {
   it("follows a source that rates one of the Series' books 18+", async () => {
     const { t, ids, rebuild, heat } = await seeded();
     await t.run((ctx) =>
-      ctx.db.insert("sourceObservations", {
+      insertObservation(ctx, {
         sourceKey: "sevenseas",
         sourceRecordId: "42",
         recordRef: { type: "release", id: ids.heat.releaseId },
         snapshot: { kind: "book", mature: true },
-        lastSeenAt: 0,
-        withdrawn: false,
       }),
     );
     await rebuild();
@@ -205,10 +174,10 @@ describe("deriving series.mature (seriesBrowse.rebuild)", () => {
     await rebuild();
     expect((await heat())?.mature).toBe(true);
 
-    await t.withIdentity({ subject: "user_admin" }).mutation(api.users.claimUsername, { username: "alice" });
-    await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
+    await seedTeam(t, [alice]);
+    const admin = signedIn(t, alice);
     const edit = (value: string) =>
-      t.withIdentity({ subject: "user_admin" }).mutation(api.moderation.submitDirectEdit, {
+      admin.mutation(api.moderation.submitDirectEdit, {
         ref: { type: "series", id: ids.heat.seriesId },
         baseRevisionId: undefined,
         changes: [{ field: "contentRating", value }],
@@ -226,7 +195,7 @@ describe("deriving series.mature (seriesBrowse.rebuild)", () => {
 
     // Clearing it hands the call back to the evidence at the next rebuild.
     const revision = await t.run((ctx) => ctx.db.query("revisions").first());
-    await t.withIdentity({ subject: "user_admin" }).mutation(api.moderation.submitDirectEdit, {
+    await admin.mutation(api.moderation.submitDirectEdit, {
       ref: { type: "series", id: ids.heat.seriesId },
       baseRevisionId: revision!._id,
       // The edit form clears a select with "".

@@ -3,40 +3,24 @@
 // reviews.test.ts mock both flags on and cover the features themselves; this
 // file mocks them off, so it holds whatever the flags ship as.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it, vi } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
-import { api, internal } from "./_generated/api";
-import schema from "./schema";
+import { api } from "./_generated/api";
+import { insertSeries } from "./test.factories";
+import { ADMIN, PLAIN as OTHER, alice, dave, makeT, seedTeam } from "./test.helpers";
 
 vi.mock("./lib/features", () => ({ FEATURES: { publicReviews: false, comments: false } }));
 
-const ADMIN = "user_admin";
+// The Review and Comment author: no Data Team role, unlike the shared carol.
 const AUTHOR = "user_author";
-const OTHER = "user_other";
 const TEXT = "A quiet, patient story about grief.\nThe art carries it.";
 const target = { kind: "series" as const, publicId: 1 };
 
 async function seed() {
-  const t = convexTest(schema);
-  rateLimiterTest.register(t, "rateLimiter");
-  for (const [subject, username] of [
-    [ADMIN, "alice"],
-    [AUTHOR, "carol"],
-    [OTHER, "dave"],
-  ] as const) {
-    await t.withIdentity({ subject }).mutation(api.users.claimUsername, { username });
-  }
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
+  const t = makeT();
+  await seedTeam(t, [alice, { subject: AUTHOR, username: "carol" }, dave]);
   const ids = await t.run(async (ctx) => {
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Frieren",
-      altTitles: [],
-      searchText: "Frieren",
-    });
+    const seriesId = await insertSeries(ctx, { publicId: 1, title: "Frieren" });
     const author = await ctx.db
       .query("users")
       .withIndex("by_username", (q) => q.eq("usernameNormalized", "carol"))
