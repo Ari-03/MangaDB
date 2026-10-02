@@ -1,13 +1,10 @@
-// MangaDB Convex schema — drafted and settled under wayfinder #11.
-// Embodies the decisions from #5 (hybrid data strategy), #6 (edition mapping),
-// #7 (personal tracking), #10 (Clerk auth), #13 (ingestion policy),
-// #14 (proposal workflow), #15 (bootstrap/seeding), and #19 (routes/SEO).
+// MangaDB Convex schema.
 //
 // Open vocabularies (language codes, binding, currency, reserved usernames)
 // are validated in mutations against code-level constant lists, not schema
 // literals, so extending them is never a schema event. Structural invariants
 // the schema can't express (exactly-one-of, "note required when type=other",
-// binding only on physical) are enforced at submission/approval per #14.
+// binding only on physical) are enforced at submission/approval.
 
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
@@ -16,7 +13,7 @@ import { scoreFormatValidator } from "./lib/scoreFormat";
 
 // ---------- shared validators ----------
 
-// Partial-precision publication date (#13). `sort` is yyyymmdd with zeroed
+// Partial-precision publication date. `sort` is yyyymmdd with zeroed
 // unknown parts (20260800 = "Aug 2026"), giving one indexable key for the
 // calendar, month pages, and upcoming queries; month grouping is a prefix range.
 export const partialDate = v.object({
@@ -122,7 +119,7 @@ export const recordRef = v.union(
   v.object({ type: v.literal("releaseBundle"), id: v.id("releaseBundles") }),
 );
 
-// Human authors record their role at authorship; promotions never rewrite it (#14).
+// Human authors record their role at authorship; promotions never rewrite it.
 const authorRef = v.union(
   v.object({
     kind: v.literal("user"),
@@ -140,7 +137,7 @@ const fieldChange = v.object({
   after: v.optional(v.any()),
 });
 
-// One coherent atomic intent (#14): approval applies every op in a single
+// One coherent atomic intent: approval applies every op in a single
 // mutation. `tempId` lets one proposal create a Volume, its Edition, and
 // coverage together, with later ops referencing the not-yet-created records.
 // `baseRevisionId` is the staleness anchor; absent only for records that
@@ -204,8 +201,8 @@ export const evidence = v.union(
 // Envelope shared by canonical catalog tables. Merged docs keep their publicId
 // and point at the winner, so losing-ID URLs resolve to permanent 301s without
 // a redirects table. Hidden and merged records are locked against ordinary
-// edits in code (#14). `overriddenFields` is the sticky Human Override set
-// (#13); its audit trail lives in Revisions.
+// edits in code. `overriddenFields` is the sticky Human Override set;
+// its audit trail lives in Revisions.
 const canonical = <Table extends string>(table: Table) => ({
   status: v.union(v.literal("active"), v.literal("hidden"), v.literal("merged")),
   mergedIntoId: v.optional(v.id(table)),
@@ -220,7 +217,7 @@ export default defineSchema({
   publishers: defineTable({
     ...canonical("publishers"),
     name: v.string(),
-    // Publishers are the slug-only URL exception (#19); renames 301 via
+    // Publishers are the slug-only URL exception; renames 301 via
     // publisherSlugRedirects.
     slug: v.string(),
     description: v.optional(v.string()),
@@ -543,7 +540,7 @@ export default defineSchema({
     volumeId: v.id("volumes"),
     order: v.number(),
     extent: v.union(v.literal("complete"), v.literal("partial")),
-    // Optional chapter/page description (#6) — descriptive, not modeled.
+    // Optional chapter/page description — descriptive, not modeled.
     note: v.optional(v.string()),
   })
     .index("by_edition", ["editionId", "order"])
@@ -616,7 +613,7 @@ export default defineSchema({
 
   // ---------- provenance & moderation ----------
 
-  // The approved-source registry is data, not code (#13).
+  // The approved-source registry is data, not code.
   approvedSources: defineTable({
     key: v.string(),
     name: v.string(),
@@ -665,7 +662,7 @@ export default defineSchema({
     .index("by_source_record", ["sourceKey", "sourceRecordId"])
     .index("by_record", ["recordRef.type", "recordRef.id"])
     // For the post-sweep withdrawal pass: records a completed full listing
-    // sweep did not touch have disappeared at the source (#13 — retained,
+    // sweep did not touch have disappeared at the source (retained,
     // never deleted; absence is never evidence).
     .index("by_source_seen", ["sourceKey", "lastSeenAt"]),
 
@@ -688,7 +685,7 @@ export default defineSchema({
     // Draft. `currentVersionNo` names the version under review once submitted.
     currentVersionNo: v.number(),
     // Set when any affected record's base Revision changes before approval;
-    // a stale proposal must return to Draft and be rebased (#14).
+    // a stale proposal must return to Draft and be rebased.
     stale: v.optional(v.boolean()),
     claimedBy: v.optional(v.id("users")),
     submittedAt: v.optional(v.number()),
@@ -696,7 +693,7 @@ export default defineSchema({
     decidedAt: v.optional(v.number()),
     // Lineage link when resubmitting rejected work as a new Proposal.
     resubmittedFromId: v.optional(v.id("proposals")),
-    // The mutable working copy while in Draft (#32). Submission freezes it
+    // The mutable working copy while in Draft. Submission freezes it
     // into an immutable proposalVersions row and clears it; Request Changes
     // and rebase seed it back from the last submitted version.
     draft: v.optional(
@@ -710,7 +707,7 @@ export default defineSchema({
     .index("by_state", ["state", "submittedAt"])
     .index("by_author", ["author.userId", "state"]),
 
-  // Immutable once submitted; Request Changes yields a new version (#14).
+  // Immutable once submitted; Request Changes yields a new version.
   proposalVersions: defineTable({
     proposalId: v.id("proposals"),
     versionNo: v.number(),
@@ -720,7 +717,7 @@ export default defineSchema({
     warningsAcknowledged: v.optional(v.array(v.string())),
   }).index("by_proposal", ["proposalId", "versionNo"]),
 
-  // Internal review discussion (#14: private in v1 — Data-Team-only, never
+  // Internal review discussion (private in v1 — Data-Team-only, never
   // public). Decision notes (request-changes reasons, rejections) land here
   // beside free-form comments; the note keeps the version it was made on.
   proposalNotes: defineTable({
@@ -745,16 +742,16 @@ export default defineSchema({
     approvedBy: v.optional(v.id("users")),
     changes: v.array(fieldChange),
     comment: v.string(),
-    // Source citation for importer-authored Revisions (#13, ANN attribution).
+    // Source citation for importer-authored Revisions (ANN attribution).
     citation: v.optional(v.object({ sourceName: v.string(), url: v.string() })),
   })
     .index("by_record", ["ref.type", "ref.id", "seq"])
-    // Launch gate ④ (#40): verifying a correction produced public Revisions.
+    // Launch gate ④: verifying a correction produced public Revisions.
     .index("by_proposal", ["proposalId"]),
 
-  // Rejected import conflicts, keyed exactly as #13 specifies; suppression
-  // lifts when the source offers a different value, the observation is
-  // withdrawn, or registry rules change.
+  // Rejected import conflicts, keyed by record, field, source and offered
+  // value; suppression lifts when the source offers a different value, the
+  // observation is withdrawn, or registry rules change.
   conflictSuppressions: defineTable({
     ref: recordRef,
     field: v.string(),
@@ -762,7 +759,7 @@ export default defineSchema({
     valueHash: v.string(),
   }).index("by_key", ["ref.type", "ref.id", "field", "sourceKey", "valueHash"]),
 
-  // What one Merge physically did (ticket #33): every reference it repointed
+  // What one Merge physically did: every reference it repointed
   // (with the prior value), every duplicate row it deleted, and every row it
   // inserted — exactly what an explicit Split reverses. One manifest per
   // merge; `reversedAt` marks a consumed manifest (a loser merged again later
@@ -830,7 +827,7 @@ export default defineSchema({
     errors: v.array(v.string()),
   }).index("by_source", ["sourceKey"]),
 
-  // Append-only forever (#14): every appointment, revocation, suspension, and
+  // Append-only forever: every appointment, revocation, suspension, and
   // reinstatement lands here and is never edited or deleted. The initial
   // Administrator is appointed by the operator (roles.bootstrapAdministrator),
   // recorded with the system actor.
@@ -868,8 +865,8 @@ export default defineSchema({
     countedAt: v.number(),
   }),
 
-  // Singleton. Bootstrap Mode (#15) is switched off permanently before launch.
-  // The launch bookkeeping (#40, spec §7) also lives here: the latest
+  // Singleton. Bootstrap Mode is switched off permanently before launch.
+  // The launch bookkeeping (spec §7) also lives here: the latest
   // duplicate-sweep summary (QA gate ③) and the Administrator's attestation
   // that the correction loop ran end-to-end for real (launch gate ④).
   appConfig: defineTable({
@@ -893,7 +890,7 @@ export default defineSchema({
     ),
   }),
 
-  // ---------- launch QA (#40, spec §7) ----------
+  // ---------- launch QA (spec §7) ----------
 
   // One row per Series in a drawn quality-gate sample (~50 random, ~50 most
   // prominent). Verification is by hand; a "failed" row names an error whose
@@ -917,7 +914,7 @@ export default defineSchema({
 
   // Title-similarity duplicate sweep results (QA gate ③): one row per flagged
   // Series pair, keyed so a re-sweep never re-opens a resolved pair. "merged"
-  // records that the pair was collapsed via the Merge operation (#33);
+  // records that the pair was collapsed via the Merge operation;
   // "distinct" records a human decision that they are different Series.
   duplicateCandidates: defineTable({
     pairKey: v.string(),
@@ -938,7 +935,7 @@ export default defineSchema({
   // ---------- users & personal tracking ----------
 
   users: defineTable({
-    // Stable Clerk JWT subject (#10) — identity link is never by email.
+    // Stable Clerk JWT subject — identity link is never by email.
     clerkSubject: v.string(),
     // Required at first sign-in; unique case-insensitively via the normalized
     // copy; changeable with immediate release; reserved names checked in code.
@@ -951,7 +948,7 @@ export default defineSchema({
       v.literal("digital"),
       v.literal("both"),
     ),
-    // Private by default (#7); per-Series overrides live on userSeriesStates.
+    // Private by default; per-Series overrides live on userSeriesStates.
     ownershipVisibility: visibility,
     readingVisibility: visibility,
     // Shadowed User (CONTEXT.md): a Moderator's quiet mute. Their Comments
@@ -977,7 +974,7 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_user_release", ["userId", "releaseId"])
     .index("by_user_bundle", ["userId", "bundleId"])
-    // Reverse lookups for merge transfer + impact previews (ticket #33).
+    // Reverse lookups for merge transfer + impact previews.
     .index("by_release", ["releaseId"])
     .index("by_bundle", ["bundleId"]),
 
@@ -996,13 +993,13 @@ export default defineSchema({
       ),
     ),
     following: v.boolean(),
-    // One non-blocking follow prompt per series (#7); dismissal is permanent.
+    // One non-blocking follow prompt per series; dismissal is permanent.
     followPromptDismissed: v.boolean(),
     ownershipVisibility: v.optional(visibility),
     readingVisibility: v.optional(visibility),
   })
     .index("by_user_series", ["userId", "seriesId"])
-    // Reverse lookup for merge transfer + impact previews (ticket #33).
+    // Reverse lookup for merge transfer + impact previews.
     .index("by_series", ["seriesId"]),
 
   // An active reading pass; at most one per (user, release). Confirmed
@@ -1016,7 +1013,7 @@ export default defineSchema({
   })
     .index("by_user_release", ["userId", "releaseId"])
     .index("by_user_series", ["userId", "seriesId"])
-    // Reverse lookups for merge transfer + impact previews (ticket #33).
+    // Reverse lookups for merge transfer + impact previews.
     .index("by_release", ["releaseId"])
     .index("by_series", ["seriesId"]),
 
@@ -1025,12 +1022,12 @@ export default defineSchema({
     volumeId: v.id("volumes"),
     seriesId: v.id("series"),
     readCount: v.number(),
-    // Supports undoing the most recent completion (#7).
+    // Supports undoing the most recent completion.
     lastCompletedAt: v.optional(v.number()),
   })
     .index("by_user_volume", ["userId", "volumeId"])
     .index("by_user_series", ["userId", "seriesId"])
-    // Reverse lookups for merge transfer + impact previews (ticket #33).
+    // Reverse lookups for merge transfer + impact previews.
     .index("by_volume", ["volumeId"])
     .index("by_series", ["seriesId"]),
 

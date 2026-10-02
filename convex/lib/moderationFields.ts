@@ -1,4 +1,4 @@
-// The direct-edit field registry (ticket #31, spec §5): which fields of each
+// The direct-edit field registry (spec §5): which fields of each
 // canonical record type the proposal write path accepts, how each is edited,
 // and how a submitted value is validated and normalized. Plain data + pure
 // functions so the edit-form route renders inputs from the same descriptors
@@ -7,8 +7,8 @@
 // Deliberately absent:
 // - identity/structure (seriesId, editionId, position, coverage, format):
 //   per CONTEXT.md a change to Release identity characteristics is a
-//   different Release, and structural moves are their own proposal ops in a
-//   later slice. Format stays fixed for the same reason (and because Binding
+//   different Release, and structural moves are their own operations, not
+//   field edits. Format stays fixed for the same reason (and because Binding
 //   only applies to physical Releases).
 // - the canonical envelope (status, locked, overriddenFields): maintained by
 //   the machinery itself, never edited as a field.

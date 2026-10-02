@@ -1,4 +1,4 @@
-// Editor Proposals and the review queue (ticket #32, spec §5). The full
+// Editor Proposals and the review queue (spec §5). The full
 // Proposal lifecycle: an Editor drafts a change (mutable working copy),
 // submits it (validation, required change comment, source evidence for
 // factual changes, warning acknowledgment) and it lands In Review in the
@@ -170,7 +170,7 @@ async function buildDraftOps(
 
 /**
  * Validate an op set's creates together with the Release ISBNs its updates
- * write, so the proposal's final ISBN assignments are checked as one (R11).
+ * write, so the proposal's final ISBN assignments are checked as one.
  * Save, submission, and approval all run this; approval inside its
  * transaction, before anything is written.
  */
@@ -789,13 +789,12 @@ export const approveProposal = mutation({
         });
         revisionIds.push(revisionId);
       } else if (op.kind === "clearOverride") {
-        // Override removal arrives with a later slice.
         return fail(
           "unsupportedOp",
           `"${op.kind}" operations are not approvable yet.`,
         );
       } else {
-        // Sensitive catalog operations (ticket #33): the same apply
+        // Sensitive catalog operations: the same apply
         // functions as the direct Moderator mutations (sensitiveOps.ts) —
         // each validates the record's current state and throws (rolling the
         // whole approval back) when the world moved.

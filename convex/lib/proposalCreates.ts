@@ -1,4 +1,4 @@
-// Proposal create ops (ticket #32, spec §5): one Proposal can atomically
+// Proposal create ops (spec §5): one Proposal can atomically
 // create several new records — temp-IDs let later ops reference records
 // earlier ops create, so a Volume + its Edition Line + its Edition +
 // coverage + a Release land together or not at all. This module is the

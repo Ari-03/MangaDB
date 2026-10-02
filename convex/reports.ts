@@ -1,5 +1,5 @@
 // The per-Series "see something missing/wrong? → report" affordance
-// (ticket #40, spec §7): any signed-in user — no data-team role required —
+// (spec §7): any signed-in user — no data-team role required —
 // files a free-text report from a Series page, and it lands in the shared
 // review queue as a zero-op In-Review Proposal. Gap-spotters become the
 // Editor pipeline: a reviewer acts on the report (a direct edit, their own

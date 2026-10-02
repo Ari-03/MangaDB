@@ -1,5 +1,5 @@
-// Catalog seeding, quality gates, and the launch-ready checklist (ticket
-// #40, spec §7). Seeding runs the four stages in order under Bootstrap
+// Catalog seeding, quality gates, and the launch-ready checklist (spec
+// §7). Seeding runs the four stages in order under Bootstrap
 // Mode; the quality gates draw the two ~50-Series hand-verification samples
 // and run the title-similarity duplicate sweep; the checklist computes every
 // launch gate from live data so "ready" is a query result, not a vibe. The
@@ -631,7 +631,7 @@ export const duplicateQueue = query({
  * Resolve one flagged pair (Moderator). "distinct" is the human decision
  * that these are different Series (durable — the pair never re-flags);
  * "merged" is bookkeeping when the duplicates were collapsed via the Merge
- * operation (#33) — the sweep also closes those automatically.
+ * operation — the sweep also closes those automatically.
  */
 export const resolveDuplicate = mutation({
   args: {

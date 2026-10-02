@@ -1,4 +1,4 @@
-// Role governance (ticket #31, spec §4/§5): the initial Administrator is
+// Role governance (spec §4/§5): the initial Administrator is
 // appointed by the operator; Administrators appoint Moderators; Moderators
 // appoint Editors. Every appointment, revocation, suspension, and
 // reinstatement writes a permanent roleAudit row — the audit trail is
@@ -49,7 +49,7 @@ async function guardLastAdministrator(ctx: MutationCtx, target: Doc<"users">) {
 }
 
 /**
- * Bootstrap the initial Administrator (spec §5, ticket #31). Operator-only —
+ * Bootstrap the initial Administrator (spec §5). Operator-only —
  * run once against the deployment, before any Administrator exists:
  *
  *   npx convex run roles:bootstrapAdministrator '{"username":"yourname"}'

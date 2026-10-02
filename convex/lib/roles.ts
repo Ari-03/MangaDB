@@ -1,4 +1,4 @@
-// Data-team roles and the governance matrix (spec §4/§5, ticket #31):
+// Data-team roles and the governance matrix (spec §4/§5):
 // Administrators appoint Moderators (and, as a superset, everything else);
 // Moderators appoint Editors and approve/reject proposals; Editors propose.
 // Role checks always read the live User doc — the role is never baked into a

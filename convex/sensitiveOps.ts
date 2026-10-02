@@ -1,4 +1,4 @@
-// Sensitive catalog operations — the Moderator surface (ticket #33, spec §5):
+// Sensitive catalog operations — the Moderator surface (spec §5):
 // Hide, Restore, Merge, Split, and temporary Locks. Every mutation demands a
 // reason and explicit confirmation of the impact preview (`manageForm`
 // computes it; `confirmImpact` asserts the human saw it), and each applies as

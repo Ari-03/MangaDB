@@ -1,34 +1,24 @@
-// The sensitive catalog operations (ticket #33, spec §5): Hide, Restore,
-// Merge, Split, and temporary Locks. Each apply function validates the
-// record's current state, performs the operation, and appends immutable
-// public Revisions — shared by the direct Moderator mutations
-// (../sensitiveOps.ts) and review-queue approval (../proposals.ts), so both
-// paths behave identically.
+// The sensitive catalog operations (spec §5): Hide, Restore, Lock, Unlock,
+// Merge and Split. Each apply function checks the record's current state,
+// performs the operation and appends immutable public Revisions; the direct
+// Moderator mutations (../sensitiveOps.ts) and review-queue approval
+// (../proposals.ts) share them, so both paths behave the same.
 //
-// Merge picks a survivor and physically transfers Source Observations,
-// compatible relationships, child records, and user tracking to it; the
-// loser keeps its identity, public ID, and revision history and points at
-// the winner (`status: "merged"` + `mergedIntoId`), which is what turns
-// every losing-ID URL into a permanent 301 — no redirects table. Everything
-// a merge moved is written to a mergeManifests row, and an explicit Split
-// (the only way to reverse a mistaken merge) replays that manifest backward,
-// skipping anything the world changed since. Neither Merge nor Split makes
-// any User's tracking more visible on their public profile than it was just
-// before. Both find the Users concerned through one enumeration of who
-// tracks what, per record and surface (trackersOf: the records touched and
-// everything under them, as they stand). Split asks it about the loser and
-// every record its manifests moved, so tracking logged or filed there since
-// the merge counts, and then re-derives the touched Releases' Series from
-// the links it restored, so no stored Series outlives the coverage it came
-// from. Governance is read from the stored records, hidden ones included,
-// never through a display filter. Wherever tracking changes the Series it
-// answers to, those Series absorb the overrides of the Series that same
-// tracking left (absorbedFrom, stricterVisibility; a merge logs these
-// writes in its manifest, Split's are final), and Split never widens an
-// override it replays; a catalog record the User does not track narrows
-// nothing. Moving tracked Releases, Bundles or rated Editions between some
-// Series and none is refused, by merge or Split alike, since no override
-// governs tracking with no Series.
+// Merge moves Source Observations, relationships, child records and user
+// tracking to the survivor and points the loser at it (`status: "merged"`,
+// `mergedIntoId`), which makes every losing-ID URL a permanent 301. What a
+// merge moved goes in a mergeManifests row; Split, the only reversal,
+// replays it backward and skips anything changed since.
+//
+// Neither Merge nor Split makes any User's tracking more visible on their
+// public profile than it was just before. Both find the Users concerned
+// through one enumeration (trackersOf), reading governance from the stored
+// records, hidden ones included. Where tracking changes the Series it
+// answers to, those Series absorb the overrides of the Series it left
+// (absorbedFrom, stricterVisibility), and Split never widens an override it
+// replays; a record the User does not track narrows nothing. Moving tracked
+// Releases, Bundles or rated Editions between some Series and none is
+// refused, since no override governs tracking with no Series.
 
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -429,16 +419,12 @@ function absorbedFrom(
 
 /**
  * One User's tracking on some surfaces answered to the `from` Series and now
- * answers to the `to` Series (a cross-Series merge moved it, or re-derived
+ * answers to the `to` Series (a cross-Series merge moved it or re-derived
  * its Release's Series; a repair re-parented its Volume). Every `to` Series
  * absorbs the overrides of the Series the tracking left (absorbedFrom under
- * `gate`, stricterVisibility), on a new state row where the User had none;
- * tracking with no Series followed the default alone. A merge's
- * synthesized rows are undone by Split only once bare again, and Split
- * never widens them back (keepSplitVisibility). Merges refuse to move
- * tracked Releases between some Series and none (refuseSeriesChange), and
- * Split refuses to leave them with none; a carry to no Series is a no-op
- * here.
+ * `gate`, stricterVisibility), on a new state row where the User had none.
+ * Split removes such a row only once it is bare again. A carry to no
+ * Series is a no-op; callers refuse that case (refuseSeriesChange).
  */
 export async function carryVisibility(
   ctx: MutationCtx,
@@ -913,17 +899,13 @@ async function transferRatingsAndReviews(
 }
 
 /**
- * Keep an Edition's own Ratings, Reviews and Favorites reachable when its
- * coverage stops making it an omnibus: once its coverage rows name exactly
- * one Volume (a Volume merge folded its two Volumes into one, or a Data Team
- * remap), it is rated through that Volume (lib/ratings.ts omnibusEdition),
- * so everything users left on the Edition moves to the Volume. The
- * Volume's own row wins where a user has both, and the Edition's is removed.
- * Both aggregates are recounted, which drops the Edition's ratingStats row.
- * Every move lands in `log`: a merge passes its manifest's log so a Split
- * puts the rows back (applySplit recounts what they touched). Without a log
- * the collapse is one-way. Does nothing while the coverage names zero or
- * several Volumes. Returns how many rows moved or were removed.
+ * Keep an Edition's own Ratings, Reviews and Favorites reachable once its
+ * coverage names exactly one Volume (a Volume merge or a remap), since it is
+ * then rated through that Volume (lib/ratings.ts omnibusEdition): they move
+ * to the Volume, the Volume's row winning where a user has both, and both
+ * aggregates are recounted. Moves land in `log`, so a merge's manifest lets
+ * Split put them back; without a log the collapse is one-way. Returns how
+ * many rows moved or were removed.
  */
 export async function collapseEditionTakes(
   ctx: MutationCtx,
@@ -1824,20 +1806,15 @@ function addRefs<K extends RecordKind>(ctx: MutationCtx, into: RecordSets, kind:
 }
 
 /**
- * What a Split touches, read before it replays anything. It touches the
- * loser (every reference to it answers to it again, not to the survivor)
- * and every record whose Series the replay changes: a Volume or Edition
- * Line the manifests re-parented, an Edition whose coverage or line they
- * changed, a Release whose Series or Edition they changed (and both
- * Editions), a Bundle whose members they changed. `users`: everyone
- * tracking those or anything under them (trackersOf, as the database stands
- * now: tracking logged since the merge counts, whichever operation filed it
- * there), and the owners of the personal rows the manifests moved, removed
- * or inserted, each with the records they track and on which surfaces (a
- * personal row is tracked on every record it points at, as the profile
- * gates it: a pass on its Release and on its Series). `records`: every
- * record trackersOf read, and every record such a personal row points at on
- * either side of the replay.
+ * What a Split touches, read before it replays anything: the loser and
+ * every record whose Series the replay changes (a re-parented Volume or
+ * Edition Line, an Edition whose coverage or line moved, a Release whose
+ * Series or Edition moved and both its Editions, a Bundle whose members
+ * moved). `users`: everyone tracking those or anything under them as the
+ * database stands now (trackersOf), plus the owners of the personal rows
+ * the manifests moved, removed or inserted, each tracking every record
+ * their row points at. `records`: everything trackersOf read, plus every
+ * record those personal rows point at on either side of the replay.
  */
 async function splitScope(ctx: MutationCtx, loser: RecordRef, manifests: Array<Doc<"mergeManifests">>) {
   const users: Trackers = new Map();
@@ -1981,21 +1958,15 @@ async function splitGovernance(ctx: MutationCtx, loser: RecordRef, manifests: Ar
 
 /**
  * After a Split, no surface shows more than it did just before (the floor
- * splitGovernance took), and nothing the User does not track is narrowed.
- * For each User found: each Series their tracked records answered to gets
- * back at most its own earlier overrides (the replay may have reverted what
- * the merge narrowed, or taken its row back to the loser; a moved state row
- * is itself tracked, on both surfaces), and for each tracked record whose
- * Series changed, each Series it answers to now absorbs the earlier
- * overrides of the Series that record left (absorbedFrom; gate "one" for an
- * omnibus Rating's Edition), on the surfaces the User tracks it on. The
- * sources gathered per Series and surface are applied in one write
- * (stricterVisibility is monotone), so the work is one read, and at most
- * one write, per User and Series their own tracking reaches: proportional
- * to the tracking rows the Split moves or re-gates, which trackersOf reads
- * regardless. A Release or Bundle someone tracks that the Split would leave
- * with no Series is refused: the account default alone would govern it, and
- * no override could keep it as private.
+ * splitGovernance took), and nothing a User does not track is narrowed.
+ * Per User: each Series their tracked records answered to gets back at most
+ * its own earlier overrides, and each Series a tracked record answers to
+ * now absorbs the earlier overrides of the Series that record left
+ * (absorbedFrom; gate "one" for an omnibus Rating's Edition). The sources
+ * per Series are applied in one write (stricterVisibility is monotone): one
+ * read and at most one write per User and Series. A tracked Release or
+ * Bundle the Split would leave with no Series is refused, since no override
+ * could keep it private.
  */
 async function keepSplitVisibility(
   ctx: MutationCtx,
@@ -2039,23 +2010,14 @@ async function keepSplitVisibility(
 }
 
 /**
- * Split — the only reversal of a mistaken merge: replay the merge's
- * manifest(s) backward (delete what it inserted, reinsert what it removed,
- * repoint back every reference that still points where the merge left it)
- * and reactivate the loser. References the world re-aimed since the merge
- * are left alone, and personal rows of a deleted User are never reinserted.
- * The touched Editions' Release Series are then derived afresh from the
- * coverage and lines the replay left, and their passes filed under them
- * (recomputeReleaseDenorms), so a replayed value never outlives the links
- * it was derived from.
- * No profile shows anything after a Split that it did not show just before
- * (keepSplitVisibility), for every User tracking what the Split touches
- * (splitScope: the loser, what the manifests moved, and everything under
- * those, with whatever was logged or filed there since the merge): an
- * override the merge narrowed stays narrow (the User may have tracked more
- * under it since, or another merge relied on it), and every Series a
- * record the User tracks answers to afterwards takes on what the Series
- * that record answered to just before hid.
+ * Split, the only reversal of a mistaken merge: replay the merge's
+ * manifests backward (delete what they inserted, reinsert what they removed
+ * unless its User is gone, repoint every reference still where the merge
+ * left it) and reactivate the loser. The touched Editions' Release Series
+ * are then derived afresh from the restored links (recomputeReleaseDenorms).
+ * No profile shows more afterwards than just before (keepSplitVisibility):
+ * an override the merge narrowed stays narrow, as the User may have tracked
+ * more under it in the meantime.
  */
 export async function applySplit(
   ctx: MutationCtx,

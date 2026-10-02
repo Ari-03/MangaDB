@@ -1,11 +1,11 @@
-// The moderation core (ticket #31, spec §4/§5): immutable, versioned
-// Proposals are the single write path for catalog changes. This slice
-// implements the Administrator/Moderator direct edit — a save that is an
-// immediately approved Proposal Version — producing one immutable public
-// Revision per affected record, plus the public per-record history and the
-// implicit Human Override marking. Editor submission and the review queue
-// (ticket #32) live in proposals.ts and reuse `applyUpdate`,
-// `validateChanges`, and the record plumbing exported here.
+// The moderation core (spec §4/§5): immutable, versioned Proposals are the
+// single write path for catalog changes. This module holds the
+// Administrator/Moderator direct edit — a save that is an immediately
+// approved Proposal Version — producing one immutable public Revision per
+// affected record, plus the public per-record history and the implicit
+// Human Override marking. Editor submission and the review queue live in
+// proposals.ts and reuse `applyUpdate`, `validateChanges`, and the record
+// plumbing exported here.
 
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -71,7 +71,7 @@ export async function revisionsOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
     .collect();
 }
 
-// ---------- Human Override detection (spec §4, ticket #31) ----------
+// ---------- Human Override detection (spec §4) ----------
 
 /**
  * Which of `fields` are currently import-authored on this record: the most
@@ -197,7 +197,7 @@ export async function insertRevision(
  * Apply one approved update op to its record: staleness check against the
  * base Revision, the patch itself (plus derived fields), implicit Human
  * Override marking, and the new immutable Revision. Shared by direct edits
- * today and the review-queue approval in the next slice.
+ * and review-queue approval.
  */
 export async function applyUpdate(
   ctx: MutationCtx,
@@ -248,7 +248,8 @@ export async function applyUpdate(
 
   // Implicit Human Override (spec §4): a human author's approved change to an
   // import-authored field joins the record's sticky overridden-fields list.
-  // Only an explicit clearOverride op (a later slice) removes an entry.
+  // Only an explicit clearOverride op may remove an entry, and none is
+  // approvable yet.
   if (args.author.kind === "user") {
     const overridden = importAuthoredFields(
       history,
@@ -265,7 +266,7 @@ export async function applyUpdate(
 }
 
 /**
- * The Administrator/Moderator direct edit (ticket #31): the form's save is an
+ * The Administrator/Moderator direct edit: the form's save is an
  * immediately approved Proposal Version — the same machinery as reviewed
  * proposals, with the author as approver — producing one immutable public
  * Revision. Hidden and merged records are locked against ordinary edits, as
@@ -447,7 +448,7 @@ export async function displayInfo(
  * editable fields with current values (straight from the registry the
  * mutations validate against), the base Revision for the staleness check,
  * and the record's overridden-fields list. Editors use it to draft update
- * Proposals (#32); Moderators for direct edits — the mutations re-check the
+ * Proposals; Moderators for direct edits — the mutations re-check the
  * stronger role.
  */
 export const editForm = query({
@@ -584,7 +585,7 @@ export const sourceBlurbs = query({
   },
 });
 
-// ---------- public revision history (spec §5, ticket #31) ----------
+// ---------- public revision history (spec §5) ----------
 
 const historyTargetArg = v.union(
   v.literal("series"),
