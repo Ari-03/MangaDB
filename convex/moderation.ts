@@ -7,7 +7,7 @@
 // (ticket #32) live in proposals.ts and reuse `applyUpdate`,
 // `validateChanges`, and the record plumbing exported here.
 
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   mutation,
@@ -49,13 +49,13 @@ export const TABLE_FOR_TYPE = {
 
 export type CatalogTable = (typeof TABLE_FOR_TYPE)[RecordType];
 export type CatalogDoc = Doc<CatalogTable>;
-export type RecordRef = { type: RecordType; id: Id<CatalogTable> };
+export type RecordRef = Infer<typeof recordRef>;
 
 export async function getCanonical(
   ctx: QueryCtx | MutationCtx,
   ref: RecordRef,
 ): Promise<CatalogDoc | null> {
-  return (await ctx.db.get(ref.id)) as CatalogDoc | null;
+  return await ctx.db.get(ref.id);
 }
 
 /** Revisions of one record, newest first (the by_record index ends on seq). */
@@ -63,7 +63,7 @@ export async function revisionsOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
   return await ctx.db
     .query("revisions")
     .withIndex("by_record", (q) =>
-      q.eq("ref.type", ref.type).eq("ref.id", ref.id as never),
+      q.eq("ref.type", ref.type).eq("ref.id", ref.id),
     )
     .order("desc")
     .collect();
@@ -205,7 +205,7 @@ export async function applyUpdate(
   await ctx.db.patch(ref.id, patch as never);
 
   const revisionId = await ctx.db.insert("revisions", {
-    ref: ref as never,
+    ref,
     seq: (latest?.seq ?? 0) + 1,
     proposalId: args.proposalId,
     author: args.author,
@@ -232,7 +232,7 @@ export const submitDirectEdit = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireModerator(ctx);
-    const ref = args.ref as RecordRef;
+    const ref = args.ref;
 
     const comment = args.comment.trim();
     if (comment === "") fail("commentRequired", "Every change needs a change comment.");
@@ -267,7 +267,7 @@ export const submitDirectEdit = mutation({
       ops: [
         {
           kind: "update",
-          ref: ref as never,
+          ref,
           baseRevisionId: args.baseRevisionId,
           changes,
         },
@@ -486,7 +486,7 @@ export const sourceBlurbs = query({
     const field = ref.type === "release" ? "description" : "synopsis";
     const canonicalText = blurbText((doc as Record<string, unknown>)[field]);
 
-    const touch = latestTouch(await revisionsOf(ctx, { type: ref.type, id }), field);
+    const touch = latestTouch(await revisionsOf(ctx, { type: ref.type, id } as RecordRef), field);
     const author =
       touch === undefined
         ? null

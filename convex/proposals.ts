@@ -160,7 +160,7 @@ async function buildDraftOps(
     const latest = (await revisionsOf(ctx, ref))[0];
     ops.push({
       kind: "update",
-      ref: ref as never,
+      ref,
       baseRevisionId: latest?._id,
       changes,
     });
@@ -244,7 +244,7 @@ function needsSourceEvidence(ops: StoredOp[]): boolean {
   for (const op of ops) {
     if (op.kind === "create") return true;
     if (op.kind !== "update") continue;
-    const type = (op.ref as RecordRef).type;
+    const type = op.ref.type;
     for (const change of op.changes) {
       if (!fieldDescriptor(type, change.field)?.editorial) return true;
     }
@@ -272,7 +272,7 @@ async function staleRecordsOf(
   const stale: StaleRecord[] = [];
   for (const op of ops) {
     if (op.kind !== "update") continue;
-    const ref = op.ref as RecordRef;
+    const ref = op.ref;
     const doc = await getCanonical(ctx, ref);
     if (!doc || doc.status !== "active" || doc.locked) {
       stale.push({ type: ref.type, id: ref.id as string, reason: "unavailable" });
@@ -384,7 +384,7 @@ export const submitProposal = mutation({
     await planOps(ctx, draft.ops);
     for (const op of draft.ops) {
       if (op.kind !== "update") continue;
-      const ref = op.ref as RecordRef;
+      const ref = op.ref;
       const doc = await getCanonical(ctx, ref);
       validateChanges(
         ref.type,
@@ -502,7 +502,7 @@ export const rebaseProposal = mutation({
         ops.push(op);
         continue;
       }
-      const ref = op.ref as RecordRef;
+      const ref = op.ref;
       const doc = await getCanonical(ctx, ref);
       if (!doc || doc.status !== "active" || doc.locked) {
         dropped.push(`${ref.type} is no longer editable`);
@@ -681,8 +681,8 @@ export const rejectProposal = mutation({
             .query("conflictSuppressions")
             .withIndex("by_key", (q) =>
               q
-                .eq("ref.type", (op.ref as RecordRef).type)
-                .eq("ref.id", (op.ref as RecordRef).id as never)
+                .eq("ref.type", op.ref.type)
+                .eq("ref.id", op.ref.id)
                 .eq("field", change.field)
                 .eq("sourceKey", sourceKey)
                 .eq("valueHash", hash),
@@ -755,7 +755,7 @@ export const approveProposal = mutation({
         if (record.existing) continue;
         revisionIds.push(
           await ctx.db.insert("revisions", {
-            ref: record.ref as never,
+            ref: record.ref,
             seq: 1,
             proposalId: args.proposalId,
             author: proposal.author,
@@ -773,7 +773,7 @@ export const approveProposal = mutation({
           publicId: record.publicId,
         });
       } else if (op.kind === "update") {
-        const ref = op.ref as RecordRef;
+        const ref = op.ref;
         const doc = await getCanonical(ctx, ref);
         // Re-validate the exact reviewed values against hard invariants.
         const changes = validateChanges(
@@ -813,13 +813,13 @@ export const approveProposal = mutation({
           revisionIds.push(
             ...(await applyMerge(
               ctx,
-              op.survivor as RecordRef,
-              op.merged as RecordRef,
+              op.survivor,
+              op.merged,
               meta,
             )),
           );
         } else {
-          const ref = op.ref as RecordRef;
+          const ref = op.ref;
           const apply =
             op.kind === "hide"
               ? applyHide
@@ -886,7 +886,7 @@ function recordTypesOf(ops: StoredOp[]): string[] {
       const type = CREATABLE_TABLES[op.table as keyof typeof CREATABLE_TABLES];
       types.add(type ?? op.table);
     } else if ("ref" in op) {
-      types.add((op.ref as RecordRef).type);
+      types.add(op.ref.type);
     }
   }
   return [...types].sort();
@@ -981,7 +981,7 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
         summary: await describeCreate(ctx, op, tempLabels),
       });
     } else if (op.kind === "update") {
-      const ref = op.ref as RecordRef;
+      const ref = op.ref;
       const doc = await getCanonical(ctx, ref);
       const title = doc
         ? (await displayInfo(ctx, ref.type, doc)).title
@@ -1006,7 +1006,7 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
     } else if (op.kind === "merge") {
       rendered.push({
         kind: "merge" as const,
-        summary: `Merge ${await refLabel(ctx, op.merged as RecordRef)} into ${await refLabel(ctx, op.survivor as RecordRef)}`,
+        summary: `Merge ${await refLabel(ctx, op.merged)} into ${await refLabel(ctx, op.survivor)}`,
       });
     } else {
       const verb =
@@ -1023,7 +1023,7 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
                   : "Clear an override on";
       rendered.push({
         kind: op.kind,
-        summary: `${verb} ${await refLabel(ctx, op.ref as RecordRef)}`,
+        summary: `${verb} ${await refLabel(ctx, op.ref)}`,
       });
     }
   }

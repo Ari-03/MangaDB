@@ -74,7 +74,7 @@ async function recordRevision(
 ): Promise<Id<"revisions">> {
   const latest = (await revisionsOf(ctx, ref))[0];
   return await ctx.db.insert("revisions", {
-    ref: ref as never,
+    ref,
     seq: (latest?.seq ?? 0) + 1,
     proposalId: meta.proposalId,
     author: meta.author,
@@ -110,7 +110,7 @@ export async function applyHide(
     fail("badState", `Only active records can be hidden; this ${ref.type} is ${doc.status}.`);
   }
   if (doc.locked) fail("locked", "This record is temporarily locked — unlock it first.");
-  await ctx.db.patch(ref.id, { status: "hidden" } as never);
+  await ctx.db.patch(ref.id, { status: "hidden" });
   return [
     await recordRevision(
       ctx,
@@ -134,7 +134,7 @@ export async function applyRestore(
   if (doc.status !== "hidden") {
     fail("badState", `Only hidden records can be restored; this ${ref.type} is ${doc.status}.`);
   }
-  await ctx.db.patch(ref.id, { status: "active" } as never);
+  await ctx.db.patch(ref.id, { status: "active" });
   return [
     await recordRevision(
       ctx,
@@ -158,7 +158,7 @@ export async function applyLock(
     fail("badState", `A ${doc.status} record is already locked by its status.`);
   }
   if (doc.locked) fail("badState", "This record is already locked.");
-  await ctx.db.patch(ref.id, { locked: true } as never);
+  await ctx.db.patch(ref.id, { locked: true });
   return [
     await recordRevision(
       ctx,
@@ -176,7 +176,7 @@ export async function applyUnlock(
 ): Promise<Id<"revisions">[]> {
   const doc = await requireRecord(ctx, ref);
   if (!doc.locked) fail("badState", "This record is not locked.");
-  await ctx.db.patch(ref.id, { locked: undefined } as never);
+  await ctx.db.patch(ref.id, { locked: undefined });
   return [
     await recordRevision(
       ctx,
@@ -250,7 +250,7 @@ async function transferProvenance(
   const observations = await ctx.db
     .query("sourceObservations")
     .withIndex("by_record", (q) =>
-      q.eq("recordRef.type", loser.type).eq("recordRef.id", loser.id as never),
+      q.eq("recordRef.type", loser.type).eq("recordRef.id", loser.id),
     )
     .collect();
   for (const observation of observations) {
@@ -261,7 +261,7 @@ async function transferProvenance(
   const suppressions = await ctx.db
     .query("conflictSuppressions")
     .withIndex("by_key", (q) =>
-      q.eq("ref.type", loser.type).eq("ref.id", loser.id as never),
+      q.eq("ref.type", loser.type).eq("ref.id", loser.id),
     )
     .collect();
   for (const suppression of suppressions) {
@@ -1064,9 +1064,9 @@ async function collapsibleTakes(ctx: QueryCtx, volumeId: Id<"volumes">): Promise
 
 /** A Series, Volume or Edition ref as a rating target; other record types have none. */
 function ratingTarget(ref: RecordRef): TargetId | null {
-  if (ref.type === "series") return { kind: "series", id: ref.id as Id<"series"> };
-  if (ref.type === "volume") return { kind: "volume", id: ref.id as Id<"volumes"> };
-  if (ref.type === "edition") return { kind: "edition", id: ref.id as Id<"editions"> };
+  if (ref.type === "series") return { kind: "series", id: ref.id };
+  if (ref.type === "volume") return { kind: "volume", id: ref.id };
+  if (ref.type === "edition") return { kind: "edition", id: ref.id };
   return null;
 }
 
@@ -1774,8 +1774,8 @@ export async function applyMerge(
     mergedIntoId: survivor.id,
   } as never);
   await ctx.db.insert("mergeManifests", {
-    loserRef: loser as never,
-    survivorRef: survivor as never,
+    loserRef: loser,
+    survivorRef: survivor,
     proposalId: meta.proposalId,
     repointed: log.repointed,
     removed: log.removed,
@@ -1824,7 +1824,7 @@ async function reversibleManifestsOf(
   const manifests = await ctx.db
     .query("mergeManifests")
     .withIndex("by_loser", (q) =>
-      q.eq("loserRef.type", ref.type).eq("loserRef.id", ref.id as never),
+      q.eq("loserRef.type", ref.type).eq("loserRef.id", ref.id),
     )
     .collect();
   const lastSplit = Math.max(
@@ -2157,7 +2157,7 @@ export async function applySplit(
   if (!latest) {
     fail("noManifest", "This merge predates manifests and cannot be split automatically.");
   }
-  const survivor = latest.survivorRef as RecordRef;
+  const survivor = latest.survivorRef;
   const governed = await splitGovernance(ctx, ref, manifests);
 
   for (const manifest of manifests) {
@@ -2204,7 +2204,7 @@ export async function applySplit(
     }
   }
 
-  await ctx.db.patch(ref.id, { status: "active", mergedIntoId: undefined } as never);
+  await ctx.db.patch(ref.id, { status: "active", mergedIntoId: undefined });
   // Release Series, and the Series their passes are filed under, are derived
   // from the links just restored; like every write a Split makes, the
   // re-derivation is final (a scratch log).
@@ -2273,14 +2273,14 @@ export async function impactOf(
     ctx.db
       .query("sourceObservations")
       .withIndex("by_record", (q) =>
-        q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id as never),
+        q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id),
       ),
   );
   add("Public revisions", (await revisionsOf(ctx, ref)).length);
 
   switch (ref.type) {
     case "publisher": {
-      const id = ref.id as Id<"publishers">;
+      const id = ref.id;
       // A company has a handful of imprints; the read stops at the cap and
       // says so rather than count an unbounded set.
       const children = await ctx.db
@@ -2319,12 +2319,12 @@ export async function impactOf(
     case "seriesFamily": {
       await count(
         "Member series",
-        ctx.db.query("series").withIndex("by_family", (q) => q.eq("familyId", ref.id as Id<"seriesFamilies">)),
+        ctx.db.query("series").withIndex("by_family", (q) => q.eq("familyId", ref.id)),
       );
       break;
     }
     case "series": {
-      const id = ref.id as Id<"series">;
+      const id = ref.id;
       await count("Volumes", ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", id)));
       await count("Edition lines", ctx.db.query("editionLines").withIndex("by_series", (q) => q.eq("seriesId", id)));
       const fromEdges = await ctx.db
@@ -2361,7 +2361,7 @@ export async function impactOf(
       break;
     }
     case "volume": {
-      const id = ref.id as Id<"volumes">;
+      const id = ref.id;
       await count(
         "Coverage rows (editions covering this volume)",
         ctx.db.query("volumeCoverages").withIndex("by_volume", (q) => q.eq("volumeId", id)),
@@ -2383,12 +2383,12 @@ export async function impactOf(
     case "editionLine": {
       await count(
         "Editions in this line",
-        ctx.db.query("editions").withIndex("by_line", (q) => q.eq("editionLineId", ref.id as Id<"editionLines">)),
+        ctx.db.query("editions").withIndex("by_line", (q) => q.eq("editionLineId", ref.id)),
       );
       break;
     }
     case "edition": {
-      const id = ref.id as Id<"editions">;
+      const id = ref.id;
       await count(
         "Coverage rows",
         ctx.db.query("volumeCoverages").withIndex("by_edition", (q) => q.eq("editionId", id)),
@@ -2400,7 +2400,7 @@ export async function impactOf(
       break;
     }
     case "release": {
-      const id = ref.id as Id<"releases">;
+      const id = ref.id;
       await count("Variants", ctx.db.query("releaseVariants").withIndex("by_release", (q) => q.eq("releaseId", id)));
       await count(
         "Bundle memberships",
@@ -2417,7 +2417,7 @@ export async function impactOf(
       break;
     }
     case "releaseVariant": {
-      const id = ref.id as Id<"releaseVariants">;
+      const id = ref.id;
       add(
         "Collection entries pinning this variant",
         (await ctx.db.query("collectionEntries").collect()).filter(
@@ -2433,7 +2433,7 @@ export async function impactOf(
       break;
     }
     case "releaseBundle": {
-      const id = ref.id as Id<"releaseBundles">;
+      const id = ref.id;
       await count(
         "Member releases",
         ctx.db.query("bundleMemberships").withIndex("by_bundle", (q) => q.eq("bundleId", id)),

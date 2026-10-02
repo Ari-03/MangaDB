@@ -138,10 +138,10 @@ const singleRefArgs = {
 export const hideRecord = mutation({
   args: singleRefArgs,
   handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
+    const ref = args.ref;
     const meta = await beginOperation(ctx, args, async (baseOf) => ({
       kind: "hide",
-      ref: ref as never,
+      ref,
       baseRevisionId: await baseOf(ref),
     }));
     const revisionIds = await applyHide(ctx, ref, meta);
@@ -153,10 +153,10 @@ export const hideRecord = mutation({
 export const restoreRecord = mutation({
   args: singleRefArgs,
   handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
+    const ref = args.ref;
     const meta = await beginOperation(ctx, args, async (baseOf) => ({
       kind: "restore",
-      ref: ref as never,
+      ref,
       baseRevisionId: await baseOf(ref),
     }));
     const revisionIds = await applyRestore(ctx, ref, meta);
@@ -168,10 +168,10 @@ export const restoreRecord = mutation({
 export const lockRecord = mutation({
   args: singleRefArgs,
   handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
+    const ref = args.ref;
     const meta = await beginOperation(ctx, args, async () => ({
       kind: "lock",
-      ref: ref as never,
+      ref,
     }));
     const revisionIds = await applyLock(ctx, ref, meta);
     return { proposalId: meta.proposalId, revisionIds };
@@ -181,10 +181,10 @@ export const lockRecord = mutation({
 export const unlockRecord = mutation({
   args: singleRefArgs,
   handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
+    const ref = args.ref;
     const meta = await beginOperation(ctx, args, async () => ({
       kind: "unlock",
-      ref: ref as never,
+      ref,
     }));
     const revisionIds = await applyUnlock(ctx, ref, meta);
     return { proposalId: meta.proposalId, revisionIds };
@@ -204,8 +204,8 @@ export const mergeRecords = mutation({
     confirmImpact: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const survivor = args.survivor as RecordRef;
-    const loser = args.loser as RecordRef;
+    const survivor = args.survivor;
+    const loser = args.loser;
     const meta = await beginOperation(ctx, args, async (baseOf) => {
       const bases: Id<"revisions">[] = [];
       const survivorBase = await baseOf(survivor);
@@ -214,8 +214,8 @@ export const mergeRecords = mutation({
       if (loserBase) bases.push(loserBase);
       return {
         kind: "merge",
-        survivor: survivor as never,
-        merged: loser as never,
+        survivor,
+        merged: loser,
         baseRevisionIds: bases,
       };
     });
@@ -228,10 +228,10 @@ export const mergeRecords = mutation({
 export const splitRecord = mutation({
   args: singleRefArgs,
   handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
+    const ref = args.ref;
     const meta = await beginOperation(ctx, args, async (baseOf) => ({
       kind: "split",
-      ref: ref as never,
+      ref,
       baseRevisionId: await baseOf(ref),
       details: {},
     }));
