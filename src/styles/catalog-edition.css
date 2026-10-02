@@ -302,11 +302,7 @@
 .release-binding {
   text-transform: capitalize;
 }
-.release-date {
-  font-weight: 800;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
+.release-date,
 .release-price {
   font-weight: 800;
   color: var(--text);
@@ -468,7 +464,6 @@
   color: var(--accent);
 }
 .pub-shelf-count {
-  font-family: var(--body);
   font-size: 0.8rem;
   font-weight: 700;
   color: var(--text-mute);

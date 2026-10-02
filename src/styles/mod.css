@@ -470,7 +470,10 @@
 
 .queue-warnings { color: var(--mod-warn); }
 
-.proposal-actions {
+.proposal-actions,
+.proposal-version,
+.proposal-notes,
+.manage-action {
   margin-top: 26px;
   padding: 0 18px 18px;
   border: 1px solid var(--line);
@@ -483,7 +486,8 @@
   border-bottom: 1px solid var(--line);
   font-size: 1.02rem;
 }
-.proposal-actions label {
+.proposal-actions label,
+.proposal-notes label {
   display: grid;
   gap: 5px;
   margin: 16px 0;
@@ -493,20 +497,16 @@
   color: var(--text-dim);
 }
 
-/* one immutable version, or the mutable draft */
-.proposal-version {
-  margin-top: 26px;
-  padding: 0 18px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
-.proposal-version > h2 {
+.proposal-version > h2,
+.proposal-notes > h2,
+.manage-action > h2 {
   margin: 0 -18px 0;
   padding: 14px 18px;
   border-bottom: 1px solid var(--line);
   font-size: 1.02rem;
 }
+
+/* one immutable version, or the mutable draft */
 .proposal-version > h3 {
   margin: 20px 0 8px;
   font-size: 0.92rem;
@@ -544,19 +544,6 @@
 .proposal-evidence a:hover { border-bottom: 1px solid var(--accent); }
 
 /* internal discussion — data-team only, never public */
-.proposal-notes {
-  margin-top: 26px;
-  padding: 0 18px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
-.proposal-notes > h2 {
-  margin: 0 -18px 0;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--line);
-  font-size: 1.02rem;
-}
 .proposal-notes > .section-hint { margin-top: 14px; }
 .proposal-notes ol {
   list-style: none;
@@ -572,15 +559,6 @@
   color: var(--text-dim);
 }
 .proposal-notes ol strong { color: var(--text); }
-.proposal-notes label {
-  display: grid;
-  gap: 5px;
-  margin: 16px 0;
-  max-width: 40rem;
-  font-size: 0.86rem;
-  font-weight: 700;
-  color: var(--text-dim);
-}
 
 /* ---------- sensitive operations (#33) ------------------------------------ */
 
@@ -627,19 +605,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.manage-action {
-  margin-top: 26px;
-  padding: 0 18px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
-.manage-action > h2 {
-  margin: 0 -18px 0;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--line);
-  font-size: 1.02rem;
-}
 .manage-action > .section-hint { margin-top: 14px; }
 .manage-action form {
   display: grid;

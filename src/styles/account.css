@@ -417,14 +417,6 @@
 }
 [data-theme="light"] .form-error { --danger: #a8371a; }
 
-/* the followed marker still rides on Releases-browser rows (#29) */
-.followed-marker {
-  color: var(--accent);
-  font-size: 0.78rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
 /* --- Tracking visibility (#30): segmented pills -------------------------- */
 
 .sharing-settings { display: grid; gap: 18px; }

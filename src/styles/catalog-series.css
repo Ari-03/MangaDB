@@ -369,7 +369,6 @@
 }
 .report-form textarea::placeholder { color: var(--text-mute); }
 .report-actions { display: flex; gap: 10px; }
-.form-error { font-size: 0.86rem; color: #e08a6a; }
 [data-theme="light"] .form-error { color: #a23c15; }
 
 /* --- Volume page --------------------------------------------------------

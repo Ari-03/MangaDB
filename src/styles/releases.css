@@ -18,8 +18,6 @@
 }
 .page-title { font-size: clamp(1.9rem, 1.3rem + 2vw, 2.9rem); }
 .page-kicker { color: var(--text-mute); font-size: 0.95rem; margin-bottom: 4px; }
-/* Pages that have not adopted .page-kicker yet still label their masthead. */
-.eyebrow { color: var(--text-mute); font-size: 0.95rem; margin: 0 0 4px; }
 
 .month-nav {
   margin-left: auto;
