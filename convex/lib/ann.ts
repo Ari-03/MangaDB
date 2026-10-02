@@ -23,7 +23,7 @@
 // `parseReleasePage` reads (see ann.ts's release-page pass).
 
 import { v, type Infer } from "convex/values";
-import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
+import { canonicalLabel, coverRangeValidator } from "./bookTitle";
 import { toIsbn13 } from "./openLibrary";
 import {
   cleanBlurb,
@@ -44,6 +44,35 @@ export const annCreditValidator = v.object({
 });
 export type AnnCredit = Infer<typeof annCreditValidator>;
 
+/** ANN's partial-precision date (`parseAnnDate`). */
+const annDateValidator = v.object({
+  year: v.number(),
+  month: v.optional(v.number()),
+  day: v.optional(v.number()),
+});
+export type AnnDate = Infer<typeof annDateValidator>;
+
+/** One `<release>` line of a manga entry. */
+const annReleaseValidator = v.object({
+  /** ANN's stable release id (releases.php?id=NNN) — observation identity. */
+  annId: v.string(),
+  date: v.optional(annDateValidator),
+  /** The English release title before the "(GN n)" designator. */
+  title: v.string(),
+  /** Volume label ("14", "7.5"); absent = an unnumbered oneshot. */
+  label: v.optional(v.string()),
+  /** A "(GN 1-3)" range or omnibus/box-set designator (multi-volume). */
+  multi: v.boolean(),
+  format: v.union(v.literal("physical"), v.literal("digital")),
+  /** Omnibus/box-set/deluxe packaging — an Edition Line shape. */
+  editionLineHint: v.boolean(),
+  /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
+  isbn13: v.optional(v.string()),
+  /** The Volumes a "(GN 97-99)" designator says the book collects. */
+  coverRange: v.optional(coverRangeValidator),
+});
+export type AnnRelease = Infer<typeof annReleaseValidator>;
+
 // What reconciliation reads (spec §6): one observation per manga entry, its
 // releases embedded (they also get per-release observations keyed on ANN's
 // own release ids — see ann.ts).
@@ -60,27 +89,7 @@ export const annMangaValidator = v.object({
   credits: v.optional(v.array(annCreditValidator)),
   /** ANN rates the entry for adults (`isMatureEntry`); absent otherwise. */
   mature: v.optional(v.literal(true)),
-  releases: v.array(
-    v.object({
-      annId: v.string(),
-      date: v.optional(
-        v.object({
-          year: v.number(),
-          month: v.optional(v.number()),
-          day: v.optional(v.number()),
-        }),
-      ),
-      title: v.string(),
-      label: v.optional(v.string()),
-      multi: v.boolean(),
-      format: v.union(v.literal("physical"), v.literal("digital")),
-      editionLineHint: v.boolean(),
-      /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
-      isbn13: v.optional(v.string()),
-      /** The Volumes a "(GN 97-99)" designator says the book collects. */
-      coverRange: v.optional(coverRangeValidator),
-    }),
-  ),
+  releases: v.array(annReleaseValidator),
 });
 
 export type AnnMangaSnapshot = Infer<typeof annMangaValidator>;
@@ -140,25 +149,6 @@ export function parseReport(xml: string): AnnReport {
 
 // ---------- release lines ----------
 
-export type AnnRelease = {
-  /** ANN's stable release id (releases.php?id=NNN) — observation identity. */
-  annId: string;
-  date?: { year: number; month?: number; day?: number };
-  /** The English release title before the "(GN n)" designator. */
-  title: string;
-  /** Volume label ("14", "7.5"); absent = an unnumbered oneshot. */
-  label?: string;
-  /** A "(GN 1-3)" range or omnibus/box-set designator (multi-volume). */
-  multi: boolean;
-  format: "physical" | "digital";
-  /** Omnibus/box-set/deluxe packaging — an Edition Line shape. */
-  editionLineHint: boolean;
-  /** The book's ISBN-13, from the line's `ean` attribute. */
-  isbn13?: string;
-  /** The Volumes a "(GN 97-99)" designator says the book collects. */
-  coverRange?: CoverRange;
-};
-
 // Before 2010 ANN recorded month-only dates as the 1st (day 1 is a third of
 // its 2000-04 dates against ~3% elsewhere): such a day is a placeholder.
 const MONTH_PLACEHOLDER_BEFORE = 2010;
@@ -168,9 +158,7 @@ const MONTH_PLACEHOLDER_BEFORE = 2010;
  * A pre-2010 "day 01" reads as month precision, so a real day from another
  * source can refine it (spec §6) instead of losing to false precision.
  */
-export function parseAnnDate(
-  text: string,
-): { year: number; month?: number; day?: number } | undefined {
+export function parseAnnDate(text: string): AnnDate | undefined {
   const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(text.trim());
   if (!m) return undefined;
   const year = Number(m[1]);
@@ -204,15 +192,7 @@ const TITLE_PACKAGING =
 export function splitReleaseTitle(
   text: string,
   entryName = "",
-): {
-  title: string;
-  label?: string;
-  multi: boolean;
-  format: "physical" | "digital";
-  editionLineHint: boolean;
-  /** "(GN 97-99)": the stated coverage, the best placement signal there is. */
-  coverRange?: CoverRange;
-} | null {
+): Omit<AnnRelease, "annId" | "date" | "isbn13"> | null {
   const m = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(text.trim());
   if (!m) return null;
   const title = m[1]!.trim();
@@ -240,15 +220,13 @@ export function splitReleaseTitle(
 
 // ---------- manga records ----------
 
-export type AnnManga = {
-  id: string;
-  title: string;
-  altTitles: string[];
-  synopsis?: string;
-  staff: string[];
+/**
+ * One parsed manga entry: its snapshot before `toSnapshot` adds the identity
+ * fields, with every credit row and the rating as a plain flag.
+ */
+export type AnnManga = Omit<AnnMangaSnapshot, "kind" | "url" | "credits" | "mature"> & {
   credits: AnnCredit[];
   mature: boolean;
-  releases: AnnRelease[];
 };
 
 /**
@@ -370,22 +348,23 @@ export function parseApiResponse(xml: string): AnnManga[] {
  * on the line's observation as `page` (the fetch state that keeps the pass
  * incremental).
  */
-export type AnnReleasePage = {
-  title?: string;
+export const annReleasePageValidator = v.object({
+  title: v.optional(v.string()),
   /** The designator as the page shows it ("GN 2 / 2", "eBook 1"). */
-  volume?: string;
-  distributor?: string;
+  volume: v.optional(v.string()),
+  distributor: v.optional(v.string()),
   /** ANN's company id for the distributor (company.php?id=N). */
-  distributorId?: string;
-  date?: { year: number; month?: number; day?: number };
-  isbn13?: string;
-  isbn10?: string;
-  priceCents?: number;
+  distributorId: v.optional(v.string()),
+  date: v.optional(annDateValidator),
+  isbn13: v.optional(v.string()),
+  isbn10: v.optional(v.string()),
+  priceCents: v.optional(v.number()),
   /** The manga entry the page belongs to. */
-  mangaId?: string;
+  mangaId: v.optional(v.string()),
   /** The book's blurb (publisher copy an ANN contributor entered), cleaned. */
-  description?: string;
-};
+  description: v.optional(v.string()),
+});
+export type AnnReleasePage = Infer<typeof annReleasePageValidator>;
 
 /** One labelled field's raw HTML: `<b>Label:</b> …` up to the next break. */
 function pageField(html: string, label: string): string | undefined {
@@ -775,17 +754,11 @@ export function releaseUrl(annId: string): string {
   return `https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${annId}`;
 }
 
-export function toSnapshot(manga: AnnManga): AnnMangaSnapshot {
+export function toSnapshot({ mature, ...manga }: AnnManga): AnnMangaSnapshot {
   return {
     kind: "annManga",
-    id: manga.id,
     url: mangaUrl(manga.id),
-    title: manga.title,
-    altTitles: manga.altTitles,
-    synopsis: manga.synopsis,
-    staff: manga.staff,
-    credits: manga.credits,
-    ...(manga.mature ? { mature: true as const } : {}),
-    releases: manga.releases,
+    ...manga,
+    ...(mature ? { mature: true as const } : {}),
   };
 }
