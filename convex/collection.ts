@@ -19,7 +19,7 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { resolveActiveSeries } from "./catalog";
+import { activeVolumes, resolveActiveSeries } from "./catalog";
 import { editionCoverage, publisherLink } from "./catalogPages";
 import { followMerges, getActive, requireActive } from "./lib/merges";
 import { seriesStateRow } from "./lib/seriesStates";
@@ -27,6 +27,7 @@ import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
+import { completelyCoveredVolumes, volumeProgressRow } from "./reading";
 
 /** Batch marking (the library's "Own all") stops here; nobody shelves more in one click. */
 export const MANY_ENTRIES_CAP = 200;
@@ -397,27 +398,15 @@ async function editionRead(
   userId: Id<"users">,
   editionId: Id<"editions">,
 ): Promise<boolean | null> {
-  const rows = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-  let complete = 0;
-  for (const row of rows) {
-    if (row.extent !== "complete") continue;
-    const volume = await getActive(ctx, "volumes", row.volumeId);
-    if (!volume) continue;
-    complete += 1;
-    const progress = await ctx.db
-      .query("volumeProgress")
-      .withIndex("by_user_volume", (q) =>
-        q.eq("userId", userId).eq("volumeId", volume._id),
-      )
-      .unique();
-    if (!progress || progress.readCount < 1) return false;
-  }
+  const volumes = await completelyCoveredVolumes(ctx, editionId);
   // A book covering nothing completely (a split, or coverage not yet mapped)
   // has no read state to show.
-  return complete === 0 ? null : true;
+  if (volumes.length === 0) return null;
+  for (const volume of volumes) {
+    const progress = await volumeProgressRow(ctx, userId, volume._id);
+    if (!progress || progress.readCount < 1) return false;
+  }
+  return true;
 }
 
 /**
@@ -609,13 +598,7 @@ export const myLibrary = query({
         } else {
           if (volumeCount === null) {
             const seriesDoc = await resolveActiveSeries(ctx, shelf.seriesPublicId);
-            if (seriesDoc) {
-              const volumes = await ctx.db
-                .query("volumes")
-                .withIndex("by_series", (q) => q.eq("seriesId", seriesDoc._id))
-                .collect();
-              volumeCount = volumes.filter((doc) => doc.status === "active").length;
-            }
+            if (seriesDoc) volumeCount = (await activeVolumes(ctx, seriesDoc._id)).length;
           }
           bookCount = volumeCount;
         }

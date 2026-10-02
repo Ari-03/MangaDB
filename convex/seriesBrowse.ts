@@ -22,7 +22,7 @@
 import { ConvexError, v, type Infer, type ObjectType } from "convex/values";
 
 import { internal } from "./_generated/api";
-import { recountCatalog } from "./catalog";
+import { activeVolumes, recountCatalog } from "./catalog";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalAction,
@@ -325,12 +325,7 @@ export const repackBlock = internalMutation({
  * the Series' `bookless` and `mature` flags on the way.
  */
 async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: number) {
-  const volumes = (
-    await ctx.db
-      .query("volumes")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .collect()
-  ).filter((v) => v.status === "active");
+  const volumes = await activeVolumes(ctx, series._id);
 
   const editionIds = new Set<Id<"editions">>();
   // Each Edition's first covered Volume, for the cover pick.

@@ -476,6 +476,18 @@ export async function resolveActiveSeries(
 }
 
 /**
+ * A Series' active Volumes in reading order: the by_series index is
+ * (seriesId, position). Labels never sort anything.
+ */
+export async function activeVolumes(ctx: QueryCtx, seriesId: Id<"series">) {
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
+  return volumes.filter((volume) => volume.status === "active");
+}
+
+/**
  * Everything the Series page renders, shaped as the Reading Path hierarchy
  * validated in prototype #16 (spec §10): the canonical Volume sequence leads
  * (ordered by Volume Position — the Label is display-only); each
@@ -550,14 +562,8 @@ export const seriesPage = query({
       }
     }
 
-    // Canonical Volume sequence: the by_series index is (seriesId, position),
-    // so this arrives in reading order. Labels never sort anything.
-    const volumeDocs = (
-      await ctx.db
-        .query("volumes")
-        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-        .collect()
-    ).filter((doc) => doc.status === "active");
+    // The canonical Volume sequence, in reading order.
+    const volumeDocs = await activeVolumes(ctx, series._id);
     const volumeById = new Map(volumeDocs.map((doc) => [doc._id, doc]));
 
     // Every Edition of the Series: those covering its Volumes, plus Edition

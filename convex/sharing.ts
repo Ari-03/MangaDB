@@ -22,7 +22,7 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { resolveActiveSeries } from "./catalog";
+import { activeVolumes, resolveActiveSeries } from "./catalog";
 import { followMerges, getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { releaseLink, variantName } from "./collection";
@@ -379,16 +379,11 @@ export const publicProfile = query({
       }
       const existing = readingRows.get(series._id);
       if (existing) return existing;
-      const volumes = await ctx.db
-        .query("volumes")
-        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-        .collect();
       const row: ReadingRow = {
         seriesPublicId: series.publicId,
         title: series.title,
         readingStatus: null,
-        totalVolumes: volumes.filter((volume) => volume.status === "active")
-          .length,
+        totalVolumes: (await activeVolumes(ctx, series._id)).length,
         readVolumes: [],
         passes: [],
       };

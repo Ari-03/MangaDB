@@ -20,7 +20,7 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { resolveActiveSeries } from "./catalog";
+import { activeVolumes, resolveActiveSeries } from "./catalog";
 import { editionCoverage } from "./catalogPages";
 import { getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
@@ -40,7 +40,8 @@ const readingStatusValidator = v.union(
 
 // ---------- shared lookups ----------
 
-async function volumeProgressRow(
+/** One user's Volume Progress row for one Volume, or null. */
+export async function volumeProgressRow(
   ctx: QueryCtx,
   userId: Id<"users">,
   volumeId: Id<"volumes">,
@@ -67,18 +68,18 @@ async function passRowFor(
 }
 
 /**
- * The active Volumes a Release covers *completely* — the exact set a
- * confirmed completion increments (spec §3); partial coverage never appears
- * here. Coverage lives on the Edition, so all of an Edition's Releases share
- * it. Volumes are merge-resolved and deduplicated by surviving identity.
+ * The active Volumes an Edition covers *completely* — the exact set a
+ * confirmed completion of any of its Releases increments (spec §3); partial
+ * coverage never appears here. Volumes are merge-resolved and deduplicated
+ * by surviving identity. Exported for the library's read flag (collection.ts).
  */
-async function completelyCoveredVolumes(
+export async function completelyCoveredVolumes(
   ctx: QueryCtx,
-  release: Doc<"releases">,
+  editionId: Id<"editions">,
 ): Promise<Array<Doc<"volumes">>> {
   const rows = await ctx.db
     .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
+    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
     .collect();
   const volumes = new Map<Id<"volumes">, Doc<"volumes">>();
   for (const row of rows) {
@@ -119,17 +120,62 @@ async function allVolumesRead(
   userId: Id<"users">,
   seriesId: Id<"series">,
 ): Promise<boolean> {
-  const volumes = await ctx.db
-    .query("volumes")
-    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-    .collect();
-  const active = volumes.filter((volume) => volume.status === "active");
+  const active = await activeVolumes(ctx, seriesId);
   if (active.length === 0) return false;
   for (const volume of active) {
     const progress = await volumeProgressRow(ctx, userId, volume._id);
     if (!progress || progress.readCount < 1) return false;
   }
   return true;
+}
+
+/**
+ * The completed-series prompt material after a completion or read-marking: covered Series
+ * where every active Volume now has a read and the status is not already
+ * "Completed" — a suggestion only, acted on solely by setSeriesReadingStatus.
+ */
+async function completedSuggestions(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  covered: Array<Doc<"volumes">>,
+) {
+  const suggestCompleted = [];
+  const seen = new Set<Id<"series">>();
+  for (const volume of covered) {
+    if (seen.has(volume.seriesId)) continue;
+    seen.add(volume.seriesId);
+    const series = await ctx.db.get(volume.seriesId);
+    if (!series || series.status !== "active") continue;
+    const state = await seriesStateRow(ctx, userId, series._id);
+    if (state?.readingStatus === "completed") continue;
+    if (await allVolumesRead(ctx, userId, series._id)) {
+      suggestCompleted.push({ seriesId: series._id, title: series.title });
+    }
+  }
+  return suggestCompleted;
+}
+
+/**
+ * Store one user's read count for a Volume: patch their row, or create it
+ * under the Volume and (denormalized) its Series.
+ */
+async function putVolumeProgress(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  volume: Doc<"volumes">,
+  progress: Doc<"volumeProgress"> | null,
+  fields: Pick<Doc<"volumeProgress">, "readCount" | "lastCompletedAt">,
+) {
+  if (progress) {
+    await ctx.db.patch(progress._id, fields);
+  } else {
+    await ctx.db.insert("volumeProgress", {
+      userId,
+      volumeId: volume._id,
+      seriesId: volume.seriesId,
+      ...fields,
+    });
+  }
 }
 
 // ---------- queries ----------
@@ -149,13 +195,8 @@ export const seriesTracking = query({
     if (!series) return null;
 
     const state = await seriesStateRow(ctx, user._id, series._id);
-    const volumeDocs = await ctx.db
-      .query("volumes")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .collect();
     const volumes = [];
-    for (const volume of volumeDocs) {
-      if (volume.status !== "active") continue;
+    for (const volume of await activeVolumes(ctx, series._id)) {
       const progress = await volumeProgressRow(ctx, user._id, volume._id);
       volumes.push({
         volumeId: volume._id,
@@ -239,11 +280,7 @@ export const myReading = query({
       if (!series) return null;
       const existing = rows.get(series._id);
       if (existing) return existing;
-      const volumes = await ctx.db
-        .query("volumes")
-        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-        .collect();
-      const active = volumes.filter((volume) => volume.status === "active");
+      const active = await activeVolumes(ctx, series._id);
       let volumesRead = 0;
       for (const volume of active) {
         const progress = await volumeProgressRow(ctx, user._id, volume._id);
@@ -422,39 +459,17 @@ export const completePass = mutation({
     }
 
     const completedAt = Date.now();
-    const covered = await completelyCoveredVolumes(ctx, release);
+    const covered = await completelyCoveredVolumes(ctx, release.editionId);
     for (const volume of covered) {
       const progress = await volumeProgressRow(ctx, user._id, volume._id);
-      if (progress) {
-        await ctx.db.patch(progress._id, {
-          readCount: progress.readCount + 1,
-          lastCompletedAt: completedAt,
-        });
-      } else {
-        await ctx.db.insert("volumeProgress", {
-          userId: user._id,
-          volumeId: volume._id,
-          seriesId: volume.seriesId,
-          readCount: 1,
-          lastCompletedAt: completedAt,
-        });
-      }
+      await putVolumeProgress(ctx, user._id, volume, progress, {
+        readCount: (progress?.readCount ?? 0) + 1,
+        lastCompletedAt: completedAt,
+      });
     }
     await ctx.db.delete(pass._id);
 
-    const suggestCompleted = [];
-    const seen = new Set<Id<"series">>();
-    for (const volume of covered) {
-      if (seen.has(volume.seriesId)) continue;
-      seen.add(volume.seriesId);
-      const series = await ctx.db.get(volume.seriesId);
-      if (!series || series.status !== "active") continue;
-      const state = await seriesStateRow(ctx, user._id, series._id);
-      if (state?.readingStatus === "completed") continue;
-      if (await allVolumesRead(ctx, user._id, series._id)) {
-        suggestCompleted.push({ seriesId: series._id, title: series.title });
-      }
-    }
+    const suggestCompleted = await completedSuggestions(ctx, user._id, covered);
     return { completedAt, suggestCompleted };
   },
 });
@@ -475,7 +490,7 @@ export const undoCompletion = mutation({
     const release = await requireActive(ctx, "releases", releaseId, "Release");
 
     let decremented = 0;
-    for (const volume of await completelyCoveredVolumes(ctx, release)) {
+    for (const volume of await completelyCoveredVolumes(ctx, release.editionId)) {
       const progress = await volumeProgressRow(ctx, user._id, volume._id);
       if (!progress || progress.lastCompletedAt !== completedAt) continue;
       if (progress.readCount <= 1) {
@@ -535,20 +550,10 @@ async function writeVolumeReadCount(
   }
   if (readCount === 0) {
     if (progress) await ctx.db.delete(progress._id);
-  } else if (progress) {
-    await ctx.db.patch(progress._id, {
-      readCount,
-      lastCompletedAt:
-        readCount > progress.readCount ? Date.now() : progress.lastCompletedAt,
-    });
   } else {
-    await ctx.db.insert("volumeProgress", {
-      userId: user._id,
-      volumeId: volume._id,
-      seriesId: volume.seriesId,
-      readCount,
-      lastCompletedAt: Date.now(),
-    });
+    const lastCompletedAt =
+      progress && readCount <= progress.readCount ? progress.lastCompletedAt : Date.now();
+    await putVolumeProgress(ctx, user._id, volume, progress, { readCount, lastCompletedAt });
   }
   return { readCount };
 }
@@ -610,67 +615,22 @@ async function writeEditionRead(
     .withIndex("by_publicId", (q) => q.eq("publicId", editionPublicId))
     .unique();
   const edition = await requireActive(ctx, "editions", stored, "Edition");
-  const rows = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-    .collect();
-  const covered = new Map<Id<"volumes">, Doc<"volumes">>();
-  for (const row of rows) {
-    if (row.extent !== "complete") continue;
-    const volume = await getActive(ctx, "volumes", row.volumeId);
-    if (volume) covered.set(volume._id, volume);
-  }
+  const covered = await completelyCoveredVolumes(ctx, edition._id);
 
   const now = Date.now();
   let changed = 0;
-  for (const volume of covered.values()) {
+  for (const volume of covered) {
     const progress = await volumeProgressRow(ctx, userId, volume._id);
     if (read) {
       if (progress && progress.readCount >= 1) continue;
-      if (progress) {
-        await ctx.db.patch(progress._id, { readCount: 1, lastCompletedAt: now });
-      } else {
-        await ctx.db.insert("volumeProgress", {
-          userId,
-          volumeId: volume._id,
-          seriesId: volume.seriesId,
-          readCount: 1,
-          lastCompletedAt: now,
-        });
-      }
+      await putVolumeProgress(ctx, userId, volume, progress, { readCount: 1, lastCompletedAt: now });
     } else {
       if (!progress) continue;
       await ctx.db.delete(progress._id);
     }
     changed += 1;
   }
-  return { changed, covered: [...covered.values()] };
-}
-
-/**
- * The completed-series prompt material after read-marking: covered Series
- * where every active Volume now has a read and the status is not already
- * "Completed" — a suggestion only, acted on solely by setSeriesReadingStatus.
- */
-async function completedSuggestions(
-  ctx: MutationCtx,
-  userId: Id<"users">,
-  covered: Array<Doc<"volumes">>,
-) {
-  const suggestCompleted = [];
-  const seen = new Set<Id<"series">>();
-  for (const volume of covered) {
-    if (seen.has(volume.seriesId)) continue;
-    seen.add(volume.seriesId);
-    const series = await ctx.db.get(volume.seriesId);
-    if (!series || series.status !== "active") continue;
-    const state = await seriesStateRow(ctx, userId, series._id);
-    if (state?.readingStatus === "completed") continue;
-    if (await allVolumesRead(ctx, userId, series._id)) {
-      suggestCompleted.push({ seriesId: series._id, title: series.title });
-    }
-  }
-  return suggestCompleted;
+  return { changed, covered };
 }
 
 /** Mark a whole book read or unread from its cover (see writeEditionRead). */
