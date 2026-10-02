@@ -1,12 +1,10 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { ConvexError } from "convex/values";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
 import type { RecordType } from "../../convex/lib/moderationFields";
-import { PROPOSAL_WARNINGS } from "../../convex/proposals";
 import {
   FieldInput,
   fieldValue,
@@ -15,7 +13,7 @@ import {
   stateKeysOf,
   type FormState,
 } from "~/lib/editForm";
-import { mutationErrorMessage } from "~/lib/errors";
+import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
 import { useIsDataTeam } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
@@ -86,20 +84,13 @@ function ProposeGate({ type, editKey }: { type: RecordType; editKey: string }) {
 }
 
 function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
-  const navigate = useNavigate();
   const form = useQuery(api.moderation.editForm, { type, key: editKey });
-  const saveDraft = useMutation(api.proposals.saveDraft);
-  const submitProposal = useMutation(api.proposals.submitProposal);
+  const draft = useProposalDraft();
   const [state, setState] = useState<FormState | null>(null);
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
   const [comment, setComment] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
   const [evidenceNote, setEvidenceNote] = useState("");
-  const [draftId, setDraftId] = useState<Id<"proposals"> | null>(null);
-  const [pendingWarnings, setPendingWarnings] = useState<string[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [savedDraft, setSavedDraft] = useState(false);
 
   if (form === undefined) {
     return (
@@ -123,12 +114,12 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
   const setValue = (key: string, value: string) => {
     setState({ ...values, [key]: value });
     setDirty(new Set([...dirty, key]));
-    setSavedDraft(false);
+    draft.clearSaved();
   };
 
   const editable = form.status === "active" && !form.locked;
 
-  const buildArgs = () => {
+  const buildArgs = (): DraftContent => {
     const changes: Array<{ field: string; value: unknown }> = [];
     for (const field of form.fields) {
       if (!stateKeysOf(field).some((k) => dirty.has(k))) continue;
@@ -146,7 +137,6 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
       evidence.push({ kind: "note", text: evidenceNote.trim() });
     }
     return {
-      proposalId: draftId ?? undefined,
       ops: [
         {
           kind: "update" as const,
@@ -157,49 +147,6 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
       evidence,
       comment,
     };
-  };
-
-  const save = async (): Promise<Id<"proposals">> => {
-    const { proposalId } = await saveDraft(buildArgs());
-    setDraftId(proposalId);
-    return proposalId;
-  };
-
-  const onSaveDraft = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await save();
-      setSavedDraft(true);
-    } catch (err) {
-      setError(mutationErrorMessage(err, "Saving the draft failed."));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onSubmit = async (acknowledgeWarnings?: string[]) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const proposalId = await save();
-      await submitProposal({ proposalId, acknowledgeWarnings });
-      await navigate({
-        to: "/mod/proposal/$id",
-        params: { id: proposalId as string },
-      });
-    } catch (err) {
-      const data = (err as { data?: unknown })?.data as
-        | { code?: string; warnings?: string[] }
-        | undefined;
-      if (data?.code === "warningsUnacknowledged" && data.warnings) {
-        setPendingWarnings(data.warnings);
-      } else {
-        setError(mutationErrorMessage(err, "Submitting the proposal failed."));
-      }
-    } finally {
-      setBusy(false);
-    }
   };
 
   return (
@@ -230,7 +177,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
           className="mod-edit-form"
           onSubmit={(event) => {
             event.preventDefault();
-            void onSubmit();
+            void draft.submit(buildArgs);
           }}
         >
           {form.fields.map((field) => (
@@ -276,46 +223,31 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="button"
               className="btn"
-              disabled={busy || dirty.size === 0}
-              onClick={() => void onSaveDraft()}
+              disabled={draft.busy || dirty.size === 0}
+              onClick={() => void draft.saveDraft(buildArgs)}
             >
               Save draft
             </button>
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={busy || dirty.size === 0 || comment.trim() === ""}
+              disabled={draft.busy || dirty.size === 0 || comment.trim() === ""}
             >
-              {busy ? "Working…" : "Submit for review"}
+              {draft.busy ? "Working…" : "Submit for review"}
             </button>
           </div>
-          {pendingWarnings ? (
-            <div className="notice">
-              <p>This proposal carries warnings:</p>
-              <ul>
-                {pendingWarnings.map((warning) => (
-                  <li key={warning}>
-                    {PROPOSAL_WARNINGS[
-                      warning as keyof typeof PROPOSAL_WARNINGS
-                    ] ?? warning}
-                  </li>
-                ))}
-              </ul>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                disabled={busy}
-                onClick={() => void onSubmit(pendingWarnings)}
-              >
-                Acknowledge and submit
-              </button>
-            </div>
+          {draft.pendingWarnings ? (
+            <ProposalWarnings
+              warnings={draft.pendingWarnings}
+              busy={draft.busy}
+              onAcknowledge={(warnings) => void draft.submit(buildArgs, warnings)}
+            />
           ) : null}
-          {error ? <p className="form-error">{error}</p> : null}
-          {savedDraft && draftId ? (
+          {draft.error ? <p className="form-error">{draft.error}</p> : null}
+          {draft.savedDraft && draft.draftId ? (
             <p className="notice">
               Draft saved.{" "}
-              <Link to="/mod/proposal/$id" params={{ id: draftId as string }}>
+              <Link to="/mod/proposal/$id" params={{ id: draft.draftId as string }}>
                 View it
               </Link>
               .

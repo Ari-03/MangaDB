@@ -5,9 +5,9 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { PROPOSAL_WARNINGS } from "../../convex/proposals";
 import { mutationErrorMessage } from "~/lib/errors";
 import { ProposalStateChip, renderFieldValue } from "~/lib/moderation";
+import { unacknowledgedWarnings, warningLabel } from "~/lib/proposalDraft";
 import { useIsDataTeam } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
@@ -65,12 +65,6 @@ function ProposalGate({ id }: { id: string }) {
     );
   }
   return <ProposalDetail id={id} />;
-}
-
-function warningLabel(warning: string): string {
-  return (
-    PROPOSAL_WARNINGS[warning as keyof typeof PROPOSAL_WARNINGS] ?? warning
-  );
 }
 
 type Detail = NonNullable<
@@ -239,11 +233,9 @@ function ProposalDetail({ id }: { id: string }) {
         await submitProposal({ proposalId, acknowledgeWarnings });
         setPendingWarnings(null);
       } catch (err) {
-        const data = (err as { data?: unknown })?.data as
-          | { code?: string; warnings?: string[] }
-          | undefined;
-        if (data?.code === "warningsUnacknowledged" && data.warnings) {
-          setPendingWarnings(data.warnings);
+        const warnings = unacknowledgedWarnings(err);
+        if (warnings) {
+          setPendingWarnings(warnings);
           return;
         }
         throw err;
