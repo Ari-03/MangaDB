@@ -1,87 +1,61 @@
-import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
-  insertBundle,
-  insertBundleMember,
   insertCoverage,
   insertEdition,
   insertEditionLine,
   insertPublisher,
   insertRelease,
   insertSeries,
-  insertVariant,
-  insertVolume,
 } from "./test.factories";
-import { makeT, signedIn, withUser, type TestT } from "./test.helpers";
+import { makeT, withUser, type TestT } from "./test.helpers";
+import { describeNoViewer, witchHatShelf } from "./test.tracking";
 
 const COLLECTOR = { subject: "user_2collector", username: "collector" };
+const OTHER = { subject: "user_2other", username: "other" };
 
 /**
- * One catalog exercising ticket #27's corners: a Series of 2 Volumes, an
- * Edition + Release per Volume, a cover Variant on the first Release, and a
- * box set bundling both Releases while pinning that Variant — so Derived
- * Ownership, variant pinning (direct and bundle-pinned), and coexistence
- * with direct entries are all reachable.
+ * One catalog exercising ticket #27's corners (witchHatShelf): a Series of 2
+ * Volumes, an Edition + Release per Volume, a cover Variant on the first
+ * Release, and a box set bundling both Releases while pinning that Variant —
+ * so Derived Ownership, variant pinning (direct and bundle-pinned), and
+ * coexistence with direct entries are all reachable. `as` is the collector,
+ * signed in with their username claimed.
  */
-async function seed(t: TestT) {
-  return await t.run(async (ctx) => {
-    const publisherId = await insertPublisher(ctx, { name: "Seven Seas", slug: "seven-seas" });
-    const seriesId = await insertSeries(ctx, { publicId: 1, title: "Witch Hat Atelier" });
-    const v1 = await insertVolume(ctx, { seriesId, publicId: 11, position: 1 });
-    const v2 = await insertVolume(ctx, { seriesId, publicId: 12, position: 2 });
-
-    const releases: Array<Id<"releases">> = [];
-    for (const [i, volumeId] of [v1, v2].entries()) {
-      const editionId = await insertEdition(ctx, { publicId: 21 + i, publisherId });
-      await insertCoverage(ctx, { editionId, volumeId });
-      releases.push(
-        await insertRelease(ctx, { editionId, binding: "paperback", publisherId, seriesIds: [seriesId] }),
-      );
-    }
-    const [r1, r2] = releases as [Id<"releases">, Id<"releases">];
-
-    const variantId = await insertVariant(ctx, { releaseId: r1, name: "Bookstore exclusive" });
-
-    const bundleId = await insertBundle(ctx, {
-      publicId: 41,
-      name: "Witch Hat Atelier Box Set",
-      publisherId,
-      format: "physical",
-    });
-    // The box set ships the exclusive cover.
-    await insertBundleMember(ctx, { bundleId, releaseId: r1, variantId, order: 1 });
-    await insertBundleMember(ctx, { bundleId, releaseId: r2, order: 2 });
-
-    return { seriesId, v1, v2, r1, r2, variantId, bundleId };
-  });
+async function setup() {
+  const t = makeT();
+  const shelf = await t.run(witchHatShelf);
+  const as = await withUser(t, COLLECTOR);
+  return { t, as, ...shelf };
 }
 
 async function entryRows(t: TestT) {
   return await t.run(async (ctx) => await ctx.db.query("collectionEntries").collect());
 }
 
+describeNoViewer(setup, {
+  queries: [
+    ["entryForRelease", (as, { r1 }) => as.query(api.collection.entryForRelease, { releaseId: r1 })],
+    ["entryForBundle", (as, { bundleId }) => as.query(api.collection.entryForBundle, { bundleId })],
+    ["volumeOwnership", (as) => as.query(api.collection.volumeOwnership, { volumePublicId: 11 })],
+    ["seriesEntries", (as) => as.query(api.collection.seriesEntries, { seriesPublicId: 1 })],
+    ["myLibrary", (as) => as.query(api.collection.myLibrary, {})],
+  ],
+  mutations: [
+    ["setReleaseEntry", (as, { r1 }) => as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" })],
+    [
+      "setManyReleaseEntries",
+      (as, { r1, r2 }) => as.mutation(api.collection.setManyReleaseEntries, { releaseIds: [r1, r2], state: "owned" }),
+    ],
+    ["setBundleEntry", (as, { bundleId }) => as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" })],
+  ],
+});
+
 describe("collection.entryForRelease", () => {
-  it("is null signed out — public rows just omit the controls", async () => {
-    const t = makeT();
-    const { r1 } = await seed(t);
-    expect(await t.query(api.collection.entryForRelease, { releaseId: r1 })).toBeNull();
-  });
-
-  it("is null while the username claim is pending", async () => {
-    const t = makeT();
-    const { r1 } = await seed(t);
-    expect(
-      await signedIn(t, COLLECTOR).query(api.collection.entryForRelease, { releaseId: r1 }),
-    ).toBeNull();
-  });
-
   it("lists the release's active variants for the picker", async () => {
-    const t = makeT();
-    const { r1, r2, variantId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r1, r2, variantId } = await setup();
     const forR1 = await as.query(api.collection.entryForRelease, { releaseId: r1 });
     expect(forR1?.entry).toBeNull();
     expect(forR1?.variants).toEqual([
@@ -94,9 +68,7 @@ describe("collection.entryForRelease", () => {
 
 describe("collection.setReleaseEntry", () => {
   it("holds exactly one state — each transition replaces, never accumulates", async () => {
-    const t = makeT();
-    const { r1 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { t, as, r1 } = await setup();
 
     for (const state of ["wanted", "ordered", "owned"] as const) {
       await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state });
@@ -107,9 +79,7 @@ describe("collection.setReleaseEntry", () => {
   });
 
   it("omitting state removes the entry", async () => {
-    const t = makeT();
-    const { r1 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { t, as, r1 } = await setup();
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "owned" });
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1 });
     const data = await as.query(api.collection.entryForRelease, { releaseId: r1 });
@@ -118,9 +88,7 @@ describe("collection.setReleaseEntry", () => {
   });
 
   it("pins and clears an owned variant", async () => {
-    const t = makeT();
-    const { r1, variantId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r1, variantId } = await setup();
 
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -137,38 +105,20 @@ describe("collection.setReleaseEntry", () => {
   });
 
   it("rejects a variant that belongs to another release", async () => {
-    const t = makeT();
-    const { r2, variantId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r2, variantId } = await setup();
     await expect(
       as.mutation(api.collection.setReleaseEntry, {
         releaseId: r2,
         state: "owned",
         variantId,
       }),
-    ).rejects.toThrow(ConvexError);
-  });
-
-  it("requires a signed-in user with a claimed username", async () => {
-    const t = makeT();
-    const { r1 } = await seed(t);
-    await expect(
-      t.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" }),
-    ).rejects.toThrow(ConvexError);
-    await expect(
-      signedIn(t, COLLECTOR).mutation(api.collection.setReleaseEntry, {
-        releaseId: r1,
-        state: "wanted",
-      }),
-    ).rejects.toThrow(/username/i);
+    ).rejects.toMatchObject({ data: { code: "badVariant" } });
   });
 });
 
 describe("collection.setBundleEntry & derived ownership", () => {
   it("an owned bundle derives ownership on members, with the pinned variant", async () => {
-    const t = makeT();
-    const { r1, r2, bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { t, as, r1, r2, bundleId } = await setup();
 
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
 
@@ -189,18 +139,14 @@ describe("collection.setBundleEntry & derived ownership", () => {
   });
 
   it("a wanted/ordered bundle derives nothing", async () => {
-    const t = makeT();
-    const { r1, bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r1, bundleId } = await setup();
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "ordered" });
     const forR1 = await as.query(api.collection.entryForRelease, { releaseId: r1 });
     expect(forR1?.derived).toEqual([]);
   });
 
   it("derived ownership coexists with a direct entry; removing the bundle never erases it", async () => {
-    const t = makeT();
-    const { r1, bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { t, as, r1, bundleId } = await setup();
 
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "owned" });
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
@@ -220,9 +166,7 @@ describe("collection.setBundleEntry & derived ownership", () => {
 
 describe("collection.volumeOwnership", () => {
   it("shows a volume as owned only through owned covering releases", async () => {
-    const t = makeT();
-    const { r1, bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r1, bundleId } = await setup();
 
     // Nothing owned yet.
     let v1Own = await as.query(api.collection.volumeOwnership, { volumePublicId: 11 });
@@ -256,9 +200,7 @@ describe("collection.volumeOwnership", () => {
 
 describe("collection follow suggestions (#29)", () => {
   it("a first entry in a series suggests a follow — a suggestion only", async () => {
-    const t = makeT();
-    const { seriesId, r1 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, seriesId, r1 } = await setup();
 
     const result = await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -273,9 +215,7 @@ describe("collection follow suggestions (#29)", () => {
   });
 
   it("appears once per series: later entries and state changes never suggest", async () => {
-    const t = makeT();
-    const { r1, r2 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r1, r2 } = await setup();
 
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" });
     // State change on the existing entry: not a first entry.
@@ -293,9 +233,7 @@ describe("collection follow suggestions (#29)", () => {
   });
 
   it("dismissal suppresses the prompt permanently", async () => {
-    const t = makeT();
-    const { seriesId, r1 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, seriesId, r1 } = await setup();
 
     await as.mutation(api.follows.dismissFollowPrompt, { seriesId });
     // Even a genuine first entry stays quiet after dismissal…
@@ -314,9 +252,7 @@ describe("collection follow suggestions (#29)", () => {
   });
 
   it("an already-followed series never prompts", async () => {
-    const t = makeT();
-    const { seriesId, r1 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, seriesId, r1 } = await setup();
     await as.mutation(api.follows.setSeriesFollow, { seriesId, following: true });
     const result = await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -326,9 +262,7 @@ describe("collection follow suggestions (#29)", () => {
   });
 
   it("a bundle entry suggests through its member releases' series", async () => {
-    const t = makeT();
-    const { seriesId, bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, seriesId, bundleId } = await setup();
     const result = await as.mutation(api.collection.setBundleEntry, {
       bundleId,
       state: "wanted",
@@ -341,9 +275,7 @@ describe("collection follow suggestions (#29)", () => {
 
 describe("collection.myLibrary", () => {
   it("shelves every entry under its series and reading path", async () => {
-    const t = makeT();
-    const { r1, r2, variantId, bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r1, r2, variantId, bundleId } = await setup();
 
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -392,9 +324,7 @@ describe("collection.myLibrary", () => {
   });
 
   it("an owned box set alone shelves its members as derived ownership", async () => {
-    const t = makeT();
-    const { bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, bundleId } = await setup();
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
     const library = await as.query(api.collection.myLibrary, {});
     const books = library!.series[0]!.paths[0]!.books;
@@ -407,9 +337,7 @@ describe("collection.myLibrary", () => {
   });
 
   it("an ordered box set is listed but shelves nothing", async () => {
-    const t = makeT();
-    const { bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, bundleId } = await setup();
     await as.mutation(api.collection.setBundleEntry, { bundleId, state: "ordered" });
     const library = await as.query(api.collection.myLibrary, {});
     expect(library?.series).toEqual([]);
@@ -417,15 +345,13 @@ describe("collection.myLibrary", () => {
   });
 
   it("sizes an edition line by its active editions", async () => {
-    const t = makeT();
-    const { seriesId, v1, r1 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { t, as, seriesId, publisherId, v1, r1 } = await setup();
     // Move r1's edition into a line of three editions (one hidden).
     await t.run(async (ctx) => {
       const release = (await ctx.db.get(r1))!;
       const lineId = await insertEditionLine(ctx, {
         seriesId,
-        publisherId: release.publisherId,
+        publisherId,
         name: "Deluxe Edition",
       });
       await ctx.db.patch(release.editionId, { editionLineId: lineId, linePosition: "1" });
@@ -433,7 +359,7 @@ describe("collection.myLibrary", () => {
         const editionId = await insertEdition(ctx, {
           status,
           publicId: 31 + i,
-          publisherId: release.publisherId,
+          publisherId,
           editionLineId: lineId,
           linePosition: String(2 + i),
         });
@@ -450,19 +376,11 @@ describe("collection.myLibrary", () => {
     });
     expect(path.books[0]).toMatchObject({ lineName: "Deluxe Edition", linePosition: "1" });
   });
-
-  it("is null signed out", async () => {
-    const t = makeT();
-    await seed(t);
-    expect(await t.query(api.collection.myLibrary, {})).toBeNull();
-  });
 });
 
 describe("collection.seriesEntries", () => {
   it("returns the viewer's entries and derived ownership within one series", async () => {
-    const t = makeT();
-    const { r1, r2, variantId, bundleId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r1, r2, variantId, bundleId } = await setup();
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
       state: "wanted",
@@ -476,20 +394,15 @@ describe("collection.seriesEntries", () => {
     expect(new Set(overlay?.derivedOwned)).toEqual(new Set([r1, r2]));
   });
 
-  it("is null signed out or for an unknown series", async () => {
-    const t = makeT();
-    await seed(t);
-    const as = await withUser(t, COLLECTOR);
-    expect(await t.query(api.collection.seriesEntries, { seriesPublicId: 1 })).toBeNull();
+  it("is null for an unknown series", async () => {
+    const { as } = await setup();
     expect(await as.query(api.collection.seriesEntries, { seriesPublicId: 9 })).toBeNull();
   });
 });
 
 describe("collection.setManyReleaseEntries", () => {
   it("sets one state on every release, keeping pinned variants, prompting once", async () => {
-    const t = makeT();
-    const { r1, r2, variantId } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { t, as, r1, r2, variantId } = await setup();
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
       state: "wanted",
@@ -513,9 +426,7 @@ describe("collection.setManyReleaseEntries", () => {
   });
 
   it("a first entry in a series prompts once for the batch", async () => {
-    const t = makeT();
-    const { r1, r2 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { as, r1, r2 } = await setup();
     const result = await as.mutation(api.collection.setManyReleaseEntries, {
       releaseIds: [r1, r2],
       state: "owned",
@@ -526,9 +437,7 @@ describe("collection.setManyReleaseEntries", () => {
   });
 
   it("omitting the state removes every entry, and the cap holds", async () => {
-    const t = makeT();
-    const { r1, r2 } = await seed(t);
-    const as = await withUser(t, COLLECTOR);
+    const { t, as, r1, r2 } = await setup();
     await as.mutation(api.collection.setManyReleaseEntries, {
       releaseIds: [r1, r2],
       state: "ordered",
@@ -540,28 +449,26 @@ describe("collection.setManyReleaseEntries", () => {
         releaseIds: Array.from({ length: 201 }, () => r1),
         state: "owned",
       }),
-    ).rejects.toThrow(ConvexError);
+    ).rejects.toMatchObject({ data: { code: "tooMany" } });
   });
 });
 
 describe("collection pinned variants that were hidden later (B27)", () => {
-  async function pinThenHide(t: TestT) {
-    const seeded = await seed(t);
-    const as = await withUser(t, COLLECTOR);
-    await as.mutation(api.collection.setReleaseEntry, {
-      releaseId: seeded.r1,
+  async function pinThenHide() {
+    const s = await setup();
+    await s.as.mutation(api.collection.setReleaseEntry, {
+      releaseId: s.r1,
       state: "wanted",
-      variantId: seeded.variantId,
+      variantId: s.variantId,
     });
-    await t.run(async (ctx) => {
-      await ctx.db.patch(seeded.variantId, { status: "hidden" });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.variantId, { status: "hidden" });
     });
-    return { ...seeded, as };
+    return s;
   }
 
   it("a batch state change keeps the hidden pin instead of aborting the batch", async () => {
-    const t = makeT();
-    const { r1, r2, variantId, as } = await pinThenHide(t);
+    const { t, r1, r2, variantId, as } = await pinThenHide();
     const result = await as.mutation(api.collection.setManyReleaseEntries, {
       releaseIds: [r1, r2],
       state: "owned",
@@ -577,8 +484,7 @@ describe("collection pinned variants that were hidden later (B27)", () => {
   });
 
   it("a single state change resending the unchanged pin keeps it", async () => {
-    const t = makeT();
-    const { r1, variantId, as } = await pinThenHide(t);
+    const { t, r1, variantId, as } = await pinThenHide();
     // The release row resends the current pin with every state change.
     await as.mutation(api.collection.setReleaseEntry, {
       releaseId: r1,
@@ -592,8 +498,7 @@ describe("collection pinned variants that were hidden later (B27)", () => {
   });
 
   it("selecting a hidden variant as a new pin is still refused", async () => {
-    const t = makeT();
-    const { r1, r2, variantId, as } = await pinThenHide(t);
+    const { r1, r2, variantId, as } = await pinThenHide();
     await as.mutation(api.collection.setReleaseEntry, { releaseId: r1 });
     await expect(
       as.mutation(api.collection.setReleaseEntry, {
@@ -610,6 +515,44 @@ describe("collection pinned variants that were hidden later (B27)", () => {
         variantId,
       }),
     ).rejects.toThrow(/does not belong/);
+  });
+});
+
+describe("collection entries belong to one user", () => {
+  it("another user neither sees the collector's entries nor changes them", async () => {
+    const { t, as, r1, r2, variantId, bundleId } = await setup();
+    await as.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "owned", variantId });
+    await as.mutation(api.collection.setReleaseEntry, { releaseId: r2, state: "wanted" });
+    await as.mutation(api.collection.setBundleEntry, { bundleId, state: "owned" });
+    const collectorRows = await entryRows(t);
+    const collectorLibrary = await as.query(api.collection.myLibrary, {});
+
+    const other = await withUser(t, OTHER);
+    // Every overlay reads as an empty collection: no entries, nothing derived.
+    expect(await other.query(api.collection.entryForRelease, { releaseId: r1 })).toMatchObject({
+      entry: null,
+      derived: [],
+    });
+    expect(await other.query(api.collection.entryForBundle, { bundleId })).toMatchObject({ entry: null });
+    expect((await other.query(api.collection.volumeOwnership, { volumePublicId: 11 }))?.owned).toEqual([]);
+    expect(await other.query(api.collection.seriesEntries, { seriesPublicId: 1 })).toMatchObject({
+      entries: [],
+      derivedOwned: [],
+    });
+    expect(await other.query(api.collection.myLibrary, {})).toEqual({ series: [], bundles: [] });
+
+    // Removing "their" entries removes nothing of the collector's.
+    await other.mutation(api.collection.setReleaseEntry, { releaseId: r1 });
+    await other.mutation(api.collection.setManyReleaseEntries, { releaseIds: [r1, r2] });
+    await other.mutation(api.collection.setBundleEntry, { bundleId });
+    expect(await entryRows(t)).toEqual(collectorRows);
+    // Their own entry on the same Release is a row of their own.
+    await other.mutation(api.collection.setReleaseEntry, { releaseId: r1, state: "wanted" });
+    expect(await entryRows(t)).toHaveLength(collectorRows.length + 1);
+    expect(await as.query(api.collection.myLibrary, {})).toEqual(collectorLibrary);
+    expect(await as.query(api.collection.entryForRelease, { releaseId: r1 })).toMatchObject({
+      entry: { state: "owned", variantId },
+    });
   });
 });
 
