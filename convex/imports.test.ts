@@ -4,30 +4,42 @@
 // cadence dispatch, withdrawal's possible-cancellation review, the exactly-
 // once Administrator health emails, and the Data Team dashboard.
 
-import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import { isDue, possiblyFuture } from "./imports";
-import schema from "./schema";
+import { insertObservation, insertSeries, seedCatalog } from "./test.factories";
+import { alice, dave, drain, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
 
-const ADMIN = "user_admin";
-const PLAIN = "user_plain";
+/** alice, the Administrator, and dave, who holds no role. */
+const setup = (t: TestT) => seedTeam(t, [alice, dave]);
 
-async function setup(t: ReturnType<typeof convexTest>) {
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.users.claimUsername, { username: "alice" });
-  await t
-    .withIdentity({ subject: PLAIN })
-    .mutation(api.users.claimUsername, { username: "dave" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
+/** Every source the registry seeds. */
+const SOURCE_KEYS = ["ann", "kodansha", "kodansha-backlist", "openlibrary", "prh", "sevenseas", "yenpress"];
+
+/**
+ * Start and finish one Import Run of `sourceKey` (Seven Seas unless given),
+ * counting nothing unless told; a failed run carries one HTTP error.
+ */
+async function finishRun(
+  t: TestT,
+  status: "succeeded" | "failed",
+  run: { sourceKey?: string; recordsSeen?: number; recordsChanged?: number; errors?: string[] } = {},
+) {
+  const runId = await t.mutation(internal.imports.startRun, { sourceKey: run.sourceKey ?? "sevenseas" });
+  await t.mutation(internal.imports.finishRun, {
+    runId,
+    status,
+    recordsSeen: run.recordsSeen ?? 0,
+    recordsChanged: run.recordsChanged ?? 0,
+    errors: run.errors ?? (status === "failed" ? ["HTTP 500 for /wp-json"] : []),
+  });
 }
 
 describe("imports.runScheduled", () => {
   it("seeds the canonical publisher rows before starting sources, so a fresh deployment can place VIZ and Dark Horse books", async () => {
-    const t = convexTest(schema);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    const t = makeT();
+    await seedRegistry(t);
     vi.stubGlobal("fetch", async () => new Response("", { status: 503 }));
     expect(await t.run((ctx) => ctx.db.query("publishers").collect())).toHaveLength(0);
     await t.action(internal.imports.runScheduled, {});
@@ -42,17 +54,9 @@ describe("imports.runScheduled", () => {
 
 describe("importSources.seedRegistry", () => {
   it("seeds the five v1 sources plus Yen Press and the Kodansha backlist per the spec authority table", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { inserted } = await t.mutation(internal.importSources.seedRegistry, {});
-    expect(inserted.sort()).toEqual([
-      "ann",
-      "kodansha",
-      "kodansha-backlist",
-      "openlibrary",
-      "prh",
-      "sevenseas",
-      "yenpress",
-    ]);
+    expect(inserted.sort()).toEqual(SOURCE_KEYS);
     const sources = await t.run((ctx) => ctx.db.query("approvedSources").collect());
     const sevenSeas = sources.find((s) => s.key === "sevenseas")!;
     expect(sevenSeas).toMatchObject({
@@ -70,10 +74,10 @@ describe("importSources.seedRegistry", () => {
   });
 
   it("never overwrites an edited row on re-run", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    await t.mutation(internal.importSources.seedRegistry, {});
-    await t.withIdentity({ subject: ADMIN }).mutation(api.importSources.upsert, {
+    await seedRegistry(t);
+    await signedIn(t, alice).mutation(api.importSources.upsert, {
       key: "sevenseas",
       name: "Seven Seas Entertainment",
       enabled: false,
@@ -83,9 +87,7 @@ describe("importSources.seedRegistry", () => {
     });
     const { inserted } = await t.mutation(internal.importSources.seedRegistry, {});
     expect(inserted).toEqual([]);
-    const sources = await t
-      .withIdentity({ subject: ADMIN })
-      .query(api.importSources.list, {});
+    const sources = await signedIn(t, alice).query(api.importSources.list, {});
     const sevenSeas = sources.find((s) => s.key === "sevenseas")!;
     expect(sevenSeas.cadence).toBe("weekly");
     expect(sevenSeas.enabled).toBe(false);
@@ -95,8 +97,8 @@ describe("importSources.seedRegistry", () => {
 
 describe("importSources.backfillFieldAuthority", () => {
   it("adds default categories a stored row lacks, never changing a set one", async () => {
-    const t = convexTest(schema);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    const t = makeT();
+    await seedRegistry(t);
     // A deployment seeded before the description column existed, plus an
     // Administrator who already chose ANN's description authority.
     await t.run(async (ctx) => {
@@ -132,8 +134,8 @@ describe("importSources.backfillFieldAuthority", () => {
   });
 
   it("keeps a weak description an Administrator already set", async () => {
-    const t = convexTest(schema);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    const t = makeT();
+    await seedRegistry(t);
     await t.run(async (ctx) => {
       const kodansha = (await ctx.db.query("approvedSources").collect()).find(
         (s) => s.key === "kodansha",
@@ -153,9 +155,9 @@ describe("importSources.backfillFieldAuthority", () => {
 
 describe("importSources.upsert — registry rows are data", () => {
   it("adds a brand-new source with no code change", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    await t.withIdentity({ subject: ADMIN }).mutation(api.importSources.upsert, {
+    const row = {
       key: "yenpress",
       name: "Yen Press",
       enabled: false,
@@ -163,15 +165,16 @@ describe("importSources.upsert — registry rows are data", () => {
       fieldAuthority: { date: "authoritative", isbn: "authoritative" },
       cadence: "daily",
       attribution: "Data courtesy of Yen Press.",
-    });
-    const sources = await t
-      .withIdentity({ subject: ADMIN })
-      .query(api.importSources.list, {});
-    expect(sources.map((s) => s.key)).toContain("yenpress");
+    } as const;
+    await signedIn(t, alice).mutation(api.importSources.upsert, row);
+    const sources = await signedIn(t, alice).query(api.importSources.list, {});
+    // The registry was empty: the one row listed is the new source, as given.
+    expect(sources).toHaveLength(1);
+    expect(sources[0]).toMatchObject(row);
   });
 
   it("is Administrator-gated and validates keys", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const args = {
       key: "x",
@@ -182,21 +185,19 @@ describe("importSources.upsert — registry rows are data", () => {
       cadence: "daily",
     };
     await expect(
-      t.withIdentity({ subject: PLAIN }).mutation(api.importSources.upsert, args),
+      signedIn(t, dave).mutation(api.importSources.upsert, args),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
     await expect(
-      t
-        .withIdentity({ subject: ADMIN })
-        .mutation(api.importSources.upsert, { ...args, key: "Bad Key!" }),
+      signedIn(t, alice).mutation(api.importSources.upsert, { ...args, key: "Bad Key!" }),
     ).rejects.toMatchObject({ data: { code: "invalidKey" } });
   });
 });
 
 describe("Bootstrap Mode", () => {
   it("defaults off, toggles via the admin mutation, reads via bootstrapStatus", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    const admin = t.withIdentity({ subject: ADMIN });
+    const admin = signedIn(t, alice);
     expect(await admin.query(api.importSources.bootstrapStatus, {})).toEqual({
       bootstrapMode: false,
     });
@@ -205,38 +206,18 @@ describe("Bootstrap Mode", () => {
       bootstrapMode: true,
     });
     await expect(
-      t
-        .withIdentity({ subject: PLAIN })
-        .mutation(api.importSources.setBootstrapMode, { on: false }),
+      signedIn(t, dave).mutation(api.importSources.setBootstrapMode, { on: false }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
   });
 });
 
 describe("import runs & source health", () => {
-  const finish = async (
-    t: ReturnType<typeof convexTest>,
-    status: "succeeded" | "failed",
-  ) => {
-    const runId = await t.mutation(internal.imports.startRun, {
-      sourceKey: "sevenseas",
-    });
-    await t.mutation(internal.imports.finishRun, {
-      runId,
-      status,
-      recordsSeen: 10,
-      recordsChanged: status === "succeeded" ? 2 : 0,
-      errors: status === "failed" ? ["boom"] : [],
-    });
-  };
-
   it("logs source, timing, counts, and errors", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    await t.mutation(internal.importSources.seedRegistry, {});
-    await finish(t, "succeeded");
-    const runs = await t
-      .withIdentity({ subject: ADMIN })
-      .query(api.imports.recentRuns, { sourceKey: "sevenseas" });
+    await seedRegistry(t);
+    await finishRun(t, "succeeded", { recordsSeen: 10, recordsChanged: 2 });
+    const runs = await signedIn(t, alice).query(api.imports.recentRuns, { sourceKey: "sevenseas" });
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
       sourceKey: "sevenseas",
@@ -249,8 +230,8 @@ describe("import runs & source health", () => {
   });
 
   it("flips unhealthy after three consecutive failures and recovers on success", async () => {
-    const t = convexTest(schema);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    const t = makeT();
+    await seedRegistry(t);
     const health = async () =>
       await t.run(async (ctx) => {
         const s = await ctx.db
@@ -260,12 +241,12 @@ describe("import runs & source health", () => {
         return { state: s!.healthState, failures: s!.consecutiveFailures };
       });
 
-    await finish(t, "failed");
-    await finish(t, "failed");
+    await finishRun(t, "failed");
+    await finishRun(t, "failed");
     expect(await health()).toEqual({ state: "healthy", failures: 2 });
-    await finish(t, "failed");
+    await finishRun(t, "failed");
     expect(await health()).toEqual({ state: "unhealthy", failures: 3 });
-    await finish(t, "succeeded");
+    await finishRun(t, "succeeded");
     expect(await health()).toEqual({ state: "healthy", failures: 0 });
   });
 });
@@ -287,32 +268,15 @@ describe("cadence", () => {
   });
 
   it("enabledSources reports only enabled rows with their last run", async () => {
-    const t = convexTest(schema);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    const t = makeT();
+    await seedRegistry(t);
     const before = await t.query(internal.imports.enabledSources, {});
     // Every seeded source is enabled and unrun.
-    expect(before.map((s) => s.key).sort()).toEqual([
-      "ann",
-      "kodansha",
-      "kodansha-backlist",
-      "openlibrary",
-      "prh",
-      "sevenseas",
-      "yenpress",
-    ]);
+    expect(before.map((s) => s.key).sort()).toEqual(SOURCE_KEYS);
     expect(
       before.every((s) => s.lastStartedAt === null && s.lastStatus === null),
     ).toBe(true);
-    const runId = await t.mutation(internal.imports.startRun, {
-      sourceKey: "sevenseas",
-    });
-    await t.mutation(internal.imports.finishRun, {
-      runId,
-      status: "succeeded",
-      recordsSeen: 0,
-      recordsChanged: 0,
-      errors: [],
-    });
+    await finishRun(t, "succeeded");
     const after = await t.query(internal.imports.enabledSources, {});
     expect(after[0]!.lastStatus).toBe("succeeded");
     expect(after[0]!.lastStartedAt).not.toBeNull();
@@ -323,57 +287,21 @@ describe("cadence", () => {
 
 /** One canonical Release linked (rung ①) to a Seven Seas observation. */
 async function insertLinkedRelease(
-  t: ReturnType<typeof convexTest>,
+  t: TestT,
   pubDate?: { year: number; month?: number; day?: number; sort: number },
 ) {
   return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas Entertainment",
-      slug: "seven-seas",
+    const { releaseId } = await seedCatalog(ctx, {
+      publisher: { name: "Seven Seas Entertainment", slug: "seven-seas" },
+      series: { title: "Alpha Adventures" },
+      release: { isbn13: "9781999000103", pubDate },
     });
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Alpha Adventures",
-      altTitles: [],
-      searchText: "Alpha Adventures",
-    });
-    const volumeId = await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: 1,
-      seriesId,
-      position: 1,
-      label: "1",
-    });
-    const editionId = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 1,
-      publisherId,
-    });
-    await ctx.db.insert("volumeCoverages", {
-      editionId,
-      volumeId,
-      order: 1,
-      extent: "complete",
-    });
-    const releaseId = await ctx.db.insert("releases", {
-      status: "active",
-      editionId,
-      format: "physical",
-      language: "en",
-      isbn13: "9781999000103",
-      pubDate,
-      publisherId,
-      seriesIds: [seriesId],
-    });
-    const observationId = await ctx.db.insert("sourceObservations", {
+    const observationId = await insertObservation(ctx, {
       sourceKey: "sevenseas",
       sourceRecordId: "book:101",
       recordRef: { type: "release", id: releaseId },
       snapshot: { title: "Alpha Adventures Vol. 1" },
       lastSeenAt: 1_000,
-      withdrawn: false,
     });
     return { releaseId, observationId };
   });
@@ -394,9 +322,9 @@ describe("withdrawal → possible-cancellation review (#37)", () => {
   });
 
   it("queues one hide-op review for a future-dated linked Release, touching no field", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    await seedRegistry(t);
     const { releaseId, observationId } = await insertLinkedRelease(t, FUTURE);
     const before = await t.run((ctx) => ctx.db.get(releaseId));
 
@@ -436,17 +364,15 @@ describe("withdrawal → possible-cancellation review (#37)", () => {
     ]);
 
     // Approving the pre-filled guess hides the release — one click.
-    await t
-      .withIdentity({ subject: ADMIN })
-      .mutation(api.proposals.approveProposal, { proposalId: proposal._id });
+    await signedIn(t, alice).mutation(api.proposals.approveProposal, { proposalId: proposal._id });
     const hidden = await t.run((ctx) => ctx.db.get(releaseId));
     expect(hidden!.status).toBe("hidden");
   });
 
   it("leaves past-dated and undated linked Releases untouched (no review)", async () => {
     for (const pubDate of [PAST, undefined]) {
-      const t = convexTest(schema);
-      await t.mutation(internal.importSources.seedRegistry, {});
+      const t = makeT();
+      await seedRegistry(t);
       const { releaseId, observationId } = await insertLinkedRelease(t, pubDate);
       const result = await t.mutation(internal.imports.markWithdrawn, {
         sourceKey: "sevenseas",
@@ -467,9 +393,9 @@ describe("withdrawal → possible-cancellation review (#37)", () => {
   });
 
   it("never double-queues: an open or rejected review blocks a repeat", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    await seedRegistry(t);
     const { observationId } = await insertLinkedRelease(t, FUTURE);
     await t.mutation(internal.imports.markWithdrawn, {
       sourceKey: "sevenseas",
@@ -518,42 +444,20 @@ describe("source health alert emails", () => {
     );
   }
 
-  const finish = async (
-    t: ReturnType<typeof convexTest>,
-    status: "succeeded" | "failed",
-  ) => {
-    const runId = await t.mutation(internal.imports.startRun, {
-      sourceKey: "sevenseas",
-    });
-    await t.mutation(internal.imports.finishRun, {
-      runId,
-      status,
-      recordsSeen: 0,
-      recordsChanged: 0,
-      errors: status === "failed" ? ["HTTP 500 for /wp-json"] : [],
-    });
-  };
-
-  const drain = async (t: ReturnType<typeof convexTest>) => {
-    vi.useFakeTimers();
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-    vi.useRealTimers();
-  };
-
   it("emails the Administrator exactly once per transition, each way", async () => {
-    const t = convexTest(schema);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    const t = makeT();
+    await seedRegistry(t);
     const sent: Sent[] = [];
     stubResend(sent);
 
     // Two failures: still healthy, no email.
-    await finish(t, "failed");
-    await finish(t, "failed");
+    await finishRun(t, "failed");
+    await finishRun(t, "failed");
     await drain(t);
     expect(sent).toHaveLength(0);
 
     // Third failure: the transition — exactly one email.
-    await finish(t, "failed");
+    await finishRun(t, "failed");
     await drain(t);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("admin@example.com");
@@ -563,25 +467,25 @@ describe("source health alert emails", () => {
     expect(sent[0]!.text).toContain("HTTP 500 for /wp-json");
 
     // A fourth failure while already unhealthy: no repeat.
-    await finish(t, "failed");
+    await finishRun(t, "failed");
     await drain(t);
     expect(sent).toHaveLength(1);
 
     // Recovery: exactly one more.
-    await finish(t, "succeeded");
+    await finishRun(t, "succeeded");
     await drain(t);
     expect(sent).toHaveLength(2);
     expect(sent[1]!.subject).toContain("recovered");
 
     // Staying healthy never re-sends.
-    await finish(t, "succeeded");
+    await finishRun(t, "succeeded");
     await drain(t);
     expect(sent).toHaveLength(2);
   });
 
   it("skips (never throws) when email is unconfigured", async () => {
-    const t = convexTest(schema);
-    await t.mutation(internal.importSources.seedRegistry, {});
+    const t = makeT();
+    await seedRegistry(t);
     const result = await t.action(internal.imports.healthAlert, {
       sourceKey: "sevenseas",
       transition: "unhealthy",
@@ -597,28 +501,15 @@ describe("source health alert emails", () => {
 
 describe("imports.dashboard", () => {
   it("is data-team gated and flags unhealthy sources first with last-run summaries", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    await t.mutation(internal.importSources.seedRegistry, {});
-    for (let i = 0; i < 3; i++) {
-      const runId = await t.mutation(internal.imports.startRun, {
-        sourceKey: "kodansha",
-      });
-      await t.mutation(internal.imports.finishRun, {
-        runId,
-        status: "failed",
-        recordsSeen: 5,
-        recordsChanged: 0,
-        errors: ["boom"],
-      });
-    }
+    await seedRegistry(t);
+    for (let i = 0; i < 3; i++) await finishRun(t, "failed", { sourceKey: "kodansha", recordsSeen: 5 });
     await expect(
-      t.withIdentity({ subject: PLAIN }).query(api.imports.dashboard, {}),
+      signedIn(t, dave).query(api.imports.dashboard, {}),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
-    const rows = await t
-      .withIdentity({ subject: ADMIN })
-      .query(api.imports.dashboard, {});
+    const rows = await signedIn(t, alice).query(api.imports.dashboard, {});
     expect(rows.map((r) => r.key)[0]).toBe("kodansha"); // unhealthy first
     const kodansha = rows.find((r) => r.key === "kodansha")!;
     expect(kodansha).toMatchObject({
@@ -641,31 +532,16 @@ describe("imports.dashboard", () => {
 
 describe("imports.bootstrapBacklog", () => {
   it("is moderator-gated and reports tagged records per type", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await t.run(async (ctx) => {
-      await ctx.db.insert("series", {
-        status: "active",
-        bootstrapUnreviewed: true,
-        publicId: 1,
-        title: "Tagged",
-        altTitles: [],
-        searchText: "Tagged",
-      });
-      await ctx.db.insert("series", {
-        status: "active",
-        publicId: 2,
-        title: "Untagged",
-        altTitles: [],
-        searchText: "Untagged",
-      });
+      await insertSeries(ctx, { title: "Tagged", bootstrapUnreviewed: true });
+      await insertSeries(ctx, { title: "Untagged" });
     });
     await expect(
-      t.withIdentity({ subject: PLAIN }).query(api.imports.bootstrapBacklog, {}),
+      signedIn(t, dave).query(api.imports.bootstrapBacklog, {}),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
-    const backlog = await t
-      .withIdentity({ subject: ADMIN })
-      .query(api.imports.bootstrapBacklog, {});
+    const backlog = await signedIn(t, alice).query(api.imports.bootstrapBacklog, {});
     expect(backlog.series.count).toBe(1);
     expect(backlog.volumes.count).toBe(0);
     expect(backlog.releases.count).toBe(0);
