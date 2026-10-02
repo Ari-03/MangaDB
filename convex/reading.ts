@@ -43,19 +43,6 @@ export async function volumeProgressRow(
     .unique();
 }
 
-/**
- * One user's Volume Progress rows in one Series, by Volume: one index read
- * for a whole Series. Each row carries its Volume's Series, which merges,
- * splits and repairs move along with the Volume.
- */
-async function seriesProgress(ctx: QueryCtx, userId: Id<"users">, seriesId: Id<"series">) {
-  const rows = await ctx.db
-    .query("volumeProgress")
-    .withIndex("by_user_series", (q) => q.eq("userId", userId).eq("seriesId", seriesId))
-    .collect();
-  return new Map(rows.map((row) => [row.volumeId, row]));
-}
-
 async function passRowFor(
   ctx: QueryCtx,
   userId: Id<"users">,
@@ -139,8 +126,11 @@ async function allVolumesRead(
 ): Promise<boolean> {
   const active = await activeVolumes(ctx, seriesId);
   if (active.length === 0) return false;
-  const progress = await seriesProgress(ctx, userId, seriesId);
-  return active.every((volume) => (progress.get(volume._id)?.readCount ?? 0) >= 1);
+  for (const volume of active) {
+    const progress = await volumeProgressRow(ctx, userId, volume._id);
+    if (!progress || progress.readCount < 1) return false;
+  }
+  return true;
 }
 
 /**
@@ -228,10 +218,9 @@ export const seriesTracking = query({
     if (!series) return null;
 
     const state = await seriesStateRow(ctx, user._id, series._id);
-    const read = await seriesProgress(ctx, user._id, series._id);
     const volumes = [];
     for (const volume of await activeVolumes(ctx, series._id)) {
-      const progress = read.get(volume._id);
+      const progress = await volumeProgressRow(ctx, user._id, volume._id);
       volumes.push({
         volumeId: volume._id,
         volumePublicId: volume.publicId,
@@ -305,10 +294,11 @@ export const myReading = query({
       const existing = rows.get(series._id);
       if (existing) return existing;
       const active = await activeVolumes(ctx, series._id);
-      const read = await seriesProgress(ctx, user._id, series._id);
-      const volumesRead = active.filter(
-        (volume) => (read.get(volume._id)?.readCount ?? 0) >= 1,
-      ).length;
+      let volumesRead = 0;
+      for (const volume of active) {
+        const progress = await volumeProgressRow(ctx, user._id, volume._id);
+        if (progress && progress.readCount >= 1) volumesRead += 1;
+      }
       const stats = await seriesStatsRow(ctx, series._id);
       const row: Row = {
         seriesId: series._id,

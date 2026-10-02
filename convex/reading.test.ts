@@ -10,8 +10,9 @@ import {
   insertSeries,
   insertVolume,
 } from "./test.factories";
-import { makeT, reader, withUser, type TestT } from "./test.helpers";
-import { describeNoViewer } from "./test.tracking";
+import { alice, bob, makeT, reader, seedTeam, signedIn, withUser, type TestT } from "./test.helpers";
+import { mergeAs, splitAs } from "./test.moderation";
+import { describeNoViewer, seriesWithVolume } from "./test.tracking";
 
 const OTHER = { subject: "user_2other", username: "other" };
 
@@ -113,6 +114,25 @@ describe("reading.seriesTracking", () => {
     await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
     const tracking = await as.query(api.reading.seriesTracking, { seriesPublicId: 1 });
     expect(tracking?.volumes.map((v) => v.readCount)).toEqual([0, 1, 0]);
+  });
+
+  // Split restores the Volume's Series but not the progress row's denormalised
+  // seriesId, so the count is read per Volume rather than through by_user_series.
+  it("keeps a read recorded while merged after the Series is split back out", async () => {
+    const t = makeT();
+    await seedTeam(t, [alice, bob, reader]);
+    const { survivor, loser, volumeId } = await t.run(async (ctx) => {
+      const survivor = await insertSeries(ctx, { publicId: 1, title: "Vinland Saga" });
+      const { seriesId: loser, volumeId } = await seriesWithVolume(ctx, 2, "Vinland Saga (duplicate)");
+      return { survivor, loser, volumeId };
+    });
+    await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser });
+    const as = signedIn(t, reader);
+    await as.mutation(api.reading.setVolumeReadCount, { volumeId, readCount: 3 });
+    await splitAs(t, { type: "series", id: loser });
+
+    const tracking = await as.query(api.reading.seriesTracking, { seriesPublicId: 2 });
+    expect(tracking?.volumes).toMatchObject([{ volumeId, readCount: 3 }]);
   });
 });
 
