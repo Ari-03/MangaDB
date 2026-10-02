@@ -52,13 +52,19 @@ import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   createCanonicalRecords,
+  descriptionRepairWork,
   findPublisherByName,
   IMPORT_LANGUAGE,
   isbnHeldElsewhere,
   needsEditionLine,
+  recleaned,
   recordUnplaced,
-  rewriteOwnDescription,
+  repairCountsValidator,
+  repairLinkedDescription,
+  runDescriptionRepair,
+  REPAIR_SCAN,
   toPartialDate,
+  type DescriptionRepair,
 } from "./lib/pipeline";
 import {
   cleanOlDescription,
@@ -640,30 +646,9 @@ export const replayDescriptions = internalAction({
 
 // ---------- the description repair ----------
 
-/** OpenLibrary observations scanned per repair lookup. */
-const REPAIR_SCAN = 100;
-/** Failed observations whose message a repair link logs (the count is complete). */
-const REPAIR_ERROR_SAMPLES = 20;
-
-const repairCounts = v.object({
-  scanned: v.number(),
-  snapshotFixed: v.number(),
-  releaseUpdated: v.number(),
-  releaseCleared: v.number(),
-  errors: v.number(),
-});
-type RepairCounts = typeof repairCounts.type;
-
-/** Text `cleanOlDescription` would change (a non-string is listed so it fails loudly). */
-function stale(text: unknown): boolean {
-  return text !== undefined && (typeof text !== "string" || cleanOlDescription(text) !== text);
-}
-
 /**
- * Up to REPAIR_SCAN OpenLibrary observations after `after` and the ones
- * with work: a stored description the cleaner would change, or a linked
- * Release whose current text it would change (the mutation decides whose
- * text that is). Where to look next is null once exhausted.
+ * Up to REPAIR_SCAN OpenLibrary observations after `after`, and the ones
+ * whose stored description or linked Release text the cleaner would change.
  */
 export const repairCandidates = internalQuery({
   args: { after: v.union(v.string(), v.null()) },
@@ -676,18 +661,12 @@ export const repairCandidates = internalQuery({
           : q.eq("sourceKey", SOURCE_KEY).gt("sourceRecordId", after),
       )
       .take(REPAIR_SCAN);
-    const ids: Id<"sourceObservations">[] = [];
-    for (const doc of docs) {
-      const snapshot = doc.snapshot as Partial<OlEditionSnapshot> | null;
-      const release = doc.recordRef?.type === "release" ? await ctx.db.get(doc.recordRef.id) : null;
-      if (stale(snapshot?.description) || stale(release?.description)) ids.push(doc._id);
-    }
-    const last = docs.at(-1);
-    return {
-      ids,
-      scanned: docs.length,
-      next: docs.length < REPAIR_SCAN || !last ? null : last.sourceRecordId,
-    };
+    return await descriptionRepairWork(
+      ctx,
+      docs,
+      (doc) => (doc.snapshot as Partial<OlEditionSnapshot> | null)?.description,
+      cleanOlDescription,
+    );
   },
 });
 
@@ -700,37 +679,19 @@ export const repairCandidates = internalQuery({
  */
 export const repairDescriptionLine = internalMutation({
   args: { observationId: v.id("sourceObservations") },
-  handler: async (
-    ctx,
-    { observationId },
-  ): Promise<{ snapshotFixed: boolean; release: "updated" | "cleared" | null }> => {
+  handler: async (ctx, { observationId }): Promise<DescriptionRepair> => {
     const observation = await ctx.db.get(observationId);
     if (observation === null) return { snapshotFixed: false, release: null };
     const snapshot = observation.snapshot as OlEditionSnapshot;
-    let snapshotFixed = false;
-    if (stale(snapshot.description)) {
-      const fixed = cleanOlDescription(snapshot.description!);
-      const { description: _, ...rest } = snapshot;
-      await ctx.db.patch(observation._id, {
-        snapshot: fixed === undefined ? rest : { ...rest, description: fixed },
-      });
-      snapshotFixed = true;
-    }
-    if (observation.recordRef?.type !== "release") return { snapshotFixed, release: null };
-    const release = await ctx.db.get(observation.recordRef.id);
-    if (release === null || typeof release.description !== "string" || !stale(release.description)) {
-      return { snapshotFixed, release: null };
-    }
-    const source = await getSourceByKey(ctx, SOURCE_KEY);
-    const rewritten = await rewriteOwnDescription(ctx, {
+    const fixed = recleaned(snapshot, cleanOlDescription);
+    if (fixed !== null) await ctx.db.patch(observation._id, { snapshot: fixed });
+    const release = await repairLinkedDescription(ctx, observation, {
       sourceKey: SOURCE_KEY,
-      observation,
-      release,
-      text: cleanOlDescription(release.description),
-      citation: { sourceName: source?.name ?? "OpenLibrary", url: snapshot.url },
-      now: Date.now(),
+      clean: cleanOlDescription,
+      sourceName: "OpenLibrary",
+      url: snapshot.url,
     });
-    return { snapshotFixed, release: rewritten };
+    return { snapshotFixed: fixed !== null, release };
   },
 });
 
@@ -738,14 +699,11 @@ export const repairDescriptionLine = internalMutation({
  * Re-clean every stored OpenLibrary description with today's
  * `cleanOlDescription` (a physical description is no blurb; a trailing
  * "--P. [4] of cover." citation goes) and fix the Releases still showing
- * OpenLibrary's text (`repairDescriptionLine`). No network. A small
- * action of its own rather than a mode of `ann:repairDescriptions`: the
- * two walk different observations with different cleaners and share only
- * the guarded write (`rewriteOwnDescription`). Each observation is its own
- * mutation: one that fails is counted and logged and the walk goes on.
- * Safe to rerun; continues itself across the action time limit and logs
- * its counts at every hand-off and at the end. An operator command: it
- * runs whatever the source's enabled flag says and opens no Import Run.
+ * OpenLibrary's text (`repairDescriptionLine`). No network; the walk is
+ * `ann:repairDescriptions`' own (`runDescriptionRepair`) over different
+ * observations with a different cleaner. Safe to rerun. An operator
+ * command: it runs whatever the source's enabled flag says and opens no
+ * Import Run.
  *
  *   npx convex run openLibrary:repairDescriptions '{}'
  */
@@ -753,48 +711,15 @@ export const repairDescriptions = internalAction({
   args: {
     // ----- continuation state (never passed by callers) -----
     after: v.optional(v.string()),
-    counts: v.optional(repairCounts),
+    counts: v.optional(repairCountsValidator),
   },
-  handler: async (ctx, args): Promise<RepairCounts & { continued: boolean }> => {
-    const started = Date.now();
-    const counts: RepairCounts = args.counts ?? {
-      scanned: 0,
-      snapshotFixed: 0,
-      releaseUpdated: 0,
-      releaseCleared: 0,
-      errors: 0,
-    };
-    let logged = 0;
-    let cursor: string | null = args.after ?? null;
-    for (;;) {
-      const batch: { ids: Id<"sourceObservations">[]; scanned: number; next: string | null } =
-        await ctx.runQuery(internal.openLibrary.repairCandidates, { after: cursor });
-      counts.scanned += batch.scanned;
-      for (const observationId of batch.ids) {
-        try {
-          const done = await applyRetrying(ctx, internal.openLibrary.repairDescriptionLine, {
-            observationId,
-          });
-          if (done.snapshotFixed) counts.snapshotFixed++;
-          if (done.release === "updated") counts.releaseUpdated++;
-          if (done.release === "cleared") counts.releaseCleared++;
-        } catch (e) {
-          counts.errors++;
-          if (logged++ < REPAIR_ERROR_SAMPLES) {
-            console.error(`[openLibrary.repairDescriptions] observation ${observationId}: ${errorMessage(e)}`);
-          }
-        }
-      }
-      cursor = batch.next;
-      if (cursor === null) {
-        console.log(`[openLibrary.repairDescriptions] done: ${JSON.stringify(counts)}`);
-        return { ...counts, continued: false };
-      }
-      if (Date.now() - started > REPLAY_BUDGET_MS) {
-        await ctx.scheduler.runAfter(0, internal.openLibrary.repairDescriptions, { after: cursor, counts });
-        console.log(`[openLibrary.repairDescriptions] continuing after ${cursor}: ${JSON.stringify(counts)}`);
-        return { ...counts, continued: true };
-      }
-    }
-  },
+  handler: (ctx, args): ReturnType<typeof runDescriptionRepair> =>
+    runDescriptionRepair(ctx, args, {
+      label: "openLibrary.repairDescriptions",
+      noun: "observation",
+      budgetMs: REPLAY_BUDGET_MS,
+      candidates: internal.openLibrary.repairCandidates,
+      repair: internal.openLibrary.repairDescriptionLine,
+      self: internal.openLibrary.repairDescriptions,
+    }),
 });

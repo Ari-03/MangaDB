@@ -28,14 +28,18 @@
 // `release` is optional on both paths: a series-structured source (ANN)
 // creates or queues the Series/Volume backbone without any Release.
 
+import type { FunctionReference } from "convex/server";
+import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
 import { canonicalLabel } from "./bookTitle";
 import { partialDateSort, type DateParts } from "./dates";
+import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { getObservation, upsertObservation } from "./observations";
+import { applyRetrying } from "./occ";
 import { allocatePublicId } from "./publicIds";
 import {
   canonicalPublisherBySlug,
@@ -612,23 +616,28 @@ export async function blurbOutranked(
   ) {
     return false;
   }
+  const revision = await lastDescriptionRevision(ctx, release._id);
+  if (revision?.author.kind !== "source") return false;
+  const [incoming, incumbent] = await Promise.all([
+    getSourceByKey(ctx, sourceKey),
+    getSourceByKey(ctx, revision.author.sourceKey),
+  ]);
+  return (
+    authorityRank(incumbent?.fieldAuthority, "description") <
+    authorityRank(incoming?.fieldAuthority, "description")
+  );
+}
+
+/** The latest Revision that touched a Release's description, or null. */
+async function lastDescriptionRevision(ctx: QueryCtx, releaseId: Id<"releases">) {
   const history = ctx.db
     .query("revisions")
-    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
+    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", releaseId))
     .order("desc");
   for await (const revision of history) {
-    if (!revision.changes.some((change) => change.field === "description")) continue;
-    if (revision.author.kind !== "source") return false;
-    const [incoming, incumbent] = await Promise.all([
-      getSourceByKey(ctx, sourceKey),
-      getSourceByKey(ctx, revision.author.sourceKey),
-    ]);
-    return (
-      authorityRank(incumbent?.fieldAuthority, "description") <
-      authorityRank(incoming?.fieldAuthority, "description")
-    );
+    if (revision.changes.some((change) => change.field === "description")) return revision;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -638,31 +647,24 @@ export async function blurbOutranked(
  * nobody did.
  */
 export async function descriptionEvidence(
-  ctx: QueryCtx | MutationCtx,
+  ctx: QueryCtx,
   release: Doc<"releases">,
   sourceKey: string,
-): Promise<string[] | null> {
-  const history = ctx.db
-    .query("revisions")
-    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
-    .order("desc");
-  for await (const revision of history) {
-    if (!revision.changes.some((change) => change.field === "description")) continue;
-    if (revision.author.kind !== "source" || revision.author.sourceKey !== sourceKey) return null;
-    const proposal = revision.proposalId ? await ctx.db.get(revision.proposalId) : null;
-    const version = proposal
-      ? await ctx.db
-          .query("proposalVersions")
-          .withIndex("by_proposal", (q) =>
-            q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
-          )
-          .unique()
-      : null;
-    return (version?.evidence ?? []).flatMap((row) =>
-      row.kind === "observation" ? [row.observationId as string] : [],
-    );
-  }
-  return null;
+): Promise<Id<"sourceObservations">[] | null> {
+  const revision = await lastDescriptionRevision(ctx, release._id);
+  if (revision?.author.kind !== "source" || revision.author.sourceKey !== sourceKey) return null;
+  const proposal = await ctx.db.get(revision.proposalId);
+  const version = proposal
+    ? await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) =>
+          q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
+        )
+        .unique()
+    : null;
+  return (version?.evidence ?? []).flatMap((row) =>
+    row.kind === "observation" ? [row.observationId] : [],
+  );
 }
 
 /**
@@ -710,6 +712,176 @@ export async function rewriteOwnDescription(
   });
   if (!result.applied.includes("description")) return null;
   return text === undefined ? "cleared" : "updated";
+}
+
+// ---------- the description repair (ann.ts, openLibrary.ts) ----------
+
+/** A source's description cleaner: the text to keep, or undefined when no blurb remains. */
+type DescriptionCleaner = (text: string) => string | undefined;
+
+/** Observations scanned per repair lookup. */
+export const REPAIR_SCAN = 100;
+/** Failed records whose message a repair link logs (the count is complete). */
+const REPAIR_ERROR_SAMPLES = 20;
+
+export const repairCountsValidator = v.object({
+  scanned: v.number(),
+  snapshotFixed: v.number(),
+  releaseUpdated: v.number(),
+  releaseCleared: v.number(),
+  errors: v.number(),
+});
+type RepairCounts = Infer<typeof repairCountsValidator>;
+
+/** What repairing one observation did. */
+export type DescriptionRepair = { snapshotFixed: boolean; release: "updated" | "cleared" | null };
+
+/** Text `clean` would change. A non-string is listed too, so its record fails loudly and is counted. */
+function staleDescription(text: unknown, clean: DescriptionCleaner): boolean {
+  return text !== undefined && (typeof text !== "string" || clean(text) !== text);
+}
+
+/**
+ * The repair work in a scanned page of observations: those whose stored
+ * description (`stored`) or linked Release's current text `clean` would
+ * change, whoever wrote that text (the repair mutation decides). `next` is
+ * null once the scan is exhausted.
+ */
+export async function descriptionRepairWork(
+  ctx: QueryCtx,
+  docs: Doc<"sourceObservations">[],
+  stored: (doc: Doc<"sourceObservations">) => unknown,
+  clean: DescriptionCleaner,
+) {
+  const ids: Id<"sourceObservations">[] = [];
+  for (const doc of docs) {
+    const release = doc.recordRef?.type === "release" ? await ctx.db.get(doc.recordRef.id) : null;
+    if (staleDescription(stored(doc), clean) || staleDescription(release?.description, clean)) {
+      ids.push(doc._id);
+    }
+  }
+  const last = docs.at(-1);
+  return {
+    ids,
+    scanned: docs.length,
+    next: docs.length < REPAIR_SCAN || !last ? null : last.sourceRecordId,
+  };
+}
+
+/**
+ * A stored snapshot part with its description re-cleaned (dropped when
+ * nothing remains), or null when it is already clean. Patched in place:
+ * the same fetch re-read, so no history row.
+ */
+export function recleaned<T extends { description?: string }>(
+  holder: T,
+  clean: DescriptionCleaner,
+): (Omit<T, "description"> & { description?: string }) | null {
+  if (!staleDescription(holder.description, clean)) return null;
+  const fixed = clean(holder.description!);
+  const { description: _, ...rest } = holder;
+  return fixed === undefined ? rest : { ...rest, description: fixed };
+}
+
+/**
+ * Re-clean the text of the Release an observation links to when `clean`
+ * would change it, through `rewriteOwnDescription` (only text the source
+ * wrote from this observation; no lock, no Human Override), citing `url`
+ * under the registry's name for the source (else `sourceName`).
+ */
+export async function repairLinkedDescription(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  args: { sourceKey: string; clean: DescriptionCleaner; sourceName: string; url: string },
+): Promise<DescriptionRepair["release"]> {
+  if (observation.recordRef?.type !== "release") return null;
+  const release = await ctx.db.get(observation.recordRef.id);
+  if (
+    release === null ||
+    typeof release.description !== "string" ||
+    !staleDescription(release.description, args.clean)
+  ) {
+    return null;
+  }
+  const source = await getSourceByKey(ctx, args.sourceKey);
+  return await rewriteOwnDescription(ctx, {
+    sourceKey: args.sourceKey,
+    observation,
+    release,
+    text: args.clean(release.description),
+    citation: { sourceName: source?.name ?? args.sourceName, url: args.url },
+    now: Date.now(),
+  });
+}
+
+/**
+ * The walk behind `ann:repairDescriptions` and `openLibrary:repairDescriptions`:
+ * page through `candidates`, repair each observation with work in its own
+ * mutation (`repair`), and hand the cursor and counts to a fresh action
+ * (`self`) after `budgetMs`. A record that fails is counted and logged and
+ * the walk goes on. Counts are logged at every hand-off and at the end,
+ * since the CLI stops listening after a few minutes.
+ */
+export async function runDescriptionRepair(
+  ctx: ActionCtx,
+  args: { after?: string; counts?: RepairCounts },
+  walk: {
+    /** Log prefix and the noun for a failed record ("ann.repairDescriptions", "line"). */
+    label: string;
+    noun: string;
+    budgetMs: number;
+    candidates: FunctionReference<
+      "query",
+      "internal",
+      { after: string | null },
+      Awaited<ReturnType<typeof descriptionRepairWork>>
+    >;
+    repair: FunctionReference<
+      "mutation",
+      "internal",
+      { observationId: Id<"sourceObservations"> },
+      DescriptionRepair
+    >;
+    self: FunctionReference<"action", "internal", { after?: string; counts?: RepairCounts }>;
+  },
+): Promise<RepairCounts & { continued: boolean }> {
+  const started = Date.now();
+  const counts: RepairCounts = args.counts ?? {
+    scanned: 0,
+    snapshotFixed: 0,
+    releaseUpdated: 0,
+    releaseCleared: 0,
+    errors: 0,
+  };
+  let logged = 0;
+  let cursor: string | null = args.after ?? null;
+  for (;;) {
+    const batch = await ctx.runQuery(walk.candidates, { after: cursor });
+    counts.scanned += batch.scanned;
+    for (const observationId of batch.ids) {
+      try {
+        const done = await applyRetrying(ctx, walk.repair, { observationId });
+        if (done.snapshotFixed) counts.snapshotFixed++;
+        if (done.release === "updated") counts.releaseUpdated++;
+        if (done.release === "cleared") counts.releaseCleared++;
+      } catch (e) {
+        counts.errors++;
+        if (logged++ < REPAIR_ERROR_SAMPLES) {
+          console.error(`[${walk.label}] ${walk.noun} ${observationId}: ${errorMessage(e)}`);
+        }
+      }
+    }
+    cursor = batch.next;
+    if (cursor === null) {
+      console.log(`[${walk.label}] done: ${JSON.stringify(counts)}`);
+      return { ...counts, continued: false };
+    }
+    if (Date.now() - started > walk.budgetMs) {
+      await ctx.scheduler.runAfter(0, walk.self, { after: cursor, counts });
+      console.log(`[${walk.label}] continuing after ${cursor}: ${JSON.stringify(counts)}`);
+      return { ...counts, continued: true };
+    }
+  }
 }
 
 type PublisherRef = { name: string; slug: string; parentSlug?: string };
