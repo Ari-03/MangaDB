@@ -353,8 +353,9 @@ export default defineSchema({
         v.object({ name: v.string(), role: creditRole, count: v.number(), seenAt: v.number() }),
       ),
     ),
-    // PRH rows only: pairs of near spelling keys ("a|b") one line of this
-    // rebuild named together, so settle keeps them two people.
+    // PRH rows only: pairs of spelling keys ("a|b") one line of this
+    // rebuild named together, so settle keeps them two people. A line names
+    // a handful of people, so a Series has a few pairs.
     runApart: v.optional(v.array(v.string())),
     // Superseded by runNames; left by a staging rehearsal of the previous
     // rule and cleared from each row the next time a rebuild stamps it.

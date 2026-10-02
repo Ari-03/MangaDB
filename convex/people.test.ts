@@ -673,6 +673,10 @@ async function variantCatalog() {
     await book(pair, "Art by Yuka Sato", 1);
     await book(pair, "Art by Yuka Sato", 1);
     await book(pair, "Story by Yuki Sato; Art by Yuka Sato", 1, true);
+    // Two people one line names together, and a spelling near both.
+    const bridge = await series("Bridge Pens");
+    await book(bridge, "Story by Kenta Mori; Art by Kenji Mari", 1);
+    await book(bridge, "Kenta Mari", 1, true);
     for (let i = 0; i < 200; i++) {
       await ctx.db.insert("sourceObservations", {
         sourceKey: "prh",
@@ -682,7 +686,7 @@ async function variantCatalog() {
         withdrawn: true,
       });
     }
-    return { hellbound, nomiya, sirius, dumbbells, kurosagi, berserk, twins, pair };
+    return { hellbound, nomiya, sirius, dumbbells, kurosagi, berserk, twins, pair, bridge };
   });
   await t.action(internal.people.rebuild, {});
   return { t, ids };
@@ -766,6 +770,11 @@ describe("people.rebuild PRH lines", () => {
     expect(await creditLines(t, ids.pair)).toEqual([
       "Yuka Sato: art (prh)",
       "Yuki Sato: story (prh)",
+    ]);
+    // Kenta Mari is near both, but can't join them into one person.
+    expect(await creditLines(t, ids.bridge)).toEqual([
+      "Kenji Mari: art (prh)",
+      "Kenta Mori: story (prh)",
     ]);
   });
 
@@ -865,6 +874,72 @@ describe("people.rebuild PRH lines", () => {
       "Choe Gyu-Seok: art (prh)",
       "Yeon Sang-Ho: story (prh)",
     ]);
+  });
+
+  it("settles a Series split across settle pages as if settled once", async () => {
+    const { t, ids } = await variantCatalog();
+    const rebuiltAt = Date.now() + 1000;
+    // Two PRH rows on The Hellbound, a page apart: the first tallies the
+    // winning spelling twice; the second shows the winner's person but
+    // tallies the other spelling, so its own tally alone would pick Choe.
+    const { choi } = await t.run(async (ctx) => {
+      const person = (name: string) =>
+        ctx.db.insert("people", {
+          publicId: 7000 + name.length,
+          name,
+          nameKey: nameKey(name),
+          seriesCount: 0,
+          originalCount: 0,
+          coverUrl: null,
+          coverIsbn: null,
+        });
+      // The first run left Choi's person (the spelling seen first) in place.
+      const choi = (await ctx.db.query("people").collect()).find((p) => p.name === "Choi Gyu-Seok")!._id;
+      const other = await person("Somebody Else Entirely");
+      for (const row of await ctx.db
+        .query("seriesCredits")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.hellbound))
+        .collect()) {
+        await ctx.db.delete(row._id);
+      }
+      const prh = (personId: Id<"people">, runNames: { name: string; count: number }[]) =>
+        ctx.db.insert("seriesCredits", {
+          seriesId: ids.hellbound,
+          personId,
+          role: "art",
+          runRole: "art",
+          source: "prh",
+          rebuiltAt,
+          runNames: runNames.map((n) => ({ ...n, role: "art" as const, seenAt: 1 })),
+          runApart: [],
+        });
+      await prh(other, [{ name: "Choi Gyu-Seok", count: 2 }]);
+      for (let i = 0; i < 100; i++) {
+        await ctx.db.insert("seriesCredits", {
+          seriesId: ids.berserk,
+          personId: other,
+          role: "author",
+          source: "creators",
+          rebuiltAt,
+        });
+      }
+      await prh(choi, [{ name: "Choe Gyu-Seok", count: 1 }]);
+      return { choi };
+    });
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      cursor = await t.mutation(internal.people.settleRoles, { rebuiltAt, cursor });
+      pages++;
+    } while (cursor !== null);
+    expect(pages).toBeGreaterThan(1);
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query("seriesCredits")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.hellbound))
+        .collect(),
+    );
+    expect(rows.map((row) => row.personId)).toEqual([choi]);
   });
 
   it("keeps every row id across rebuilds", async () => {
