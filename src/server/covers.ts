@@ -17,8 +17,8 @@
 // burst of lookups never hides art for a day. Spec §6: covers are stored under
 // industry-standard tolerance with the takedown contact on /about-the-data.
 //
-// Measured on a stratified sample of the catalog's ISBNs (README "Cover
-// art"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
+// Measured on a stratified sample of the catalog's ISBNs (docs/decisions.md,
+// "Cover art sources"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
 import { env, waitUntil } from "cloudflare:workers";
 
 import type { CoverShelf } from "~/lib/homeShelves";

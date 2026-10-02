@@ -24,7 +24,7 @@ export const Route = createFileRoute("/about-the-data")({
 });
 
 // The takedown/attribution contact. A mailbox the operator must actually
-// run — see the README's launch section.
+// run — see docs/operations.md, "Seeding a new catalog".
 export const DATA_CONTACT_EMAIL = "data@mangadb.org";
 
 type Source = {

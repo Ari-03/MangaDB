@@ -1,4 +1,4 @@
-// Same-origin reverse proxy for PostHog (README "Analytics (PostHog)"),
+// Same-origin reverse proxy for PostHog (docs/configuration.md "Analytics (PostHog)"),
 // after PostHog's Cloudflare Workers proxy guide. The browser SDK uses
 // `/_s` as its api_host, so analytics requests are first-party and ad
 // blockers that match *.posthog.com leave them alone.

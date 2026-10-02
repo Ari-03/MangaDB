@@ -13,7 +13,7 @@ import { convexClient } from "~/providers";
  * appoint/revoke/suspend/reinstate actions, and the permanent audit trail.
  * Administrators appoint Moderators; Moderators appoint Editors; every
  * change lands in the append-only roleAudit table. The initial Administrator
- * is appointed by the operator (see the README). Never indexed.
+ * is appointed by the operator (docs/moderation.md). Never indexed.
  */
 export const Route = createFileRoute("/mod/roles")({
   head: () => ({ meta: [{ title: "Roles — MangaDB" }] }),

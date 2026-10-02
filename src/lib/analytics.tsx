@@ -1,4 +1,4 @@
-// Product analytics with PostHog (README "Analytics (PostHog)").
+// Product analytics with PostHog (docs/configuration.md "Analytics (PostHog)").
 //
 // - `<AnalyticsProvider>` (mounted by AppProviders) loads PostHog in the
 //   browser only, from VITE_PUBLIC_POSTHOG_KEY. Without the key it renders
