@@ -30,6 +30,7 @@ import {
 } from "./lib/moderationFields";
 import { seriesSearchText } from "./lib/searchMatch";
 import { syncMatureProjection } from "./seriesBrowse";
+import type { OpMeta } from "./lib/sensitiveOps";
 import { volumeTitle } from "./lib/titles";
 import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue } from "./lib/values";
@@ -136,6 +137,62 @@ export function validateChanges(
 
 // ---------- the approved-update write path ----------
 
+type Author = Doc<"proposals">["author"];
+
+/**
+ * A Proposal approved as it is made (direct edits, sensitive operations,
+ * the data repair): its author's approver decides it at submission.
+ */
+export async function insertApprovedProposal(
+  ctx: MutationCtx,
+  author: Author,
+  approvedBy: Id<"users">,
+): Promise<Id<"proposals">> {
+  const now = Date.now();
+  return await ctx.db.insert("proposals", {
+    author,
+    state: "approved",
+    currentVersionNo: 1,
+    submittedAt: now,
+    decidedBy: approvedBy,
+    decidedAt: now,
+  });
+}
+
+/** A Proposal's immutable version 1. */
+export async function insertFirstVersion(
+  ctx: MutationCtx,
+  proposalId: Id<"proposals">,
+  version: Pick<Doc<"proposalVersions">, "ops" | "evidence" | "changeComment">,
+): Promise<void> {
+  await ctx.db.insert("proposalVersions", { proposalId, versionNo: 1, ...version });
+}
+
+/**
+ * Append the next immutable Revision to one record's history. `latest` is
+ * the record's newest Revision as the caller read it (none for a record
+ * just created), and the new one's `seq` follows it.
+ */
+export async function insertRevision(
+  ctx: MutationCtx,
+  ref: RecordRef,
+  latest: Doc<"revisions"> | null | undefined,
+  changes: Doc<"revisions">["changes"],
+  meta: OpMeta,
+) {
+  const seq = (latest?.seq ?? 0) + 1;
+  const revisionId = await ctx.db.insert("revisions", {
+    ref,
+    seq,
+    proposalId: meta.proposalId,
+    author: meta.author,
+    approvedBy: meta.approvedBy,
+    changes,
+    comment: meta.comment,
+  });
+  return { revisionId, seq };
+}
+
 /**
  * Apply one approved update op to its record: staleness check against the
  * base Revision, the patch itself (plus derived fields), implicit Human
@@ -204,17 +261,7 @@ export async function applyUpdate(
   }
 
   await ctx.db.patch(ref.id, patch as never);
-
-  const revisionId = await ctx.db.insert("revisions", {
-    ref,
-    seq: (latest?.seq ?? 0) + 1,
-    proposalId: args.proposalId,
-    author: args.author,
-    approvedBy: args.approvedBy,
-    changes,
-    comment: args.comment,
-  });
-  return { revisionId, seq: (latest?.seq ?? 0) + 1 };
+  return await insertRevision(ctx, ref, latest, changes, args);
 }
 
 /**
@@ -251,28 +298,10 @@ export const submitDirectEdit = mutation({
       userId: user._id,
       roleAtAuthorship: user.role,
     };
-    const now = Date.now();
 
-    // The immediately approved Proposal + its immutable version 1.
-    const proposalId = await ctx.db.insert("proposals", {
-      author,
-      state: "approved",
-      currentVersionNo: 1,
-      submittedAt: now,
-      decidedBy: user._id,
-      decidedAt: now,
-    });
-    await ctx.db.insert("proposalVersions", {
-      proposalId,
-      versionNo: 1,
-      ops: [
-        {
-          kind: "update",
-          ref,
-          baseRevisionId: args.baseRevisionId,
-          changes,
-        },
-      ],
+    const proposalId = await insertApprovedProposal(ctx, author, user._id);
+    await insertFirstVersion(ctx, proposalId, {
+      ops: [{ kind: "update", ref, baseRevisionId: args.baseRevisionId, changes }],
       evidence: [],
       changeComment: comment,
     });

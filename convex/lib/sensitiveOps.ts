@@ -36,6 +36,7 @@ import { followMerges, primaryVolumeSeries } from "../catalogPages";
 import {
   displayInfo,
   getCanonical,
+  insertRevision,
   revisionsOf,
   type CatalogDoc,
   type RecordRef,
@@ -74,15 +75,7 @@ async function recordRevision(
   meta: OpMeta,
 ): Promise<Id<"revisions">> {
   const latest = (await revisionsOf(ctx, ref))[0];
-  return await ctx.db.insert("revisions", {
-    ref,
-    seq: (latest?.seq ?? 0) + 1,
-    proposalId: meta.proposalId,
-    author: meta.author,
-    approvedBy: meta.approvedBy,
-    changes,
-    comment: meta.comment,
-  });
+  return (await insertRevision(ctx, ref, latest, changes, meta)).revisionId;
 }
 
 async function requireRecord(

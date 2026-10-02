@@ -25,6 +25,7 @@ import {
   applyUpdate,
   displayInfo,
   getCanonical,
+  insertRevision,
   revisionsOf,
   validateChanges,
   type FieldChange,
@@ -746,6 +747,12 @@ export const approveProposal = mutation({
       publicId: number | null;
     }> = [];
     const revisionIds: Id<"revisions">[] = [];
+    const meta: OpMeta = {
+      proposalId: args.proposalId,
+      author: proposal.author,
+      approvedBy: user._id,
+      comment: version.changeComment,
+    };
     let planCursor = 0;
     for (const op of version.ops) {
       if (op.kind === "create") {
@@ -754,19 +761,10 @@ export const approveProposal = mutation({
         const record = await applyCreatePlan(ctx, plan, temp);
         // A joined existing record was not created: no creation Revision.
         if (record.existing) continue;
-        revisionIds.push(
-          await ctx.db.insert("revisions", {
-            ref: record.ref,
-            seq: 1,
-            proposalId: args.proposalId,
-            author: proposal.author,
-            approvedBy: user._id,
-            changes: Object.entries(record.revisionFields)
-              .filter(([, value]) => value !== undefined)
-              .map(([field, after]) => ({ field, after })),
-            comment: version.changeComment,
-          }),
-        );
+        const changes = Object.entries(record.revisionFields)
+          .filter(([, value]) => value !== undefined)
+          .map(([field, after]) => ({ field, after }));
+        revisionIds.push((await insertRevision(ctx, record.ref, null, changes, meta)).revisionId);
         created.push({
           tempId: record.tempId,
           type: record.ref.type,
@@ -804,12 +802,6 @@ export const approveProposal = mutation({
         // functions as the direct Moderator mutations (sensitiveOps.ts) —
         // each validates the record's current state and throws (rolling the
         // whole approval back) when the world moved.
-        const meta: OpMeta = {
-          proposalId: args.proposalId,
-          author: proposal.author,
-          approvedBy: user._id,
-          comment: version.changeComment,
-        };
         if (op.kind === "merge") {
           revisionIds.push(
             ...(await applyMerge(

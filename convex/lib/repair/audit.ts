@@ -8,7 +8,12 @@
 import { ConvexError, type Infer } from "convex/values";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
-import { revisionsOf } from "../../moderation";
+import {
+  insertApprovedProposal,
+  insertFirstVersion,
+  insertRevision,
+  revisionsOf,
+} from "../../moderation";
 import type { evidence, recordRef } from "../../schema";
 import { coverageOf, editionSeriesIds, releasesOf } from "../editionRows";
 import { allocatePublicId } from "../publicIds";
@@ -75,15 +80,7 @@ export function createAudit(
     /** The Proposal meta stock apply functions stamp on their Revisions. */
     async meta(): Promise<OpMeta> {
       if (meta) return meta;
-      const now = Date.now();
-      const proposalId = await ctx.db.insert("proposals", {
-        author,
-        state: "approved",
-        currentVersionNo: 1,
-        submittedAt: now,
-        decidedBy: actor.userId,
-        decidedAt: now,
-      });
+      const proposalId = await insertApprovedProposal(ctx, author, actor.userId);
       meta = { proposalId, author, approvedBy: actor.userId, comment };
       return meta;
     },
@@ -110,28 +107,13 @@ export function createAudit(
     /** Append the next Revision to one record's public history. */
     async revise(ref: Ref, changes: Change[]) {
       if (changes.length === 0) return;
-      const { proposalId } = await this.meta();
-      const latest = (await revisionsOf(ctx, ref))[0];
-      await ctx.db.insert("revisions", {
-        ref,
-        seq: (latest?.seq ?? 0) + 1,
-        proposalId,
-        author,
-        approvedBy: actor.userId,
-        changes,
-        comment,
-      });
+      const opMeta = await this.meta();
+      await insertRevision(ctx, ref, (await revisionsOf(ctx, ref))[0], changes, opMeta);
     },
     /** Freeze the Proposal's immutable version once the entry is done. */
     async finish() {
       if (!meta) return;
-      await ctx.db.insert("proposalVersions", {
-        proposalId: meta.proposalId,
-        versionNo: 1,
-        ops,
-        evidence: evidenceRows,
-        changeComment: comment,
-      });
+      await insertFirstVersion(ctx, meta.proposalId, { ops, evidence: evidenceRows, changeComment: comment });
     },
   };
 }

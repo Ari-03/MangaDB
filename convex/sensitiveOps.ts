@@ -11,6 +11,8 @@ import { mutation, query, type MutationCtx } from "./_generated/server";
 import {
   displayInfo,
   getCanonical,
+  insertApprovedProposal,
+  insertFirstVersion,
   resolveEditTarget,
   revisionsOf,
   type RecordRef,
@@ -107,22 +109,8 @@ async function beginOperation(
     userId: user._id,
     roleAtAuthorship: user.role,
   };
-  const now = Date.now();
-  const proposalId = await ctx.db.insert("proposals", {
-    author,
-    state: "approved",
-    currentVersionNo: 1,
-    submittedAt: now,
-    decidedBy: user._id,
-    decidedAt: now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
-    ops: [storedOp],
-    evidence: [],
-    changeComment: reason,
-  });
+  const proposalId = await insertApprovedProposal(ctx, author, user._id);
+  await insertFirstVersion(ctx, proposalId, { ops: [storedOp], evidence: [], changeComment: reason });
   return { proposalId, author, approvedBy: user._id, comment: reason };
 }
 
