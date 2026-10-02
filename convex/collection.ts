@@ -27,7 +27,7 @@ import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
 import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
-import { completelyCoveredVolumes, volumeProgressRow } from "./reading";
+import { readableVolumes, volumeProgressRow } from "./reading";
 
 /** Batch marking (the library's "Own all") stops here; nobody shelves more in one click. */
 export const MANY_ENTRIES_CAP = 200;
@@ -397,13 +397,16 @@ export const seriesEntries = query({
   },
 });
 
-/** Whether every completely covered Volume of an Edition has a completed read. */
+/**
+ * Whether every Volume of an Edition that read-marking writes
+ * (reading.readableVolumes) has a completed read.
+ */
 async function editionRead(
   ctx: QueryCtx,
   userId: Id<"users">,
   editionId: Id<"editions">,
 ): Promise<boolean | null> {
-  const volumes = await completelyCoveredVolumes(ctx, editionId);
+  const volumes = await readableVolumes(ctx, editionId);
   // A book covering nothing completely (a split, or coverage not yet mapped)
   // has no read state to show.
   if (volumes.length === 0) return null;

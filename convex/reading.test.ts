@@ -515,6 +515,18 @@ describe("reading.adjustVolumeReadCount", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("refuses a Volume of a hidden Series, keeping reads recorded before", async () => {
+    const t = convexTest(schema);
+    const { seriesId, v2 } = await seed(t);
+    const as = await withUser(t);
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 });
+    await t.run(async (ctx) => await ctx.db.patch(seriesId, { status: "hidden" }));
+    await expect(
+      as.mutation(api.reading.adjustVolumeReadCount, { volumeId: v2, delta: 1 }),
+    ).rejects.toThrow(/Volume not found/);
+    expect(await readCount(t, v2)).toBe(1);
+  });
+
   it("rejects fractional deltas and requires a user", async () => {
     const t = convexTest(schema);
     const { v2 } = await seed(t);
@@ -658,6 +670,71 @@ describe("reading.setEditionRead", () => {
     });
     expect(result.changed).toBe(0);
     expect(await readCount(t, v3)).toBe(0);
+  });
+
+  it("leaves a hidden Series' Volumes alone, and the library's read flag agrees", async () => {
+    const t = convexTest(schema);
+    const { v1, omnibusRelease } = await seed(t);
+    // The omnibus also collects a Volume of a second Series.
+    const { otherSeries, other } = await t.run(async (ctx) => {
+      const otherSeries = await ctx.db.insert("series", {
+        status: "active",
+        publicId: 2,
+        title: "Planetes",
+        altTitles: [],
+        searchText: "Planetes",
+      });
+      const other = await ctx.db.insert("volumes", {
+        status: "active",
+        publicId: 31,
+        seriesId: otherSeries,
+        position: 1,
+        label: "1",
+      });
+      const omnibus = await ctx.db
+        .query("editions")
+        .withIndex("by_publicId", (q) => q.eq("publicId", 22))
+        .unique();
+      await ctx.db.insert("volumeCoverages", {
+        editionId: omnibus!._id,
+        volumeId: other,
+        order: 4,
+        extent: "complete",
+      });
+      return { otherSeries, other };
+    });
+    const as = await withUser(t);
+    await as.mutation(api.reading.adjustVolumeReadCount, { volumeId: other, delta: 1 });
+    await as.mutation(api.collection.setReleaseEntry, { releaseId: omnibusRelease, state: "owned" });
+    await t.run(async (ctx) => await ctx.db.patch(otherSeries, { status: "hidden" }));
+
+    // Unmarking clears the visible Volumes only: the hidden one's read stays.
+    await as.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: true });
+    const unread = await as.mutation(api.reading.setEditionRead, {
+      editionPublicId: 22,
+      read: false,
+    });
+    expect(unread.changed).toBe(3);
+    expect(await readCount(t, v1)).toBe(0);
+    expect(await readCount(t, other)).toBe(1);
+
+    // Marking writes the visible Volumes only, and the shelf reads it as read.
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("volumeProgress")
+        .withIndex("by_volume", (q) => q.eq("volumeId", other))
+        .unique();
+      await ctx.db.delete(row!._id);
+    });
+    const read = await as.mutation(api.reading.setEditionRead, {
+      editionPublicId: 22,
+      read: true,
+    });
+    expect(read.changed).toBe(3);
+    expect(await readCount(t, other)).toBe(0);
+    const library = await as.query(api.collection.myLibrary, {});
+    const book = library?.series[0]?.paths[0]?.books.find((b) => b.editionPublicId === 22);
+    expect(book?.read).toBe(true);
   });
 
   it("rejects an unknown edition and requires a user", async () => {

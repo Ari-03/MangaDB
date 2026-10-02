@@ -26,6 +26,7 @@ import { getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
+import { activeVolume } from "./lib/ratings";
 import { releaseAnchor } from "./lib/titles";
 import { seriesStatsRow } from "./seriesBrowse";
 
@@ -71,9 +72,9 @@ async function passRowFor(
  * The active Volumes an Edition covers *completely* — the exact set a
  * confirmed completion of any of its Releases increments (spec §3); partial
  * coverage never appears here. Volumes are merge-resolved and deduplicated
- * by surviving identity. Exported for the library's read flag (collection.ts).
+ * by surviving identity.
  */
-export async function completelyCoveredVolumes(
+async function completelyCoveredVolumes(
   ctx: QueryCtx,
   editionId: Id<"editions">,
 ): Promise<Array<Doc<"volumes">>> {
@@ -88,6 +89,21 @@ export async function completelyCoveredVolumes(
     if (volume) volumes.set(volume._id, volume);
   }
   return [...volumes.values()];
+}
+
+/**
+ * completelyCoveredVolumes less those of a hidden Series (a hidden Series
+ * hides its Volumes): what marking a book read or unread writes, and what
+ * the library's read flag checks (collection.ts). Reads recorded before a
+ * Series was hidden stay as they are.
+ */
+export async function readableVolumes(ctx: QueryCtx, editionId: Id<"editions">) {
+  const volumes = [];
+  for (const volume of await completelyCoveredVolumes(ctx, editionId)) {
+    const series = await ctx.db.get(volume.seriesId);
+    if (series && series.status === "active") volumes.push(volume);
+  }
+  return volumes;
 }
 
 /**
@@ -539,7 +555,10 @@ async function writeVolumeReadCount(
   toCount: (current: number) => number,
 ) {
   const user = await requireUser(ctx);
-  const volume = await requireActive(ctx, "volumes", volumeId, "Volume");
+  // Like a Rating, never on a Volume its hidden Series hides.
+  const found = await activeVolume(ctx, await ctx.db.get(volumeId));
+  if (!found) throw new ConvexError({ code: "notFound", message: "Volume not found." });
+  const { volume } = found;
   const progress = await volumeProgressRow(ctx, user._id, volume._id);
   const readCount = toCount(progress?.readCount ?? 0);
   if (!Number.isInteger(readCount) || readCount < 0) {
@@ -601,8 +620,9 @@ export const MANY_EDITIONS_CAP = 200;
  * completed read (`read: true` — Volumes already read keep their count, so
  * a reread is never erased), or has its read history cleared (`read:
  * false`). Partial coverage is untouched, exactly as a confirmed pass
- * completion. Direct Volume Progress edits: no pass, no Reading Status
- * change. Returns the covered Volumes so the caller can compute prompts.
+ * completion, and so are Volumes of a hidden Series (readableVolumes).
+ * Direct Volume Progress edits: no pass, no Reading Status change. Returns
+ * the covered Volumes so the caller can compute prompts.
  */
 async function writeEditionRead(
   ctx: MutationCtx,
@@ -615,7 +635,7 @@ async function writeEditionRead(
     .withIndex("by_publicId", (q) => q.eq("publicId", editionPublicId))
     .unique();
   const edition = await requireActive(ctx, "editions", stored, "Edition");
-  const covered = await completelyCoveredVolumes(ctx, edition._id);
+  const covered = await readableVolumes(ctx, edition._id);
 
   const now = Date.now();
   let changed = 0;

@@ -92,9 +92,10 @@ type OmnibusEdition = Active<Extract<TargetId, { kind: "edition" }>> & {
 
 /**
  * An active Volume through merges whose Series is active too (a hidden
- * Series hides its Volumes, as on the Volume page), or null.
+ * Series hides its Volumes, as on the Volume page), or null. Exported for
+ * reading.ts, whose direct read-count edits refuse such Volumes alike.
  */
-async function activeVolume(
+export async function activeVolume(
   ctx: QueryCtx,
   doc: Doc<"volumes"> | null,
 ): Promise<{ volume: Doc<"volumes">; series: Doc<"series"> } | null> {
