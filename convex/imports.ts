@@ -21,6 +21,7 @@ import { todaySortKey } from "./lib/dates";
 import { sendAdminEmail } from "./lib/email";
 import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
+import { insertSourceProposal } from "./lib/reconcile";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { revisionsOf } from "./moderation";
 
@@ -477,18 +478,13 @@ async function queueWithdrawalReview(
   if (await alreadyHandled(ctx, observation)) return false;
   const ref = { type: "release" as const, id: release._id };
   const latest = (await revisionsOf(ctx, ref))[0];
-  const proposalId = await ctx.db.insert("proposals", {
-    author: { kind: "source", sourceKey },
+  const { proposalId } = await insertSourceProposal(ctx, {
+    sourceKey,
     state: "inReview",
-    currentVersionNo: 1,
-    submittedAt: Date.now(),
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
     ops: [{ kind: "hide", ref, baseRevisionId: latest?._id }],
-    evidence: [{ kind: "observation", observationId: observation._id }],
-    changeComment: `${sourceName} no longer lists this future-dated release — possible cancellation. Approve to hide the release; reject to keep it. Withdrawal by itself never changes a field (absence is not evidence).`,
+    evidence: [observation._id],
+    comment: `${sourceName} no longer lists this future-dated release — possible cancellation. Approve to hide the release; reject to keep it. Withdrawal by itself never changes a field (absence is not evidence).`,
+    now: Date.now(),
   });
   await ctx.db.patch(observation._id, { queuedProposalId: proposalId });
   return true;

@@ -44,7 +44,7 @@ import {
   publisherNameKey,
   type CanonicalPublisher,
 } from "./publishers";
-import { reconcileFields } from "./reconcile";
+import { insertSourceProposal, reconcileFields } from "./reconcile";
 import { seriesSearchText } from "./searchMatch";
 
 // ---------- dates & labels ----------
@@ -976,42 +976,23 @@ async function recordCreation(
   created: CreatedRecord[],
 ): Promise<void> {
   if (created.length === 0) return;
-  const author = { kind: "source" as const, sourceKey: args.sourceKey };
-  const proposalId = await ctx.db.insert("proposals", {
-    author,
+  await insertSourceProposal(ctx, {
+    ...args,
     state: "approved",
-    currentVersionNo: 1,
-    submittedAt: args.now,
-    decidedAt: args.now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
     ops: created.map((record) => ({
       kind: "create" as const,
       table: record.table,
       tempId: record.ref.type === "volume" ? record.ref.id : record.ref.type,
       fields: record.fields,
     })),
-    evidence: [...new Set(args.evidence)].map((observationId) => ({
-      kind: "observation" as const,
-      observationId,
-    })),
-    changeComment: args.comment,
-  });
-  for (const record of created) {
-    await ctx.db.insert("revisions", {
+    revisions: created.map((record) => ({
       ref: record.ref as never,
       seq: 1,
-      proposalId,
-      author,
       changes: Object.entries(record.fields)
         .filter(([, value]) => value !== undefined)
         .map(([field, after]) => ({ field, after })),
-      comment: args.comment,
-      citation: args.citation,
-    });
-  }
+    })),
+  });
 }
 
 /**
@@ -1504,29 +1485,15 @@ async function addLateBundleMembers(
         .sort((a, b) => place.get(a)! - place.get(b)!)
     : [...before, ...missing.map((member) => member.releaseId)];
   const changes = [{ field: "members", before, after }];
-  const author = { kind: "source" as const, sourceKey: args.sourceKey };
-  const proposalId = await ctx.db.insert("proposals", {
-    author,
+  await insertSourceProposal(ctx, {
+    sourceKey: args.sourceKey,
     state: "approved",
-    currentVersionNo: 1,
-    submittedAt: args.now,
-    decidedAt: args.now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
     ops: [{ kind: "update", ref, baseRevisionId: latest?._id, changes }],
-    evidence: [{ kind: "observation", observationId: args.observation._id }],
-    changeComment: args.importComment,
-  });
-  await ctx.db.insert("revisions", {
-    ref,
-    seq: (latest?.seq ?? 0) + 1,
-    proposalId,
-    author,
-    changes,
+    evidence: [args.observation._id],
     comment: args.importComment,
+    now: args.now,
     citation: args.citation,
+    revisions: [{ ref, seq: (latest?.seq ?? 0) + 1, changes }],
   });
   return { expected: expected.length, added: missing.length };
 }
@@ -1759,18 +1726,13 @@ export async function queueCreationProposal(
     });
   }
 
-  const proposalId = await ctx.db.insert("proposals", {
-    author: { kind: "source", sourceKey: args.sourceKey },
+  const { proposalId } = await insertSourceProposal(ctx, {
+    sourceKey: args.sourceKey,
     state: "inReview",
-    currentVersionNo: 1,
-    submittedAt: args.now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
     ops,
-    evidence: [{ kind: "observation", observationId: args.observation._id }],
-    changeComment: args.comment,
+    evidence: [args.observation._id],
+    comment: args.comment,
+    now: args.now,
   });
   await ctx.db.patch(args.observation._id, { queuedProposalId: proposalId });
   return proposalId;
