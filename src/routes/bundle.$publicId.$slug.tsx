@@ -13,13 +13,12 @@ import { formatPartialDate, formatPrice, plural } from "~/lib/format";
 import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import {
-  breadcrumbListJsonLd,
   bundleTitleTag,
   isoPartialDate,
-  jsonLdScript,
   pageHead,
   truncateDescription,
 } from "~/lib/seo";
+import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
 
 /**
@@ -59,43 +58,23 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
       bundle.pubDate ? `released ${isoPartialDate(bundle.pubDate)}` : null,
       bundle.isbn13 ? `box set ISBN ${bundle.isbn13}` : null,
     ].filter((fact) => fact !== null);
-    return {
-      ...pageHead({
-        title: bundleTitleTag(bundle.name, bundle.publisher?.name ?? null),
-        description: `${bundle.name} ${facts.join(", ")}.${
-          bundle.description
-            ? ` ${truncateDescription(bundle.description, 80)}`
-            : ""
-        }`,
-        path,
-        image: bundle.coverUrl,
-        ogType: "book",
-        mature,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: bundle.name },
-          ]),
-        ),
-      ],
-    };
+    return pageHead({
+      title: bundleTitleTag(bundle.name, bundle.publisher?.name ?? null),
+      description: `${bundle.name} ${facts.join(", ")}.${
+        bundle.description
+          ? ` ${truncateDescription(bundle.description, 80)}`
+          : ""
+      }`,
+      path,
+      image: bundle.coverUrl,
+      ogType: "book",
+      mature,
+      breadcrumbs: [{ name: bundle.name }],
+    });
   },
   component: ConcealedBundlePage,
-  notFoundComponent: BundleNotFound,
+  notFoundComponent: () => <NotFound noun="Bundle" />,
 });
-
-function BundleNotFound() {
-  return (
-    <main>
-      <h1>Bundle not found</h1>
-      <p className="notice">
-        No bundle lives at this address. <Link to="/">Browse the catalog</Link>.
-      </p>
-    </main>
-  );
-}
 
 /** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
 function ConcealedBundlePage() {
@@ -113,10 +92,7 @@ function BundlePage() {
 
   return (
     <main className="bundle-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Bundle</span>
-      </nav>
+      <Breadcrumbs trail={["Bundle"]} />
 
       <section className="detail-hero">
         <div className="detail-cover">

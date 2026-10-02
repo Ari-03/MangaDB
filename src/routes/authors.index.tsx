@@ -5,7 +5,7 @@ import { api } from "../../convex/_generated/api";
 import { catalogQuery, type AuthorCard } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
-import { breadcrumbListJsonLd, jsonLdScript, pageHead, SITE_NAME } from "~/lib/seo";
+import { pageHead, SITE_NAME } from "~/lib/seo";
 import { slugParams } from "~/lib/slug";
 
 /** Authors per page of the tab. */
@@ -29,19 +29,14 @@ export const Route = createFileRoute("/authors/")({
     const mature = showMature();
     return { first: await authorsPage(null, mature), mature };
   },
-  head: () => ({
-    ...pageHead({
+  head: () =>
+    pageHead({
       title: `Manga Authors – Browse by Mangaka | ${SITE_NAME}`,
       description:
         "Browse manga authors and artists with English releases, the most prolific first, and every series each one made.",
       path: "/authors",
+      breadcrumbs: [{ name: "Authors" }],
     }),
-    scripts: [
-      jsonLdScript(
-        breadcrumbListJsonLd([{ name: "MangaDB", path: "/" }, { name: "Authors" }]),
-      ),
-    ],
-  }),
   component: AuthorsPage,
 });
 

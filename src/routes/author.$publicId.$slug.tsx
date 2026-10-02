@@ -8,11 +8,10 @@ import { Cover } from "~/lib/cover";
 import { plural } from "~/lib/format";
 import {
   authorTitleTag,
-  breadcrumbListJsonLd,
-  jsonLdScript,
   pageHead,
   personJsonLd,
 } from "~/lib/seo";
+import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { authorPath, parsePublicId, slugParams } from "~/lib/slug";
 
 /**
@@ -48,34 +47,17 @@ export const Route = createFileRoute("/author/$publicId/$slug")({
     const series = loaderData.series.filter(made);
     const path = authorPath(author.publicId, author.name);
     const titles = series.slice(0, 3).map((s) => s.title).join(", ");
-    return {
-      ...pageHead({
-        title: authorTitleTag(author.name),
-        description: `Manga by ${author.name} in English: ${series.length} series${titles ? `, including ${titles}` : ""}, with every edition and release date.`,
-        path,
-        image: series[0]?.coverUrl ?? null,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: "Authors", path: "/authors" },
-            { name: author.name },
-          ]),
-        ),
-        jsonLdScript(personJsonLd({ name: author.name, path, sameAs: author.annUrl })),
-      ],
-    };
+    return pageHead({
+      title: authorTitleTag(author.name),
+      description: `Manga by ${author.name} in English: ${series.length} series${titles ? `, including ${titles}` : ""}, with every edition and release date.`,
+      path,
+      image: series[0]?.coverUrl ?? null,
+      breadcrumbs: [{ name: "Authors", path: "/authors" }, { name: author.name }],
+      jsonLd: [personJsonLd({ name: author.name, path, sameAs: author.annUrl })],
+    });
   },
   component: AuthorPage,
-  notFoundComponent: () => (
-    <main>
-      <h1>Author not found</h1>
-      <p className="notice">
-        No author lives at this address. <Link to="/authors">Browse authors</Link>.
-      </p>
-    </main>
-  ),
+  notFoundComponent: () => <NotFound noun="Author" browse="authors" />,
 });
 
 
@@ -101,10 +83,7 @@ function AuthorPage() {
   const volumes = series.reduce((sum, entry) => sum + entry.volumeCount, 0);
   return (
     <main className="author-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <Link to="/authors">Authors</Link>
-      </nav>
+      <Breadcrumbs trail={[<Link to="/authors">Authors</Link>]} />
 
       <header className="author-hero">
         <p className="page-kicker">Author</p>

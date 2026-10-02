@@ -1,6 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { pageHead } from "~/lib/seo";
 
 /**
@@ -71,10 +72,7 @@ const SOURCES: Source[] = [
 function AboutTheData() {
   return (
     <main className="about-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>About the data</span>
-      </nav>
+      <Breadcrumbs trail={["About the data"]} />
 
       <h1>About the data</h1>
       <p className="about-lede">

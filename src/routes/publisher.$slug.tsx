@@ -30,12 +30,11 @@ import {
 } from "~/lib/month";
 import { ModEditLink } from "~/lib/moderation";
 import {
-  breadcrumbListJsonLd,
-  jsonLdScript,
   organizationJsonLd,
   pageHead,
   publisherTitleTag,
 } from "~/lib/seo";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { slugParams } from "~/lib/slug";
 
 // The upcoming lane's horizon: the three months after this one (~a 90-day
@@ -108,30 +107,21 @@ export const Route = createFileRoute("/publisher/$slug")({
     if (!loaderData) return {};
     const { publisher } = loaderData;
     const path = `/publisher/${publisher.slug}`;
-    return {
-      ...pageHead({
-        title: publisherTitleTag(publisher.name),
-        description: `${publisher.name} on MangaDB: publisher profile, upcoming English manga releases, and the full release calendar.`,
-        path,
-        // An adult-only publisher is marked for safe-search (lib/mature.tsx).
-        mature: publisher.mature,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: publisher.name },
-          ]),
-        ),
-        jsonLdScript(
-          organizationJsonLd({
-            name: publisher.name,
-            path,
-            description: publisher.description,
-          }),
-        ),
+    return pageHead({
+      title: publisherTitleTag(publisher.name),
+      description: `${publisher.name} on MangaDB: publisher profile, upcoming English manga releases, and the full release calendar.`,
+      path,
+      // An adult-only publisher is marked for safe-search (lib/mature.tsx).
+      mature: publisher.mature,
+      breadcrumbs: [{ name: publisher.name }],
+      jsonLd: [
+        organizationJsonLd({
+          name: publisher.name,
+          path,
+          description: publisher.description,
+        }),
       ],
-    };
+    });
   },
   component: ConcealedPublisherPage,
   notFoundComponent: PublisherNotFound,
@@ -220,10 +210,7 @@ function PublisherPage() {
 
   return (
     <main className="publisher-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <Link to="/publishers">Publishers</Link>
-      </nav>
+      <Breadcrumbs trail={[<Link to="/publishers">Publishers</Link>]} />
 
       <header className="pub-hero">
         <span className="pub-logo" aria-hidden="true">

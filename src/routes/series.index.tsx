@@ -15,12 +15,7 @@ import { plural } from "~/lib/format";
 import { MatureFilter, showMature } from "~/lib/mature";
 import { MONTH_NAMES, sortKeyMonth } from "~/lib/month";
 import { RatingLine } from "~/lib/ratings";
-import {
-  breadcrumbListJsonLd,
-  jsonLdScript,
-  pageHead,
-  SITE_NAME,
-} from "~/lib/seo";
+import { pageHead, SITE_NAME } from "~/lib/seo";
 import { slugParams } from "~/lib/slug";
 import { useUrlDraft } from "~/lib/urlDraft";
 
@@ -210,23 +205,15 @@ export const Route = createFileRoute("/series/")({
       mature: showMature(),
     };
   },
-  head: ({ loaderData }) => ({
-    ...pageHead({
+  head: ({ loaderData }) =>
+    pageHead({
       title: `Browse Series | ${SITE_NAME}`,
       description:
         "Every manga series in the catalog. Filter by publisher, volume count, release timing, and format, then sort by title, latest, or upcoming releases.",
       path: "/series",
       robots: loaderData?.filtered ? "noindex, follow" : undefined,
+      breadcrumbs: [{ name: "Series" }],
     }),
-    scripts: [
-      jsonLdScript(
-        breadcrumbListJsonLd([
-          { name: "MangaDB", path: "/" },
-          { name: "Series" },
-        ]),
-      ),
-    ],
-  }),
   component: SeriesLibraryPage,
 });
 

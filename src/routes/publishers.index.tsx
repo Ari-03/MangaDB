@@ -5,12 +5,7 @@ import { catalogQuery } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
 import { currentMonth } from "~/lib/month";
 import { PublishersBoard } from "~/lib/publishersBoard";
-import {
-  breadcrumbListJsonLd,
-  jsonLdScript,
-  pageHead,
-  SITE_NAME,
-} from "~/lib/seo";
+import { pageHead, SITE_NAME } from "~/lib/seo";
 
 /**
  * `/publishers` — the Publishers board for the current month: one card per
@@ -26,22 +21,14 @@ export const Route = createFileRoute("/publishers/")({
     const data = await catalogQuery(api.publisher.monthBoard, { ...anchor, showMature: showMature() });
     return { anchor, data };
   },
-  head: () => ({
-    ...pageHead({
+  head: () =>
+    pageHead({
       title: `English Manga Publishers – This Month's Releases | ${SITE_NAME}`,
       description:
         "What every English manga publisher is releasing this month: release counts, new series, formats, and covers, plus the A–Z publisher directory.",
       path: "/publishers",
+      breadcrumbs: [{ name: "Publishers" }],
     }),
-    scripts: [
-      jsonLdScript(
-        breadcrumbListJsonLd([
-          { name: "MangaDB", path: "/" },
-          { name: "Publishers" },
-        ]),
-      ),
-    ],
-  }),
   component: PublishersPage,
 });
 

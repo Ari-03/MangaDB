@@ -20,11 +20,10 @@ import { SeriesReportAffordance } from "~/lib/report";
 import { ReviewsSection, TakePanel } from "~/lib/reviews";
 import {
   bookSeriesJsonLd,
-  breadcrumbListJsonLd,
-  jsonLdScript,
   pageHead,
   seriesTitleTag,
 } from "~/lib/seo";
+import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import {
   bookLabel,
   bookTitle,
@@ -87,45 +86,19 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
     const { series, volumes, coverUrl } = loaderData;
     const path = seriesPath(series.publicId, series.title);
     const volumeCount = plural(volumes.length, "volume");
-    return {
-      ...pageHead({
-        title: seriesTitleTag(series.title),
-        description: `English releases of ${series.title}: ${volumeCount} in the canonical reading order, with every edition, format, and release date.`,
-        path,
-        image: coverUrl,
-        mature: series.mature,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: series.title },
-          ]),
-        ),
-        jsonLdScript(
-          bookSeriesJsonLd({
-            title: series.title,
-            altTitles: series.altTitles,
-            path,
-          }),
-        ),
-      ],
-    };
+    return pageHead({
+      title: seriesTitleTag(series.title),
+      description: `English releases of ${series.title}: ${volumeCount} in the canonical reading order, with every edition, format, and release date.`,
+      path,
+      image: coverUrl,
+      mature: series.mature,
+      breadcrumbs: [{ name: series.title }],
+      jsonLd: [bookSeriesJsonLd({ title: series.title, altTitles: series.altTitles, path })],
+    });
   },
   component: ConcealedSeriesPage,
-  notFoundComponent: SeriesNotFound,
+  notFoundComponent: () => <NotFound noun="Series" kind="series" />,
 });
-
-function SeriesNotFound() {
-  return (
-    <main className="series-page">
-      <h1 className="series-title">Series not found</h1>
-      <p className="notice">
-        No series lives at this address. <Link to="/">Browse the catalog</Link>.
-      </p>
-    </main>
-  );
-}
 
 const SOURCE_STATUS_LABELS = {
   ongoing: "Ongoing",
@@ -195,10 +168,7 @@ function SeriesPage() {
 
   return (
     <main className="series-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <Link to="/series">Series</Link>
-      </nav>
+      <Breadcrumbs trail={[<Link to="/series">Series</Link>]} />
 
       <section className="series-hero">
         <div className="series-hero-aside">
