@@ -53,7 +53,8 @@ import {
   parseBookTitle,
   type Packaging,
 } from "./bookTitle";
-import { toIsbn13 } from "./openLibrary";
+import { calendarDay, fullDateValidator, type FullDate } from "./dates";
+import { toIsbn13 } from "./isbn";
 import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
@@ -75,7 +76,7 @@ export const kodanshaSnapshotValidator = v.object({
   packaging: v.optional(packagingValidator),
   format: v.union(v.literal("physical"), v.literal("digital")),
   creators: v.array(v.string()),
-  releaseDate: v.optional(v.object({ year: v.number(), month: v.number(), day: v.number() })),
+  releaseDate: v.optional(fullDateValidator),
   coverUrl: v.optional(v.string()),
   // Volume pages only (the backlist crawl): this format's ISBN-13, binding,
   // and USD list price. The calendar never carries them.
@@ -90,8 +91,6 @@ export const kodanshaSnapshotValidator = v.object({
 
 export type KodanshaSnapshot = Infer<typeof kodanshaSnapshotValidator>;
 
-type Ymd = { year: number; month: number; day: number };
-
 /** One catalog item before the per-format split. */
 export type KodanshaItem = {
   /** Kodansha's own series name, verbatim. */
@@ -105,7 +104,7 @@ export type KodanshaItem = {
   packaging?: Packaging;
   creators: string[];
   formats: Array<"physical" | "digital">;
-  releaseDate?: Ymd;
+  releaseDate?: FullDate;
   coverUrl?: string;
   /** Out of catalog scope: observed only, never placed. */
   outOfScope?: string;
@@ -147,19 +146,12 @@ export function parseCreators(byline: unknown): string[] {
  * calendar day must exist; whatever follows a `T` or space separator (time,
  * any zone shape, none at all) is ignored, since only the day is kept.
  */
-export function parseIsoDate(text: unknown): Ymd | undefined {
+export function parseIsoDate(text: unknown): FullDate | undefined {
   if (typeof text !== "string") return undefined;
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/.exec(text);
   if (!m) return undefined;
   const year = Number(m[1]);
-  const month = Number(m[2]);
-  const day = Number(m[3]);
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1]!) {
-    return undefined;
-  }
-  return { year, month, day };
+  return year >= 1 ? calendarDay(year, Number(m[2]), Number(m[3])) : undefined;
 }
 
 // Packaging lines only Kodansha names this way; everything else is the
@@ -214,7 +206,7 @@ function itemFrom(args: {
   url: unknown;
   creators: string[];
   formats: Array<"physical" | "digital">;
-  releaseDate?: Ymd;
+  releaseDate?: FullDate;
   coverUrl: unknown;
   /** A scope verdict the feed itself gives (new-releases' `series_type`). */
   outOfScope?: string;
@@ -535,7 +527,7 @@ export type VolumeOffer = {
   format: "physical" | "digital";
   binding?: string;
   isbn13: string;
-  releaseDate?: Ymd;
+  releaseDate?: FullDate;
   priceCents?: number;
 };
 

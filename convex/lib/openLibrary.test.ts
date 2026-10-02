@@ -3,15 +3,14 @@
 // publish_date / title styles OL actually contains.
 
 import { describe, expect, it } from "vitest";
+import { isbn10To13, toIsbn13 } from "./isbn";
 import {
   cleanOlDescription,
-  isbn10To13,
   isbnPair,
   isEnglishEdition,
   parseDumpLine,
   parseEditionJson,
   parseOlDate,
-  toIsbn13,
 } from "./openLibrary";
 
 const EDITION = {
@@ -354,29 +353,34 @@ describe("toIsbn13", () => {
   });
 });
 
-// Catalogue text Open Library stores as a description (2026-10 export).
+// Catalogue text Open Library stores as a description.
 describe("cleanOlDescription", () => {
-  it("rejects a physical description standing in for a blurb", () => {
-    for (const collation of ["1 volume (unpaged) : 19 cm", "1 volume : 19 cm", "146 p. : 19 cm", "v. : 19 cm"]) {
+  it.each(["1 volume (unpaged) : 19 cm", "1 volume : 19 cm", "146 p. : 19 cm", "v. : 19 cm"])(
+    "rejects a physical description standing in for a blurb: %j",
+    (collation) => {
       expect(cleanOlDescription(collation)).toBeUndefined();
-    }
+    },
+  );
+
+  it("rejects a physical description at parse time", () => {
     expect(parseEditionJson({ ...EDITION, description: "1 volume (unpaged) : 19 cm" })?.description).toBeUndefined();
   });
 
-  it("strips the citation after a quoted blurb, and the quote it opened", () => {
-    for (const citation of [
-      '"--P. [4] of cover.',
-      '"--Back cover.',
-      '" -- from publisher\'s web site.',
-      '"--Page 4 of cover.',
-      '"--Vol. 1, p. [4] of cover.',
-      '"--Provided by publisher.',
-      '"--Amazon.com.',
-      '"--Container.',
-      '"--',
-    ]) {
-      expect(cleanOlDescription(`"Denji is back.${citation}`)).toBe("Denji is back.");
-    }
+  it.each([
+    '"--P. [4] of cover.',
+    '"--Back cover.',
+    '" -- from publisher\'s web site.',
+    '"--Page 4 of cover.',
+    '"--Vol. 1, p. [4] of cover.',
+    '"--Provided by publisher.',
+    '"--Amazon.com.',
+    '"--Container.',
+    '"--',
+  ])("strips the citation %j after a quoted blurb, and the quote it opened", (citation) => {
+    expect(cleanOlDescription(`"Denji is back.${citation}`)).toBe("Denji is back.");
+  });
+
+  it("strips a page-of-cover or named-source citation after unquoted text, stacked ones in one call", () => {
     expect(cleanOlDescription("Denji is back. -- p.4 of cover.")).toBe("Denji is back.");
     expect(cleanOlDescription("Why does she know so much?--Amazon.com")).toBe("Why does she know so much?");
     // Stacked citations go in one call.
@@ -388,19 +392,17 @@ describe("cleanOlDescription", () => {
     );
   });
 
-  it("keeps blurbs that only use dashes or mention a cover", () => {
-    for (const text of [
-      "The heroes fight on--as humans.",
-      "They rob a bank--which makes up for their lack of acting talent.",
-      "Ash arrives -- can he win over the independent Pikachu?",
-      "First Printing, August 2011 (English)",
-      "A story told across 146 pages.",
-      '"I am the scum of the earth!" he cries.',
-      "And then--",
-      "They ran for--cover.",
-      "She said--back cover the bet.",
-    ]) {
-      expect(cleanOlDescription(text)).toBe(text);
-    }
+  it.each([
+    "The heroes fight on--as humans.",
+    "They rob a bank--which makes up for their lack of acting talent.",
+    "Ash arrives -- can he win over the independent Pikachu?",
+    "First Printing, August 2011 (English)",
+    "A story told across 146 pages.",
+    '"I am the scum of the earth!" he cries.',
+    "And then--",
+    "They ran for--cover.",
+    "She said--back cover the bet.",
+  ])("keeps a blurb that only uses dashes or mentions a cover: %j", (text) => {
+    expect(cleanOlDescription(text)).toBe(text);
   });
 });

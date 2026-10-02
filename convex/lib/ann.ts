@@ -1,4 +1,4 @@
-// ANN Encyclopedia parsing (ticket #36, spec §6/§7): pure functions from
+// ANN Encyclopedia parsing (spec §6/§7): pure functions from
 // ANN's XML wire formats to normalized snapshots. Two endpoints feed the
 // mirror (both verified live 2026-08-20):
 //
@@ -23,8 +23,9 @@
 // `parseReleasePage` reads (see ann.ts's release-page pass).
 
 import { v, type Infer } from "convex/values";
-import { canonicalLabel, coverRangeValidator } from "./bookTitle";
-import { toIsbn13 } from "./openLibrary";
+import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
+import { datePartsValidator, type DateParts } from "./dates";
+import { toIsbn13 } from "./isbn";
 import {
   cleanBlurb,
   cleanTitleText,
@@ -44,19 +45,11 @@ export const annCreditValidator = v.object({
 });
 export type AnnCredit = Infer<typeof annCreditValidator>;
 
-/** ANN's partial-precision date (`parseAnnDate`). */
-const annDateValidator = v.object({
-  year: v.number(),
-  month: v.optional(v.number()),
-  day: v.optional(v.number()),
-});
-export type AnnDate = Infer<typeof annDateValidator>;
-
 /** One `<release>` line of a manga entry. */
 const annReleaseValidator = v.object({
   /** ANN's stable release id (releases.php?id=NNN) — observation identity. */
   annId: v.string(),
-  date: v.optional(annDateValidator),
+  date: v.optional(datePartsValidator),
   /** The English release title before the "(GN n)" designator. */
   title: v.string(),
   /** Volume label ("14", "7.5"); absent = an unnumbered oneshot. */
@@ -158,7 +151,7 @@ const MONTH_PLACEHOLDER_BEFORE = 2010;
  * A pre-2010 "day 01" reads as month precision, so a real day from another
  * source can refine it (spec §6) instead of losing to false precision.
  */
-export function parseAnnDate(text: string): AnnDate | undefined {
+export function parseAnnDate(text: string): DateParts | undefined {
   const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(text.trim());
   if (!m) return undefined;
   const year = Number(m[1]);
@@ -355,7 +348,7 @@ export const annReleasePageValidator = v.object({
   distributor: v.optional(v.string()),
   /** ANN's company id for the distributor (company.php?id=N). */
   distributorId: v.optional(v.string()),
-  date: v.optional(annDateValidator),
+  date: v.optional(datePartsValidator),
   isbn13: v.optional(v.string()),
   isbn10: v.optional(v.string()),
   priceCents: v.optional(v.number()),
@@ -382,16 +375,15 @@ const NEXT_FIELD = /<p class="easyread-width">\s*<b>[^<]{1,40}:<\/b>/i;
 const ADDED_ON = /<p>\s*<small>\s*\(added on\b/i;
 const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
 
-// Site chrome ANN renders inside the Description field itself. A page with
-// no description (release 8116, seen 2026-10-02) carries only its review
-// link there: `<b>Description:</b><br><a href="0/0/reviews/new">Submit your
-// own review of this item.</a></p>`.
+// Site chrome ANN renders inside the Description field itself: a page with
+// no description carries only its review link there
+// (`<a href="0/0/reviews/new">Submit your own review of this item.</a>`).
 const REVIEW_LINK = /<a\b[^>]*\breviews\/new\b[^>]*>[\s\S]*?<\/a>/gi;
 const CHROME = ["Submit your own review of this item."];
 
-// Retail and listing rows ANN contributors pasted in place of a blurb,
-// each seen in the 2026-10 production export. Only a description that is
-// wholly one of these is rejected; nothing judges blurb quality otherwise.
+// Retail and listing rows ANN contributors pasted in place of a blurb. Only
+// a description that is wholly one of these is rejected; nothing judges
+// blurb quality otherwise.
 const NOT_A_BLURB = [
   // A seller's condition notes, whole.
   /^Book is in like-new condition\.$/,
@@ -411,16 +403,14 @@ const NOT_A_BLURB = [
 ];
 
 // The credit ANN appends to publisher copy ("… a friend or a foe? Story
-// and art by Eiichiro Oda."): the byline already shows it. In the first
-// 1,604 production descriptions it ends 87% of them, in these shapes:
+// and art by Eiichiro Oda."): the byline already shows it. Its shapes:
 // "Story and art by X.", "Story by X and Art by Y.", "Story and art by X
 // and Original Concept by Y.", "Manga by X and original story by Y.",
 // "Originally written by X, adapted by Y.", "Story by X. Art by Y.". A
 // credit tail is one or more clauses ROLE by NAMES, joined by "and", a
 // comma or a sentence break, running to the very end of the text.
 const CREDIT_ROLES = [
-  // ANN's own typos, seen in production: "Sotyr and art by", "Story and
-  // and art by", "Written and art by".
+  // ANN's own typos.
   "sotyr and art",
   "story and and art",
   "written and art",
@@ -454,10 +444,10 @@ const NAME_WORD = /^\(?[\p{Lu}\d]\S*$/u;
  * Lower-case name words ANN's contributors wrote in a credit that is a
  * sentence of its own ("Story by ufotable and Art by tartan check.",
  * "Story and art by est em.", "atsushi Suzumi", "Oh! great", "Girls und
- * Panzer Projekt"). An explicit list, from the 30 such credits in the
- * 2026-10 export: no rule tells "tartan check" from "pure accident", and
- * a constructed sentence ("Created by pure accident.", "Script by day, art
- * by night.") must stay. New pages are rare; extend the list if one shows.
+ * Panzer Projekt"). An explicit list because no rule tells "tartan check"
+ * from "pure accident", and a constructed sentence ("Created by pure
+ * accident.", "Script by day, art by night.") must stay. Extend it when a
+ * new page needs a word.
  */
 const LOWERCASE_NAME_WORDS = new Set(["atsushi", "check", "em", "est", "great", "tartan", "ufotable", "und"]);
 const MAX_LOOSE_NAME_WORDS = 5;
@@ -554,8 +544,8 @@ function isNameList(words: string[]): boolean {
   );
 }
 
-// ANN's own typo, three times in the sample: "Story and Kazuo Koike and
-// Art by Goseki Kojima." ("and" for "by").
+// ANN's own typo: "Story and Kazuo Koike and Art by Goseki Kojima." ("and"
+// for "by").
 const STORY_AND_TYPO = /^Story and (.+?) and Art by (.+)$/;
 
 /**
@@ -566,8 +556,8 @@ const STORY_AND_TYPO = /^Story and (.+?) and Art by (.+)$/;
  * clauses it has: "Based on the series created by Jon Favreau and written
  * by Dave Filoni." and "Created by Masashi Kishimoto and features story by
  * …" stay whole. A single clause naming one word ("Created by God.", "Art
- * by Committee.") is kept unless its role is ANN's fused "Story and art"
- * ("Story and art by CLAMP.", every one-word credit in the sample).
+ * by Committee.") is kept unless its role is ANN's fused "Story and art",
+ * the only role ANN gives one-word names ("Story and art by CLAMP.").
  */
 function stripCreditTail(text: string): string {
   const words = text.split(" ");
@@ -636,13 +626,8 @@ function stripNotesTail(text: string): string {
 
 /**
  * The cleaner every ANN release-page description goes through, at parse
- * time and again on stored text (`ann:repairDescriptions`), so it is
- * idempotent and works on already-cleaned text: zero-width spaces and
- * Windows-1252 mojibake and C1 controls repaired, stray entities decoded,
- * ANN page chrome and a trailing "Notes:" section rejected, a credit tail
- * (and a fused credit opening the text) dropped, and a text that is only
- * retail or listing junk (`NOT_A_BLURB`) rejected. Undefined when nothing
- * of the publisher's copy remains.
+ * time and again on stored text (`ann:repairDescriptions`), so it must be
+ * idempotent. Undefined when nothing of the publisher's copy remains.
  */
 export function cleanAnnDescription(text: string): string | undefined {
   // Mojibake first: its runs carry C1 code points ("â€\u009d") that the
@@ -668,23 +653,20 @@ export function cleanAnnDescription(text: string): string | undefined {
 
 /**
  * The page's Description, cleaned to one paragraph. It opens with a `<br>`
- * and spans paragraphs, so `pageField` cannot read it. Seen live
- * (2026-10-02) in two shapes: older pages run the text inline
+ * and spans paragraphs, so `pageField` cannot read it. It comes in two
+ * shapes: older pages run the text inline
  * (`<b>Description:</b><br>Text<br>\n<br>More</p>`), newer ones close the
  * paragraph and carry it in `<div class="simple-html">Text</div>`. The
  * field ends at ANN's next field (`NEXT_FIELD`, its Notes) or the "added
- * on" trailer, so markup inside the text (a list, an inline `<small>`, a
- * bold "Note:" or "Bonus Features:" paragraph, a nested div) never cuts it
- * short: the div runs to its last `</div>`, inline text to its closing
- * `</p>`. Without either bound both stop at the first close. The review link ANN puts in an empty field
- * is dropped, and the text goes through `cleanAnnDescription`.
+ * on" trailer, whichever comes first, so markup inside the text (a list,
+ * an inline `<small>`, a bold "Bonus Features:" paragraph, a nested div)
+ * never cuts it short: the div runs to its last `</div>`, inline text to
+ * its closing `</p>`. Without either bound both stop at the first close.
  */
 function pageDescription(html: string): string | undefined {
   const label = /<b>Description:<\/b>/i.exec(html);
   if (!label) return undefined;
   const rest = html.slice(label.index + label[0].length);
-  // The field ends at ANN's next field (Notes:) or at the "added on"
-  // trailer, whichever comes first; inside that bound any markup is copy.
   const ends = [rest.search(NEXT_FIELD), rest.search(ADDED_ON)].filter((at) => at >= 0);
   const bounded = ends.length > 0;
   const field = (bounded ? rest.slice(0, Math.min(...ends)) : rest).replace(REVIEW_LINK, "");

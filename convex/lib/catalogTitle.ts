@@ -13,7 +13,8 @@ import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
-import { packagingValidator, rangeLabels } from "./bookTitle";
+import { packagingValidator, rangeLabels, type ParsedBookTitle } from "./bookTitle";
+import { fullDateValidator } from "./dates";
 import { inferCoverage } from "./coverage";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./matching";
 import { upsertObservation } from "./observations";
@@ -59,7 +60,7 @@ export const catalogTitleFields = {
   /** The split an unlicensed trailing number would make (lib/bookTitle.ts `bareSplit`). */
   bareSplit: v.optional(v.object({ seriesTitle: v.string(), volumeLabel: v.string() })),
   author: v.optional(v.string()),
-  onsale: v.optional(v.object({ year: v.number(), month: v.number(), day: v.number() })),
+  onsale: v.optional(fullDateValidator),
   format: v.union(v.literal("physical"), v.literal("digital")),
   binding: v.optional(v.string()),
   /** The imprint = the publisher brand (e.g. "Kodansha Comics"). */
@@ -77,6 +78,23 @@ export const catalogTitleFields = {
 
 const catalogTitleValidator = v.object(catalogTitleFields);
 export type CatalogTitle = Infer<typeof catalogTitleValidator>;
+
+/**
+ * A parsed book title as snapshot fields (PRH, Yen Press, OpenLibrary): the
+ * parser's nulls and false flags become absent fields.
+ */
+export function parsedTitleFields(parsed: ParsedBookTitle) {
+  const coverRange = parsed.packaging?.coverRange ?? null;
+  return {
+    seriesTitle: parsed.seriesTitle,
+    volumeLabel: parsed.volumeLabel ?? undefined,
+    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
+    packaging: parsed.packaging ?? undefined,
+    bareNumber: parsed.bareNumber || undefined,
+    bareRoman: parsed.bareRoman || undefined,
+    bareSplit: parsed.bareSplit ?? undefined,
+  };
+}
 
 export type ApplyResult = {
   status:

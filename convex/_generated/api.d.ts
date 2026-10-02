@@ -36,6 +36,7 @@ import type * as lib_errors from "../lib/errors.js";
 import type * as lib_features from "../lib/features.js";
 import type * as lib_http from "../lib/http.js";
 import type * as lib_importRuns from "../lib/importRuns.js";
+import type * as lib_isbn from "../lib/isbn.js";
 import type * as lib_kodansha from "../lib/kodansha.js";
 import type * as lib_matching from "../lib/matching.js";
 import type * as lib_mature from "../lib/mature.js";
@@ -127,6 +128,7 @@ declare const fullApi: ApiFromModules<{
   "lib/features": typeof lib_features;
   "lib/http": typeof lib_http;
   "lib/importRuns": typeof lib_importRuns;
+  "lib/isbn": typeof lib_isbn;
   "lib/kodansha": typeof lib_kodansha;
   "lib/matching": typeof lib_matching;
   "lib/mature": typeof lib_mature;

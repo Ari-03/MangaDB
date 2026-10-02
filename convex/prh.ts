@@ -39,6 +39,7 @@ import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
+import { toPartialDate } from "./lib/pipeline";
 import { parseTitleList, prhTitleValidator } from "./lib/prh";
 import { withExceptionCapture } from "./lib/posthog";
 
@@ -52,11 +53,6 @@ const LINK_BUDGET_MS = 4 * 60 * 1000;
 const CONTENT_ZOOM = "https://api.penguinrandomhouse.com/title/titles/content/definition";
 
 // ---------- the sync action ----------
-
-/** An onsale date as a yyyymmdd number, comparable to `todaySortKey()`. */
-function dateKey(date: { year: number; month: number; day: number }): number {
-  return date.year * 10000 + date.month * 100 + date.day;
-}
 
 /** Masks the api_key query value in a message (fetch errors quote URLs). */
 export function redactKey(message: string): string {
@@ -257,10 +253,10 @@ export const sync = internalAction({
             // imprint; undated titles neither apply nor end it.
             const pastReached =
               mode === "future" &&
-              titles.some((t) => t.onsale !== undefined && dateKey(t.onsale) < todayKey);
+              titles.some((t) => t.onsale !== undefined && toPartialDate(t.onsale).sort < todayKey);
             const toApply =
               mode === "future"
-                ? titles.filter((t) => t.onsale !== undefined && dateKey(t.onsale) >= todayKey)
+                ? titles.filter((t) => t.onsale !== undefined && toPartialDate(t.onsale).sort >= todayKey)
                 : titles;
 
             for (const snapshot of toApply) {

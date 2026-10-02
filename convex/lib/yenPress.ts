@@ -27,8 +27,9 @@
 
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, parseBookTitle, type ParsedBookTitle } from "./bookTitle";
-import { catalogTitleFields } from "./catalogTitle";
-import { toIsbn13 } from "./openLibrary";
+import { catalogTitleFields, parsedTitleFields } from "./catalogTitle";
+import { calendarDay, monthFromAbbreviation, type FullDate } from "./dates";
+import { toIsbn13 } from "./isbn";
 import { cleanBlurb, cleanTitleText, stripHtml } from "./text";
 
 export const yenTitleValidator = v.object({
@@ -88,7 +89,7 @@ export type YenFormat = {
   /** The format tab's label ("Paperback", "Hardback", "Digital"). */
   tab: string;
   isbn13?: string;
-  onsale?: { year: number; month: number; day: number };
+  onsale?: FullDate;
   priceCents?: number;
   imprint?: string;
   seriesName?: string;
@@ -113,39 +114,12 @@ export type YenTitlePage = {
   formats: YenFormat[];
 };
 
-const MONTHS: Record<string, number> = {
-  jan: 1,
-  feb: 2,
-  mar: 3,
-  apr: 4,
-  may: 5,
-  jun: 6,
-  jul: 7,
-  aug: 8,
-  sep: 9,
-  oct: 10,
-  nov: 11,
-  dec: 12,
-};
-
 /** "Jan 26, 2027" → a full date; anything vaguer → undefined. */
-export function parseYenDate(
-  text: string,
-): { year: number; month: number; day: number } | undefined {
+export function parseYenDate(text: string): FullDate | undefined {
   const m = /^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),\s*(\d{4})$/.exec(text.trim());
   if (!m) return undefined;
-  const month = MONTHS[m[1]!.toLowerCase()];
-  const day = Number(m[2]);
-  if (month === undefined || day < 1 || day > 31) return undefined;
-  const year = Number(m[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  )
-    return undefined;
-  return { year, month, day };
+  const month = monthFromAbbreviation(m[1]!);
+  return month !== undefined ? calendarDay(Number(m[3]), month, Number(m[2])) : undefined;
 }
 
 /** One "full details" block's labelled fields ("ISBN" → "979…"). */
@@ -264,7 +238,6 @@ export function toSnapshots(page: YenTitlePage, url: string): YenTitleSnapshot[]
   const cut = VOLUME_THEN_SUBTITLE.exec(page.title)?.[1] ?? page.title;
   const parsed = parseBookTitle(cut);
   const boxed = parsed.isBox || /\bbox(?:ed)? set\b/i.test(page.title);
-  const coverRange = parsed.packaging?.coverRange ?? null;
   const snapshots: YenTitleSnapshot[] = [];
   for (const entry of page.formats) {
     if (entry.isbn13 === undefined || !ENGLISH_ISBN.test(entry.isbn13)) continue;
@@ -276,16 +249,11 @@ export function toSnapshots(page: YenTitlePage, url: string): YenTitleSnapshot[]
       url,
       isbn13: entry.isbn13,
       title: page.title,
-      seriesTitle: parsed.seriesTitle,
-      volumeLabel: parsed.volumeLabel ?? undefined,
-      multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
+      ...parsedTitleFields(parsed),
       packaging:
         parsed.packaging ??
         (boxed ? { lineName: "Box Set", linePosition: null, coverRange: null } : undefined),
       isBox: boxed || undefined,
-      bareNumber: parsed.bareNumber || undefined,
-      bareRoman: parsed.bareRoman || undefined,
-      bareSplit: parsed.bareSplit ?? undefined,
       onsale: entry.onsale,
       format: format?.format ?? "physical",
       binding: format?.binding,
