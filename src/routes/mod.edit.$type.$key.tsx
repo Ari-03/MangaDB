@@ -5,16 +5,14 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import {
-  EDITABLE_FIELDS,
-  type RecordType,
-} from "../../convex/lib/moderationFields";
+import type { RecordType } from "../../convex/lib/moderationFields";
 import {
   draftChanges,
   draftIsStale,
   editDraft,
   FieldInput,
   freshDraft,
+  isRecordType,
   type EditDraft,
 } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
@@ -47,10 +45,6 @@ export const Route = createFileRoute("/mod/edit/$type/$key")({
   }),
   component: ModEditPage,
 });
-
-function isRecordType(raw: string): raw is RecordType {
-  return raw in EDITABLE_FIELDS;
-}
 
 function ModEditPage() {
   const { type, key } = Route.useParams();

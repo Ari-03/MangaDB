@@ -63,9 +63,21 @@ export function firstWeekday({ year, month }: YearMonth): number {
   return new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
 }
 
-/** Short weekday name for a day of the month; the Agenda's date rail. */
-export function weekdayName({ year, month }: YearMonth, day: number): string {
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
-    new Date(Date.UTC(year, month - 1, day)).getUTCDay()
-  ]!;
+const WEEKDAYS = [
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+] as const;
+
+/** Full weekday name for a day of the month ("Tuesday"). */
+export function weekdayFullName({ year, month }: YearMonth, day: number): string {
+  return WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()]!;
+}
+
+/** Short weekday name for a day of the month ("Tue"); the Agenda's date rail. */
+export function weekdayName(month: YearMonth, day: number): string {
+  return weekdayFullName(month, day).slice(0, 3);
+}
+
+/** The month of a yyyymmdd sort key (dd is 00 for a month-only date). */
+export function sortKeyMonth(key: number): YearMonth {
+  return { year: Math.floor(key / 10000), month: Math.floor(key / 100) % 100 };
 }

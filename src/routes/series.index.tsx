@@ -11,8 +11,9 @@ import {
   type SeriesFacets,
 } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
+import { plural } from "~/lib/format";
 import { MatureFilter, showMature } from "~/lib/mature";
-import { MONTH_NAMES } from "~/lib/month";
+import { MONTH_NAMES, sortKeyMonth } from "~/lib/month";
 import { RatingLine } from "~/lib/ratings";
 import {
   breadcrumbListJsonLd,
@@ -865,7 +866,7 @@ function SeriesCard({
         </Link>
         <div className="caption-meta">
           <span>
-            {item.volumeCount} {item.volumeCount === 1 ? "vol" : "vols"}
+            {plural(item.volumeCount, "vol")}
           </span>
           {publishers ? (
             <>
@@ -917,8 +918,7 @@ function SortDetail({ item, sort }: { item: SeriesBrowseItem; sort: SeriesSort }
  */
 function releaseDate(key: number): string | null {
   if (!key) return null;
-  const year = Math.floor(key / 10000);
-  const month = Math.floor(key / 100) % 100;
+  const { year, month } = sortKeyMonth(key);
   const day = key % 100;
   const monthName = MONTH_NAMES[month - 1]?.slice(0, 3);
   if (!monthName) return String(year);

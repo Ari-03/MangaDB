@@ -5,6 +5,7 @@ import { ROLE_NAMES, type CreditRole } from "~/lib/byline";
 import { catalogQuery, type AuthorPageData } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
+import { plural } from "~/lib/format";
 import {
   authorTitleTag,
   breadcrumbListJsonLd,
@@ -190,7 +191,7 @@ function AuthorSeriesItem({ entry, eager }: { entry: AuthorSeries; eager: boolea
         </Link>
         <div className="caption-meta">
           <span>
-            {entry.volumeCount} {entry.volumeCount === 1 ? "vol" : "vols"}
+            {plural(entry.volumeCount, "vol")}
           </span>
           {entry.publishers[0] ? (
             <>

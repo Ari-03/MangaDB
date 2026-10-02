@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
+import { plural } from "~/lib/format";
 import { CommentsQueueLink, useIsDataTeam, useIsModerator } from "~/lib/moderation";
 import { writeErrorMessage } from "~/lib/ratings";
 import { slugParams } from "~/lib/slug";
@@ -216,7 +217,7 @@ function QueueRow({ row, canAct }: { row: Row; canAct: boolean }) {
         <span className="chip mod-chip">{row.status}</span>
         {row.reportCount > 0 ? (
           <span className="chip mod-chip mod-chip--bad">
-            {row.reportCount} {row.reportCount === 1 ? "report" : "reports"}
+            {plural(row.reportCount, "report")}
           </span>
         ) : null}
         <span>

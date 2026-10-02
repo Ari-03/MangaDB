@@ -3,7 +3,7 @@ import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { CommentsQueueLink, useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink, timestamp, useIsDataTeam } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 
 /**
@@ -59,15 +59,6 @@ function ImportsGate() {
   }
   return <Imports />;
 }
-
-const timestamp = (ms: number) =>
-  new Date(ms).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 
 function duration(startedAt: number, finishedAt: number | null): string {
   if (finishedAt === null) return "running";

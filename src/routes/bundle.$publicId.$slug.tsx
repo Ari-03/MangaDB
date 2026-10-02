@@ -9,7 +9,7 @@ import { api } from "../../convex/_generated/api";
 import { catalogQuery, type BundlePageData } from "~/lib/catalogData";
 import { BundleCollectionControls } from "~/lib/collection";
 import { Cover } from "~/lib/cover";
-import { formatPartialDate, formatPrice } from "~/lib/format";
+import { formatPartialDate, formatPrice, plural } from "~/lib/format";
 import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import {
@@ -126,7 +126,7 @@ function BundlePage() {
               isbn13={bundle.isbn13}
               title={bundle.name}
               foot={[
-                members.length === 1 ? "1 book" : `${members.length} books`,
+                plural(members.length, "book"),
                 bundle.publisher?.name,
               ]}
               lazy={false}

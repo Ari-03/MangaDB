@@ -5,10 +5,8 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { FunctionReturnType } from "convex/server";
-import {
-  EDITABLE_FIELDS,
-  type RecordType,
-} from "../../convex/lib/moderationFields";
+import type { RecordType } from "../../convex/lib/moderationFields";
+import { isRecordType } from "~/lib/editForm";
 import { mutationErrorMessage } from "~/lib/errors";
 import { useIsModerator } from "~/lib/moderation";
 import { convexClient } from "~/providers";
@@ -30,10 +28,6 @@ export const Route = createFileRoute("/mod/manage/$type/$key")({
   }),
   component: ModManagePage,
 });
-
-function isRecordType(raw: string): raw is RecordType {
-  return raw in EDITABLE_FIELDS;
-}
 
 function ModManagePage() {
   const { type, key } = Route.useParams();

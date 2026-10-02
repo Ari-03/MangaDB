@@ -17,6 +17,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { CoverBadge } from "~/lib/cover";
 import { mutationErrorMessage } from "~/lib/errors";
+import { plural } from "~/lib/format";
 import { FollowPrompt, type FollowSuggestion } from "~/lib/follows";
 import { CompletedPrompt, type SeriesSuggestion } from "~/lib/reading";
 
@@ -421,7 +422,7 @@ export function RunActions({
       }
     } catch (err) {
       setFailure(
-        `Marked ${done} of ${items.length} ${items.length === 1 ? "book" : "books"}, then stopped: ${mutationErrorMessage(err)}`,
+        `Marked ${done} of ${plural(items.length, "book")}, then stopped: ${mutationErrorMessage(err)}`,
       );
     } finally {
       setRunClaims(owner, claimFor(action, items), false);

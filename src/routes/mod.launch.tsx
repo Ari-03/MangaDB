@@ -6,7 +6,7 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
-import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
+import { CommentsQueueLink, timestamp, useIsModerator } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
@@ -68,15 +68,6 @@ function LaunchGate() {
   }
   return <Launch canAct={isModerator} />;
 }
-
-const timestamp = (ms: number) =>
-  new Date(ms).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 
 function Launch({ canAct }: { canAct: boolean }) {
   return (

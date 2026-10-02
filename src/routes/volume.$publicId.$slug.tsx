@@ -8,6 +8,7 @@ import { AboutSeriesNote, CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
+import { plural } from "~/lib/format";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { ConcealArt } from "~/lib/mature";
@@ -73,8 +74,7 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
     if (!loaderData) return {};
     const { volume, series, editions, description, coverUrl, mature } = loaderData;
     const path = volumePath(volume.publicId, volume.title);
-    const editionCount =
-      editions.length === 1 ? "1 English edition" : `${editions.length} English editions`;
+    const editionCount = plural(editions.length, "English edition");
     return {
       ...pageHead({
         title: volumeTitleTag(series.title, volume.label),
@@ -117,10 +117,6 @@ function VolumeNotFound() {
 }
 
 type CoveringEditionData = VolumePageData["editions"][number];
-
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
 
 /** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
 function ConcealedVolumePage() {

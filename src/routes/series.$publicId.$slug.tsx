@@ -30,12 +30,12 @@ import {
   bookTitle,
   dateSpan,
   PathShelf,
-  plural,
   MissingVolume,
   type EditionGroup,
 } from "~/lib/seriesShelf";
+import { plural } from "~/lib/format";
 import { SeriesVisibilityControls } from "~/lib/sharing";
-import { parsePublicId, seriesPath } from "~/lib/slug";
+import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 
 /**
  * The Series page (ticket #22): `/series/{id}/{slug}`, server-rendered from
@@ -86,8 +86,7 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
     if (!loaderData) return {};
     const { series, volumes, coverUrl } = loaderData;
     const path = seriesPath(series.publicId, series.title);
-    const volumeCount =
-      volumes.length === 1 ? "1 volume" : `${volumes.length} volumes`;
+    const volumeCount = plural(volumes.length, "volume");
     return {
       ...pageHead({
         title: seriesTitleTag(series.title),
@@ -160,12 +159,6 @@ function packagingFacts(groups: ReadonlyArray<EditionGroup>) {
     publishers: [...publishers].map(([slug, name]) => ({ slug, name })),
     dateSpan: dateSpan(books),
   };
-}
-
-function seriesLinkParams(publicId: number, title: string) {
-  const canonical = seriesPath(publicId, title);
-  const slug = canonical.split("/").pop() ?? "";
-  return { publicId: String(publicId), slug };
 }
 
 /** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
@@ -319,7 +312,7 @@ function SeriesPage() {
                           {i > 0 ? ", " : ""}
                           <Link
                             to="/series/$publicId/$slug"
-                            params={seriesLinkParams(
+                            params={slugParams(
                               member.publicId,
                               member.title,
                             )}
@@ -476,7 +469,7 @@ function EditionPicker({
             key={group.key}
             className={isSelected ? "edition-card is-selected" : "edition-card"}
             to="/series/$publicId/$slug"
-            params={seriesLinkParams(series.publicId, series.title)}
+            params={slugParams(series.publicId, series.title)}
             search={{ edition: group.key }}
             // Switching editions keeps the reader where they are.
             resetScroll={false}
@@ -542,7 +535,7 @@ function FamilySection({
                   <Link
                     className="cover-link"
                     to="/series/$publicId/$slug"
-                    params={seriesLinkParams(member.publicId, member.title)}
+                    params={slugParams(member.publicId, member.title)}
                     aria-label={member.title}
                   >
                     <Cover title={member.title} />
@@ -558,7 +551,7 @@ function FamilySection({
                   <Link
                     className="caption-title"
                     to="/series/$publicId/$slug"
-                    params={seriesLinkParams(member.publicId, member.title)}
+                    params={slugParams(member.publicId, member.title)}
                   >
                     {member.title}
                   </Link>

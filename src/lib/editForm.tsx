@@ -4,7 +4,16 @@
 // handlers shape typed values that the Convex mutations re-validate against
 // the same registry (convex/lib/moderationFields.ts).
 
-import type { FieldDescriptor } from "../../convex/lib/moderationFields";
+import {
+  EDITABLE_FIELDS,
+  type FieldDescriptor,
+  type RecordType,
+} from "../../convex/lib/moderationFields";
+
+/** Whether a `$type` route segment names an editable record type. */
+export function isRecordType(raw: string): raw is RecordType {
+  return raw in EDITABLE_FIELDS;
+}
 
 export type FormState = Record<string, string>;
 

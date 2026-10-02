@@ -4,7 +4,8 @@ import { getRequest } from "@tanstack/react-start/server";
 import { useMemo, type CSSProperties, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { catalogQuery, type BrowseRelease } from "~/lib/catalogData";
+import { catalogQuery, releaseTitle, type BrowseRelease } from "~/lib/catalogData";
+import { plural } from "~/lib/format";
 import { showMature } from "~/lib/mature";
 import { clothColor, Cover } from "~/lib/cover";
 import {
@@ -24,6 +25,7 @@ import {
   monthParam,
   monthTitle,
   todaySortKey,
+  weekdayFullName,
   type YearMonth,
 } from "~/lib/month";
 import { pageHead, SITE_NAME } from "~/lib/seo";
@@ -320,7 +322,7 @@ function ReleaseShelves({
           </h2>
           <p className="section-note">
             {undated.length > 0
-              ? `${countLabel(undated.length)}, publication day still to be announced`
+              ? `${plural(undated.length, "book")}, publication day still to be announced`
               : `Nothing is dated for ${monthTitle(month)} yet`}
           </p>
           {/* An empty month carries its own call to action below, so the
@@ -350,7 +352,7 @@ function ReleaseShelves({
             {primaryHeading(primary.day, todaySort)}
           </h2>
           <p className="section-note">
-            {fullDate(month, primary.day)} — {countLabel(primary.releases.length)}
+            {fullDate(month, primary.day)} — {plural(primary.releases.length, "book")}
           </p>
           <Link className="section-link" to="/releases">
             Full agenda for {MONTH_NAMES[month.month - 1]}
@@ -363,11 +365,11 @@ function ReleaseShelves({
         <section className="section">
           <div className="section-head">
             <h2 className="section-title">
-              Next {weekdayFull(month, secondary.day)}, {secondary.day}{" "}
+              Next {weekdayFullName(month, secondary.day)}, {secondary.day}{" "}
               {MONTH_NAMES[month.month - 1]}
             </h2>
             <p className="section-note">
-              {countLabel(secondary.releases.length)} already dated
+              {plural(secondary.releases.length, "book")} already dated
             </p>
             <Link
               className="section-link"
@@ -493,15 +495,6 @@ function EmptyMonth({ month }: { month: YearMonth }) {
   );
 }
 
-/** Crossovers ship under every Series they collect, so the titles join. */
-function releaseTitle(release: BrowseRelease): string {
-  return release.series.map((entry) => entry.title).join(" × ");
-}
-
-function countLabel(count: number): string {
-  return `${count} ${count === 1 ? "book" : "books"}`;
-}
-
 /**
  * A headline count rounded down to two significant figures, as a floor:
  * 5,488 → "5,400+", 28,155 → "28,000+", 65 → "65+". The catalog grows daily,
@@ -518,17 +511,8 @@ function groupDigits(value: number): string {
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
-const WEEKDAYS_FULL = [
-  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
-] as const;
-
-/** Weekday of a day in the month, UTC like every other date in the browser. */
-function weekdayFull({ year, month }: YearMonth, day: number): string {
-  return WEEKDAYS_FULL[new Date(Date.UTC(year, month - 1, day)).getUTCDay()]!;
-}
-
 function fullDate(month: YearMonth, day: number): string {
-  return `${weekdayFull(month, day)} ${day} ${MONTH_NAMES[month.month - 1]} ${month.year}`;
+  return `${weekdayFullName(month, day)} ${day} ${MONTH_NAMES[month.month - 1]} ${month.year}`;
 }
 
 /** What the nearest day is to the reader: today, this week, later, or gone. */

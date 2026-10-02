@@ -32,10 +32,6 @@ export type Volume = SeriesPage["volumes"][number];
 export type EditionGroup = SeriesPage["editionGroups"][number];
 export type Book = EditionGroup["books"][number];
 
-export function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 /** First and last known publication dates across some books, as a span. */
 export function dateSpan(books: ReadonlyArray<Book>): string | null {
   let first: Book["releases"][number]["pubDate"] = null;

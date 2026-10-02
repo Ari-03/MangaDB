@@ -15,6 +15,7 @@ import {
 } from "~/lib/catalogData";
 import { ConcealArt, showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
+import { plural } from "~/lib/format";
 import {
   addMonths,
   currentMonth,
@@ -22,6 +23,7 @@ import {
   monthEndSortKey,
   monthParam,
   monthTitle,
+  sortKeyMonth,
   todaySortKey,
   weekdayName,
   type YearMonth,
@@ -156,8 +158,7 @@ const stillToCome = (book: Book, todaySort: number) =>
 
 /** "Tue, Sep 29", or "Sep, date TBA" for a book dated only to its month. */
 function bookDate(book: Book): string {
-  const year = Math.floor(book.sort / 10000);
-  const month = Math.floor(book.sort / 100) % 100;
+  const { year, month } = sortKeyMonth(book.sort);
   const name = MONTH_NAMES[month - 1]?.slice(0, 3) ?? "";
   return book.day === null
     ? `${name}, date TBA`
@@ -168,10 +169,7 @@ function bookDate(book: Book): string {
 function groupByMonth(books: ReadonlyArray<Book>) {
   const groups: Array<{ month: YearMonth; books: Book[] }> = [];
   for (const book of books) {
-    const month = {
-      year: Math.floor(book.sort / 10000),
-      month: Math.floor(book.sort / 100) % 100,
-    };
+    const month = sortKeyMonth(book.sort);
     const group = groups.at(-1);
     if (group && group.month.year === month.year && group.month.month === month.month) {
       group.books.push(book);
@@ -512,7 +510,7 @@ function SeriesItem({ item }: { item: SeriesBrowseItem }) {
         </Link>
         <div className="caption-meta">
           <span>
-            {item.volumeCount} {item.volumeCount === 1 ? "volume" : "volumes"}
+            {plural(item.volumeCount, "volume")}
           </span>
         </div>
       </div>

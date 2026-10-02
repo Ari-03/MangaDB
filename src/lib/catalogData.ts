@@ -47,6 +47,11 @@ type Found<Query extends FunctionReference<"query">> = NonNullable<
 export type MonthReleasesData = Found<typeof api.releases.monthBrowse>;
 export type BrowseRelease = MonthReleasesData["releases"][number];
 
+/** A release's book title: crossovers ship under every Series they collect, so the titles join. */
+export function releaseTitle(release: BrowseRelease): string {
+  return release.series.map((series) => series.title).join(" × ");
+}
+
 /**
  * The Publishers board (`/publishers`, `/publishers/{yyyy-mm}`): one month's
  * activity per Publisher plus the A–Z directory (convex/publisher.ts

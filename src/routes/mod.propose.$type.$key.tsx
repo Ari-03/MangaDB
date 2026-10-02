@@ -5,15 +5,13 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import {
-  EDITABLE_FIELDS,
-  type RecordType,
-} from "../../convex/lib/moderationFields";
+import type { RecordType } from "../../convex/lib/moderationFields";
 import { PROPOSAL_WARNINGS } from "../../convex/proposals";
 import {
   FieldInput,
   fieldValue,
   initialFormState,
+  isRecordType,
   stateKeysOf,
   type FormState,
 } from "~/lib/editForm";
@@ -38,10 +36,6 @@ export const Route = createFileRoute("/mod/propose/$type/$key")({
   }),
   component: ModProposePage,
 });
-
-function isRecordType(raw: string): raw is RecordType {
-  return raw in EDITABLE_FIELDS;
-}
 
 function ModProposePage() {
   const { type, key } = Route.useParams();

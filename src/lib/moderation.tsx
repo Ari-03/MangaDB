@@ -165,6 +165,16 @@ function RecordHistoryInner({
   );
 }
 
+/** A date and time in the viewer's locale, as the mod dashboards show them. */
+export const timestamp = (ms: number) =>
+  new Date(ms).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
 /** True when the viewer holds the Moderator or Administrator role. */
 export function useIsModerator(): boolean {
   const viewer = useQuery(api.users.viewer, {});

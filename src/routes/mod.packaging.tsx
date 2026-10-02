@@ -6,6 +6,7 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { mutationErrorMessage } from "~/lib/errors";
+import { plural } from "~/lib/format";
 import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
 import { slugParams } from "~/lib/slug";
 
@@ -190,7 +191,7 @@ function BooklessSeries() {
                   {row.title}
                 </Link>{" "}
                 <em>
-                  {row.volumeCount} {row.volumeCount === 1 ? "volume" : "volumes"}
+                  {plural(row.volumeCount, "volume")}
                   {row.sources.map((source) =>
                     source.sourceKey === "ann" && source.recordId.startsWith("manga:") ? (
                       <>

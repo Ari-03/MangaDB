@@ -26,25 +26,17 @@ import {
   bookBadges,
   BookQuickActions,
   ENTRY_LABELS,
+  ENTRY_STATES,
   NO_PROMPTS,
   ShelfPrompts,
   useRunLock,
   type EntryState,
   type ShelfPromptState,
 } from "~/lib/quickActions";
-import { bookLabel, PathShelf, plural } from "~/lib/seriesShelf";
+import { plural } from "~/lib/format";
+import { bookLabel, PathShelf } from "~/lib/seriesShelf";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
-
-const STATE_LABELS = {
-  wanted: "Wanted",
-  ordered: "Ordered",
-  owned: "Owned",
-} as const;
-
-type CollectionState = keyof typeof STATE_LABELS;
-
-const STATE_ORDER: CollectionState[] = ["wanted", "ordered", "owned"];
 
 /**
  * The three-state segmented control. Exactly one state can be active;
@@ -58,8 +50,8 @@ function StateButtons({
   onPick,
   disabled = false,
 }: {
-  current: CollectionState | null;
-  onPick: (state: CollectionState | null) => void;
+  current: EntryState | null;
+  onPick: (state: EntryState | null) => void;
   disabled?: boolean;
 }) {
   return (
@@ -68,7 +60,7 @@ function StateButtons({
       role="group"
       aria-label="Collection state"
     >
-      {STATE_ORDER.map((state) => (
+      {ENTRY_STATES.map((state) => (
         <button
           key={state}
           type="button"
@@ -78,11 +70,11 @@ function StateButtons({
           title={
             current === state
               ? "Remove this from your collection"
-              : `Mark as ${STATE_LABELS[state].toLowerCase()}`
+              : `Mark as ${ENTRY_LABELS[state].toLowerCase()}`
           }
           onClick={() => onPick(current === state ? null : state)}
         >
-          {STATE_LABELS[state]}
+          {ENTRY_LABELS[state]}
         </button>
       ))}
     </span>
