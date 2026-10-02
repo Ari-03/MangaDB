@@ -17,6 +17,7 @@ import {
   freshDraft,
   type EditDraft,
 } from "~/lib/editForm";
+import { mutationErrorMessage } from "~/lib/errors";
 import { slugParams } from "~/lib/slug";
 import { useIsModerator } from "~/lib/moderation";
 import { convexClient } from "~/providers";
@@ -168,13 +169,11 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
         await navigate({ to, params: slugParams(publicId, title) });
       }
     } catch (err) {
-      const message =
-        err instanceof ConvexError && typeof err.data === "object" && err.data !== null
-          ? String((err.data as { message?: string }).message ?? "Save failed.")
-          : err instanceof ConvexError
-            ? String(err.data)
-            : "Save failed. Nothing was changed — try again.";
-      setError(message);
+      setError(
+        err instanceof ConvexError
+          ? mutationErrorMessage(err, "Save failed.")
+          : "Save failed. Nothing was changed — try again.",
+      );
     } finally {
       setBusy(false);
     }

@@ -5,10 +5,10 @@ import {
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery } from "convex/react";
-import { ConvexError } from "convex/values";
 import { useState, type FormEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { mutationErrorMessage } from "~/lib/errors";
 import { clerkEnabled, convexClient } from "~/providers";
 import { ssrAuth } from "~/server/auth";
 
@@ -70,11 +70,7 @@ function ClaimForm() {
       await claimUsername({ username });
       await navigate({ to: "/me" });
     } catch (err) {
-      setError(
-        err instanceof ConvexError && typeof err.data?.message === "string"
-          ? err.data.message
-          : "Could not claim that username. Try another.",
-      );
+      setError(mutationErrorMessage(err, "Could not claim that username. Try another."));
       setBusy(false);
     }
   };

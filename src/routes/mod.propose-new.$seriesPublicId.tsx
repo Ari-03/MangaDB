@@ -5,7 +5,7 @@ import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { PROPOSAL_WARNINGS } from "../../convex/proposals";
-import { mutationErrorMessage } from "~/lib/editForm";
+import { mutationErrorMessage } from "~/lib/errors";
 import { useIsDataTeam } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 

@@ -9,6 +9,7 @@ import {
   EDITABLE_FIELDS,
   type RecordType,
 } from "../../convex/lib/moderationFields";
+import { mutationErrorMessage } from "~/lib/errors";
 import { useIsModerator } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 
@@ -92,13 +93,9 @@ function ModManageGate({
 type ManageForm = NonNullable<FunctionReturnType<typeof api.sensitiveOps.manageForm>>;
 
 function errorMessage(err: unknown): string {
-  return err instanceof ConvexError &&
-    typeof err.data === "object" &&
-    err.data !== null
-    ? String((err.data as { message?: string }).message ?? "The operation failed.")
-    : err instanceof ConvexError
-      ? String(err.data)
-      : "The operation failed. Nothing was changed — try again.";
+  return err instanceof ConvexError
+    ? mutationErrorMessage(err, "The operation failed.")
+    : "The operation failed. Nothing was changed — try again.";
 }
 
 /** The impact preview every operation must show before confirmation. */

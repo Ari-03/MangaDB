@@ -1,9 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ConvexError } from "convex/values";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { mutationErrorMessage } from "~/lib/errors";
 import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 
@@ -74,13 +74,6 @@ const ACTION_LABELS = {
   reinstated: "reinstated",
 } as const;
 
-function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    return String((err.data as { message?: string }).message ?? "Action failed.");
-  }
-  return "Action failed.";
-}
-
 function ModRolesContent() {
   const roster = useQuery(api.roles.roster, {});
   const auditLog = useQuery(api.roles.auditLog, {});
@@ -101,7 +94,7 @@ function ModRolesContent() {
     try {
       await action();
     } catch (err) {
-      setError(errorMessage(err));
+      setError(mutationErrorMessage(err, "Action failed."));
     } finally {
       setBusy(false);
     }

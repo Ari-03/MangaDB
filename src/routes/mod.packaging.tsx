@@ -5,6 +5,7 @@ import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { mutationErrorMessage } from "~/lib/errors";
 import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
 import { slugParams } from "~/lib/slug";
 
@@ -219,9 +220,6 @@ function BooklessSeries() {
 }
 
 function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError) {
-    const data = err.data as { message?: string } | string;
-    return typeof data === "string" ? data : (data.message ?? "That did not work.");
-  }
+  if (err instanceof ConvexError) return mutationErrorMessage(err, "That did not work.");
   return err instanceof Error ? err.message : "That did not work.";
 }

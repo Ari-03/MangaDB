@@ -5,20 +5,12 @@
 // for everyone); opening it reveals the report form signed in, or a sign-in
 // pointer signed out.
 
-import { ConvexError } from "convex/values";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
 import { convexClient } from "~/providers";
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    const message = (err.data as { message?: string }).message;
-    if (message) return message;
-  }
-  return "That didn't go through. Try again.";
-}
 
 export function SeriesReportAffordance({
   seriesPublicId,
@@ -100,7 +92,7 @@ function ReportForm({
         setError(null);
         submit({ seriesPublicId, message })
           .then(() => setSent(true))
-          .catch((err: unknown) => setError(errorMessage(err)));
+          .catch((err: unknown) => setError(mutationErrorMessage(err, TRY_AGAIN, TRY_AGAIN)));
       }}
     >
       <label className="report-field">

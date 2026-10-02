@@ -1,11 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ConvexError } from "convex/values";
 import { useAction, useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { mutationErrorMessage } from "~/lib/errors";
 import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
@@ -26,14 +26,6 @@ export const Route = createFileRoute("/mod/launch")({
   }),
   component: LaunchPage,
 });
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    const message = (err.data as { message?: string }).message;
-    if (message) return message;
-  }
-  return "That didn't go through. Try again.";
-}
 
 function LaunchPage() {
   if (!convexClient) {
@@ -176,7 +168,7 @@ function SeedStages({ canAct }: { canAct: boolean }) {
               onClick={() => {
                 setError(null);
                 setBootstrap({ on: !status.bootstrapMode }).catch(
-                  (err: unknown) => setError(errorMessage(err)),
+                  (err: unknown) => setError(mutationErrorMessage(err)),
                 );
               }}
             >
@@ -220,7 +212,7 @@ function SeedStages({ canAct }: { canAct: boolean }) {
                 onClick={() => {
                   setError(null);
                   start({ stage: stage.stage }).catch((err: unknown) =>
-                    setError(errorMessage(err)),
+                    setError(mutationErrorMessage(err)),
                   );
                 }}
               >
@@ -297,7 +289,7 @@ function SampleTable({
                 setError(null);
                 setDrawing(true);
                 draw({ kind })
-                  .catch((err: unknown) => setError(errorMessage(err)))
+                  .catch((err: unknown) => setError(mutationErrorMessage(err)))
                   .finally(() => setDrawing(false));
               }}
             >
@@ -354,7 +346,7 @@ function SampleTable({
                             setFailing(null);
                             setNote("");
                           })
-                          .catch((err: unknown) => setError(errorMessage(err)));
+                          .catch((err: unknown) => setError(mutationErrorMessage(err)));
                       }}
                     >
                       Record failure
@@ -377,7 +369,7 @@ function SampleTable({
                         record({
                           checkId: row._id as Id<"qaChecks">,
                           status: "verified",
-                        }).catch((err: unknown) => setError(errorMessage(err)));
+                        }).catch((err: unknown) => setError(mutationErrorMessage(err)));
                       }}
                     >
                       Verified
@@ -436,7 +428,7 @@ function DuplicateSweep({ canAct }: { canAct: boolean }) {
                 setError(null);
                 setRunning(true);
                 run({})
-                  .catch((err: unknown) => setError(errorMessage(err)))
+                  .catch((err: unknown) => setError(mutationErrorMessage(err)))
                   .finally(() => setRunning(false));
               }}
             >
@@ -462,7 +454,7 @@ function DuplicateSweep({ canAct }: { canAct: boolean }) {
                       resolve({
                         candidateId: row.candidateId,
                         resolution: "distinct",
-                      }).catch((err: unknown) => setError(errorMessage(err)));
+                      }).catch((err: unknown) => setError(mutationErrorMessage(err)));
                     }}
                   >
                     Distinct
@@ -531,7 +523,7 @@ function CorrectionLoop({ canAct }: { canAct: boolean }) {
             event.preventDefault();
             setError(null);
             attest({ proposalId: proposalId.trim() as Id<"proposals"> }).catch(
-              (err: unknown) => setError(errorMessage(err)),
+              (err: unknown) => setError(mutationErrorMessage(err)),
             );
           }}
         >

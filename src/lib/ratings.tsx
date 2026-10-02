@@ -10,7 +10,6 @@
 
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
-import { ConvexError } from "convex/values";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
@@ -28,6 +27,7 @@ import {
   type ScoreFormat,
   type Smiley,
 } from "../../convex/lib/scoreFormat";
+import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
 import { convexClient } from "~/providers";
 
 /** A rating target as pages know it: `{ kind: "series" | "volume" | "edition", publicId }`. */
@@ -50,12 +50,11 @@ export function ratingLine(
 
 /** The message a failed rating or review write shows, rate limits included. */
 export function writeErrorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    const data = err.data as { message?: string; kind?: string };
-    if (data.kind === "RateLimited") return "That's a lot in a short time. Try again in a few minutes.";
-    if (data.message) return data.message;
-  }
-  return "That didn't go through. Try again.";
+  return mutationErrorMessage(
+    err,
+    TRY_AGAIN,
+    "That's a lot in a short time. Try again in a few minutes.",
+  );
 }
 
 /**

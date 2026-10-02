@@ -296,16 +296,3 @@ export function FieldInput({
   }
 }
 
-/** A readable error message out of any thrown mutation error. */
-export function mutationErrorMessage(err: unknown, fallback: string): string {
-  const data = (err as { data?: unknown })?.data;
-  if (typeof data === "object" && data !== null) {
-    const record = data as { message?: unknown; kind?: unknown };
-    if (record.kind === "RateLimited") {
-      return "Slow down — you have hit the per-user rate limit. Try again in a few minutes.";
-    }
-    if (typeof record.message === "string") return record.message;
-  }
-  if (typeof data === "string") return data;
-  return fallback;
-}

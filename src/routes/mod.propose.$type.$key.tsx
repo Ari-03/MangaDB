@@ -14,10 +14,10 @@ import {
   FieldInput,
   fieldValue,
   initialFormState,
-  mutationErrorMessage,
   stateKeysOf,
   type FormState,
 } from "~/lib/editForm";
+import { mutationErrorMessage } from "~/lib/errors";
 import { useIsDataTeam } from "~/lib/moderation";
 import { convexClient } from "~/providers";
 

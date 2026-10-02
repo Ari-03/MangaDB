@@ -11,12 +11,12 @@
 
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ConvexError } from "convex/values";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { CoverBadge } from "~/lib/cover";
+import { mutationErrorMessage } from "~/lib/errors";
 import { FollowPrompt, type FollowSuggestion } from "~/lib/follows";
 import { CompletedPrompt, type SeriesSuggestion } from "~/lib/reading";
 
@@ -356,14 +356,6 @@ export function BookQuickActions({
  */
 export const RUN_BATCH = 200;
 
-function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    const message = (err.data as { message?: string }).message;
-    if (message) return message;
-  }
-  return "That didn't go through. Try again.";
-}
-
 /**
  * Whole-run marking above a shelf: Want / Order / Own every book here, or
  * mark every book read, in one click — collection.setManyReleaseEntries and
@@ -429,7 +421,7 @@ export function RunActions({
       }
     } catch (err) {
       setFailure(
-        `Marked ${done} of ${items.length} ${items.length === 1 ? "book" : "books"}, then stopped: ${errorMessage(err)}`,
+        `Marked ${done} of ${items.length} ${items.length === 1 ? "book" : "books"}, then stopped: ${mutationErrorMessage(err)}`,
       );
     } finally {
       setRunClaims(owner, claimFor(action, items), false);
