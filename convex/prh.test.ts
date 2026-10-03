@@ -977,11 +977,29 @@ describe("prh.sync — continuation links", () => {
     const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
     await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
     vi.stubEnv("PRH_API_KEY", "");
-    expect(await sync(t, { runId, seen: 3, changed: 1 })).toEqual({ skipped: "disabled" });
+    expect(await sync(t, { runId, seen: 3, changed: 1, errors: ["carried"] })).toEqual({ skipped: "disabled" });
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
       expect(run).toMatchObject({ status: "failed", recordsSeen: 3, recordsChanged: 1 });
-      expect(run?.errors.at(-1)).toBe("Stopped mid-run: the source was disabled.");
+      expect(run?.errors).toEqual(["carried", "Stopped mid-run: the source was disabled."]);
+    });
+  });
+
+  // A fresh call without a key only skips (see "prh.sync — configuration");
+  // a continuation that loses its key closes its run as failed.
+  it("closes a resumed run when the key was removed between links", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
+    vi.stubEnv("PRH_API_KEY", "");
+    expect(await sync(t, { runId, errors: ["carried"] })).toEqual({ skipped: "unconfigured" });
+    await t.run(async (ctx) => {
+      const run = await ctx.db.get(runId);
+      expect(run?.status).toBe("failed");
+      expect(run?.errors).toEqual([
+        "carried",
+        "Stopped mid-run: PRH_API_KEY / PRH_IMPRINT_CODES were removed.",
+      ]);
     });
   });
 
