@@ -1,13 +1,13 @@
 // Run plumbing shared by the sync actions: the registry lookup, the cover
-// store, and the enablement gate of the chained importers (ANN, Yen Press,
-// OpenLibrary, the Kodansha backlist). A run spans many action links;
-// disabling a source must stop the runs the scheduler started. The gate lets
-// a run an operator forced on a disabled source (imports:startRun, then the
-// sync with its runId) through; what happens next is the source's own: ANN,
-// Open Library and the Kodansha backlist write to the end, and Yen Press's
-// applies refuse every write. PRH keeps its own gate (convex/prh.ts): any
-// link that finds the source disabled, forced or not, closes the run as
-// failed, which counts toward the source's unhealthy alert.
+// store, closing a finished run, and the enablement gate of the chained
+// importers (ANN, Yen Press, OpenLibrary, the Kodansha backlist). A run spans
+// many action links; disabling a source must stop the runs the scheduler
+// started. The gate lets a run an operator forced on a disabled source
+// (imports:startRun, then the sync with its runId) through; what happens next
+// is the source's own: ANN, Open Library and the Kodansha backlist write to
+// the end, and Yen Press's applies refuse every write. PRH keeps its own gate
+// (convex/prh.ts): any link that finds the source disabled, forced or not,
+// closes the run as failed, which counts toward the source's unhealthy alert.
 
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -80,6 +80,35 @@ export async function runToContinue(
     errors: args.errors ?? [],
   });
   return stopped ? null : args.runId;
+}
+
+/**
+ * Close a run with its totals and return the result fields every sync
+ * reports for a finished run; a failed run's result carries `failed`. The
+ * caller picks the status and spreads the result into its own:
+ * `return { ...(await closeRun(ctx, runId, status, totals)), completeSweep }`.
+ */
+export async function closeRun(
+  ctx: ActionCtx,
+  runId: Id<"importRuns">,
+  status: "succeeded" | "failed",
+  totals: { seen: number; changed: number; errors: string[]; healthNeutral?: boolean },
+) {
+  await ctx.runMutation(internal.imports.finishRun, {
+    runId,
+    status,
+    recordsSeen: totals.seen,
+    recordsChanged: totals.changed,
+    errors: totals.errors,
+    healthNeutral: totals.healthNeutral,
+  });
+  return {
+    runId,
+    recordsSeen: totals.seen,
+    recordsChanged: totals.changed,
+    errorCount: totals.errors.length,
+    ...(status === "failed" ? { failed: true as const } : {}),
+  };
 }
 
 /**

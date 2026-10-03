@@ -52,7 +52,7 @@ import type { ApplyResult } from "./lib/catalogTitle";
 import { coverKey, coverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { MAX_CARRIED_ERRORS, registryRow, runToContinue, storeRunCover } from "./lib/importRuns";
+import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue, storeRunCover } from "./lib/importRuns";
 import {
   baseRecordId,
   crawlMode,
@@ -213,36 +213,11 @@ export const sync = internalAction({
           }
         }
 
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: failures > 0 ? "failed" : "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errorCount: errors.length,
-          ...(failures > 0 ? { failed: true } : {}),
-        };
+        const status = failures > 0 ? "failed" : "succeeded";
+        return await closeRun(ctx, runId, status, { seen, changed, errors });
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errorCount: errors.length,
-          failed: true,
-        };
+        return await closeRun(ctx, runId, "failed", { seen, changed, errors });
       }
     }),
 });
@@ -430,25 +405,12 @@ export const backlistSync = internalAction({
       let lastSlug = args.afterSlug;
       const covers: StoredCovers = new Map();
 
-      const finish = async (status: "succeeded" | "failed"): Promise<BacklistResult> => {
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          seriesCrawled,
-          fetched: fetchedTotal,
-          continued: false,
-          errorCount: errors.length,
-          ...(status === "failed" ? { failed: true } : {}),
-        };
-      };
+      const finish = async (status: "succeeded" | "failed"): Promise<BacklistResult> => ({
+        ...(await closeRun(ctx, runId, status, { seen, changed, errors })),
+        seriesCrawled,
+        fetched: fetchedTotal,
+        continued: false,
+      });
 
       try {
         const only = args.onlySeries === undefined ? null : new Set(args.onlySeries);

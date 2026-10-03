@@ -32,7 +32,7 @@ import { applyCatalogTitle, reconcileCatalogBox, type ApplyResult } from "./lib/
 import type { BundleReconcile } from "./lib/pipeline";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
+import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   skipsWithoutFetch,
@@ -291,39 +291,18 @@ export const sync = internalAction({
           };
         }
 
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: pageFailed ? "failed" : "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
+        const status = pageFailed ? "failed" : "succeeded";
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, status, { seen, changed, errors })),
           fetched: fetchedTotal,
           continued: false,
-          failed: pageFailed || undefined,
-          errorCount: errors.length,
         };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
           fetched: fetchedTotal,
           continued: false,
-          errorCount: errors.length,
-          failed: true,
         };
       }
     }),

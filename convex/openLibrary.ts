@@ -46,7 +46,7 @@ import {
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
+import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
@@ -225,39 +225,15 @@ export const sync = internalAction({
           };
         }
 
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: errors.length > 0 ? "failed" : "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
+        const status = errors.length > 0 ? "failed" : "succeeded";
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, status, { seen, changed, errors })),
           continued: false,
           nextLine: done ? undefined : startLine + processed,
-          errorCount: errors.length,
-          failed: errors.length > 0 ? true : undefined,
         };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          continued: false,
-          errorCount: errors.length,
-          failed: true,
-        };
+        return { ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })), continued: false };
       }
     }),
 });

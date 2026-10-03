@@ -34,7 +34,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
-import { registryRow } from "./lib/importRuns";
+import { closeRun, registryRow } from "./lib/importRuns";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { toPartialDate } from "./lib/pipeline";
@@ -289,41 +289,20 @@ export const sync = internalAction({
           });
         }
 
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: recordFailures > 0 ? "failed" : "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
+        const status = recordFailures > 0 ? "failed" : "succeeded";
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, status, { seen, changed, errors })),
           mode,
           completeSweep: mode === "full" && completeSweep,
-          errorCount: errors.length,
-          ...(recordFailures > 0 ? { failed: true } : {}),
         };
       } catch (e) {
         // politeFetch errors quote the request URL, api_key included; run
         // errors are operator-visible, so the key never reaches them.
         errors.push(redactKey(errorMessage(e)));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
           mode,
           completeSweep: false,
-          errorCount: errors.length,
-          failed: true,
         };
       }
     }),

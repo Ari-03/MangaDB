@@ -29,7 +29,7 @@ import {
 } from "./lib/covers";
 import type { ApplyResult } from "./lib/catalogTitle";
 import { errorMessage, politeFetch } from "./lib/http";
-import { registryRow, storeRunCover } from "./lib/importRuns";
+import { closeRun, registryRow, storeRunCover } from "./lib/importRuns";
 import { applyRetrying } from "./lib/occ";
 import { parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { inferCoverage } from "./lib/coverage";
@@ -266,37 +266,13 @@ export const sync = internalAction({
           });
         }
 
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: failures > 0 ? "failed" : "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          completeSweep,
-          errorCount: errors.length,
-          ...(failures > 0 ? { failed: true } : {}),
-        };
+        const status = failures > 0 ? "failed" : "succeeded";
+        return { ...(await closeRun(ctx, runId, status, { seen, changed, errors })), completeSweep };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
           completeSweep: false,
-          errorCount: errors.length,
-          failed: true,
         };
       }
     }),

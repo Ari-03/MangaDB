@@ -76,7 +76,7 @@ import {
 import { errorMessage, politeFetch } from "./lib/http";
 import { decodeUtf8OrWindows1252 } from "./lib/text";
 import { applyRetrying } from "./lib/occ";
-import { MAX_CARRIED_ERRORS, openFollowOnRun, registryRow, runToContinue } from "./lib/importRuns";
+import { closeRun, MAX_CARRIED_ERRORS, openFollowOnRun, registryRow, runToContinue } from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
 import {
@@ -319,11 +319,9 @@ export const sync = internalAction({
         } else if (!complete) {
           errors.push("ANN mirror was incomplete; withdrawal skipped");
         }
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: complete ? "succeeded" : "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
+        const closed = await closeRun(ctx, runId, complete ? "succeeded" : "failed", {
+          seen,
+          changed,
           errors,
         });
         // The mirror refreshed the lines it could: now place the unlinked
@@ -338,31 +336,10 @@ export const sync = internalAction({
             ...(complete ? {} : { afterFailedMirror: true }),
           });
         }
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          continued: false,
-          errorCount: errors.length,
-          ...(complete ? {} : { failed: true }),
-        };
+        return { ...closed, continued: false };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          continued: false,
-          errorCount: errors.length,
-          failed: true,
-        };
+        return { ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })), continued: false };
       }
     }),
 });
@@ -1141,39 +1118,18 @@ export const syncReleasePages = internalAction({
           };
         }
         if (errors.length > 0) throw new Error("ANN release-page pass was incomplete");
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-          healthNeutral: args.afterFailedMirror,
-        });
+        const totals = { seen, changed, errors, healthNeutral: args.afterFailedMirror };
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "succeeded", totals)),
           fetched: fetchedTotal,
           continued: false,
-          errorCount: errors.length,
         };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
           fetched: fetchedTotal,
           continued: false,
-          errorCount: errors.length,
-          failed: true,
         };
       }
     }),
