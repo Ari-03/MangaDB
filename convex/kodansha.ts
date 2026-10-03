@@ -61,6 +61,7 @@ import {
   MAX_CARRIED_ERRORS,
   registryRow,
   runToContinue,
+  stampHandOff,
   stopAtGate,
   storeRunCover,
 } from "./lib/importRuns";
@@ -581,6 +582,7 @@ export const backlistSync = internalAction({
         }
 
         if (budgetSpent) {
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.kodansha.backlistSync, {
             politeDelayMs: args.politeDelayMs,
             maxFetches: args.maxFetches,

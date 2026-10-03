@@ -25,12 +25,14 @@
 // - A run that is missing, belongs to another source key, or is no longer
 //   "running" stops its chain. Nothing is written: not the run, not either
 //   source's health. A closed run never reaches a withdrawal pass.
-// - Every pass, and opening a run, stamps the run's `lastActivityAt`. A
+// - Opening a run, every pass, and every hand-off to a continuation stamp
+//   the run's `lastActivityAt` and store its counts and errors so far. A
 //   "running" run that has gone quiet for longer than STRANDED_AFTER_MS lost
 //   its chain (an action killed at its time limit, a crash outside the
 //   adapter's try, a continuation that failed validation after a deploy):
-//   the hourly tick closes it as "failed", which counts toward the source's
-//   health, and dispatches the source if it is due (imports.runScheduled).
+//   the hourly tick closes it as "failed" with those counts, which counts
+//   toward the source's health, and dispatches the source if it is due
+//   (imports.runScheduled).
 
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -42,28 +44,35 @@ import { errorMessage } from "./http";
 export const MAX_CARRIED_ERRORS = 50;
 
 /**
- * Quiet time after which a "running" run counts as stranded. Every link
- * stamps its run on entry (runToContinue opens the run or passes the gate)
- * and passes the gate again at page or batch boundaries: Seven Seas each
- * listing page, the Kodansha window every 50 records, the backlist each due
- * series, ANN each report page (up to 10 detail batches) and each candidate
- * page of 25 release pages, Open Library every 1,000 lines, Yen Press every
- * 100 titles, PRH each list page. However slow its fetches or applies, no
- * such interval outlasts the link it sits in, and a link is one action,
- * which Convex kills at 10 minutes (most hand off sooner: PRH after 4, ANN's
- * page pass after 5, the others after a fetch or line budget). So a live
- * chain is never quiet for more than one action's lifetime plus the
- * scheduler's delay in starting its next link: under 10 minutes between two
- * stamps, plus 10 for the action limit, plus 10 for the scheduler.
+ * Quiet time after which a "running" run counts as stranded. Every adapter
+ * runs in the Convex runtime, where an action is ended at 30 minutes. A
+ * link stamps its run on entry (runToContinue opens the run or passes the
+ * gate), at page or batch boundaries (Seven Seas each listing page, the
+ * Kodansha window every 50 records, the backlist each due series, ANN each
+ * report page and each candidate page of 25 release pages, Open Library
+ * every 1,000 lines, Yen Press every 100 titles, PRH each list page), and
+ * when it schedules its continuation (stampHandOff; ANN's page pass opens
+ * its run stamped in the mutation that schedules it). A fetch or body read
+ * has no timeout of its own, so a stalled request holds its link until
+ * Convex ends the action: inside a link, the gap between two stamps is
+ * bounded by the 30-minute action limit, not by the boundaries above. PRH
+ * and ANN's page pass hand off after 4 and 5 minutes, Open Library and ANN's
+ * mirror after a line or batch budget, Yen Press and the backlist after a
+ * fetch budget; Seven Seas and the Kodansha calendar run in one action.
+ * Between links, the gap is the scheduler's delay in starting the next one,
+ * normally seconds. Sixty minutes is the action limit with another 30 to
+ * spare. A chain whose hand-off waits longer than this is closed although it
+ * was alive; its continuation then stops at the gate and writes nothing.
  */
-export const STRANDED_AFTER_MS = 30 * 60 * 1000;
+export const STRANDED_AFTER_MS = 60 * 60 * 1000;
 
 /**
- * A "running" run with no `lastActivityAt` was opened before the gate
- * stamped it. A live one gets its first stamp at its next gate pass; until
- * then its creation time is all there is, and a multi-hour chain's is hours
- * old. Such a run counts as stranded only past this age, the limit the ANN
- * backfill used before heartbeats.
+ * A "running" run with no `lastActivityAt` was opened by code that did not
+ * stamp it. Its first stamp comes at the first gate pass of a link running
+ * code that does; an action from that older code still executing never
+ * stamps. Until then its creation time is all there is, and a multi-hour
+ * chain's is hours old. Such a run counts as stranded only past this age,
+ * the limit the ANN backfill used before heartbeats.
  */
 const UNSTAMPED_STRANDED_AFTER_MS = 12 * 60 * 60 * 1000;
 
@@ -128,7 +137,8 @@ type RunTotals = { seen: number; changed: number; errors: string[] };
 /**
  * The gate (imports.stopIfAutomatic), checked before a run's next page,
  * batch, link or withdrawal pass by the sync scheduled under `sourceKey`.
- * Null when the run may go on (its activity is stamped). Otherwise the run
+ * Null when the run may go on (its activity is stamped and these totals
+ * stored on it). Otherwise the run
  * is over (closed as "stopped" with these totals if it was automatic and its
  * source is disabled; left as it was if it was already closed or is not this
  * source's) and this is what the sync reports for it:
@@ -155,6 +165,20 @@ export async function stopAtGate(
     errorCount: totals.errors.length,
     stopped: true as const,
   };
+}
+
+/**
+ * Stamp the run with its totals as a link hands it to its continuation. Call
+ * it just before scheduling the next link, so the wait for that link's
+ * entry gate starts from a fresh stamp.
+ */
+export async function stampHandOff(ctx: ActionCtx, runId: Id<"importRuns">, totals: RunTotals) {
+  await ctx.runMutation(internal.imports.recordRunActivity, {
+    runId,
+    recordsSeen: totals.seen,
+    recordsChanged: totals.changed,
+    errors: totals.errors,
+  });
 }
 
 /**

@@ -46,7 +46,14 @@ import {
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue, stopAtGate } from "./lib/importRuns";
+import {
+  closeRun,
+  MAX_CARRIED_ERRORS,
+  registryRow,
+  runToContinue,
+  stampHandOff,
+  stopAtGate,
+} from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
@@ -227,6 +234,7 @@ export const sync = internalAction({
         if (stopped) return { ...stopped, continued: false, nextLine: startLine + processed };
 
         if (!done && args.noContinue !== true) {
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.openLibrary.sync, {
             dumpUrl,
             maxLines: args.maxLines,
@@ -503,7 +511,7 @@ export const applyEdition = internalMutation({
 const REPLAY_SCAN = 200;
 /** Editions handed to the action per lookup. */
 const REPLAY_BATCH = 25;
-/** Work per action before it continues in a fresh one (actions run ≤10 min). */
+/** Work per action before it continues in a fresh one (actions run ≤30 min). */
 const REPLAY_BUDGET_MS = 5 * 60 * 1000;
 
 /** The matcher's own note on an edition its ISBN rung declined (applyEdition). */

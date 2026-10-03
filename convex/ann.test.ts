@@ -995,6 +995,35 @@ describe("ann — disabling the source mid-run", () => {
   });
 });
 
+describe("ann — a slow chain is not stranded", () => {
+  it("stamps at hand-off, so a slow last page and a delayed continuation do not strand the run", async () => {
+    // Fake timers: the clock moves only when the test moves it, and the
+    // continuation stays queued.
+    vi.useFakeTimers();
+    const t = makeT();
+    await seedRegistry(t, true);
+    // A full report page of entries with no English release: ten detail
+    // batches, after which a one-batch budget hands off.
+    const quiet = Array.from({ length: 500 }, (_, i) => ({ id: 6000 + i, title: `Quiet ${i}`, releases: [] }));
+    stubAnn(quiet);
+    const inner = globalThis.fetch;
+    const minute = 60_000;
+    const opened = Date.now();
+    // The report page takes 28 minutes after the gate stamped before it.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).includes("reports.xml")) vi.setSystemTime(Date.now() + 28 * minute);
+      return await inner(input);
+    });
+    expect(await sync(t, { maxBatches: 1, releasePages: false })).toMatchObject({ continued: true });
+    const [run] = await t.run((ctx) => ctx.db.query("importRuns").collect());
+    expect(run).toMatchObject({ status: "running", lastActivityAt: opened + 28 * minute });
+    // The continuation waits 35 minutes: 63 since the stamp before the page.
+    vi.setSystemTime(opened + 63 * minute);
+    expect(await t.mutation(internal.imports.closeStrandedRun, { runId: run!._id })).toBe(false);
+    expect(await t.run((ctx) => ctx.db.get(run!._id))).toMatchObject({ status: "running" });
+  });
+});
+
 // Catalog repairs hide and merge records; the next weekly mirror must not
 // undo them (stage 13: hidden Series recreated; Summer Ghost / Qualia the
 // Purple regained an empty unlabeled placeholder after a merge).
@@ -1925,18 +1954,30 @@ describe("ann — release-page descriptions", () => {
     vi.restoreAllMocks();
   });
 
-  it("the backfill treats a run quiet for over 30 minutes as stranded", async () => {
+  it("the backfill treats a run quiet for over 60 minutes as stranded", async () => {
     const t = makeT();
     await linkedCatalog(t, describedPages, [{ label: "1" }]);
     await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
-    const later = Date.now() + 31 * 60_000;
+    const later = Date.now() + 61 * 60_000;
     vi.spyOn(Date, "now").mockImplementation(() => later);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = await backfill(t);
     expect(result).toMatchObject({ fetched: 1, filled: 1 });
     expect(result.stopped).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ignoring stranded ANN Import Run .* \(last active 31 min ago\)/));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ignoring stranded ANN Import Run .* \(last active 1 h 1 min ago\)/));
     vi.restoreAllMocks();
+  });
+
+  // A backfill action deployed before heartbeats passes `now` and holds off
+  // while `ageMs` is at most 12 hours.
+  it("answers a backfill deployed before heartbeats with the time since the run was last active", async () => {
+    const t = makeT();
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const opened = Date.now();
+    await t.run((ctx) => ctx.db.patch(runId, { lastActivityAt: opened + 20 * 60 * 60_000 }));
+    const now = opened + 20 * 60 * 60_000 + 5 * 60_000;
+    expect(await t.query(internal.ann.annRunInProgress, { now })).toMatchObject({ runId, ageMs: 5 * 60_000 });
+    expect(await t.query(internal.ann.annRunInProgress, {})).not.toHaveProperty("ageMs");
   });
 
   it("the backfill treats a run opened before heartbeats as stranded only past 12 hours", async () => {

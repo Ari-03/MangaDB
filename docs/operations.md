@@ -96,7 +96,7 @@ a change now, or where nothing scheduled will.
 | Description import (ANN pages, Open Library) | `npx convex run ann:backfillDescriptions '{"limit": 300}'` until done, then `npx convex run openLibrary:replayDescriptions '{"limit": 500}'` |
 | The ANN description cleaner (`cleanAnnDescription`) | `npx convex run ann:repairDescriptions '{}'`. No fetches; safe to rerun. |
 | The Open Library description cleaner (`cleanOlDescription`) | `npx convex run openLibrary:repairDescriptions '{}'`. No fetches. |
-| Any importer | Before deploying, disable the sources and let running imports finish. |
+| Any importer | Before deploying, not after: let running imports finish, or disable the sources and wait until no run is `running`. Required ([imports](imports.md#steady-state), "Deploying import code"). |
 | `FEATURES` in `convex/lib/features.ts` | Deploy both Convex and the Worker; both read the constant. |
 
 `seriesBrowse:rebuild`, `publisher:rebuildBoards` and `people:rebuild`

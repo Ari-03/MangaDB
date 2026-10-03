@@ -34,7 +34,14 @@ import { applyCatalogTitle, reconcileCatalogBox, type ApplyResult } from "./lib/
 import type { BundleReconcile } from "./lib/pipeline";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue, stopAtGate } from "./lib/importRuns";
+import {
+  closeRun,
+  MAX_CARRIED_ERRORS,
+  registryRow,
+  runToContinue,
+  stampHandOff,
+  stopAtGate,
+} from "./lib/importRuns";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   skipsWithoutFetch,
@@ -274,6 +281,7 @@ export const sync = internalAction({
         }
 
         if (budgetSpent) {
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.yenPress.sync, {
             politeDelayMs: args.politeDelayMs,
             maxFetches: args.maxFetches,

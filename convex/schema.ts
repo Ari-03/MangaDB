@@ -827,7 +827,8 @@ export default defineSchema({
     // the next link, page, batch or withdrawal boundary (lib/importRuns.ts).
     // An operator's forced run (imports:startRun) lacks it and carries on.
     automatic: v.optional(v.boolean()),
-    // Stamped when the run opens and at every gate pass (lib/importRuns.ts).
+    // Stamped when the run opens, at every gate pass and at every hand-off to
+    // a continuation, each storing the counts so far (lib/importRuns.ts).
     // A "running" run quiet for longer than STRANDED_AFTER_MS lost its chain:
     // the hourly tick closes it as "failed" so the source can run again. A
     // run opened before the field has none and counts as stranded only once

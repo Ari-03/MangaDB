@@ -408,22 +408,44 @@ A source whose last run is still `running` is skipped, unless that run is
 stranded. A failed run resumes at the next cadence.
 
 **Stranded runs.** A chain can die without closing its run: an action
-killed at its 10-minute limit, a crash outside the adapter's error
-handling, a continuation that fails validation after a deploy. Each run
-records `lastActivityAt` when it opens and at every gate check (listed
-below). A `running` run with no activity for 30 minutes has lost its
-chain, since a live one checks the gate at least once per action. The next
-hourly tick closes it as `failed`, with an error saying it was stranded
-and when it was last active, and starts the source if it is due. The
-failure counts toward the source's health like any other, so a chain that
-keeps dying raises the unhealthy alert. The tick reads enabled sources
-only: a disabled source's stranded run is closed once it is enabled again.
-A run opened before `lastActivityAt` existed has none; it counts as
-stranded only once it is 12 hours old. A chain live at the deploy is
-stamped at its next gate check, within minutes, so only one already 12
-hours old could be closed in that window; letting imports finish before a
-deploy (below) rules even that out. The ANN description backfill uses the
-same test.
+ended at Convex's 30-minute limit for actions in its default runtime, where
+every adapter runs, a crash outside the adapter's error handling, a
+continuation that fails validation after a deploy. A run records
+`lastActivityAt` when it opens, at every gate check (listed below), and
+when a link schedules its continuation; each gate check and hand-off also
+stores the run's counts and errors so far. Inside a link, the longest gap
+between two stamps is bounded by the action limit, since no fetch has a
+timeout of its own. Between links, it is the scheduler's delay in starting
+the next one, normally seconds. A `running` run with no activity for 60
+minutes, the action limit with 30 minutes to spare, has lost its chain. The
+next hourly tick closes it as `failed`, with the counts and errors it last
+stored, an error saying it was stranded and when it was last active, and
+starts the source if it is due. The failure counts toward the source's
+health like any other, so a chain that keeps dying raises the unhealthy
+alert. The tick reads enabled sources only: a disabled source's stranded
+run is closed once it is enabled again. The ANN description backfill uses
+the same test.
+
+The 60 minutes is a rule, not proof. A chain whose hand-off is delayed past
+it is closed although it was alive: its continuation then stops at the
+gate and writes nothing, and the source records one failure.
+
+A run opened before `lastActivityAt` existed has none and counts as
+stranded only once it is 12 hours old. An action deployed before then
+never stamps: its run gets its first stamp only at the first link that runs
+the newer code, after the old action has handed off.
+
+**Deploying import code.** Let running imports finish before deploying a
+change to import code, or disable the sources and wait until no run is
+`running`. This is a requirement. An action keeps executing the code it
+started with after a deploy, so a run older than 12 hours with no heartbeat
+can be closed while an old-version action is still executing it, and a
+continuation the old action schedules must pass the new code's validators.
+To toggle a source without signing in as an Administrator:
+
+```sh
+npx convex run importSources:setEnabledInternal '{"key":"sevenseas","enabled":false}'
+```
 
 **Disabling a source** follows one rule for every source, enforced by the
 gate in `convex/lib/importRuns.ts`:
@@ -445,7 +467,7 @@ gate in `convex/lib/importRuns.ts`:
   two checks is not interrupted.
 - An operator forces a run with `imports:startRun`, then the sync with
   that run id, promptly: on an enabled source, a run with no activity for
-  30 minutes counts as stranded. A forced run carries on and imports while
+  60 minutes counts as stranded. A forced run carries on and imports while
   the source is disabled, for every source, and withdraws only after a
   complete sweep.
 - The gate also stops a chain whose run is missing, closed (finished, or
@@ -462,13 +484,6 @@ PRH's missing configuration is checked after the gate. A run that loses
 is a forced run on a disabled source. An automatic run on a disabled source
 that has also lost its key closes as `stopped`: the gate comes first, so
 the runs a disable stops never raise a failure alert.
-
-Before deploying importer changes, disable the sources and let running
-imports finish. To toggle a source without signing in as an Administrator:
-
-```sh
-npx convex run importSources:setEnabledInternal '{"key":"sevenseas","enabled":false}'
-```
 
 **Rerunning skipped records.** If a run reports skipped records, run that
 source again with `npx convex run <source>:sync '{}'`. Every adapter fetches

@@ -84,6 +84,7 @@ import {
   openFollowOnRun,
   registryRow,
   runToContinue,
+  stampHandOff,
   stopAtGate,
 } from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
@@ -292,6 +293,7 @@ export const sync = internalAction({
 
         if (!reachedEnd) {
           // Budget spent mid-mirror: hand the run to the next link.
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.ann.sync, {
             politeDelayMs: args.politeDelayMs,
             maxBatches: args.maxBatches,
@@ -1110,6 +1112,7 @@ export const syncReleasePages = internalAction({
         }
 
         if (!done) {
+          await stampHandOff(ctx, runId, { seen, changed, errors });
           await ctx.scheduler.runAfter(0, internal.ann.syncReleasePages, {
             politeDelayMs: args.politeDelayMs,
             maxFetches: args.maxFetches,
@@ -1596,18 +1599,27 @@ export const descriptionlessLines = internalQuery({
  * The latest ANN Import Run when it is still "running": its id and when it
  * opened and was last active. The backfill decides whether it blocks
  * (lib/importRuns.ts isStranded).
+ *
+ * A backfill action deployed before heartbeats passes `now` and reads
+ * `ageMs`, holding off while it is at most 12 hours. It gets the time since
+ * the run was last active, so it holds off while the chain is alive. The
+ * argument and the field can go once no such action can still be running.
  */
 export const annRunInProgress = internalQuery({
-  args: {},
-  handler: async (ctx) => {
+  args: { now: v.optional(v.number()) },
+  handler: async (ctx, { now }) => {
     const latest = await ctx.db
       .query("importRuns")
       .withIndex("by_source", (q) => q.eq("sourceKey", SOURCE_KEY))
       .order("desc")
       .first();
-    return latest?.status === "running"
-      ? { runId: latest._id, _creationTime: latest._creationTime, lastActivityAt: latest.lastActivityAt }
-      : null;
+    if (latest?.status !== "running") return null;
+    return {
+      runId: latest._id,
+      _creationTime: latest._creationTime,
+      lastActivityAt: latest.lastActivityAt,
+      ...(now === undefined ? {} : { ageMs: now - lastActiveAt(latest) }),
+    };
   },
 });
 

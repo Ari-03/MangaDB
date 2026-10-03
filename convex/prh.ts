@@ -44,7 +44,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
-import { closeRun, registryRow, runToContinue, stopAtGate } from "./lib/importRuns";
+import { closeRun, registryRow, runToContinue, stampHandOff, stopAtGate } from "./lib/importRuns";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { toPartialDate } from "./lib/pipeline";
@@ -55,7 +55,7 @@ export const SOURCE_KEY = "prh";
 const API_BASE = "https://api.penguinrandomhouse.com/resources/v2/title/domains/PRH.US";
 const IMPORT_COMMENT = "Imported from the Penguin Random House API.";
 const ROWS_PER_PAGE = 200;
-/** Per-link wall-clock budget, well inside Convex's 10-minute action limit. */
+/** Per-link wall-clock budget, well inside Convex's 30-minute action limit. */
 const LINK_BUDGET_MS = 4 * 60 * 1000;
 /** The list endpoint's content zoom: each title embeds its flap copy (lib/prh.ts). */
 const CONTENT_ZOOM = "https://api.penguinrandomhouse.com/title/titles/content/definition";
@@ -183,6 +183,7 @@ export const sync = internalAction({
       // travels with it: a configured list re-read from the environment could
       // change between links and shift imprintIndex onto another imprint.
       const handOff = async (imprintIndex: number, start: number, pages: number): Promise<SyncResult> => {
+        await stampHandOff(ctx, runId, { seen, changed, errors });
         await ctx.scheduler.runAfter(0, internal.prh.sync, {
           mode,
           imprints,

@@ -60,38 +60,44 @@ export const startRun = internalMutation({
  * `sourceKey`. In order: a run that is missing, belongs to another source
  * key, or is no longer "running" stops its chain and nothing is written.
  * Otherwise it reads the run's own source row: while it is enabled, or for
- * an operator's run, the run goes on and its `lastActivityAt` is stamped.
- * Once it is disabled, an automatic run is closed as "stopped" with the
- * totals given (health-neutral: it never touches the source's failure
- * streak). Returns whether the run is over.
+ * an operator's run, the run goes on, its `lastActivityAt` is stamped and
+ * the totals given are stored on it. Once it is disabled, an automatic run
+ * is closed as "stopped" with those totals (health-neutral: it never
+ * touches the source's failure streak). Returns whether the run is over.
+ *
+ * `sourceKey` is optional for actions deployed before the gate took it,
+ * which call here only once they have read their source as disabled; the
+ * run's own key stands in, so they get no mismatch check. The fallback can
+ * go once no such action can still be running.
  */
 export const stopIfAutomatic = internalMutation({
   args: {
     runId: v.id("importRuns"),
-    sourceKey: v.string(),
+    sourceKey: v.optional(v.string()),
     recordsSeen: v.number(),
     recordsChanged: v.number(),
     errors: v.array(v.string()),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
+    const sourceKey = args.sourceKey ?? run?.sourceKey;
     if (!run) {
-      console.warn(`[imports] ${args.sourceKey}: run ${args.runId} does not exist; its chain stops`);
+      console.warn(`[imports] ${sourceKey ?? "unknown source"}: run ${args.runId} does not exist; its chain stops`);
       return true;
     }
-    if (run.sourceKey !== args.sourceKey) {
+    if (run.sourceKey !== sourceKey) {
       console.error(
-        `[imports] ${args.sourceKey}: run ${run._id} belongs to "${run.sourceKey}"; stopping without touching either source`,
+        `[imports] ${sourceKey}: run ${run._id} belongs to "${run.sourceKey}"; stopping without touching either source`,
       );
       return true;
     }
     if (run.status !== "running") {
-      console.warn(`[imports] ${args.sourceKey}: run ${run._id} is already ${run.status}; its chain stops`);
+      console.warn(`[imports] ${sourceKey}: run ${run._id} is already ${run.status}; its chain stops`);
       return true;
     }
     const source = await getSourceByKey(ctx, run.sourceKey);
     if (source?.enabled || !run.automatic) {
-      await ctx.db.patch(run._id, { lastActivityAt: Date.now() });
+      await stampActivity(ctx, run._id, args);
       return false;
     }
     // Its own status, not "succeeded": the sweep is incomplete. The note
@@ -109,6 +115,41 @@ export const stopIfAutomatic = internalMutation({
     return true;
   },
 });
+
+/**
+ * Stamp a still-running run as a link hands it to its continuation, storing
+ * its totals so far (lib/importRuns.ts stampHandOff). A run closed meanwhile
+ * is left alone; the continuation stops at its gate.
+ */
+export const recordRunActivity = internalMutation({
+  args: {
+    runId: v.id("importRuns"),
+    recordsSeen: v.number(),
+    recordsChanged: v.number(),
+    errors: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (run?.status === "running") await stampActivity(ctx, run._id, args);
+  },
+});
+
+/**
+ * Stamp a running run's `lastActivityAt` and store its totals so far, so a
+ * run later closed as stranded shows what it had done.
+ */
+async function stampActivity(
+  ctx: MutationCtx,
+  runId: Id<"importRuns">,
+  totals: { recordsSeen: number; recordsChanged: number; errors: string[] },
+) {
+  await ctx.db.patch(runId, {
+    lastActivityAt: Date.now(),
+    recordsSeen: totals.recordsSeen,
+    recordsChanged: totals.recordsChanged,
+    errors: totals.errors.slice(0, MAX_RUN_ERRORS),
+  });
+}
 
 export const finishRun = internalMutation({
   args: {
@@ -163,7 +204,8 @@ async function closeWithOutcome(
 /**
  * The hourly tick's recovery (runScheduled): close a run whose chain is gone
  * (lib/importRuns.ts isStranded) as "failed", saying when it was last
- * active, so its source can run again. The failure counts toward source
+ * active, so its source can run again. It keeps the counts and errors its
+ * last gate pass or hand-off stored. The failure counts toward source
  * health like any other: a chain that keeps dying raises the unhealthy
  * alert. Returns whether it closed the run; a run that is closed already, or
  * has shown activity since the tick read it, is left alone, so overlapping

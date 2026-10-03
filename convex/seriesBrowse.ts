@@ -76,7 +76,7 @@ const STALE_SWEEP = 200;
 
 /**
  * Wall-clock budget for one rebuild action before it hands the cursor to a
- * scheduled continuation. Convex stops an action at ten minutes, and the
+ * scheduled continuation. Convex stops an action at 30 minutes, and the
  * full walk over production (every Series' releases, collection entries and
  * tracking rows) can take longer than that; a chain of short actions cannot.
  */

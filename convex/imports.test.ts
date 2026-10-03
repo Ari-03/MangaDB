@@ -145,7 +145,7 @@ describe("stranded runs", () => {
     await seedRegistry(t);
     const opened = Date.now();
     const runId = await openRun(t, opened);
-    clockAt(opened + HOUR);
+    clockAt(opened + 2 * HOUR);
     await Promise.all([tick(t), tick(t)]);
     await tick(t);
     const run = await t.run((ctx) => ctx.db.get(runId));
@@ -176,6 +176,60 @@ describe("stranded runs", () => {
     clockAt(opened + 40 * 60_000);
     expect(await pass()).toBe(false);
     expect(await t.run((ctx) => ctx.db.get(runId))).toMatchObject({ lastActivityAt: opened + 40 * 60_000 });
+  });
+
+  it("closes a stranded run with the counts and errors its last pass stored", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const opened = Date.now();
+    const runId = await openRun(t, opened);
+    const carried = Array.from({ length: 60 }, (_, i) => `error ${i}`);
+    clockAt(opened + 3 * HOUR);
+    expect(
+      await t.mutation(internal.imports.stopIfAutomatic, {
+        runId,
+        sourceKey: "sevenseas",
+        recordsSeen: 1200,
+        recordsChanged: 85,
+        errors: carried,
+      }),
+    ).toBe(false);
+    expect(await t.run((ctx) => ctx.db.get(runId))).toMatchObject({
+      recordsSeen: 1200,
+      recordsChanged: 85,
+      errors: carried.slice(0, 50),
+    });
+    // A hand-off stores its totals the same way.
+    clockAt(opened + 4 * HOUR);
+    await t.mutation(internal.imports.recordRunActivity, {
+      runId,
+      recordsSeen: 1300,
+      recordsChanged: 90,
+      errors: carried.slice(0, 2),
+    });
+    clockAt(opened + 6 * HOUR);
+    expect(await t.mutation(internal.imports.closeStrandedRun, { runId })).toBe(true);
+    expect(await t.run((ctx) => ctx.db.get(runId))).toMatchObject({
+      status: "failed",
+      recordsSeen: 1300,
+      recordsChanged: 90,
+      errors: [
+        "error 0",
+        "error 1",
+        `Stranded: no activity since ${new Date(opened + 4 * HOUR).toISOString()}; closed by the scheduler.`,
+      ],
+    });
+  });
+
+  it("leaves a closed run alone at a hand-off", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const runId = await openRun(t, Date.now());
+    await t.mutation(internal.imports.finishRun, { runId, status: "succeeded", recordsSeen: 3, recordsChanged: 1, errors: [] });
+    const before = await t.run((ctx) => ctx.db.get(runId));
+    clockAt(Date.now() + HOUR);
+    await t.mutation(internal.imports.recordRunActivity, { runId, recordsSeen: 9, recordsChanged: 9, errors: ["late"] });
+    expect(await t.run((ctx) => ctx.db.get(runId))).toEqual(before);
   });
 
   it("stops a closed run's chain without writing to the run or the source's health", async () => {
@@ -423,6 +477,28 @@ describe("imports.stopIfAutomatic", () => {
       expect(run?.status).toBe("stopped");
       expect(run?.errors).toEqual([...carried.slice(0, 49), "Stopped: the source was disabled mid-run."]);
     });
+  });
+
+  // An action deployed before the gate took a source key calls it without
+  // one, and only after reading its source as disabled.
+  it("accepts a call without a source key, as actions deployed before it make", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const automatic = await t.mutation(internal.imports.startRun, { sourceKey: "ann", automatic: true });
+    const forced = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "ann", enabled: false });
+    const legacy = (runId: typeof automatic) =>
+      t.mutation(internal.imports.stopIfAutomatic, { runId, recordsSeen: 4, recordsChanged: 2, errors: ["e"] });
+    expect(await legacy(automatic)).toBe(true);
+    expect(await t.run((ctx) => ctx.db.get(automatic))).toMatchObject({
+      status: "stopped",
+      recordsSeen: 4,
+      errors: ["e", "Stopped: the source was disabled mid-run."],
+    });
+    expect(await legacy(forced)).toBe(false);
+    expect(await t.run((ctx) => ctx.db.get(forced))).toMatchObject({ status: "running", recordsSeen: 4 });
+    // A closed run still stops the chain.
+    expect(await legacy(automatic)).toBe(true);
   });
 });
 

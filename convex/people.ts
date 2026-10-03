@@ -240,7 +240,7 @@ const CREDITS_PER_PERSON = 1000;
 /** Credits read per Series: a handful in practice. */
 const CREDITS_PER_SERIES = 50;
 
-/** Work per rebuild action before it continues in a fresh one (actions run ≤10 min). */
+/** Work per rebuild action before it continues in a fresh one (actions run ≤30 min). */
 const REBUILD_BUDGET_MS = 5 * 60 * 1000;
 /** Rows per settling mutation; a PRH row settles its whole Series. */
 const SETTLE_BATCH = 100;
@@ -1198,7 +1198,7 @@ const ANN_BATCH = 50;
 const ANN_DELAY_MS = 1100;
 /** Observations scanned per lookup for ones still missing credits. */
 const BACKFILL_SCAN = 400;
-/** Work per action before it continues in a fresh one (actions run ≤10 min). */
+/** Work per action before it continues in a fresh one (actions run ≤30 min). */
 const BACKFILL_BUDGET_MS = 6 * 60 * 1000;
 
 /**
