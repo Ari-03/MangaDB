@@ -270,10 +270,10 @@ const SERIES_FALLBACK = {
 
 describe("Edition Description", () => {
   // Which blurb wins is lib/descriptions.ts representativeDescription's rule,
-  // unit-tested there; this case checks the page hands it every active
-  // Release, digital and overridden ones included. The seed's standard
-  // Edition 21: r1 (physical) carries "Back-cover blurb.", r2 (digital) is
-  // blank.
+  // unit-tested there; the first two cases check the page hands it every
+  // active Release, digital and overridden ones included. The seed's
+  // standard Edition 21: r1 (physical) carries "Back-cover blurb.", r2
+  // (digital) is blank.
   it("ranks every active Release's blurb, so a digital Human Override beats the print default", async () => {
     const t = makeT();
     const { r2 } = await seed(t);
@@ -282,6 +282,17 @@ describe("Edition Description", () => {
     });
     const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
     expect(page?.description).toEqual({ source: "release", text: "Corrected." });
+  });
+
+  it("fills an Edition from its one described Release", async () => {
+    const t = makeT();
+    const { r1, r2 } = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(r1, { description: undefined });
+      await ctx.db.patch(r2, { description: "Digital blurb." });
+    });
+    const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
+    expect(page?.description).toEqual({ source: "release", text: "Digital blurb." });
   });
 
   it("borrows the Volume Synopsis only for one whole Volume, else the flagged Series synopsis", async () => {

@@ -146,4 +146,30 @@ describe("catalog.seriesPage over the seed", () => {
     // The first standard book fronts the Series.
     expect(page.editionGroups[0]?.books[0]?.coverage[0]?.position).toBe(1);
   });
+
+  it("keeps a simple Series free of family, line, variant, and bundle concepts", async () => {
+    const { t, ids } = await seeded();
+    const page = await t.query(api.catalog.seriesPage, {
+      publicId: ids.seriesPublicIds.quietCartographer,
+    });
+    expect(page).not.toBeNull();
+    if (!page) return;
+    expect(page.family).toBeNull();
+    // One standard path, no Edition Line.
+    expect(page.editionGroups.map((g) => g.kind)).toEqual(["standard"]);
+    for (const book of page.editionGroups[0]?.books ?? []) {
+      expect(book.lineName).toBeNull();
+      expect(book.linePosition).toBeNull();
+    }
+  });
+
+  it("serves the oneshot as one unnumbered Volume", async () => {
+    const { t, ids } = await seeded();
+    const page = await t.query(api.catalog.seriesPage, {
+      publicId: ids.seriesPublicIds.oneRainyEvening,
+    });
+    expect(page?.volumes).toHaveLength(1);
+    expect(page?.volumes[0]?.label).toBeNull();
+    expect(page?.family).toBeNull();
+  });
 });
