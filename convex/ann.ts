@@ -99,7 +99,13 @@ import {
   workMatch,
   type WorkEvidence,
 } from "./lib/matching";
-import { getObservation, upsertObservation } from "./lib/observations";
+import {
+  getObservation,
+  type HoldKind,
+  linkObservation,
+  recordUnplaced,
+  upsertObservation,
+} from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
@@ -112,7 +118,6 @@ import {
   repairLinkedDescription,
   rewriteOwnDescription,
   queueCreationProposal,
-  recordUnplaced,
   removedSeriesFor,
   runDescriptionRepair,
   REPAIR_SCAN,
@@ -620,9 +625,7 @@ export const applyManga = internalMutation({
       if (series && series.status === "active") {
         seriesId = series._id;
         if (series._id !== linkedId) {
-          await ctx.db.patch(observation._id, {
-            recordRef: { type: "series", id: series._id },
-          });
+          await linkObservation(ctx, observation._id, { type: "series", id: series._id });
           changed = true;
         }
         if (!series.locked) {
@@ -676,9 +679,7 @@ export const applyManga = internalMutation({
       }
       if (candidates.length === 1) {
         seriesId = candidates[0]!._id;
-        await ctx.db.patch(observation._id, {
-          recordRef: { type: "series", id: seriesId },
-        });
+        await linkObservation(ctx, observation._id, { type: "series", id: seriesId });
         changed = true;
       } else if (candidates.length > 1) {
         // Two same-titled Series: linking either would be a guess.
@@ -705,7 +706,7 @@ export const applyManga = internalMutation({
           publisherId: null,
         });
         if (removed?.kind === "hidden") {
-          await recordUnplaced(ctx, observation, removed.reason, now);
+          await recordUnplaced(ctx, observation, { kind: "series", reason: removed.reason }, now);
           return { status: "recordOnly", changed: true, releasesLinked: 0 };
         }
         await queueCreationProposal(ctx, {
@@ -740,9 +741,7 @@ export const applyManga = internalMutation({
         return { status: "recordOnly", changed: true, releasesLinked: 0 };
       }
       seriesId = creation.seriesId;
-      await ctx.db.patch(observation._id, {
-        recordRef: { type: "series", id: seriesId },
-      });
+      await linkObservation(ctx, observation._id, { type: "series", id: seriesId });
       changed = true;
     } else if (labels.length > 0) {
       // The Volume backbone under a linked Series — within the spec §6
@@ -794,9 +793,7 @@ export const applyManga = internalMutation({
             : ({ kind: "none" } as const);
         if (match.kind === "one") {
           canonical = match.release;
-          await ctx.db.patch(releaseObs._id, {
-            recordRef: { type: "release", id: canonical._id },
-          });
+          await linkObservation(ctx, releaseObs._id, { type: "release", id: canonical._id });
           releasesLinked++;
           changed = true;
         }
@@ -1269,17 +1266,19 @@ export const applyReleasePage = internalMutation({
       return { status: fetched ? "stored" : "skipped", changed };
     }
     const citation = await pageCitation(ctx, annId);
-    const hold = async (reason: string): Promise<PlaceResult> => {
-      const current = (observation!.conflicts ?? []).find((c) => c.field === "placement");
-      if (current?.reason !== reason) {
-        await recordUnplaced(ctx, observation!, reason, now);
-        changed = true;
-      }
-      return { status: "recordOnly", changed, reason };
+    // `seriesId`: the line's active Series, once it is known.
+    const hold = async (kind: HoldKind, reason: string, seriesId?: Id<"series">): Promise<PlaceResult> => {
+      const held = await recordUnplaced(
+        ctx,
+        observation!,
+        { kind, reason, ...(seriesId !== undefined ? { seriesId } : {}) },
+        now,
+      );
+      return { status: "recordOnly", changed: changed || held, reason };
     };
 
     const isbn13 = page.isbn13 ?? line.isbn13;
-    if (isbn13 === undefined) return await hold("ANN lists no ISBN for this release.");
+    if (isbn13 === undefined) return await hold("other", "ANN lists no ISBN for this release.");
 
     // The Series: the manga entry's rung-① link, through any repair merge.
     const mangaObs = await getObservation(ctx, SOURCE_KEY, `manga:${line.mangaId}`);
@@ -1293,11 +1292,12 @@ export const applyReleasePage = internalMutation({
     // Editor hid is never recreated.
     const { active: byIsbn, hidden: isbnHidden } = await releaseByIsbn(ctx, isbn13);
     if (!byIsbn && isbnHidden) {
-      return await hold(`ISBN ${isbn13} is on a Release an Editor hid — not recreated.`);
+      return await hold("isbn", `ISBN ${isbn13} is on a Release an Editor hid — not recreated.`);
     }
     if (byIsbn) {
       if (!series || !byIsbn.seriesIds.includes(series._id)) {
         return await hold(
+          "isbn",
           `ISBN ${isbn13} is already on a Release of another Series — a duplicate-Series question for an Editor.`,
         );
       }
@@ -1312,27 +1312,27 @@ export const applyReleasePage = internalMutation({
     // variant covers still only link by ISBN.
     const packaging = line.editionLineHint || line.multi ? packagingOf(line) : null;
     if ((line.multi || line.editionLineHint) && packaging === null) {
-      return await hold("Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
+      return await hold("packaging", "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
     }
     if (VARIANT_LINE.test(line.title)) {
-      return await hold("A store-exclusive or variant cover: never a Release of its own.");
+      return await hold("other", "A store-exclusive or variant cover: never a Release of its own.");
     }
     if (!series || series.status !== "active") {
-      return await hold("The manga entry has no linked active Series.");
+      return await hold("series", "The manga entry has no linked active Series.");
     }
-    if (series.locked) return await hold("The Series is locked.");
+    if (series.locked) return await hold("series", "The Series is locked.", series._id);
 
     const distributor = page.distributor;
-    if (distributor === undefined) return await hold("The release page names no distributor.");
+    if (distributor === undefined) return await hold("other", "The release page names no distributor.", series._id);
     if (NOVEL_DISTRIBUTORS.test(distributor)) {
-      return await hold(`"${distributor}" is a prose imprint: out of manga scope.`);
+      return await hold("other", `"${distributor}" is a prose imprint: out of manga scope.`, series._id);
     }
     if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
-      return await hold(`"${distributor}" publishes in another language: out of English scope.`);
+      return await hold("other", `"${distributor}" publishes in another language: out of English scope.`, series._id);
     }
     const publisher = await findPublisherByName(ctx, distributor);
     if (!publisher) {
-      return await hold(`Distributor "${distributor}" resolves to no publisher row.`);
+      return await hold("other", `Distributor "${distributor}" resolves to no publisher row.`, series._id);
     }
 
     const volumes = await ctx.db
@@ -1349,7 +1349,9 @@ export const applyReleasePage = internalMutation({
       );
       if (labels.length > 0 && covered.length !== labels.length) {
         return await hold(
+          "volumeMissing",
           `${packaging.name} ${packaging.position ?? ""} would cover Volumes ${range!.from}–${range!.to}, but the Series lacks ${labels.filter((l) => !covered.includes(l)).join(", ")}.`,
+          series._id,
         );
       }
       const unmapped = labels.length === 0;
@@ -1358,9 +1360,11 @@ export const applyReleasePage = internalMutation({
       // Mode creates it and tags it for the post-launch backlog.
       if (!(await getBootstrapMode(ctx))) {
         return await hold(
+          "packaging",
           unmapped
             ? `${packaging.name} of unknown size: steady state leaves unmapped packaging to review.`
             : `${packaging.name} ${packaging.position ?? ""}: steady state leaves Edition Line creation to review.`,
+          series._id,
         );
       }
       const packagedDate = page.date ?? line.date;
@@ -1396,7 +1400,7 @@ export const applyReleasePage = internalMutation({
       (vol) => vol.status === "active" && labelsEqual(vol.label, line.label ?? null),
     );
     if (!volume) {
-      return await hold(`No Volume ${line.label ?? "(unlabeled)"} under the Series.`);
+      return await hold("volumeMissing", `No Volume ${line.label ?? "(unlabeled)"} under the Series.`, series._id);
     }
 
     // One Release per (Volume, publisher, format): a same-format sibling
@@ -1417,7 +1421,9 @@ export const applyReleasePage = internalMutation({
         if (release.status !== "active" || release.format !== line.format) continue;
         if (release.isbn13 === undefined && !release.locked) return await link(release);
         return await hold(
+          "isbn",
           `Volume ${line.label ?? "(unlabeled)"} already has a ${line.format} ${publisher.name} Release (ISBN ${release.isbn13 ?? "none"}): a reprint or variant, not created.`,
+          series._id,
         );
       }
     }
@@ -1449,9 +1455,7 @@ export const applyReleasePage = internalMutation({
     return { status: "created", changed: true, releaseId: creation.releaseId };
 
     async function link(release: Doc<"releases">): Promise<PlaceResult> {
-      await ctx.db.patch(observation!._id, {
-        recordRef: { type: "release", id: release._id },
-      });
+      await linkObservation(ctx, observation!._id, { type: "release", id: release._id });
       const date = page!.date ?? line.date;
       const offered: Record<string, unknown> = { ...descriptionOffer(page, release) };
       if (date) offered.pubDate = toPartialDate(date);

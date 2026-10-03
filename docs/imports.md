@@ -119,7 +119,8 @@ then the publisher blurb (`convex/lib/coverage.ts`), then a line name with
 a fixed size (`FIXED_LINE_SIZES`, such as VIZBIG). Box sets become Release
 Bundles. In Bootstrap Mode a named line's member with no usable coverage is
 created as Unmapped Packaging, which a Moderator maps at `/mod/packaging`.
-Outside Bootstrap Mode such a book stays on its observation for an Editor.
+Outside Bootstrap Mode such a book stays on its observation for an Editor,
+as a Held Book (below).
 
 ### Bookless Series
 
@@ -129,6 +130,46 @@ library rebuild. It leaves browse, search, the home shelf and the sitemap.
 Its page still loads with a notice. Imports keep working on it, and the
 flag clears on the next rebuild after a book attaches. `/mod/packaging`
 lists the current set.
+
+### Held books
+
+A book an import observed but could not place is a Held Book. The importer
+records why as a `placement` note on its observation and lists an unlinked,
+non-withdrawn one in `placementHolds` with a kind:
+
+| Kind | Meaning | Recorded by |
+|---|---|---|
+| `volumeMissing` | The Volume it names does not exist under a known Series and Publisher | ANN's page pass, Open Library |
+| `packaging` | Packaging with no stated coverage, or a line member or box set steady state leaves to an Editor | Seven Seas, Kodansha, PRH and Yen Press, ANN's page pass, Open Library |
+| `series` | No single active Series: hidden, ambiguous, locked or not linked | every importer |
+| `isbn` | Its ISBN is on a hidden Release or another Series' Release, or its Volume already has the publisher's Release in that format | ANN's page pass, Open Library |
+| `other` | No ISBN, no or unknown distributor, a variant cover, a prose or foreign imprint | ANN's page pass |
+
+A hold keeps the time it was first held while the importer sees the same
+kind again, and moves to the top when its kind changes. Linking the
+observation to a record (`linkObservation` in
+`convex/lib/observations.ts`, which every importer and repair uses) removes
+the hold and its note, and so does withdrawal; a withdrawn book that
+returns is held again at its next placement. A linked box set whose
+Release Bundle names another Series keeps its note but is not held.
+
+`/mod/imports` lists Held Books newest first (`imports.heldBooks`, Data
+Team), filtered by kind and source, with the source's title, link and
+ISBN, the Series and label the source proposes, the matched Series, the
+reason, when it was first held and last listed, and any Proposal already
+queued for it.
+
+Holds recorded before the list existed, and Open Library editions skipped
+without a note, reach it through a backfill. It pages over every
+observation, continues itself, fetches nothing and writes no canonical
+record: it holds unlinked notes under the kind their reason names,
+classifies unlinked Open Library editions as the next run would, and drops
+`placement` notes left on linked observations (not on a Release Bundle).
+Run it once after deploying the list:
+
+```sh
+npx convex run imports:backfillHolds '{}'
+```
 
 ## Descriptions
 
@@ -232,7 +273,7 @@ fetched once and stored. The line then links by ISBN, or becomes a leaf
 Release under an existing Volume when the distributor matches a publisher
 row. It never creates a Series, Volume, publisher, packaging, variant
 cover, prose imprint, or a second same-format Release of a Volume from one
-publisher. Held lines keep a `placement` note. The page's description fills
+publisher. Lines it cannot place are Held Books. The page's description fills
 a blank Release Description at weak authority, and the pass refetches up
 to 2,000 linked pages a run to read descriptions. Citations link the
 Encyclopedia, as ANN's license requires.
@@ -329,7 +370,12 @@ ISBNs (standard), dates (weak), binding (standard) and a blank description
 An unmatched record may create only a leaf Release under a Series, Volume
 and publisher that all exist already, which is how most VIZ print Releases
 appear under the ANN backbone. It never queues reviews and never
-withdraws. Library rebinds (Turtleback, Perfection Learning) never count
+withdraws. An edition a person could place, under exactly one active
+Series and a known publisher, is a Held Book (`placeEdition`): its Volume
+is missing, its packaging cannot be mapped, the Series is locked, or the
+Volume already has that publisher's Release in its format. An edition with
+no Series match, an unknown publisher, or an ISBN Yen Press holds out of
+scope is skipped and recorded nowhere. Library rebinds (Turtleback, Perfection Learning) never count
 as publishers. A Volume gets at most one Open Library leaf per (publisher,
 format). Only English editions enter: a non-English language, a
 non-English ISBN group (978-4 and the like), or no language and no
@@ -506,5 +552,5 @@ Without its variables, alerts are logged and skipped and the run is
 unaffected. Setup is in [configuration.md](configuration.md#convex-deployment).
 
 **Dashboard.** `/mod/imports` (Data Team) lists every source with its
-cadence, health and last run, unhealthy first, plus run history with
-errors.
+cadence, health and last run, unhealthy first, the Held Books (see
+"Held books" above), and run history with errors.

@@ -34,7 +34,14 @@ import { applyRetrying } from "./lib/occ";
 import { parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { inferCoverage } from "./lib/coverage";
 import { candidateSeries, matchRelease, type MatchOutcome, type ReleaseFact } from "./lib/matching";
-import { getObservation, markSeen, upsertObservation } from "./lib/observations";
+import {
+  getObservation,
+  type Hold,
+  linkObservation,
+  markSeen,
+  recordUnplaced,
+  upsertObservation,
+} from "./lib/observations";
 import {
   alreadyHandled,
   blurbOutranked,
@@ -47,7 +54,6 @@ import {
   queueCreationProposal,
   reconcileLinkedBundle,
   reconcileLinkedSeries,
-  recordUnplaced,
   removedSeriesFor,
   toPartialDate,
   linkSeriesObservation,
@@ -438,10 +444,14 @@ function staleVerdict(observation: Doc<"sourceObservations">): boolean {
 }
 
 /** Why a packaging book or box set stays on its observation, today. */
-function unplacedVerdict(snapshot: BookSnapshot): string {
-  return snapshot.isBox
-    ? `Box set "${snapshot.title}" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.`
-    : `"${snapshot.title}" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.`;
+function unplacedVerdict(snapshot: BookSnapshot, seriesId: Id<"series"> | null): Hold {
+  return {
+    kind: "packaging",
+    reason: snapshot.isBox
+      ? `Box set "${snapshot.title}" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.`
+      : `"${snapshot.title}" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.`,
+    ...(seriesId !== null ? { seriesId } : {}),
+  };
 }
 
 /**
@@ -625,9 +635,7 @@ export const applyBook = internalMutation({
       // Rung ② or ③ found the one canonical Release this book is: link the
       // observation, then reconcile the offered fields into it.
       const release = match.release;
-      await ctx.db.patch(observation._id, {
-        recordRef: { type: "release", id: release._id },
-      });
+      await linkObservation(ctx, observation._id, { type: "release", id: release._id });
       const firstSeriesId = release.seriesIds[0];
       if (firstSeriesId !== undefined) {
         await linkSeriesObservation(ctx, {
@@ -676,7 +684,7 @@ export const applyBook = internalMutation({
     // A box set is a Release Bundle of the base Series' existing Releases.
     if (snapshot.isBox) {
       if (seriesId === null || labels.length === 0 || !bootstrap) {
-        await recordUnplaced(ctx, observation, unplacedVerdict(snapshot), now);
+        await recordUnplaced(ctx, observation, unplacedVerdict(snapshot, seriesId), now);
         return { status: "recordOnly", changed: false, reason: "box set" };
       }
       const bundle = await createReleaseBundle(ctx, {
@@ -714,7 +722,7 @@ export const applyBook = internalMutation({
       bootstrap &&
       ambiguousSeries === 0;
     if (packaging && labels.length === 0 && !unmapped) {
-      await recordUnplaced(ctx, observation, unplacedVerdict(snapshot), now);
+      await recordUnplaced(ctx, observation, unplacedVerdict(snapshot, seriesId), now);
       return {
         status: "recordOnly",
         changed: false,
@@ -775,7 +783,7 @@ export const applyBook = internalMutation({
           publisherId: publisher?._id ?? null,
         });
         if (removed?.kind === "hidden") {
-          await recordUnplaced(ctx, observation, removed.reason, now);
+          await recordUnplaced(ctx, observation, { kind: "series", reason: removed.reason }, now);
           return { status: "recordOnly", changed: false, reason: "hidden series" };
         }
       }

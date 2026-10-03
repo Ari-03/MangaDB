@@ -17,8 +17,10 @@
 //   (publisher, format) — another ISBN there is a reprint or duplicate
 // - it never creates a Series, Volume, or Publisher, and never queues a
 //   match or creation review — OpenLibrary is crowd-sourced and
-//   weak-titled, so an ambiguous or structure-shaped record is simply
-//   recorded on its observation and waits for stronger sources. Its blurb
+//   weak-titled, so an ambiguous or structure-shaped record stays on its
+//   observation and waits for stronger sources. One a person could place
+//   (one active Series, a known publisher) is a Held Book; the rest are
+//   recorded nowhere (placeEdition). Its blurb
 //   never queues against weak text another record wrote (ANN's, another
 //   edition's) either: the first text stays (lib/authority.ts)
 // - no withdrawal pass: the streamed file is an operator-filtered slice of
@@ -57,7 +59,14 @@ import {
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
-import { getObservation, upsertObservation } from "./lib/observations";
+import {
+  clearHold,
+  getObservation,
+  type Hold,
+  linkObservation,
+  recordUnplaced,
+  upsertObservation,
+} from "./lib/observations";
 import {
   createCanonicalRecords,
   descriptionRepairWork,
@@ -66,7 +75,6 @@ import {
   isbnHeldElsewhere,
   needsEditionLine,
   recleaned,
-  recordUnplaced,
   repairCountsValidator,
   repairLinkedDescription,
   runDescriptionRepair,
@@ -321,9 +329,156 @@ function offeredReleaseFields(snapshot: OlEditionSnapshot): Record<string, unkno
 }
 
 /**
+ * Where an unlinked edition goes, decided without writing anything, so a
+ * stored edition can be classified too (imports.backfillHolds):
+ *
+ * - `match`: the ladder found its Release (rungs ②–④); applyEdition links it.
+ * - `review`: the ladder flagged it; the reason stays on the observation.
+ * - `create`: a leaf Release under a Series, Volume and Publisher that all
+ *   exist (rung ⑤).
+ * - `hold`: a book a person could place, held for the Data Team: one active
+ *   Series and a known Publisher, but the Volume it names does not exist
+ *   (`volumeMissing`), its packaging cannot be mapped (`packaging`), the
+ *   Series is locked or the title names several (`series`), or the Volume
+ *   already has this publisher's Release in its format (`isbn`).
+ * - `skip`: nothing to act on, recorded nowhere: a library rebind, an
+ *   unknown publisher, no Series match, an unlabeled edition with no
+ *   unlabeled Volume, or a book another source holds out of scope.
+ */
+export async function placeEdition(
+  ctx: MutationCtx,
+  snapshot: OlEditionSnapshot,
+): Promise<
+  | { kind: "match"; release: Doc<"releases"> }
+  | { kind: "review"; reason: string }
+  | {
+      kind: "create";
+      series: Doc<"series">;
+      seriesTitle: string;
+      volumeLabel: string | null;
+      publisher: Doc<"publishers">;
+    }
+  | { kind: "hold"; hold: Hold }
+  | { kind: "skip" }
+> {
+  // Rungs ②–④ via the shared ladder; the publisher key resolves against
+  // EXISTING rows only (OpenLibrary never creates publishers). Any listed
+  // publisher that resolves counts — records often lead with an imprint
+  // label or a distributor (["SHONEN JUMP", "viz media"]) — but a library
+  // rebinder's record is another book (its own ISBN), never the
+  // publisher's edition.
+  if (snapshot.publishers.some((name) => REBINDER.test(name))) return { kind: "skip" };
+  let publisher: Doc<"publishers"> | null = null;
+  for (const name of snapshot.publishers) {
+    publisher = await findPublisherByName(ctx, name);
+    if (publisher) break;
+  }
+  // Packaging (omnibus, deluxe, box sets) matches by ISBN only — an
+  // Omnibus 4 is never Volume 4. A bare trailing number or roman numeral
+  // resolves against the existing Series first, exactly as the catalog
+  // feeds do ("Chainsaw Man 22" → Chainsaw Man Vol. 22 only when that
+  // Series exists and no "Chainsaw Man 22" does).
+  const packaged = snapshot.multiVolume || snapshot.packaging !== undefined;
+  const { seriesTitle, volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
+  const fact: ReleaseFact = {
+    seriesTitle,
+    volumeLabel: packaged ? null : volumeLabel,
+    multiVolume: packaged,
+    format: snapshot.format,
+    binding: snapshot.binding,
+    language: IMPORT_LANGUAGE,
+    isbn13: snapshot.isbn13,
+    publisherId: publisher?._id ?? null,
+  };
+  const match = await matchRelease(ctx, fact);
+  if (match.kind === "match") return { kind: "match", release: match.release };
+  if (match.kind === "review") {
+    return { kind: "review", reason: `unmatched (rung ${match.rung}): ${match.reason}` };
+  }
+
+  // Rung ⑤ — the leaf-creation boundary: a single-volume Release whose
+  // Series (unique title match), Volume (exact label), and Publisher all
+  // already exist, with no Edition-Line shape. Anything else would define
+  // structure, which OpenLibrary never does; what a person could place is
+  // held, the rest is skipped.
+  if (publisher === null || candidates.length === 0) return { kind: "skip" };
+  // A publisher feed that knows this ISBN outranks OpenLibrary's scope
+  // guess: Yen Press records its light novels and audio (by ISBN) as out of
+  // scope, and OpenLibrary titles rarely say "light novel".
+  if (snapshot.isbn13 !== undefined && (await outOfScopeElsewhere(ctx, snapshot.isbn13))) {
+    return { kind: "skip" };
+  }
+  if (candidates.length > 1) {
+    return {
+      kind: "hold",
+      hold: {
+        kind: "series",
+        reason: `"${seriesTitle}" names ${candidates.length} Series (${candidates.map((c) => c.publicId).join(", ")}).`,
+      },
+    };
+  }
+  const series = candidates[0]!;
+  if (packaged || needsEditionLine(snapshot.title)) {
+    return {
+      kind: "hold",
+      hold: {
+        kind: "packaging",
+        reason: `"${snapshot.title}" is packaging of Series ${series.publicId} whose covered Volumes Open Library cannot state — an Editor maps it.`,
+        seriesId: series._id,
+      },
+    };
+  }
+  if (series.locked) {
+    return {
+      kind: "hold",
+      hold: { kind: "series", reason: `Series ${series.publicId} is locked.`, seriesId: series._id },
+    };
+  }
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
+    .collect();
+  const volume = volumes.find(
+    (vol) => vol.status === "active" && labelsEqual(vol.label, volumeLabel),
+  );
+  if (!volume) {
+    if (volumeLabel === null) return { kind: "skip" };
+    return {
+      kind: "hold",
+      hold: {
+        kind: "volumeMissing",
+        reason: `Series ${series.publicId} ("${series.title}") has no Volume ${volumeLabel}; ${publisher.name} publishes it.`,
+        seriesId: series._id,
+      },
+    };
+  }
+
+  // One OpenLibrary leaf per (Volume, publisher, format): the ladder
+  // already linked a same-format sibling without an ISBN unless its known
+  // Binding differs, so one found here carries ANOTHER ISBN or Binding — a
+  // reprint, a library binding, a hardcover, or an OL duplicate. Never a
+  // second Release; the record is held.
+  const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
+  if (sibling) {
+    return {
+      kind: "hold",
+      hold: {
+        kind: "isbn",
+        reason: `Volume ${volume.label ?? "(unlabeled)"} already has a ${snapshot.format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
+        seriesId: series._id,
+      },
+    };
+  }
+
+  return { kind: "create", series, seriesTitle, volumeLabel, publisher };
+}
+
+/**
  * Reconcile one OpenLibrary edition into the catalog. Match → fill; no
- * match → at most a leaf Release under fully pre-existing structure; never
- * a queue item, never new structure. One atomic mutation per record.
+ * match → at most a leaf Release under fully pre-existing structure
+ * (placeEdition); never a queue item, never new structure. A book a person
+ * could place is held, and a hold the edition no longer earns is cleared.
+ * One atomic mutation per record.
  */
 export const applyEdition = internalMutation({
   args: { snapshot: olEditionValidator },
@@ -370,44 +525,11 @@ export const applyEdition = internalMutation({
       };
     }
 
-    // Rungs ②–④ via the shared ladder; the publisher key resolves against
-    // EXISTING rows only (OpenLibrary never creates publishers). Any listed
-    // publisher that resolves counts — records often lead with an imprint
-    // label or a distributor (["SHONEN JUMP", "viz media"]) — but a library
-    // rebinder's record is another book (its own ISBN), never the
-    // publisher's edition.
-    if (snapshot.publishers.some((name) => REBINDER.test(name))) {
-      return { status: "recordOnly", changed: false };
-    }
-    let publisher: Doc<"publishers"> | null = null;
-    for (const name of snapshot.publishers) {
-      publisher = await findPublisherByName(ctx, name);
-      if (publisher) break;
-    }
-    // Packaging (omnibus, deluxe, box sets) matches by ISBN only — an
-    // Omnibus 4 is never Volume 4. A bare trailing number or roman numeral
-    // resolves against the existing Series first, exactly as the catalog
-    // feeds do ("Chainsaw Man 22" → Chainsaw Man Vol. 22 only when that
-    // Series exists and no "Chainsaw Man 22" does).
-    const packaged = snapshot.multiVolume || snapshot.packaging !== undefined;
-    const { seriesTitle, volumeLabel, candidates } = await resolveBaseSeries(ctx, snapshot);
-    const fact: ReleaseFact = {
-      seriesTitle,
-      volumeLabel: packaged ? null : volumeLabel,
-      multiVolume: packaged,
-      format: snapshot.format,
-      binding: snapshot.binding,
-      language: IMPORT_LANGUAGE,
-      isbn13: snapshot.isbn13,
-      publisherId: publisher?._id ?? null,
-    };
-    const match = await matchRelease(ctx, fact);
+    const placement = await placeEdition(ctx, snapshot);
 
-    if (match.kind === "match") {
-      const release = match.release;
-      await ctx.db.patch(observation._id, {
-        recordRef: { type: "release", id: release._id },
-      });
+    if (placement.kind === "match") {
+      const release = placement.release;
+      await linkObservation(ctx, observation._id, { type: "release", id: release._id });
       await reconcileFields(ctx, {
         sourceKey: SOURCE_KEY,
         ref: { type: "release", id: release._id },
@@ -420,67 +542,27 @@ export const applyEdition = internalMutation({
       return { status: "linked", changed: true, releaseId: release._id };
     }
 
-    if (match.kind === "review") {
+    if (placement.kind === "review") {
       // A flat crowd-sourced record is never worth a human's review slot on
       // its own; the ambiguity stays on the observation for the record.
+      await clearHold(ctx, observation._id);
       await ctx.db.patch(observation._id, {
-        conflicts: [
-          {
-            field: "match",
-            offered: snapshot.title,
-            at: now,
-            reason: `unmatched (rung ${match.rung}): ${match.reason}`,
-          },
-        ],
+        conflicts: [{ field: "match", offered: snapshot.title, at: now, reason: placement.reason }],
       });
       return { status: "recordOnly", changed: false };
     }
 
-    // Rung ⑤ — the leaf-creation boundary: a single-volume Release whose
-    // Series (unique title match), Volume (exact label), and Publisher all
-    // already exist, with no Edition-Line shape. Anything else would define
-    // structure, which OpenLibrary never does.
-    if (publisher === null || packaged || needsEditionLine(snapshot.title)) {
-      return { status: "recordOnly", changed: false };
-    }
-    if (candidates.length !== 1) return { status: "recordOnly", changed: false };
-    const series = candidates[0]!;
-    if (series.locked) return { status: "recordOnly", changed: false };
-    const volumes = await ctx.db
-      .query("volumes")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .collect();
-    const volume = volumes.find(
-      (vol) => vol.status === "active" && labelsEqual(vol.label, volumeLabel),
-    );
-    if (!volume) return { status: "recordOnly", changed: false };
-
-    // One OpenLibrary leaf per (Volume, publisher, format): the ladder
-    // already linked a same-format sibling without an ISBN unless its known
-    // Binding differs, so one found here carries ANOTHER ISBN or Binding — a
-    // reprint, a library binding, a hardcover, or an OL duplicate. Never a
-    // second Release; the record stays on its observation.
-    const sibling = await sameFormatRelease(ctx, volume._id, publisher._id, snapshot.format);
-    if (sibling) {
-      await recordUnplaced(
-        ctx,
-        observation,
-        `Volume ${volume.label ?? "(unlabeled)"} already has a ${snapshot.format} ${publisher.name} Release (ISBN ${sibling.isbn13 ?? "none"}).`,
-        now,
-      );
+    if (placement.kind === "hold") {
+      await recordUnplaced(ctx, observation, placement.hold, now);
       return { status: "recordOnly", changed: false };
     }
 
-    // A publisher feed that knows this ISBN outranks OpenLibrary's scope
-    // guess: Yen Press records its light novels and audio (by ISBN) as out of
-    // scope, and OpenLibrary titles rarely say "light novel".
-    const scopedOut =
-      snapshot.isbn13 !== undefined ? await outOfScopeElsewhere(ctx, snapshot.isbn13) : null;
-    if (scopedOut) {
-      await recordUnplaced(ctx, observation, `Out of scope per ${scopedOut}.`, now);
+    if (placement.kind === "skip") {
+      await clearHold(ctx, observation._id);
       return { status: "recordOnly", changed: false };
     }
 
+    const { series, seriesTitle, volumeLabel, publisher } = placement;
     const creation = await createCanonicalRecords(ctx, {
       sourceKey: SOURCE_KEY,
       observation,

@@ -2,12 +2,13 @@
 // cadence dispatcher that turns registry rows into scheduled adapter runs
 // (closing stranded runs first), the post-sweep withdrawal pass (with its
 // possible-cancellation review), source-health alert email, the Data Team
-// dashboard queries, and the bootstrap-unreviewed backlog query. Source-specific fetch/parse/apply
+// dashboard queries, the Held Books list and its backfill, and the
+// bootstrap-unreviewed backlog query. Source-specific fetch/parse/apply
 // lives in each adapter module; everything here is source-agnostic.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { FunctionReference } from "convex/server";
+import { type FunctionReference, paginationOptsValidator } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalAction,
@@ -15,17 +16,21 @@ import {
   internalQuery,
   query,
 } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getSourceByKey, recordSourceOutcome } from "./importSources";
 import { todaySortKey } from "./lib/dates";
 import { releasesOf } from "./lib/editionRows";
 import { sendAdminEmail } from "./lib/email";
 import { isStranded, lastActiveAt } from "./lib/importRuns";
+import { clearHold, type HoldKind, recordUnplaced } from "./lib/observations";
+import type { OlEditionSnapshot } from "./lib/openLibrary";
 import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
 import { insertSourceProposal } from "./lib/reconcile";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { revisionsOf } from "./moderation";
+import { placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
+import { holdKind } from "./schema";
 
 // ---------- Import Runs (spec §6: runs & failure) ----------
 
@@ -616,8 +621,10 @@ async function queueWithdrawalReview(
  * Withdrawal also lifts the record's conflict suppressions from this source
  * (spec §6: suppression holds until the value, observation, or rules
  * change) — if the record ever reappears, its conflicts get a fresh look.
- * A withdrawn observation whose linked Release is still future-dated queues
- * a possible-cancellation review.
+ * It takes a held record off the Held Books list with its `placement` note;
+ * if the record reappears, its next placement holds it again. A withdrawn
+ * observation whose linked Release is still future-dated queues a
+ * possible-cancellation review.
  */
 export const markWithdrawn = internalMutation({
   args: { sourceKey: v.string(), notSeenSince: v.number() },
@@ -636,6 +643,7 @@ export const markWithdrawn = internalMutation({
       if (obs.withdrawn) continue;
       if (obs.sourceRecordId.startsWith("series:")) continue;
       await ctx.db.patch(obs._id, { withdrawn: true });
+      await clearHold(ctx, obs._id);
       if (obs.recordRef) {
         const suppressions = await ctx.db
           .query("conflictSuppressions")
@@ -655,6 +663,151 @@ export const markWithdrawn = internalMutation({
       }
     }
     return { marked, reviewsQueued };
+  },
+});
+
+// ---------- Held Books (CONTEXT.md; held and cleared in lib/observations.ts) ----------
+
+/**
+ * Held Books, most recently held first, optionally of one kind and from one
+ * source. Data Team. Each row carries what the source says about the book,
+ * why it is held, and the Proposal already queued for it, if any.
+ */
+export const heldBooks = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    kind: v.optional(holdKind),
+    sourceKey: v.optional(v.string()),
+  },
+  handler: async (ctx, { paginationOpts, kind, sourceKey }) => {
+    await requireDataTeam(ctx);
+    const holds = ctx.db.query("placementHolds");
+    const ordered =
+      sourceKey !== undefined && kind !== undefined
+        ? holds.withIndex("by_source_kind_held", (q) => q.eq("sourceKey", sourceKey).eq("kind", kind))
+        : sourceKey !== undefined
+          ? holds.withIndex("by_source_held", (q) => q.eq("sourceKey", sourceKey))
+          : kind !== undefined
+            ? holds.withIndex("by_kind_held", (q) => q.eq("kind", kind))
+            : holds.withIndex("by_held");
+    const result = await ordered.order("desc").paginate(paginationOpts);
+    return { ...result, page: await Promise.all(result.page.map((hold) => heldBook(ctx, hold))) };
+  },
+});
+
+/** One Held Books row: the hold, the source's own facts, and its queue item. */
+async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">) {
+  const observation = await ctx.db.get(hold.observationId);
+  // Each source stores its own snapshot shape; these fields are common.
+  const book = observation?.snapshot as
+    | {
+        title?: unknown;
+        url?: unknown;
+        isbn13?: unknown;
+        seriesTitle?: unknown;
+        volumeLabel?: unknown;
+        label?: unknown;
+        page?: { isbn13?: unknown };
+      }
+    | undefined;
+  const text = (value: unknown) => (typeof value === "string" ? value : null);
+  const series = hold.seriesId !== undefined ? await ctx.db.get(hold.seriesId) : null;
+  const proposal = observation?.queuedProposalId ? await ctx.db.get(observation.queuedProposalId) : null;
+  return {
+    holdId: hold._id,
+    sourceKey: hold.sourceKey,
+    sourceRecordId: observation?.sourceRecordId ?? null,
+    kind: hold.kind,
+    reason: observation?.conflicts?.find((c) => c.field === "placement")?.reason ?? null,
+    heldAt: hold.heldAt,
+    lastSeenAt: observation?.lastSeenAt ?? null,
+    title: text(book?.title),
+    url: text(book?.url),
+    isbn13: text(book?.isbn13) ?? text(book?.page?.isbn13),
+    seriesTitle: text(book?.seriesTitle),
+    volumeLabel: text(book?.volumeLabel) ?? text(book?.label),
+    series: series ? { publicId: series.publicId, title: series.title } : null,
+    proposal: proposal ? { id: proposal._id, state: proposal.state } : null,
+  };
+}
+
+/**
+ * The kind of a hold recorded before kinds existed, read from its reason.
+ * The texts are the importers' own (ann.ts applyReleasePage,
+ * lib/catalogTitle.ts, sevenSeas.ts, kodansha.ts, openLibrary.ts and the
+ * hidden-Series note of lib/pipeline.ts removedSeriesFor).
+ */
+function storedHoldKind(reason: string): HoldKind {
+  if (/which an Editor hid|has no unique base Series|no linked active Series|^The Series is locked/.test(reason)) {
+    return "series";
+  }
+  if (/^ISBN \d+ is |already has a \w+ .* Release \(ISBN/.test(reason)) return "isbn";
+  if (/^No Volume .* under the Series|but the Series lacks/.test(reason)) return "volumeMissing";
+  if (/packaging|Packaging|Box set|Edition Line/.test(reason)) return "packaging";
+  return "other";
+}
+
+/** Observations per backfill transaction; an Open Library classification reads a few hundred rows. */
+const BACKFILL_PAGE = 25;
+
+/**
+ * Bring stored observations onto the Held Books list, page by page over
+ * every observation, continuing itself until done:
+ *
+ * - an unlinked, non-withdrawn observation with a `placement` note is held
+ *   under the kind its reason names (storedHoldKind), first held when the
+ *   note was written;
+ * - an unlinked, non-withdrawn Open Library edition is classified as
+ *   applyEdition would (placeEdition) and held where that finds a hold;
+ * - a linked observation's `placement` note is dropped as stale, except on
+ *   a Release Bundle, where it is a box set's live Series conflict.
+ *
+ * Writes observations and holds only: no fetch, no canonical record, no
+ * link. Safe to rerun.
+ *
+ *   npx convex run imports:backfillHolds '{}'
+ */
+export const backfillHolds = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    held: v.optional(v.number()),
+    classified: v.optional(v.number()),
+    cleared: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const counts = { held: args.held ?? 0, classified: args.classified ?? 0, cleared: args.cleared ?? 0 };
+    const { page, isDone, continueCursor } = await ctx.db
+      .query("sourceObservations")
+      .paginate({ numItems: BACKFILL_PAGE, cursor: args.cursor ?? null });
+    for (const observation of page) {
+      if (observation.withdrawn) continue;
+      const note = observation.conflicts?.find((c) => c.field === "placement");
+      if (observation.recordRef !== undefined) {
+        if (note !== undefined && observation.recordRef.type !== "releaseBundle") {
+          await clearHold(ctx, observation._id);
+          counts.cleared++;
+        }
+        continue;
+      }
+      if (observation.sourceKey === OPEN_LIBRARY) {
+        const placement = await placeEdition(ctx, observation.snapshot as OlEditionSnapshot);
+        if (placement.kind !== "hold") continue;
+        const at = note?.reason === placement.hold.reason ? note.at : Date.now();
+        if (await recordUnplaced(ctx, observation, placement.hold, at)) counts.classified++;
+        continue;
+      }
+      if (note === undefined) continue;
+      const hold = { kind: storedHoldKind(note.reason), reason: note.reason };
+      if (await recordUnplaced(ctx, observation, hold, note.at)) counts.held++;
+    }
+    if (!isDone) {
+      await ctx.scheduler.runAfter(0, internal.imports.backfillHolds, { cursor: continueCursor, ...counts });
+    } else {
+      console.log(
+        `[imports.backfillHolds] done: ${counts.held} held from notes, ${counts.classified} Open Library editions held, ${counts.cleared} stale notes cleared`,
+      );
+    }
+    return { ...counts, done: isDone };
   },
 });
 

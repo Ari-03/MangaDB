@@ -378,7 +378,10 @@ export async function reconcileFields(
   // ----- recordOnly bucket: on the observation, nothing canonical -----
   if (recordOnly.length > 0) {
     const replaced = new Set(recordOnly.map((c) => c.field));
-    const kept = (observation.conflicts ?? []).filter((c) => !replaced.has(c.field));
+    // Stored, not the caller's copy: a link earlier in this mutation may
+    // have cleared its placement note.
+    const stored = (await ctx.db.get(observation._id))?.conflicts ?? [];
+    const kept = stored.filter((c) => !replaced.has(c.field));
     await ctx.db.patch(observation._id, {
       conflicts: [
         ...kept,

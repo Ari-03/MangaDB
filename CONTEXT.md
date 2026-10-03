@@ -165,6 +165,10 @@ A fact reported by an external data source about a Series, Volume, or Release. S
 **Withdrawn Observation**:
 A Source Observation whose record disappeared from a complete sweep of its source. It is retained, never deleted, and never changes a Canonical Record by itself; when its linked Release is still future-dated, it queues a possible-cancellation review.
 
+**Held Book**:
+A book an Approved Source lists that its import could not place: the Volume it names does not exist under a known Series and Publisher, its packaging cannot be mapped, no single active Series fits, its ISBN or its Volume's slot for that publisher and Format is taken, or another reason the importer will not decide. Its Source Observation keeps the reason, and the Data Team's held list shows it until the observation is linked to a Canonical Record or withdrawn. Nothing canonical exists for it, unlike Unmapped Packaging.
+_Avoid_: unplaced book, orphan
+
 **Import Run**:
 One recorded execution of an Approved Source's import: source, timing, records seen and changed, and errors. Runs happen unattended on the source's registry cadence; three consecutive failed Import Runs mark the source Unhealthy.
 

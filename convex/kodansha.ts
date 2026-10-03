@@ -91,7 +91,13 @@ import {
   type SeriesListingEntry,
 } from "./lib/kodansha";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./lib/matching";
-import { getObservation, markSeen, upsertObservation } from "./lib/observations";
+import {
+  getObservation,
+  linkObservation,
+  markSeen,
+  recordUnplaced,
+  upsertObservation,
+} from "./lib/observations";
 import {
   alreadyHandled,
   createCanonicalRecords,
@@ -105,7 +111,6 @@ import {
   reconcileLinkedSeries,
   removedSeriesFor,
   recordIsbnConflict,
-  recordUnplaced,
   seriesEditions,
   toPartialDate,
 } from "./lib/pipeline";
@@ -816,9 +821,7 @@ export const applyVolume = internalMutation({
 
     if (match.kind === "match") {
       const release = match.release;
-      await ctx.db.patch(observation._id, {
-        recordRef: { type: "release", id: release._id },
-      });
+      await linkObservation(ctx, observation._id, { type: "release", id: release._id });
       const firstSeriesId = release.seriesIds[0];
       if (firstSeriesId !== undefined) {
         await linkSeriesObservation(ctx, {
@@ -852,7 +855,11 @@ export const applyVolume = internalMutation({
       await recordUnplaced(
         ctx,
         observation,
-        `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
+        {
+          kind: "packaging",
+          reason: `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
+          ...(seriesId !== null ? { seriesId } : {}),
+        },
         now,
       );
       return {
@@ -918,7 +925,7 @@ export const applyVolume = internalMutation({
           publisherId: publisher?._id ?? null,
         });
         if (removed?.kind === "hidden") {
-          await recordUnplaced(ctx, observation, removed.reason, now);
+          await recordUnplaced(ctx, observation, { kind: "series", reason: removed.reason }, now);
           return {
             status: "recordOnly",
             changed: false,

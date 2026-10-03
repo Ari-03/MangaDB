@@ -5,10 +5,22 @@
 // only. Retention is indefinite in v1; withdrawal marks, never deletes.
 // A record seen again stops being withdrawn, and the possible-cancellation
 // review its withdrawal queued is retired with it.
+//
+// A record an import cannot place is held (recordUnplaced): its reason is
+// the observation's `placement` note, and an unlinked, non-withdrawn one is
+// listed as a Held Book (`placementHolds`). Linking it (linkObservation) or
+// withdrawing it clears both (clearHold).
 
-import type { Doc } from "../_generated/dataModel";
+import type { Infer } from "convex/values";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { holdKind, recordRef } from "../schema";
 import { sameValue } from "./values";
+
+export type HoldKind = Infer<typeof holdKind>;
+
+/** Why an import holds a record, and the active Series it resolved, if any. */
+export type Hold = { kind: HoldKind; reason: string; seriesId?: Id<"series"> };
 
 export async function getObservation(
   ctx: QueryCtx | MutationCtx,
@@ -138,4 +150,100 @@ export async function upsertObservation(
   };
   if (existing.withdrawn) await retireLapsedCancellation(ctx, observation, args.now);
   return { observation, changed: true };
+}
+
+/** The observation's Held Book row, if it is listed. */
+export async function holdOf(
+  ctx: QueryCtx | MutationCtx,
+  observationId: Id<"sourceObservations">,
+): Promise<Doc<"placementHolds"> | null> {
+  return await ctx.db
+    .query("placementHolds")
+    .withIndex("by_observation", (q) => q.eq("observationId", observationId))
+    .unique();
+}
+
+/**
+ * Leave a record the importer cannot place on its observation (spec §6:
+ * record, never guess): the reason becomes its `placement` note, and an
+ * unlinked, non-withdrawn observation is listed as a Held Book of
+ * `hold.kind`. A re-sighting of the same hold keeps its place in the list
+ * (`heldAt`); a new kind moves it to the top. A linked observation (a box
+ * set placed as a Release Bundle that now names another Series) carries the
+ * note only. Returns whether anything was written.
+ */
+export async function recordUnplaced(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  hold: Hold,
+  now: number,
+): Promise<boolean> {
+  // The caller's copy may predate a write earlier in this mutation.
+  const current = (await ctx.db.get(observation._id)) ?? observation;
+  let changed = false;
+  if (current.conflicts?.find((c) => c.field === "placement")?.reason !== hold.reason) {
+    const kept = (current.conflicts ?? []).filter((c) => c.field !== "placement");
+    await ctx.db.patch(current._id, {
+      conflicts: [...kept, { field: "placement", offered: null, at: now, reason: hold.reason }],
+    });
+    changed = true;
+  }
+  if (current.recordRef !== undefined || current.withdrawn) return changed;
+  const row = await holdOf(ctx, current._id);
+  if (row === null) {
+    await ctx.db.insert("placementHolds", {
+      observationId: current._id,
+      sourceKey: current.sourceKey,
+      kind: hold.kind,
+      heldAt: now,
+      ...(hold.seriesId !== undefined ? { seriesId: hold.seriesId } : {}),
+    });
+    return true;
+  }
+  if (row.kind !== hold.kind) {
+    await ctx.db.patch(row._id, { kind: hold.kind, heldAt: now, seriesId: hold.seriesId });
+    return true;
+  }
+  if (row.seriesId !== hold.seriesId) {
+    await ctx.db.patch(row._id, { seriesId: hold.seriesId });
+    return true;
+  }
+  return changed;
+}
+
+/**
+ * Take the observation off the Held Books list and drop its `placement`
+ * note: it was placed, withdrawn, or no longer held. Returns whether
+ * anything was written.
+ */
+export async function clearHold(
+  ctx: MutationCtx,
+  observationId: Id<"sourceObservations">,
+): Promise<boolean> {
+  let changed = false;
+  const row = await holdOf(ctx, observationId);
+  if (row !== null) {
+    await ctx.db.delete(row._id);
+    changed = true;
+  }
+  const conflicts = (await ctx.db.get(observationId))?.conflicts;
+  if (conflicts?.some((c) => c.field === "placement")) {
+    await ctx.db.patch(observationId, { conflicts: conflicts.filter((c) => c.field !== "placement") });
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * Link the observation to a canonical record (matching rung ①), the one way
+ * every importer and repair writes the link. A linked record is placed, so
+ * its hold and `placement` note go (clearHold).
+ */
+export async function linkObservation(
+  ctx: MutationCtx,
+  observationId: Id<"sourceObservations">,
+  ref: Infer<typeof recordRef>,
+): Promise<void> {
+  await ctx.db.patch(observationId, { recordRef: ref });
+  await clearHold(ctx, observationId);
 }

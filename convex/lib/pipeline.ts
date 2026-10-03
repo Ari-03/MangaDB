@@ -40,7 +40,7 @@ import { coverageOf, coveringOf, releasesOf } from "./editionRows";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { followMerges, mergeSurvivor } from "./merges";
-import { getObservation, upsertObservation } from "./observations";
+import { getObservation, linkObservation, recordUnplaced, upsertObservation } from "./observations";
 import { applyRetrying } from "./occ";
 import { allocatePublicId } from "./publicIds";
 import {
@@ -257,9 +257,7 @@ export async function linkSeriesObservation(
     now: args.now,
   });
   if (!observation.recordRef) {
-    await ctx.db.patch(observation._id, {
-      recordRef: { type: "series", id: args.seriesId },
-    });
+    await linkObservation(ctx, observation._id, { type: "series", id: args.seriesId });
   }
   return observation._id;
 }
@@ -316,9 +314,7 @@ export async function reconcileLinkedSeries(
   let seriesObs = linked.link;
   // A repair merged the linked Series: the link follows it to the survivor.
   if (series._id !== seriesObs.recordRef?.id) {
-    await ctx.db.patch(seriesObs._id, {
-      recordRef: { type: "series", id: series._id },
-    });
+    await linkObservation(ctx, seriesObs._id, { type: "series", id: series._id });
   }
   const snapshot = seriesObs.snapshot as SeriesLinkSnapshot;
   if (args.offeredSynopsis !== undefined && snapshot.synopsis !== args.offeredSynopsis) {
@@ -508,7 +504,10 @@ export async function recordIsbnConflict(
   reason: string,
   now: number,
 ): Promise<void> {
-  const kept = (observation.conflicts ?? []).filter((c) => c.field !== "isbn13");
+  // Stored, not the caller's copy: a link earlier in this mutation may have
+  // cleared its placement note.
+  const stored = (await ctx.db.get(observation._id))?.conflicts ?? [];
+  const kept = stored.filter((c) => c.field !== "isbn13");
   await ctx.db.patch(observation._id, {
     conflicts: [...kept, { field: "isbn13", offered: isbn13, at: now, reason }],
   });
@@ -1206,7 +1205,7 @@ export async function createCanonicalRecords(
       publisherId: publisher?._id ?? null,
     });
     if (removed?.kind === "hidden") {
-      await recordUnplaced(ctx, args.observation, removed.reason, now);
+      await recordUnplaced(ctx, args.observation, { kind: "series", reason: removed.reason }, now);
       return {
         seriesId: removed.series._id,
         volumeIds: [],
@@ -1362,9 +1361,7 @@ export async function createCanonicalRecords(
   );
 
   if (releaseId !== undefined) {
-    await ctx.db.patch(args.observation._id, {
-      recordRef: { type: "release", id: releaseId },
-    });
+    await linkObservation(ctx, args.observation._id, { type: "release", id: releaseId });
   }
 
   return { seriesId, volumeIds, releaseId, changed: created.length > 0 };
@@ -1418,9 +1415,7 @@ export async function createReleaseBundle(
           .first()
       : null;
   if (existing) {
-    await ctx.db.patch(args.observation._id, {
-      recordRef: { type: "releaseBundle", id: existing._id },
-    });
+    await linkObservation(ctx, args.observation._id, { type: "releaseBundle", id: existing._id });
     const { expected, conflict } = await addLateBundleMembers(ctx, existing, {
       ...args,
       format: args.release.format,
@@ -1482,9 +1477,7 @@ export async function createReleaseBundle(
     },
     created,
   );
-  await ctx.db.patch(args.observation._id, {
-    recordRef: { type: "releaseBundle", id: bundleId },
-  });
+  await linkObservation(ctx, args.observation._id, { type: "releaseBundle", id: bundleId });
   return { bundleId, members: memberIds.length, created: true };
 }
 
@@ -1609,10 +1602,7 @@ async function addLateBundleMembers(
     .collect();
   const conflict = await bundleIdentityConflict(ctx, bundle, current, args);
   if (conflict !== null) {
-    const recorded = args.observation.conflicts?.some(
-      (c) => c.field === "placement" && c.reason === conflict,
-    );
-    if (!recorded) await recordUnplaced(ctx, args.observation, conflict, args.now);
+    await recordUnplaced(ctx, args.observation, { kind: "series", reason: conflict }, args.now);
     return { expected: 0, added: 0, conflict };
   }
   const expected = await expectedBundleMembers(ctx, args, bundle.publisherId);
@@ -1686,23 +1676,6 @@ export async function reconcileLinkedBundle(
   if (!bundle) return { added: 0 };
   const { added, conflict } = await addLateBundleMembers(ctx, bundle, args);
   return conflict === undefined ? { added } : { added, conflict };
-}
-
-/**
- * Leave a packaged record the importer cannot place on its observation only
- * (spec §6: record, never guess): packaging whose covered Volumes the title
- * never states, or whose base Series is unknown. An Editor maps it later.
- */
-export async function recordUnplaced(
-  ctx: MutationCtx,
-  observation: Doc<"sourceObservations">,
-  reason: string,
-  now: number,
-): Promise<void> {
-  const kept = (observation.conflicts ?? []).filter((c) => c.field !== "placement");
-  await ctx.db.patch(observation._id, {
-    conflicts: [...kept, { field: "placement", offered: null, at: now, reason }],
-  });
 }
 
 // ---------- the steady-state review queue path ----------

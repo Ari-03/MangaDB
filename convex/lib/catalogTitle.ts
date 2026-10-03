@@ -18,7 +18,7 @@ import { fullDateValidator } from "./dates";
 import type { CoverRequest } from "./covers";
 import { inferCoverage } from "./coverage";
 import { candidateSeries, matchRelease, type ReleaseFact } from "./matching";
-import { upsertObservation } from "./observations";
+import { linkObservation, recordUnplaced, upsertObservation } from "./observations";
 import {
   alreadyHandled,
   type BundleReconcile,
@@ -31,7 +31,6 @@ import {
   isbnHeldElsewhere,
   queueCreationProposal,
   reconcileLinkedBundle,
-  recordUnplaced,
   removedSeriesFor,
   toPartialDate,
 } from "./pipeline";
@@ -393,8 +392,12 @@ export async function applyCatalogTitle(
         ctx,
         observation,
         seriesId === null
-          ? `Box set "${snapshot.title}" has no unique base Series.`
-          : `Box set "${snapshot.title}" is a Release Bundle — steady state leaves bundles to review.`,
+          ? { kind: "series", reason: `Box set "${snapshot.title}" has no unique base Series.` }
+          : {
+              kind: "packaging",
+              reason: `Box set "${snapshot.title}" is a Release Bundle — steady state leaves bundles to review.`,
+              seriesId,
+            },
         now,
       );
       return { status: "recordOnly", changed: false, reason: "box set" };
@@ -434,9 +437,7 @@ export async function applyCatalogTitle(
 
   if (match.kind === "match") {
     const release = match.release;
-    await ctx.db.patch(observation._id, {
-      recordRef: { type: "release", id: release._id },
-    });
+    await linkObservation(ctx, observation._id, { type: "release", id: release._id });
     await reconcileFields(ctx, {
       sourceKey: opts.sourceKey,
       ref: { type: "release", id: release._id },
@@ -470,7 +471,11 @@ export async function applyCatalogTitle(
     await recordUnplaced(
       ctx,
       observation,
-      `"${snapshot.title}" is packaging (${packaging.lineName ?? "multi-volume"}) whose covered Volumes the title does not state — an Editor maps it.`,
+      {
+        kind: "packaging",
+        reason: `"${snapshot.title}" is packaging (${packaging.lineName ?? "multi-volume"}) whose covered Volumes the title does not state — an Editor maps it.`,
+        ...(seriesId !== null ? { seriesId } : {}),
+      },
       now,
     );
     return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
@@ -542,7 +547,7 @@ export async function applyCatalogTitle(
         publisherId: publisher?._id ?? null,
       });
       if (removed?.kind === "hidden") {
-        await recordUnplaced(ctx, observation, removed.reason, now);
+        await recordUnplaced(ctx, observation, { kind: "series", reason: removed.reason }, now);
         return { status: "recordOnly", changed: false, reason: "hidden series" };
       }
     }

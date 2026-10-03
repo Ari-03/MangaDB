@@ -33,9 +33,6 @@ is fixed.
 
 - **Human Overrides cannot be lifted.** Approving a `clearOverride` op fails
   with `unsupportedOp` (`convex/proposals.ts`).
-- **Placement holds are invisible.** Books an import could not place are
-  recorded on their observation (`recordUnplaced`), but no Data Team page
-  or query lists them.
 - **A hidden sequel can lose its ISBN to the parent Series.**
   `resolveBaseSeries` (`convex/lib/catalogTitle.ts`) only considers active
   Series. With "Kingdom Hearts II" hidden, an Open Library record titled

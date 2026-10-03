@@ -119,6 +119,23 @@ export const recordRef = v.union(
   v.object({ type: v.literal("releaseBundle"), id: v.id("releaseBundles") }),
 );
 
+// Why an import holds a book it could not place (a Held Book, CONTEXT.md).
+// The reason itself is the observation's `placement` note.
+export const holdKind = v.union(
+  // The Volume it names does not exist under a known Series and Publisher.
+  v.literal("volumeMissing"),
+  // Packaging whose covered Volumes no source states, or a line member or
+  // box set that steady state leaves to an Editor.
+  v.literal("packaging"),
+  // No unique active Series to place it under: hidden, ambiguous, locked, or
+  // not linked.
+  v.literal("series"),
+  // Its ISBN is already held elsewhere, or its Volume already has the
+  // publisher's Release in that format.
+  v.literal("isbn"),
+  v.literal("other"),
+);
+
 // Human authors record their role at authorship; promotions never rewrite it.
 const authorRef = v.union(
   v.object({
@@ -669,6 +686,25 @@ export default defineSchema({
     // sweep did not touch have disappeared at the source (retained,
     // never deleted; absence is never evidence).
     .index("by_source_seen", ["sourceKey", "lastSeenAt"]),
+
+  // Held Books (CONTEXT.md): one row per unlinked, non-withdrawn
+  // observation an import holds (lib/observations.ts recordUnplaced),
+  // removed when it is linked or withdrawn. A table of its own, so the list
+  // has small indexes and adding them never backfills sourceObservations.
+  placementHolds: defineTable({
+    observationId: v.id("sourceObservations"),
+    sourceKey: v.string(),
+    kind: holdKind,
+    // When it was first held under this kind; a re-sighting keeps it.
+    heldAt: v.number(),
+    // The active Series the import resolved for it, when it found one.
+    seriesId: v.optional(v.id("series")),
+  })
+    .index("by_observation", ["observationId"])
+    .index("by_held", ["heldAt"])
+    .index("by_kind_held", ["kind", "heldAt"])
+    .index("by_source_held", ["sourceKey", "heldAt"])
+    .index("by_source_kind_held", ["sourceKey", "kind", "heldAt"]),
 
   observationSnapshots: defineTable({
     observationId: v.id("sourceObservations"),

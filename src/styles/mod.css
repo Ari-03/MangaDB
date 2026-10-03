@@ -697,6 +697,14 @@
 }
 .import-run-errors code { word-break: break-word; }
 
+/* a held book's reason, under its facts */
+.import-hold-reason {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.import-holds-more { margin-top: 12px; }
+
 /* ---------- launch dashboard ---------------------------------------- */
 
 /* The gate list is the page's one loud element: seven lines, each either

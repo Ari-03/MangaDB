@@ -117,9 +117,17 @@ approved Proposal, so the reason lands in public history.
   it is resolved. Hidden and merged records are locked by their status.
   Hide and merge refuse a locked record until it is unlocked.
 
-## Packaging and bookless Series
+## Packaging, bookless Series and held books
 
 `/mod/packaging` (`convex/packaging.ts`) lists Unmapped Packaging, which a
 Moderator maps to Volumes (writing coverage and a Revision), and bookless
 Series with the ANN entry that built each one. The duplicate-Series queue
 lives on `/mod/launch`. See [imports](imports.md) for how both arise.
+
+The "Held books" section of `/mod/imports` (`imports.heldBooks`) lists the
+books an import observed but could not place, newest first, filtered by
+kind and source. Each row shows the source's own title, link and ISBN, the
+Series and label it proposes, the matched Series, the reason, and any
+Proposal already queued for it. A book leaves the list when an importer
+links its observation or its source stops listing it. The rows have no
+actions yet; see [imports](imports.md#held-books) for the kinds.

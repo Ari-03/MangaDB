@@ -9,6 +9,7 @@
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
 import { followMerges } from "../merges";
+import { linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
 import {
   DUPLICATE_SLUGS,
@@ -1818,7 +1819,7 @@ async function splitSeries(
       skip(`${record} now links ${ref ? `${ref.type} ${ref.id}` : "nothing"}`);
     }
     await audit.meta();
-    await ctx.db.patch(observation._id, { recordRef: { type: "series", id: targetId } });
+    await linkObservation(ctx, observation._id, { type: "series", id: targetId });
     const from = { type: "series" as const, id: source._id };
     const to = { type: "series" as const, id: targetId };
     audit.op({ kind: "update", ref: from, changes: [{ field: "sourceObservation", before: record }] });
