@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
 import { seedCatalog } from "./test.factories";
-import { makeT, withUser, type Accessor, type TestT } from "./test.helpers";
+import { alice, makeT, seedTeam, signedIn, withUser, type Accessor, type TestT } from "./test.helpers";
 import { describeNoViewer, witchHatShelf } from "./test.tracking";
 
 /**
@@ -92,6 +92,22 @@ describe("sharing.publicProfile", () => {
     expect(profile!.ownership.releases).toEqual([]);
     expect(profile!.ownership.bundles).toEqual([]);
     expect(profile!.reading).toEqual([]);
+  });
+
+  it("is null while its owner is suspended, and back unchanged on reinstatement", async () => {
+    const { t, as } = await trackEverything();
+    await makePublic(as, "ownership");
+    await seedTeam(t, [alice]);
+    const asAlice = signedIn(t, alice);
+    const shown = await profileOf(t);
+    expect(shown!.ownership.releases).toHaveLength(1);
+
+    await asAlice.mutation(api.roles.suspend, { username: "sharer", reason: "Testing." });
+    expect(await profileOf(t)).toBeNull();
+    expect(await asAlice.query(api.sharing.publicProfile, { username: "sharer" })).toBeNull();
+
+    await asAlice.mutation(api.roles.reinstate, { username: "sharer" });
+    expect(await profileOf(t)).toEqual(shown);
   });
 
   it("resolves the username case-insensitively", async () => {

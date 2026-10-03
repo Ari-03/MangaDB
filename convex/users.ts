@@ -54,9 +54,10 @@ export const viewer = query({
  * Claim (or change) the viewer's username. First claim creates the User just
  * in time with private-by-default visibility. A change releases the old
  * name immediately — uniqueness is only ever the normalized-copy index lookup
- * at claim time, so the freed name is claimable in the next mutation. A User
- * whose account deletion is under way can do neither, and keeps their name
- * taken until the purge deletes their row.
+ * at claim time, so the freed name is claimable in the next mutation. A
+ * suspended User cannot change theirs. A User whose account deletion is
+ * under way can do neither, and keeps their name taken until the purge
+ * deletes their row.
  */
 export const claimUsername = mutation({
   args: { username: v.string() },
@@ -64,6 +65,7 @@ export const claimUsername = mutation({
     const identity = await requireIdentity(ctx);
     const existing = await getUserBySubject(ctx, identity.subject);
     if (existing?.deletingSince !== undefined) fail("unauthenticated", "This account is being deleted.");
+    if (existing?.suspended) fail("suspended", "Account suspended.");
     const trimmed = username.trim();
     const result = validateUsername(trimmed);
     if (!result.ok) {

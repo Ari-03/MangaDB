@@ -69,11 +69,6 @@ is fixed.
   removed-Series check). They should become one ladder with per-source
   options.
 
-## Moderation
-
-- **A suspended user's public profile still shows.** `sharing.publicProfile`
-  has no suspension check.
-
 ## Decisions waiting on the owner
 
 - **Disjoint ISBNs as proof of another work.** `workMatch`

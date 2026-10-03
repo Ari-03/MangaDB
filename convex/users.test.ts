@@ -134,6 +134,23 @@ describe("users.claimUsername", () => {
     ).rejects.toThrow(/invalid/);
   });
 
+  it("refuses a suspended user's rename and keeps their old name", async () => {
+    const t = makeT();
+    await seedTeam(t, [alice]);
+    const asA = t.withIdentity({ subject: SUBJECT_A });
+    await asA.mutation(api.users.claimUsername, { username: "original" });
+    const asAlice = signedIn(t, alice);
+    await asAlice.mutation(api.roles.suspend, { username: "original", reason: "Testing." });
+
+    await expect(asA.mutation(api.users.claimUsername, { username: "renamed" })).rejects.toMatchObject({
+      data: { code: "suspended" },
+    });
+    // A new identity's first claim is unaffected, and the old name still resolves.
+    await t.withIdentity({ subject: SUBJECT_B }).mutation(api.users.claimUsername, { username: "renamed" });
+    await asAlice.mutation(api.roles.reinstate, { username: "original" });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ username: "original", suspended: false });
+  });
+
   it("releases the old name immediately on change", async () => {
     const t = makeT();
     const asA = t.withIdentity({ subject: SUBJECT_A });

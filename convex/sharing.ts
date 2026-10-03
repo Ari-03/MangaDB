@@ -242,9 +242,11 @@ export const seriesVisibility = query({
  *   are public by nature), or none while FEATURES.publicReviews is off.
  *   Mature Series in either only with `showMature`.
  *
- * Null when no such user exists or their account deletion is under way. A
- * fully private profile returns empty sections — the page exists
- * (public-but-noindex) but shares nothing.
+ * Null when no such user exists, while they are suspended (their sharing
+ * choices stay as they were, so reinstating brings the profile back), or
+ * once their account deletion is under way. A fully private profile
+ * returns empty sections — the page exists (public-but-noindex) but shares
+ * nothing.
  */
 export const publicProfile = query({
   args: { username: v.string(), ...showMatureArg },
@@ -255,7 +257,7 @@ export const publicProfile = query({
         q.eq("usernameNormalized", normalizeUsername(username)),
       )
       .unique();
-    if (!user || user.deletingSince !== undefined) return null;
+    if (!user || user.suspended || user.deletingSince !== undefined) return null;
     const overrides = await overrideMap(ctx, user._id);
     const ownershipPublic = (ids: Array<Id<"series">>) =>
       seriesAllPublic(ctx, user, overrides, "ownership", ids);

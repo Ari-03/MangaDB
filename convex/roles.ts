@@ -144,8 +144,11 @@ export const revoke = mutation({
 });
 
 /**
- * Suspend a user (privileges and account access stop immediately; the role
- * marker stays so reinstatement restores it). Audited permanently.
+ * Suspend a user: privileges and account access stop immediately (requireUser
+ * refuses them, and they cannot change their username), and their public
+ * profile is hidden (sharing.publicProfile). Nothing of theirs is changed:
+ * the role marker and sharing choices stay, so reinstatement restores both.
+ * Audited permanently.
  */
 export const suspend = mutation({
   args: { username: v.string(), reason: v.string() },

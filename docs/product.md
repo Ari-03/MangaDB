@@ -236,7 +236,8 @@ the same to everyone, its owner included.
   public for that user.
 
 Profiles are noindex, absent from sitemaps, and show current state only,
-with no activity feed.
+with no activity feed. A suspended user's profile is not found until they
+are reinstated.
 
 ## Account deletion
 
