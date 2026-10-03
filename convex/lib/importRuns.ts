@@ -20,6 +20,17 @@
 //   applies and the Kodansha backlist crawl write whatever the "kodansha"
 //   row says. Each sync is gated on its own registry row; the backlist's is
 //   "kodansha-backlist".
+//
+// The gate also fences and tracks a run:
+// - A run that is missing, belongs to another source key, or is no longer
+//   "running" stops its chain. Nothing is written: not the run, not either
+//   source's health. A closed run never reaches a withdrawal pass.
+// - Every pass, and opening a run, stamps the run's `lastActivityAt`. A
+//   "running" run that has gone quiet for longer than STRANDED_AFTER_MS lost
+//   its chain (an action killed at its time limit, a crash outside the
+//   adapter's try, a continuation that failed validation after a deploy):
+//   the hourly tick closes it as "failed", which counts toward the source's
+//   health, and dispatches the source if it is due (imports.runScheduled).
 
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -29,6 +40,48 @@ import { errorMessage } from "./http";
 
 /** Errors a continuation link carries forward to the next one. */
 export const MAX_CARRIED_ERRORS = 50;
+
+/**
+ * Quiet time after which a "running" run counts as stranded. Every link
+ * stamps its run on entry (runToContinue opens the run or passes the gate)
+ * and passes the gate again at page or batch boundaries: Seven Seas each
+ * listing page, the Kodansha window every 50 records, the backlist each due
+ * series, ANN each report page (up to 10 detail batches) and each candidate
+ * page of 25 release pages, Open Library every 1,000 lines, Yen Press every
+ * 100 titles, PRH each list page. However slow its fetches or applies, no
+ * such interval outlasts the link it sits in, and a link is one action,
+ * which Convex kills at 10 minutes (most hand off sooner: PRH after 4, ANN's
+ * page pass after 5, the others after a fetch or line budget). So a live
+ * chain is never quiet for more than one action's lifetime plus the
+ * scheduler's delay in starting its next link: under 10 minutes between two
+ * stamps, plus 10 for the action limit, plus 10 for the scheduler.
+ */
+export const STRANDED_AFTER_MS = 30 * 60 * 1000;
+
+/**
+ * A "running" run with no `lastActivityAt` was opened before the gate
+ * stamped it. A live one gets its first stamp at its next gate pass; until
+ * then its creation time is all there is, and a multi-hour chain's is hours
+ * old. Such a run counts as stranded only past this age, the limit the ANN
+ * backfill used before heartbeats.
+ */
+const UNSTAMPED_STRANDED_AFTER_MS = 12 * 60 * 60 * 1000;
+
+/** When the run last showed activity: its last gate pass, or its opening. */
+export function lastActiveAt(run: Pick<Doc<"importRuns">, "_creationTime" | "lastActivityAt">) {
+  return run.lastActivityAt ?? run._creationTime;
+}
+
+/**
+ * Whether a "running" run's chain is gone: quiet for STRANDED_AFTER_MS, or,
+ * unstamped, older than UNSTAMPED_STRANDED_AFTER_MS. Shared by the hourly
+ * tick's recovery and the ANN backfill's start check.
+ */
+export function isStranded(run: Pick<Doc<"importRuns">, "_creationTime" | "lastActivityAt">, now: number) {
+  return run.lastActivityAt === undefined
+    ? now - run._creationTime > UNSTAMPED_STRANDED_AFTER_MS
+    : now - run.lastActivityAt > STRANDED_AFTER_MS;
+}
 
 /**
  * A sync's registry row. A missing row is a setup error, so it throws. The
@@ -74,14 +127,22 @@ type RunTotals = { seen: number; changed: number; errors: string[] };
 
 /**
  * The gate (imports.stopIfAutomatic), checked before a run's next page,
- * batch, link or withdrawal pass. Null when the run may go on. Otherwise the
- * run is over (closed as "stopped" with these totals if it was automatic)
- * and this is what the sync reports for it:
+ * batch, link or withdrawal pass by the sync scheduled under `sourceKey`.
+ * Null when the run may go on (its activity is stamped). Otherwise the run
+ * is over (closed as "stopped" with these totals if it was automatic and its
+ * source is disabled; left as it was if it was already closed or is not this
+ * source's) and this is what the sync reports for it:
  * `if (stopped) return { ...stopped, completeSweep: false }`.
  */
-export async function stopAtGate(ctx: ActionCtx, runId: Id<"importRuns">, totals: RunTotals) {
+export async function stopAtGate(
+  ctx: ActionCtx,
+  runId: Id<"importRuns">,
+  sourceKey: string,
+  totals: RunTotals,
+) {
   const stopped: boolean = await ctx.runMutation(internal.imports.stopIfAutomatic, {
     runId,
+    sourceKey,
     recordsSeen: totals.seen,
     recordsChanged: totals.changed,
     errors: totals.errors,
@@ -110,7 +171,7 @@ export async function runToContinue(
     if (!source.enabled) return null;
     return await ctx.runMutation(internal.imports.startRun, { sourceKey: source.key, automatic: true });
   }
-  const stopped = await stopAtGate(ctx, args.runId, {
+  const stopped = await stopAtGate(ctx, args.runId, source.key, {
     seen: args.seen ?? 0,
     changed: args.changed ?? 0,
     errors: args.errors ?? [],
@@ -163,6 +224,7 @@ export async function openFollowOnRun(
   return await ctx.db.insert("importRuns", {
     sourceKey,
     status: "running",
+    lastActivityAt: Date.now(),
     recordsSeen: 0,
     recordsChanged: 0,
     errors: [],

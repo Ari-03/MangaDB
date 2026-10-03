@@ -209,7 +209,7 @@ export const sync = internalAction({
 
         let budgetSpent = false;
         for (let offset = 0; offset < slugs.length && !budgetSpent; offset += PLAN_CHUNK) {
-          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
           if (stopped) return { ...stopped, fetched: fetchedTotal, continued: false };
           const chunk = slugs.slice(offset, offset + PLAN_CHUNK);
           const plan: { due: number[]; boxes: number[] } = await ctx.runQuery(

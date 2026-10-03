@@ -1062,6 +1062,29 @@ describe("sevenSeas.sync — failure handling", () => {
     expect((await observationOf(t, ALPHA_1)).recordRef?.type).toBe("release");
   });
 
+  // The scheduler closed the run as stranded while this link still ran: the
+  // gate before the withdrawal pass refuses it.
+  it("never withdraws for a run closed during its last listing page", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.run((ctx) => insertObservation(ctx, { sourceKey: "sevenseas", sourceRecordId: "999" }));
+    stubSite([ALPHA_1]);
+    const site = globalThis.fetch;
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "sevenseas" });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).startsWith(`${BASE}/wp-json/wp/v2/books`)) {
+        await t.run((ctx) => ctx.db.patch(runId, { status: "failed", finishedAt: Date.now() }));
+      }
+      return await site(input);
+    });
+    expect(await sync(t, { runId })).toMatchObject({ stopped: true, completeSweep: false });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(runId)).toMatchObject({ status: "failed", recordsSeen: 0 });
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.find((o) => o.sourceRecordId === "999")?.withdrawn).toBe(false);
+    });
+  });
+
   it("imports through a run an operator forced on the disabled source", async () => {
     const t = makeT();
     await seedRegistry(t, true);

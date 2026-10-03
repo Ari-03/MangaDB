@@ -1557,6 +1557,30 @@ describe("kodansha — disabling the source mid-run", () => {
   });
 });
 
+describe("kodansha.backlistSync — a run of another source", () => {
+  it("stops on a kodansha run id without touching either run or source", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "kodansha", automatic: true });
+    const before = await t.run(async (ctx) => ({
+      run: await ctx.db.get(runId),
+      sources: await ctx.db.query("approvedSources").collect(),
+    }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await backlist(t, { runId })).toEqual({ skipped: "disabled" });
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/kodansha-backlist: run .* belongs to "kodansha"/));
+    error.mockRestore();
+    expect(requested).toEqual([]);
+    expect(
+      await t.run(async (ctx) => ({
+        run: await ctx.db.get(runId),
+        sources: await ctx.db.query("approvedSources").collect(),
+      })),
+    ).toEqual(before);
+  });
+});
+
 describe("kodansha.sync — a forced run", () => {
   it("imports a daily window an operator forced on its disabled row", async () => {
     const t = makeT();

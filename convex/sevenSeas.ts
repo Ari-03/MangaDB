@@ -137,7 +137,7 @@ export const sync = internalAction({
             completeSweep = false;
             break;
           }
-          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
           if (stopped) return { ...stopped, completeSweep: false };
           const res = await politeFetch(
             `${BASE_URL}/wp-json/wp/v2/books?per_page=100&page=${page}&orderby=modified&order=desc`,
@@ -266,7 +266,7 @@ export const sync = internalAction({
         // noteListing already bumped their observations. A run the gate stops
         // here closes "stopped" without withdrawing.
         if (completeSweep) {
-          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
           if (stopped) return { ...stopped, completeSweep: false };
           await ctx.runMutation(internal.imports.markWithdrawn, {
             sourceKey: SOURCE_KEY,

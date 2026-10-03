@@ -223,7 +223,7 @@ export const sync = internalAction({
               completeSweep = false;
               break;
             }
-            const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+            const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
             if (stopped) return { ...stopped, mode, completeSweep: false };
             const params = new URLSearchParams({
               api_key: apiKey,
@@ -304,7 +304,7 @@ export const sync = internalAction({
         // (absence is never evidence on a future-only or capped run) by a run
         // the gate still lets go on.
         if (mode === "full" && completeSweep) {
-          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
           if (stopped) return { ...stopped, mode, completeSweep: false };
           await ctx.runMutation(internal.imports.markWithdrawn, {
             sourceKey: SOURCE_KEY,

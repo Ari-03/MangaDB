@@ -249,9 +249,9 @@ npx convex run ann:backfillDescriptions '{"annIds": ["10948"], "refresh": true}'
 
 `ann:backfillDescriptions` fetches at one request a second, continues
 itself, and runs even when the source is disabled. It refuses to start
-while an ANN Import Run is running (a run older than 12 hours counts as
-stranded and is ignored). It stops after 5 failed fetches in a row, logs
-why it stopped, and never touches a withdrawn line.
+while an ANN Import Run is running, unless that run is stranded (see
+"Stranded runs" below), which it ignores. It stops after 5 failed fetches
+in a row, logs why it stopped, and never touches a withdrawn line.
 
 Every ANN description goes through one cleaner (`cleanAnnDescription` in
 `convex/lib/ann.ts`). It removes ANN's review link, its "Notes:" section,
@@ -404,8 +404,26 @@ publishers (`adultOnly`).
 `convex/crons.ts` runs `imports.runScheduled` every hour. It reads the
 registry and starts every enabled source that is due by its cadence string
 (`daily`, `weekly`, `monthly`), so cadence edits apply on the next tick.
-A source whose last run is still `running` is skipped. A failed run
-resumes at the next cadence.
+A source whose last run is still `running` is skipped, unless that run is
+stranded. A failed run resumes at the next cadence.
+
+**Stranded runs.** A chain can die without closing its run: an action
+killed at its 10-minute limit, a crash outside the adapter's error
+handling, a continuation that fails validation after a deploy. Each run
+records `lastActivityAt` when it opens and at every gate check (listed
+below). A `running` run with no activity for 30 minutes has lost its
+chain, since a live one checks the gate at least once per action. The next
+hourly tick closes it as `failed`, with an error saying it was stranded
+and when it was last active, and starts the source if it is due. The
+failure counts toward the source's health like any other, so a chain that
+keeps dying raises the unhealthy alert. The tick reads enabled sources
+only: a disabled source's stranded run is closed once it is enabled again.
+A run opened before `lastActivityAt` existed has none; it counts as
+stranded only once it is 12 hours old. A chain live at the deploy is
+stamped at its next gate check, within minutes, so only one already 12
+hours old could be closed in that window; letting imports finish before a
+deploy (below) rules even that out. The ANN description backfill uses the
+same test.
 
 **Disabling a source** follows one rule for every source, enforced by the
 gate in `convex/lib/importRuns.ts`:
@@ -426,8 +444,15 @@ gate in `convex/lib/importRuns.ts`:
   never withdraws anything. A source disabled and enabled again between
   two checks is not interrupted.
 - An operator forces a run with `imports:startRun`, then the sync with
-  that run id. A forced run carries on and imports while the source is
-  disabled, for every source, and withdraws only after a complete sweep.
+  that run id, promptly: on an enabled source, a run with no activity for
+  30 minutes counts as stranded. A forced run carries on and imports while
+  the source is disabled, for every source, and withdraws only after a
+  complete sweep.
+- The gate also stops a chain whose run is missing, closed (finished, or
+  closed as stranded), or belongs to another source key, such as a
+  `kodansha` run id passed to the backlist. It writes nothing then: the
+  run stays as it is and no source's health changes. A closed run never
+  reaches a withdrawal pass.
 - The flag gates runs, never applies. Direct calls to an apply mutation
   and the operator backfills write on a disabled source. The Kodansha
   backlist is gated on its own row, `kodansha-backlist`, not `kodansha`.

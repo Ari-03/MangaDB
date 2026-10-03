@@ -1906,21 +1906,51 @@ describe("ann — release-page descriptions", () => {
     await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
     const result = await backfill(t);
     expect(result).toMatchObject({ fetched: 0, filled: 0, continued: false });
-    expect(result.stopped).toMatch(/ANN Import Run .*started \d+ min ago\) is running/);
+    expect(result.stopped).toMatch(/ANN Import Run .*last active \d+ min ago\) is running/);
     expect(pageRequests).toEqual([]);
   });
 
-  it("the backfill treats a run older than 12 hours as stranded", async () => {
+  // The shared policy (lib/importRuns.ts isStranded): quiet time since the
+  // run's last gate pass, not its age.
+  it("the backfill holds off for an hours-old run that passed the gate recently", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    const later = Date.now() + 13 * 60 * 60 * 1000;
+    await t.run((ctx) => ctx.db.patch(runId, { lastActivityAt: later - 5 * 60_000 }));
+    vi.spyOn(Date, "now").mockImplementation(() => later);
+    const result = await backfill(t);
+    expect(result.stopped).toMatch(/ANN Import Run .*last active 5 min ago\) is running/);
+    expect(pageRequests).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  it("the backfill treats a run quiet for over 30 minutes as stranded", async () => {
     const t = makeT();
     await linkedCatalog(t, describedPages, [{ label: "1" }]);
     await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
-    const later = Date.now() + 13 * 60 * 60 * 1000;
+    const later = Date.now() + 31 * 60_000;
     vi.spyOn(Date, "now").mockImplementation(() => later);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = await backfill(t);
     expect(result).toMatchObject({ fetched: 1, filled: 1 });
     expect(result.stopped).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ignoring stranded ANN Import Run .* \(started 13 h 0 min ago\)/));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ignoring stranded ANN Import Run .* \(last active 31 min ago\)/));
+    vi.restoreAllMocks();
+  });
+
+  it("the backfill treats a run opened before heartbeats as stranded only past 12 hours", async () => {
+    const t = makeT();
+    await linkedCatalog(t, describedPages, [{ label: "1" }]);
+    const opened = Date.now();
+    await t.run((ctx) =>
+      ctx.db.insert("importRuns", { sourceKey: "ann", status: "running", recordsSeen: 0, recordsChanged: 0, errors: [] }),
+    );
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => opened + 11 * 60 * 60 * 1000);
+    expect((await backfill(t)).stopped).toMatch(/last active 11 h 0 min ago\) is running/);
+    clock.mockImplementation(() => opened + 13 * 60 * 60 * 1000);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await backfill(t)).toMatchObject({ fetched: 1, filled: 1 });
     vi.restoreAllMocks();
   });
 

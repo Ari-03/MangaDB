@@ -200,7 +200,7 @@ export const sync = internalAction({
         const processLine = async (line: string) => {
           if (line.trim() === "") return null;
           if (processed > 0 && processed % GATE_LINES === 0) {
-            const stop = await stopAtGate(ctx, runId, { seen, changed, errors });
+            const stop = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
             if (stop) return stop;
           }
           await handleLine(line);

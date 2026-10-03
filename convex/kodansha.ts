@@ -201,7 +201,7 @@ export const sync = internalAction({
         let applied = 0;
         for (const [recordId, { snapshot }] of items) {
           if (applied++ % WINDOW_BATCH === 0) {
-            const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+            const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
             if (stopped) return stopped;
           }
           seen++;
@@ -470,7 +470,7 @@ export const backlistSync = internalAction({
               budgetSpent = true;
               break;
             }
-            const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+            const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
             if (stopped) return { ...stopped, seriesCrawled, fetched: fetchedTotal, continued: false };
 
             // The series page: its volume list and blurb.

@@ -31,11 +31,6 @@ is fixed.
 
 ## Catalog and imports
 
-- **A stranded run blocks its source.** `imports.runScheduled` skips any
-  source whose last run is `running`, however old. If a chain dies without
-  closing its run, that source never runs on schedule again, and its health
-  never changes because no run finishes. Only `ann:backfillDescriptions` treats a run
-  older than 12 hours as stranded, and only for its own start check.
 - **Human Overrides cannot be lifted.** Approving a `clearOverride` op fails
   with `unsupportedOp` (`convex/proposals.ts`).
 - **Placement holds are invisible.** Books an import could not place are

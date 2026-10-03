@@ -1,8 +1,8 @@
-// Shared import machinery (spec §6): Import Run logging,
-// the cadence dispatcher that turns registry rows into scheduled adapter
-// runs, the post-sweep withdrawal pass (with its possible-cancellation
-// review), source-health alert email, the Data Team dashboard queries, and
-// the bootstrap-unreviewed backlog query. Source-specific fetch/parse/apply
+// Shared import machinery (spec §6): Import Run logging and the gate, the
+// cadence dispatcher that turns registry rows into scheduled adapter runs
+// (closing stranded runs first), the post-sweep withdrawal pass (with its
+// possible-cancellation review), source-health alert email, the Data Team
+// dashboard queries, and the bootstrap-unreviewed backlog query. Source-specific fetch/parse/apply
 // lives in each adapter module; everything here is source-agnostic.
 
 import { v } from "convex/values";
@@ -20,6 +20,7 @@ import { getSourceByKey, recordSourceOutcome } from "./importSources";
 import { todaySortKey } from "./lib/dates";
 import { releasesOf } from "./lib/editionRows";
 import { sendAdminEmail } from "./lib/email";
+import { isStranded, lastActiveAt } from "./lib/importRuns";
 import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
 import { insertSourceProposal } from "./lib/reconcile";
@@ -44,6 +45,7 @@ export const startRun = internalMutation({
     return await ctx.db.insert("importRuns", {
       sourceKey,
       status: "running",
+      lastActivityAt: Date.now(),
       recordsSeen: 0,
       recordsChanged: 0,
       errors: [],
@@ -54,27 +56,44 @@ export const startRun = internalMutation({
 
 /**
  * The import gate (lib/importRuns.ts stopAtGate), checked at link entry
- * and at page, batch and withdrawal boundaries. Reads the run's own source
- * row: while it is enabled the run goes on. Once it is disabled, an
- * automatic run is closed as "stopped" with the totals given (health-neutral:
- * it never touches the source's failure streak), an operator's run goes on,
- * and a run that is missing or already closed stops. Returns whether the run
- * is over.
+ * and at page, batch and withdrawal boundaries by the sync scheduled under
+ * `sourceKey`. In order: a run that is missing, belongs to another source
+ * key, or is no longer "running" stops its chain and nothing is written.
+ * Otherwise it reads the run's own source row: while it is enabled, or for
+ * an operator's run, the run goes on and its `lastActivityAt` is stamped.
+ * Once it is disabled, an automatic run is closed as "stopped" with the
+ * totals given (health-neutral: it never touches the source's failure
+ * streak). Returns whether the run is over.
  */
 export const stopIfAutomatic = internalMutation({
   args: {
     runId: v.id("importRuns"),
+    sourceKey: v.string(),
     recordsSeen: v.number(),
     recordsChanged: v.number(),
     errors: v.array(v.string()),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    if (!run) return true;
+    if (!run) {
+      console.warn(`[imports] ${args.sourceKey}: run ${args.runId} does not exist; its chain stops`);
+      return true;
+    }
+    if (run.sourceKey !== args.sourceKey) {
+      console.error(
+        `[imports] ${args.sourceKey}: run ${run._id} belongs to "${run.sourceKey}"; stopping without touching either source`,
+      );
+      return true;
+    }
+    if (run.status !== "running") {
+      console.warn(`[imports] ${args.sourceKey}: run ${run._id} is already ${run.status}; its chain stops`);
+      return true;
+    }
     const source = await getSourceByKey(ctx, run.sourceKey);
-    if (source?.enabled) return false;
-    if (run.status !== "running") return true;
-    if (!run.automatic) return false;
+    if (source?.enabled || !run.automatic) {
+      await ctx.db.patch(run._id, { lastActivityAt: Date.now() });
+      return false;
+    }
     // Its own status, not "succeeded": the sweep is incomplete. The note
     // always fits: it follows the first MAX_RUN_ERRORS - 1 carried errors.
     const errors = [...args.errors.slice(0, MAX_RUN_ERRORS - 1), "Stopped: the source was disabled mid-run."];
@@ -109,22 +128,61 @@ export const finishRun = internalMutation({
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
     if (!run || run.status !== "running") return;
-    const finishedAt = Date.now();
-    await ctx.db.patch(args.runId, {
-      status: args.status,
-      finishedAt,
-      recordsSeen: args.recordsSeen,
-      recordsChanged: args.recordsChanged,
-      errors: args.errors.slice(0, MAX_RUN_ERRORS),
+    await closeWithOutcome(ctx, run, args);
+  },
+});
+
+/**
+ * Close a "running" run as succeeded or failed with these totals, and count
+ * it toward its source's health unless it is a health-neutral success.
+ */
+async function closeWithOutcome(
+  ctx: MutationCtx,
+  run: Doc<"importRuns">,
+  closing: {
+    status: "succeeded" | "failed";
+    recordsSeen: number;
+    recordsChanged: number;
+    errors: string[];
+    healthNeutral?: boolean;
+  },
+) {
+  const finishedAt = Date.now();
+  await ctx.db.patch(run._id, {
+    status: closing.status,
+    finishedAt,
+    recordsSeen: closing.recordsSeen,
+    recordsChanged: closing.recordsChanged,
+    errors: closing.errors.slice(0, MAX_RUN_ERRORS),
+  });
+  await captureRunFinished(ctx, run, { ...closing, finishedAt });
+  if (closing.healthNeutral && closing.status === "succeeded") return;
+  await recordSourceOutcome(ctx, run.sourceKey, closing.status === "succeeded", closing.errors);
+}
+
+/**
+ * The hourly tick's recovery (runScheduled): close a run whose chain is gone
+ * (lib/importRuns.ts isStranded) as "failed", saying when it was last
+ * active, so its source can run again. The failure counts toward source
+ * health like any other: a chain that keeps dying raises the unhealthy
+ * alert. Returns whether it closed the run; a run that is closed already, or
+ * has shown activity since the tick read it, is left alone, so overlapping
+ * ticks close it once.
+ */
+export const closeStrandedRun = internalMutation({
+  args: { runId: v.id("importRuns") },
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    if (!run || run.status !== "running" || !isStranded(run, Date.now())) return false;
+    const lastActive = new Date(lastActiveAt(run)).toISOString();
+    const note = `Stranded: no activity since ${lastActive}; closed by the scheduler.`;
+    await closeWithOutcome(ctx, run, {
+      status: "failed",
+      recordsSeen: run.recordsSeen,
+      recordsChanged: run.recordsChanged,
+      errors: [...run.errors.slice(0, MAX_RUN_ERRORS - 1), note],
     });
-    await captureRunFinished(ctx, run, { ...args, finishedAt });
-    if (args.healthNeutral && args.status === "succeeded") return;
-    await recordSourceOutcome(
-      ctx,
-      run.sourceKey,
-      args.status === "succeeded",
-      args.errors,
-    );
+    return true;
   },
 });
 
@@ -320,6 +378,7 @@ export const enabledSources = internalQuery({
       result.push({
         key: source.key,
         cadence: source.cadence,
+        lastRunId: lastRun?._id ?? null,
         lastStartedAt: lastRun?._creationTime ?? null,
         lastStatus: lastRun?.status ?? null,
       });
@@ -331,7 +390,9 @@ export const enabledSources = internalQuery({
 /**
  * The hourly cron tick (crons.ts): read the registry, start every enabled,
  * due source that has an adapter. Cadence edits take effect on the next
- * tick — no code change (spec §6). A still-running run defers the source.
+ * tick — no code change (spec §6). A still-running run defers the source,
+ * unless its chain is gone (lib/importRuns.ts isStranded): then the tick
+ * closes it as failed (closeStrandedRun) and treats the source as usual.
  */
 export const runScheduled = internalAction({
   args: {},
@@ -350,7 +411,12 @@ export const runScheduled = internalAction({
       for (const source of sources) {
         const adapter = ADAPTERS[source.key];
         if (!adapter) continue;
-        if (source.lastStatus === "running") continue;
+        if (source.lastStatus === "running" && source.lastRunId !== null) {
+          const closed: boolean = await ctx.runMutation(internal.imports.closeStrandedRun, {
+            runId: source.lastRunId,
+          });
+          if (!closed) continue;
+        }
         if (!isDue(source.cadence, source.lastStartedAt, now)) {
           if (CADENCE_INTERVALS_MS[source.cadence.trim().toLowerCase()] === undefined) {
             console.warn(

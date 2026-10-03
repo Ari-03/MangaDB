@@ -78,6 +78,8 @@ import { decodeUtf8OrWindows1252 } from "./lib/text";
 import { applyRetrying } from "./lib/occ";
 import {
   closeRun,
+  isStranded,
+  lastActiveAt,
   MAX_CARRIED_ERRORS,
   openFollowOnRun,
   registryRow,
@@ -202,7 +204,7 @@ export const sync = internalAction({
         let reachedEnd = false;
 
         while (batchesDone < maxBatches && !reachedEnd) {
-          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
           if (stopped) return { ...stopped, continued: false };
           let ids: string[];
           let rawCount: number;
@@ -323,7 +325,7 @@ export const sync = internalAction({
         }
         const complete = errors.length === 0;
         if (complete && !targeted) {
-          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
           if (stopped) return { ...stopped, continued: false };
           // The full mirror completed: entries the sweep no longer lists have
           // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
@@ -986,7 +988,7 @@ type PageSyncResult =
 /**
  * Open the release-page pass's run and schedule its first link in one
  * transaction: if scheduling fails, no run is left "running" (which would
- * make the dispatcher skip ANN until someone repaired it).
+ * make the dispatcher skip ANN until it counted as stranded).
  */
 export const chainReleasePages = internalMutation({
   args: {
@@ -1060,7 +1062,7 @@ export const syncReleasePages = internalAction({
 
       try {
         pages: while (!done && fetchedHere < maxFetches) {
-          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
           if (stopped) return { ...stopped, fetched: fetchedTotal, continued: false };
           const page: {
             candidates: Array<{ annId: string; fetch: boolean; refetch?: true }>;
@@ -1591,25 +1593,20 @@ export const descriptionlessLines = internalQuery({
 });
 
 /**
- * A "running" ANN Import Run older than this is stranded (its chain died
- * without closing it), not live: a full mirror plus page pass takes hours.
- */
-const STRANDED_RUN_MS = 12 * 60 * 60 * 1000;
-
-/**
- * The latest ANN Import Run when it is still "running": its id and age.
- * The backfill decides whether it blocks (`STRANDED_RUN_MS`).
+ * The latest ANN Import Run when it is still "running": its id and when it
+ * opened and was last active. The backfill decides whether it blocks
+ * (lib/importRuns.ts isStranded).
  */
 export const annRunInProgress = internalQuery({
-  args: { now: v.number() },
-  handler: async (ctx, { now }) => {
+  args: {},
+  handler: async (ctx) => {
     const latest = await ctx.db
       .query("importRuns")
       .withIndex("by_source", (q) => q.eq("sourceKey", SOURCE_KEY))
       .order("desc")
       .first();
     return latest?.status === "running"
-      ? { runId: latest._id, ageMs: now - latest._creationTime }
+      ? { runId: latest._id, _creationTime: latest._creationTime, lastActivityAt: latest.lastActivityAt }
       : null;
   },
 });
@@ -1652,8 +1649,9 @@ type BackfillResult = {
  * the limit is spent; safe to rerun.
  *
  * Polite by construction: it refuses to run while an ANN Import Run is
- * running (the two would double the request rate) unless that run is older
- * than STRANDED_RUN_MS (a dead chain, not a live crawl), stops after
+ * running (the two would double the request rate) unless that run is
+ * stranded (lib/importRuns.ts isStranded: a dead chain, not a live crawl;
+ * the hourly tick closes it), stops after
  * BACKFILL_MAX_FAILURES consecutive failed fetches across its links (ANN
  * is down; a failed refetch never replaces a stored page), and never
  * touches a withdrawn line. A stop is logged with its reason, since a
@@ -1723,18 +1721,16 @@ export const backfillDescriptions = internalAction({
       return result({ continued: false, stopped });
     };
 
-    const running: { runId: Id<"importRuns">; ageMs: number } | null = await ctx.runQuery(
-      internal.ann.annRunInProgress,
-      { now: Date.now() },
-    );
-    if (running !== null && running.ageMs <= STRANDED_RUN_MS) {
+    const running = await ctx.runQuery(internal.ann.annRunInProgress, {});
+    const now = Date.now();
+    if (running !== null && !isStranded(running, now)) {
       return stop(
-        `An ANN Import Run (${running.runId}, started ${age(running.ageMs)} ago) is running; the backfill would double the request rate to ANN. Rerun it once the run finishes.`,
+        `An ANN Import Run (${running.runId}, last active ${age(now - lastActiveAt(running))} ago) is running; the backfill would double the request rate to ANN. Rerun it once the run finishes.`,
       );
     }
     if (running !== null) {
       console.warn(
-        `[ann.backfillDescriptions] ignoring stranded ANN Import Run ${running.runId} (started ${age(running.ageMs)} ago)`,
+        `[ann.backfillDescriptions] ignoring stranded ANN Import Run ${running.runId} (last active ${age(now - lastActiveAt(running))} ago)`,
       );
     }
 
