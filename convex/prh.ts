@@ -120,11 +120,9 @@ export const sync = internalAction({
       // write, and a full sweep that imported nothing would withdraw every title.
       const closeResumed = async (why: string) => {
         if (args.runId === undefined) return;
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId: args.runId,
-          status: "failed",
-          recordsSeen: args.seen ?? 0,
-          recordsChanged: args.changed ?? 0,
+        await closeRun(ctx, args.runId, "failed", {
+          seen: args.seen ?? 0,
+          changed: args.changed ?? 0,
           errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
         });
       };
