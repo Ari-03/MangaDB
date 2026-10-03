@@ -67,7 +67,7 @@ An active Series whose Volumes are known but to which no English book has attach
 _Avoid_: empty series, orphan series
 
 **Mature Series**:
-A Series for adults only: rated 18+ by a source (a publisher's own age rating, or ANN's), with an Edition from an adult-only publisher, or so rated by the Data Team, whose call wins either way. Discovery (browse, search, the calendar, the Publishers board, author shelves, the sitemap) leaves it out unless the viewer has opted in to mature titles, and the home page leaves it out always; its pages stay reachable but hide their cover art until then. A publisher's teen or older-teen rating does not make a Series mature.
+A Series for adults only: rated 18+ by a source (a publisher's own age rating, or ANN's), with an Edition from an adult-only publisher, or so rated by the Data Team, whose call wins either way. Discovery (browse, search, the calendar, the Publishers board, author shelves, the sitemap) leaves it out unless the viewer has opted in to mature titles, and the home page's shelves leave it out always; its pages stay reachable but hide their cover art until then. A publisher's teen or older-teen rating does not make a Series mature.
 _Avoid_: NSFW, adult manga, explicit
 
 **Unmapped Packaging**:

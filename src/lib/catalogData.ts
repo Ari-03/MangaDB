@@ -123,8 +123,9 @@ export function fetchSeriesBrowse(args: SeriesBrowseArgs) {
  * The home page's catalog reads: the headline counts, the `seriesPool`
  * newest Series, and the Releases of `month` and the month after it (the
  * hero wall runs on into next month when this one is nearly done). The home
- * page never shows a Mature Series or its books, whatever the viewer chose
- * (lib/mature.tsx), so every read asks for the non-mature pool.
+ * page's shelves never show a Mature Series or its books, whatever the
+ * viewer chose (lib/mature.tsx), so every read asks for the non-mature pool.
+ * The header search is not one of these reads; it follows the choice.
  */
 export function fetchHomeCatalog(month: YearMonth, seriesPool: number) {
   return Promise.all([
