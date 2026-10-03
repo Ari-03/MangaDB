@@ -79,7 +79,7 @@ import { applyRetrying } from "./lib/occ";
 import { closeRun, MAX_CARRIED_ERRORS, openFollowOnRun, registryRow, runToContinue } from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
-import { releasesOf } from "./lib/editionRows";
+import { coveringOf, releasesOf } from "./lib/editionRows";
 import {
   candidateSeries,
   isbnHolders,
@@ -493,10 +493,7 @@ async function matchReleaseInSeries(
   for (const volume of volumes) {
     if (volume.status !== "active") continue;
     if (!labelsEqual(volume.label, label ?? null)) continue;
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active") continue;
@@ -1385,10 +1382,7 @@ export const applyReleasePage = internalMutation({
     // whole-Volume Editions count: an omnibus, a split part, or a line's
     // packaging covering this Volume is another book, neither this line's
     // Release nor a reason to hold it.
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active" || edition.publisherId !== publisher._id) {

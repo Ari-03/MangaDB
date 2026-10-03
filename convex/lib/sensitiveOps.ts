@@ -40,7 +40,7 @@ import {
   targetOfRow,
   type TargetId,
 } from "./ratings";
-import { coverageOf, editionSeriesIds, releasesOf } from "./editionRows";
+import { coverageOf, coveringOf, editionSeriesIds, releasesOf } from "./editionRows";
 import { fail } from "./errors";
 import { sameValue } from "./values";
 
@@ -653,10 +653,7 @@ async function withDependents(ctx: MutationCtx, records: Records): Promise<Recor
     for (const edition of editions) out.editions.add(edition._id);
   }
   for (const volumeId of out.volumes) {
-    const coverage = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
-      .collect();
+    const coverage = await coveringOf(ctx, volumeId);
     for (const row of coverage) out.editions.add(row.editionId);
   }
   for (const editionId of out.editions) {
@@ -953,10 +950,7 @@ export async function collapseEditionTakes(
  * if the two Volumes were merged. The impact preview's count.
  */
 async function collapsibleTakes(ctx: QueryCtx, volumeId: Id<"volumes">): Promise<number> {
-  const covering = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
-    .collect();
+  const covering = await coveringOf(ctx, volumeId);
   let count = 0;
   for (const editionId of new Set(covering.map((row) => row.editionId))) {
     const rows = await coverageOf(ctx, editionId);
@@ -1282,10 +1276,7 @@ async function transferReferences(
       const survivorId = survivorDoc._id as Id<"volumes">;
       const survivor = survivorDoc as Doc<"volumes">;
 
-      const coverage = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_volume", (q) => q.eq("volumeId", loserId))
-        .collect();
+      const coverage = await coveringOf(ctx, loserId);
       const affectedEditions = new Set(coverage.map((row) => row.editionId));
       // A cross-Series merge re-derives these Editions' Series; what the
       // tracking answered to before is carried below (carryEditionTracking).

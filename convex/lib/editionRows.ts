@@ -1,7 +1,7 @@
-// An Edition's own rows and the Series its Releases carry. Pages, importers
-// and the write paths that re-derive them (merge and Split, proposal
-// approval, the data repair) all read them through here, so every full read
-// is the same query.
+// An Edition's own rows, the Coverage rows that tie Editions to a Volume,
+// and the Series an Edition's Releases carry. Pages, importers and the write
+// paths that re-derive them (merge and Split, proposal approval, the data
+// repair) all read them through here, so every full read is the same query.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
@@ -11,6 +11,14 @@ export async function coverageOf(ctx: QueryCtx, editionId: Id<"editions">) {
   return await ctx.db
     .query("volumeCoverages")
     .withIndex("by_edition", (q) => q.eq("editionId", editionId))
+    .collect();
+}
+
+/** The Volume Coverage rows of every Edition covering a Volume, oldest first. */
+export async function coveringOf(ctx: QueryCtx, volumeId: Id<"volumes">) {
+  return await ctx.db
+    .query("volumeCoverages")
+    .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
     .collect();
 }
 

@@ -13,7 +13,7 @@ import { followMerges, getActive, requireActive } from "./lib/merges";
 import { seriesStateRow } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
-import { releasesOf } from "./lib/editionRows";
+import { coveringOf, releasesOf } from "./lib/editionRows";
 import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
 import { completelyCoveredVolumes, volumeProgressRow } from "./reading";
@@ -287,10 +287,7 @@ export const volumeOwnership = query({
     const volume = await followMerges(ctx, "volumes", stored);
     if (!volume) return null;
 
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     const owned = [];
     for (const coverage of coverages) {
       const edition = await getActive(ctx, "editions", coverage.editionId);

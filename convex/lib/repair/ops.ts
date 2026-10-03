@@ -36,6 +36,7 @@ import {
   activeVolumes,
   canonicalLabel,
   coverageOf,
+  coveringOf,
   createEdition,
   ensureVolume,
   labelNumber,
@@ -638,10 +639,7 @@ async function placeVolume(
   }
   const label = canonicalLabel(placement.label);
   const maxPosition = survivorVolumes.reduce((max, v) => Math.max(max, v.position), 0);
-  const coverage = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-    .collect();
+  const coverage = await coveringOf(ctx, volume._id);
   const editionIds = new Set(coverage.map((row) => row.editionId));
   await carryingTracking(ctx, audit, moves, { volumeIds: [volume._id], editionIds }, async () => {
     await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {

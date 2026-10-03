@@ -48,7 +48,7 @@ import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
 import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
-import { releasesOf } from "./lib/editionRows";
+import { coveringOf, releasesOf } from "./lib/editionRows";
 import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
@@ -253,10 +253,7 @@ async function sameFormatRelease(
   publisherId: Id<"publishers">,
   format: "physical" | "digital",
 ): Promise<Doc<"releases"> | null> {
-  const coverages = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
-    .collect();
+  const coverages = await coveringOf(ctx, volumeId);
   for (const coverage of coverages) {
     const edition = await ctx.db.get(coverage.editionId);
     if (!edition || edition.status !== "active" || edition.publisherId !== publisherId) continue;

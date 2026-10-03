@@ -11,7 +11,7 @@ import {
 import { publisherLink } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { coverUrl, seriesCover } from "./lib/covers";
-import { coverageOf, releasesOf } from "./lib/editionRows";
+import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { groupEditions } from "./lib/editionGroups";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { canonicalPublisherFor } from "./lib/publishers";
@@ -488,10 +488,7 @@ export async function seriesEditions(
   const firstPosition = new Map<Id<"editions">, number>();
   const seen = new Set<Id<"editions">>();
   for (const volume of volumes) {
-    const rows = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const rows = await coveringOf(ctx, volume._id);
     for (const row of rows) {
       if (seen.has(row.editionId)) continue;
       seen.add(row.editionId);

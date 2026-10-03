@@ -18,7 +18,7 @@ import { query, type QueryCtx } from "./_generated/server";
 import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
 import { coverUrl, jacketCache } from "./lib/covers";
 import { representativeDescription } from "./lib/descriptions";
-import { coverageOf, releasesOf } from "./lib/editionRows";
+import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { isWholeSingleVolume } from "./lib/matching";
 import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
 import { creditsFor } from "./people";
@@ -324,10 +324,7 @@ export const volumePage = query({
     // A hidden Series hides its Volumes from the public site.
     if (!series || series.status !== "active") return null;
 
-    const coveringRows = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coveringRows = await coveringOf(ctx, volume._id);
     const synopsis = volume.synopsis?.trim();
     const editions = [];
     // Releases of whole single-volume Editions, the borrowable blurbs when

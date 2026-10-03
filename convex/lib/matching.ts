@@ -20,7 +20,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isNovelTitle } from "./bookTitle";
-import { releasesOf } from "./editionRows";
+import { coveringOf, releasesOf } from "./editionRows";
 import { factualOverrides } from "./moderationFields";
 import { decodeEntities } from "./text";
 
@@ -318,10 +318,7 @@ export async function workMatch(
   const seen = new Set<Id<"editions">>();
   for (const volume of volumes) {
     if (volume.status !== "active") continue;
-    const coverage = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverage = await coveringOf(ctx, volume._id);
     for (const row of coverage) {
       if (seen.has(row.editionId)) continue;
       seen.add(row.editionId);
@@ -440,10 +437,7 @@ export async function matchRelease(
     for (const volume of volumes) {
       if (volume.status !== "active") continue;
       if (!labelsEqual(volume.label, fact.volumeLabel)) continue;
-      const coverages = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-        .collect();
+      const coverages = await coveringOf(ctx, volume._id);
       for (const coverage of coverages) {
         const edition = await ctx.db.get(coverage.editionId);
         if (!edition || edition.status !== "active") continue;

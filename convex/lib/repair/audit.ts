@@ -8,6 +8,7 @@
 import { ConvexError, type Infer } from "convex/values";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
+import { activeVolumes } from "../../catalog";
 import {
   insertApprovedProposal,
   insertFirstVersion,
@@ -15,7 +16,7 @@ import {
   revisionsOf,
 } from "../../moderation";
 import type { evidence, recordRef } from "../../schema";
-import { coverageOf, editionSeriesIds, releasesOf } from "../editionRows";
+import { coverageOf, coveringOf, editionSeriesIds, releasesOf } from "../editionRows";
 import { allocatePublicId } from "../publicIds";
 import { collapseEditionTakes, type OpMeta } from "../sensitiveOps";
 import { sameValue } from "../values";
@@ -164,14 +165,8 @@ export function sameLabel(a: string | null | undefined, b: string | null | undef
   return ca === null || cb === null ? ca === cb : ca.toLowerCase() === cb.toLowerCase();
 }
 
-export async function activeVolumes(ctx: MutationCtx, seriesId: Id<"series">) {
-  return (
-    await ctx.db
-      .query("volumes")
-      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-      .collect()
-  ).filter((vol) => vol.status === "active");
-}
+// Re-exported for ./ops.ts, which reads it from here with the rest.
+export { activeVolumes };
 
 /**
  * Volume Position = volume number (owner decision, schema.ts): numbered
@@ -235,14 +230,11 @@ export async function ensureVolume(
 // ---------- editions, coverage, releases ----------
 
 // Re-exported for ./ops.ts, which reads them from here with the rest.
-export { coverageOf, releasesOf };
+export { coverageOf, coveringOf, releasesOf };
 
 /** Active Editions covering a Volume. */
 export async function activeEditionsCovering(ctx: MutationCtx, volumeId: Id<"volumes">) {
-  const rows = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
-    .collect();
+  const rows = await coveringOf(ctx, volumeId);
   const editions: Doc<"editions">[] = [];
   for (const row of rows) {
     const edition = await ctx.db.get(row.editionId);

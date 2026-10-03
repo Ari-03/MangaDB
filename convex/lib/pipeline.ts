@@ -36,7 +36,7 @@ import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
 import { canonicalLabel } from "./bookTitle";
 import { partialDateSort, type DateParts } from "./dates";
-import { coverageOf, releasesOf } from "./editionRows";
+import { coverageOf, coveringOf, releasesOf } from "./editionRows";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { followMerges, mergeSurvivor } from "./merges";
@@ -394,10 +394,7 @@ export async function seriesEditions(
     .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
     .collect();
   for (const volume of volumes) {
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (edition) editions.push(edition);
@@ -1046,10 +1043,7 @@ async function findSiblingEdition(
   line: { id: Id<"editionLines">; position: string | null } | null,
 ): Promise<Id<"editions"> | null> {
   if (volumeIds.length === 0) return null;
-  const coverages = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", volumeIds[0]!))
-    .collect();
+  const coverages = await coveringOf(ctx, volumeIds[0]!);
   for (const coverage of coverages) {
     const edition = await ctx.db.get(coverage.editionId);
     if (!edition || edition.status !== "active" || edition.locked) continue;
@@ -1514,10 +1508,7 @@ async function expectedBundleMembers(
   for (const [i, label] of args.labels.entries()) {
     const volume = volumes.find((vol) => vol.status === "active" && labelsEqual(vol.label, label));
     if (!volume) continue;
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active") continue;

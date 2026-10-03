@@ -14,10 +14,11 @@
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { activeVolumes } from "./catalog";
 import { editionCoverage } from "./catalogPages";
 import { releasesOf } from "./lib/editionRows";
 import { fail } from "./lib/errors";
-import { activeVolumes, createAudit, replaceCoverage, sameLabel, updateRecord } from "./lib/repair/audit";
+import { createAudit, replaceCoverage, sameLabel, updateRecord } from "./lib/repair/audit";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 
 const QUEUE_PAGE = 100;
