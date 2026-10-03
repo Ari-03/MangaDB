@@ -1167,6 +1167,52 @@ describe("prh.sync — continuation links", () => {
     });
   });
 
+  // A chain scheduled before `observedEveryPage` existed refused applies once
+  // its source was disabled, yet handed on completeSweep: true. Its run has
+  // no automatic flag, so it carries on; its sweep must not withdraw.
+  it("never withdraws through a continuation scheduled without observedEveryPage", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const { listed, gone } = await seedListedAndGone(t);
+    // Page 0 listed LISTED_TITLE, whose apply was refused; the link handed
+    // page 200 on as a complete sweep.
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
+    stubApi([LISTED_TITLE, ...Array.from({ length: 200 }, () => LIGHT_NOVEL)]);
+    const continuation = {
+      imprints: ["KODCM"],
+      runStartedAt: Date.now(),
+      imprintIndex: 0,
+      start: 200,
+      pages: 1,
+      seen: 1,
+      changed: 0,
+      recordFailures: 0,
+      completeSweep: true,
+      errors: [],
+    };
+    expect(await sync(t, { ...continuation, runId })).toMatchObject({ completeSweep: false });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(runId)).toMatchObject({ status: "succeeded" });
+      expect(await ctx.db.get(listed)).toMatchObject({ withdrawn: false });
+      expect(await ctx.db.get(gone)).toMatchObject({ withdrawn: false });
+      expect(await reviews(ctx)).toHaveLength(0);
+    });
+
+    // The same continuation with the marker completes the sweep: page 200
+    // now lists LISTED_TITLE, and only the gone title is withdrawn.
+    vi.unstubAllGlobals();
+    stubApi([...Array.from({ length: 200 }, () => LIGHT_NOVEL), LISTED_TITLE]);
+    const markedId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
+    expect(
+      await sync(t, { ...continuation, runStartedAt: Date.now(), runId: markedId, observedEveryPage: true }),
+    ).toMatchObject({ completeSweep: true });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(listed)).toMatchObject({ withdrawn: false });
+      expect(await ctx.db.get(gone)).toMatchObject({ withdrawn: true });
+    });
+  });
+
   it("finishes the page under way and stops before the next when the source is disabled", async () => {
     const t = makeT();
     await seedRegistry(t, true);

@@ -194,26 +194,34 @@ export const sync = internalAction({
           }
         };
 
-        while (!done && processed < maxLines) {
+        // Every line goes through here, newline-terminated or the dump's
+        // unterminated last one, so the gate before each GATE_LINES-th line
+        // applies to both. Returns the gate's stop, with the line unapplied.
+        const processLine = async (line: string) => {
+          if (line.trim() === "") return null;
+          if (processed > 0 && processed % GATE_LINES === 0) {
+            const stop = await stopAtGate(ctx, runId, { seen, changed, errors });
+            if (stop) return stop;
+          }
+          await handleLine(line);
+          return null;
+        };
+
+        while (!done && processed < maxLines && !stopped) {
           const chunk = await reader.read();
           if (chunk.done) {
             done = true;
-            if (buffer.trim() !== "") await handleLine(buffer);
+            stopped = await processLine(buffer);
             break;
           }
           buffer += decoder.decode(chunk.value, { stream: true });
           let newline = buffer.indexOf("\n");
-          while (newline >= 0 && processed < maxLines) {
-            if (processed > 0 && processed % GATE_LINES === 0) {
-              stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
-              if (stopped) break;
-            }
+          while (newline >= 0 && processed < maxLines && !stopped) {
             const line = buffer.slice(0, newline);
             buffer = buffer.slice(newline + 1);
-            if (line.trim() !== "") await handleLine(line);
+            stopped = await processLine(line);
             newline = buffer.indexOf("\n");
           }
-          if (stopped) break;
         }
         await reader.cancel().catch(() => undefined);
         if (stopped) return { ...stopped, continued: false, nextLine: startLine + processed };

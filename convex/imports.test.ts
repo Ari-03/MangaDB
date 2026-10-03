@@ -251,6 +251,24 @@ describe("import runs & source health", () => {
   });
 });
 
+describe("imports.stopIfAutomatic", () => {
+  it("keeps the stop note on a run that already carries fifty errors", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "sevenseas", automatic: true });
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+    const carried = Array.from({ length: 50 }, (_, i) => `error ${i}`);
+    expect(
+      await t.mutation(internal.imports.stopIfAutomatic, { runId, recordsSeen: 0, recordsChanged: 0, errors: carried }),
+    ).toBe(true);
+    await t.run(async (ctx) => {
+      const run = await ctx.db.get(runId);
+      expect(run?.status).toBe("stopped");
+      expect(run?.errors).toEqual([...carried.slice(0, 49), "Stopped: the source was disabled mid-run."]);
+    });
+  });
+});
+
 describe("cadence", () => {
   const DAY = 24 * 60 * 60 * 1000;
 

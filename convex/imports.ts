@@ -75,8 +75,9 @@ export const stopIfAutomatic = internalMutation({
     if (source?.enabled) return false;
     if (run.status !== "running") return true;
     if (!run.automatic) return false;
-    // Its own status, not "succeeded": the sweep is incomplete.
-    const errors = [...args.errors, "Stopped: the source was disabled mid-run."].slice(0, MAX_RUN_ERRORS);
+    // Its own status, not "succeeded": the sweep is incomplete. The note
+    // always fits: it follows the first MAX_RUN_ERRORS - 1 carried errors.
+    const errors = [...args.errors.slice(0, MAX_RUN_ERRORS - 1), "Stopped: the source was disabled mid-run."];
     const finishedAt = Date.now();
     await ctx.db.patch(args.runId, {
       status: "stopped",

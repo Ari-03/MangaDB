@@ -25,8 +25,9 @@
 // Without a key and a non-empty imprint list (PRH_IMPRINT_CODES or the
 // `imprints` argument), a fresh call skips as "unconfigured" and opens no
 // run. A link the sync hands off carries its imprint list in its arguments,
-// so removing PRH_IMPRINT_CODES mid-run has no effect on it; removing
-// PRH_API_KEY closes the run as failed.
+// so removing PRH_IMPRINT_CODES mid-run has no effect on it. A link that
+// finds PRH_API_KEY gone closes its run as failed, except an automatic run
+// on a disabled source, which the gate stops first (as "stopped").
 //
 // Disabling the source follows the shared rule (lib/importRuns.ts): the gate
 // is checked at each link, before each list page and before the withdrawal
@@ -117,6 +118,15 @@ export const sync = internalAction({
     recordFailures: v.optional(v.number()),
     completeSweep: v.optional(v.boolean()),
     errors: v.optional(v.array(v.string())),
+    /**
+     * Set on every link this sync hands off. A continuation without it was
+     * scheduled by an older sync whose applies refused writes once the
+     * source was disabled, so a title its earlier pages listed may never
+     * have been observed: such a chain finishes, but its sweep counts as
+     * incomplete and never withdraws. The marker can go once no chain
+     * scheduled before it can still be queued.
+     */
+    observedEveryPage: v.optional(v.literal(true)),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("prh.sync", ctx, async () => {
@@ -135,8 +145,11 @@ export const sync = internalAction({
         );
         if (args.runId === undefined) return { skipped: "unconfigured" as const };
       }
-      // A continuation's gate comes before its configuration: a scheduled
-      // run on a disabled source stops whatever its configuration.
+      // A continuation's gate comes before its configuration. An automatic
+      // run on a disabled source stops here, so an operator who disabled the
+      // source gets no failure alert for it. Every other run that lost its
+      // configuration fails below: a forced run on a disabled source, or any
+      // run on an enabled one.
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
       // A run that lost its configuration between links must not stay open
@@ -158,8 +171,12 @@ export const sync = internalAction({
       let seen = args.seen ?? 0;
       let changed = args.changed ?? 0;
       let recordFailures = args.recordFailures ?? 0;
-      // A subset sweep can't prove absence, so it never withdraws.
-      let completeSweep = args.completeSweep ?? (mode === "full" && args.imprints === undefined);
+      // A subset sweep can't prove absence, so it never withdraws; nor can a
+      // continuation without `observedEveryPage` (every continuation carries
+      // runStartedAt).
+      const unmarkedContinuation = args.runStartedAt !== undefined && args.observedEveryPage !== true;
+      let completeSweep =
+        !unmarkedContinuation && (args.completeSweep ?? (mode === "full" && args.imprints === undefined));
       const todayKey = todaySortKey();
       const firstImprint = args.imprintIndex ?? 0;
       // Schedule the next link with the run state. The EFFECTIVE imprint list
@@ -182,6 +199,7 @@ export const sync = internalAction({
           recordFailures,
           completeSweep,
           errors,
+          observedEveryPage: true,
         });
         return {
           runId,

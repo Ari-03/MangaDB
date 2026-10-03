@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "./_generated/api";
+import { isbn10To13 } from "./lib/isbn";
 import {
   skipsWithoutFetch,
   parseSitemap,
@@ -303,6 +304,32 @@ describe("yenPress.sync — disabling a source", () => {
     });
     // Only the first link's page was fetched.
     expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(1);
+  });
+
+  it("finishes the hundred titles under way and stops before the next hundred", async () => {
+    const t = makeT();
+    await seed(t);
+    // 101 new titles: two planning chunks. Every title page is gone (a 404 is
+    // only a notice), and the source is disabled while the first one loads.
+    const urls = Array.from(
+      { length: 101 },
+      (_, i) => `https://yenpress.com/titles/${isbn10To13(`19753${String(i).padStart(4, "0")}0`)}-gate-manga-vol-${i + 1}`,
+    );
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url === "https://yenpress.com/sitemap.xml") return new Response(sitemap(urls));
+      if (requested.length === 2) {
+        await t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled: false });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    expect(await sync(t)).toMatchObject({ stopped: true, fetched: 100, continued: false });
+    expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(100);
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+    });
   });
 
   it("imports through a run an operator forced on the disabled source", async () => {

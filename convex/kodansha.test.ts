@@ -1511,6 +1511,52 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
   });
 });
 
+describe("kodansha — disabling the source mid-run", () => {
+  it("finishes the window's fifty applies under way and stops before the next", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // 51 (volume, format) records: two batches between gate checks.
+    stubSite(
+      Array.from({ length: 51 }, (_, i) => ({ ...IRUMA, volume: i + 1, formats: ["print"] })),
+    );
+    const site = globalThis.fetch;
+    // Disabled while the first record's cover downloads, after its apply.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).includes("azuki.co") && !requested.some((url) => url.includes("azuki.co"))) {
+        await t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha", enabled: false });
+      }
+      return await site(input);
+    });
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 50 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 50 });
+      expect(await ctx.db.query("releases").collect()).toHaveLength(50);
+    });
+  });
+
+  it("finishes the series under way and stops before the next due series", async () => {
+    const t = makeT();
+    await seedBacklist(t, true);
+    stubBacklist([BLUE_LOCK, NEEDLES], BACKLIST_PAGES);
+    const site = globalThis.fetch;
+    // Series crawl in slug order: 7 Billion Needles, then Blue Lock. The
+    // row is disabled while the first series page loads.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input) === `${BASE}/series/7-billion-needles/`) {
+        await t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha-backlist", enabled: false });
+      }
+      return await site(input);
+    });
+    expect(await backlist(t)).toMatchObject({ stopped: true, seriesCrawled: 1, continued: false });
+    expect(requested.some((url) => url.includes("/series/blue-lock/"))).toBe(false);
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ sourceKey: "kodansha-backlist", status: "stopped", automatic: true });
+    });
+  });
+});
+
 describe("kodansha.sync — a forced run", () => {
   it("imports a daily window an operator forced on its disabled row", async () => {
     const t = makeT();

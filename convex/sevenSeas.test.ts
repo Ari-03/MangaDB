@@ -1038,6 +1038,30 @@ describe("sevenSeas.sync — failure handling", () => {
     expect((await observationOf(t, ALPHA_1)).recordRef?.type).toBe("release");
   });
 
+  it("withdraws nothing when the source is disabled during the last listing page", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.run((ctx) => insertObservation(ctx, { sourceKey: "sevenseas", sourceRecordId: "999" }));
+    stubSite([ALPHA_1]);
+    const site = globalThis.fetch;
+    // One listing page: the sweep is complete once it applies, and the
+    // source is disabled while it loads.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).startsWith(`${BASE}/wp-json/wp/v2/books`)) {
+        await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+      }
+      return await site(input);
+    });
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 1, completeSweep: false });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", recordsSeen: 1 });
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.find((o) => o.sourceRecordId === "999")?.withdrawn).toBe(false);
+    });
+    expect((await observationOf(t, ALPHA_1)).recordRef?.type).toBe("release");
+  });
+
   it("imports through a run an operator forced on the disabled source", async () => {
     const t = makeT();
     await seedRegistry(t, true);

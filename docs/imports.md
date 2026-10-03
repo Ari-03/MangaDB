@@ -316,8 +316,10 @@ npx convex run prh:sync '{"mode":"full"}'
 PRH needs the key and a non-empty imprint list (`PRH_IMPRINT_CODES`, or
 an `imprints` argument). Without them a fresh call skips as
 "unconfigured" and opens no run. A link handed off mid-run carries its
-imprint list, so removing `PRH_IMPRINT_CODES` has no effect on it;
-removing `PRH_API_KEY` closes the run as `failed`, a forced run's too.
+imprint list, so removing `PRH_IMPRINT_CODES` has no effect on it.
+Removing `PRH_API_KEY` mid-run closes the run as `failed` at its next
+link, with one exception: an automatic run whose source is also disabled
+closes as `stopped` (see "Disabling a source" below).
 
 ### Open Library
 
@@ -430,10 +432,14 @@ gate in `convex/lib/importRuns.ts`:
   and the operator backfills write on a disabled source. The Kodansha
   backlist is gated on its own row, `kodansha-backlist`, not `kodansha`.
 
-PRH's missing configuration is separate: a run that loses `PRH_API_KEY`
-closes as `failed`, forced or not. Before deploying importer changes,
-disable the sources and let running imports finish. To toggle a source
-without signing in as an Administrator:
+PRH's missing configuration is checked after the gate. A run that loses
+`PRH_API_KEY` closes as `failed` when its source is enabled, and when it
+is a forced run on a disabled source. An automatic run on a disabled source
+that has also lost its key closes as `stopped`: the gate comes first, so
+the runs a disable stops never raise a failure alert.
+
+Before deploying importer changes, disable the sources and let running
+imports finish. To toggle a source without signing in as an Administrator:
 
 ```sh
 npx convex run importSources:setEnabledInternal '{"key":"sevenseas","enabled":false}'

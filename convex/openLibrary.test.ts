@@ -135,6 +135,32 @@ describe("openLibrary.sync — configuration", () => {
   });
 });
 
+describe("openLibrary.sync — disabling the source mid-run", () => {
+  // The gate is checked before every 1,000th line, the dump's unterminated
+  // last line included.
+  it.each([
+    ["ends with a newline", "\n"],
+    ["ends without a newline", ""],
+  ])("stops before line 1,000 when the dump %s", async (_, end) => {
+    const t = makeT();
+    await seedRegistry(t);
+    const { releaseId } = await buildSkeleton(t, { withRelease: true });
+    // 1,000 lines with no title (each processed, none seen), then a record.
+    const { title: _title, ...untitled } = CHAINSAW_22;
+    const body = [...Array.from({ length: 1000 }, () => dumpLine(untitled)), dumpLine(CHAINSAW_22)].join("\n") + end;
+    vi.stubGlobal("fetch", async () => {
+      await t.mutation(internal.importSources.setEnabledInternal, { key: "openlibrary", enabled: false });
+      return new Response(body);
+    });
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 0, nextLine: 1000 });
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+      expect((await ctx.db.get(releaseId!))?.isbn13).toBeUndefined();
+    });
+  });
+});
+
 describe("openLibrary.sync — ISBN fill, never structure", () => {
   it("fills ISBN and empty date on a full-key match into the skeleton", async () => {
     const t = makeT();

@@ -37,6 +37,8 @@ type FixtureRelease = {
 type FixtureManga = {
   id: number;
   title: string;
+  /** The report row's type; defaults to "manga". */
+  type?: string;
   altTitles?: Array<{ lang: string; text: string }>;
   /** The Plot Summary's XML text (already escaped, as ANN serves it). */
   plot?: string;
@@ -50,7 +52,7 @@ function reportXml(manga: FixtureManga[], nskip: number, nlist: number) {
   const items = page
     .map(
       (m) =>
-        `<item><id>${m.id}</id><gid>1</gid><type>manga</type><name>${m.title}</name><precision>manga</precision></item>`,
+        `<item><id>${m.id}</id><gid>1</gid><type>${m.type ?? "manga"}</type><name>${m.title}</name><precision>manga</precision></item>`,
     )
     .join("\n");
   return `<report skipped="${nskip}" listed="${page.length}"><args><type>manga</type></args>\n${items}</report>`;
@@ -911,6 +913,84 @@ describe("ann.syncReleasePages — leaf Releases from release pages", () => {
       expect(runs.every((run) => run.status === "succeeded" && run.automatic === undefined)).toBe(
         true,
       );
+    });
+  });
+});
+
+describe("ann — disabling the source mid-run", () => {
+  const disableAnn = (t: TestT) =>
+    t.mutation(internal.importSources.setEnabledInternal, { key: "ann", enabled: false });
+
+  /** Wrap the stub stubAnn installed: disable ANN on the first request `when` picks. */
+  function disableOn(t: TestT, when: (url: string) => boolean) {
+    const inner = globalThis.fetch;
+    let done = false;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (!done && when(String(input))) {
+        done = true;
+        await disableAnn(t);
+      }
+      return await inner(input);
+    });
+  }
+
+  it("finishes the report page under way and stops before the next", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // A first report page of 500 anime rows (read, none mirrored), then Alpha.
+    const anime = Array.from({ length: 500 }, (_, i) => ({ id: 5000 + i, title: `Anime ${i}`, type: "anime", releases: [] }));
+    stubAnn([...anime, ALPHA]);
+    disableOn(t, (url) => url.includes("reports.xml"));
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 0, continued: false });
+    expect(reportRequests).toHaveLength(1);
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+      expect(await ctx.db.query("series").collect()).toHaveLength(0);
+    });
+  });
+
+  it("withdraws nothing and chains no page pass when disabled during a clean mirror's last report page", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // An entry an earlier mirror saw, which this sweep no longer lists.
+    await t.run((ctx) => insertObservation(ctx, { sourceKey: "ann", sourceRecordId: "manga:999" }));
+    stubAnn([ALPHA]);
+    disableOn(t, (url) => url.includes("reports.xml"));
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 1 });
+    await drain(t);
+    await t.run(async (ctx) => {
+      const runs = await ctx.db.query("importRuns").collect();
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 1 });
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.find((o) => o.sourceRecordId === "manga:999")?.withdrawn).toBe(false);
+      expect(observations.find((o) => o.sourceRecordId === "manga:100")?.withdrawn).toBe(false);
+    });
+    expect(pageRequests).toHaveLength(0);
+  });
+
+  it("finishes the batch of release pages under way and stops before the next", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // 26 unlinked lines: a candidate page of 25, then one more.
+    const long: FixtureManga = {
+      id: 400,
+      title: "Long Saga",
+      releases: Array.from({ length: 26 }, (_, i) => ({
+        annId: 30000 + i,
+        date: "2026-01-06",
+        designator: `GN ${i + 1}`,
+      })),
+    };
+    stubAnn([long]);
+    await sync(t, { releasePages: false });
+    disableOn(t, (url) => url.includes("releases.php"));
+    expect(await syncPages(t)).toMatchObject({ stopped: true, fetched: 25, continued: false });
+    expect(pageRequests).toHaveLength(25);
+    await t.run(async (ctx) => {
+      const runs = await ctx.db.query("importRuns").collect();
+      expect(runs.at(-1)).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 25 });
     });
   });
 });
