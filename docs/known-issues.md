@@ -105,8 +105,8 @@ is fixed.
   source disabled closes the run as `failed` (`convex/prh.ts`), not
   `stopped` as the shared gate does for the other chained sources, so the
   source's `consecutiveFailures` goes up. Three such disables in a row raise
-  the unhealthy alert. This is `main`'s behaviour, kept on purpose when the
-  branch for PR #61 briefly moved PRH onto the shared gate.
+  the unhealthy alert. This is kept on purpose; PRH does not use the shared
+  gate.
 - **Three copies of the apply ladder.** `applyBook` in
   `convex/sevenSeas.ts`, its mirror in `convex/kodansha.ts` and
   `applyCatalogTitle` in `convex/lib/catalogTitle.ts` run the same

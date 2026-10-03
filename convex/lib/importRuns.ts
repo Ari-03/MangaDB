@@ -5,7 +5,8 @@
 // started. The gate lets a run an operator forced on a disabled source
 // (imports:startRun, then the sync with its runId) through; what happens next
 // is the source's own: ANN, Open Library and the Kodansha backlist write to
-// the end, and Yen Press's applies refuse every write. PRH keeps its own gate
+// the end, and Yen Press's applies refuse every catalog write, though
+// out-of-scope books are still observed. PRH keeps its own gate
 // (convex/prh.ts): any link that finds the source disabled, forced or not,
 // closes the run as failed, which counts toward the source's unhealthy alert.
 

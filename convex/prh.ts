@@ -22,8 +22,11 @@
 //   PRH_IMPRINT_CODES  comma-separated imprint codes to mirror (verify the
 //                      codes against /title/domains/PRH.US/imprints once a
 //                      key is active)
-// Without both, a fresh call is skipped as "unconfigured" and opens no run;
-// a continuation of an open run closes that run as failed.
+// Without a key and a non-empty imprint list (PRH_IMPRINT_CODES or the
+// `imprints` argument), a fresh call skips as "unconfigured" and opens no
+// run. A link the sync hands off carries its imprint list in its arguments,
+// so removing PRH_IMPRINT_CODES mid-run has no effect on it; removing
+// PRH_API_KEY closes the run as failed.
 //
 // The API cannot filter by date (lib/prh.ts), so future mode pages an
 // imprint newest-first and cuts off at today client-side.

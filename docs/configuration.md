@@ -56,7 +56,7 @@ Settings, Environment Variables.
 |---|---|
 | `CLERK_JWT_ISSUER_DOMAIN` | Issuer domain of the `convex` JWT template. Unset falls back to a placeholder so codegen and tests run, and sign-in tokens then fail to validate. |
 | `CLERK_SECRET_KEY` | The same Clerk secret key, used by account deletion to delete the Clerk identity. |
-| `PRH_API_KEY`, `PRH_IMPRINT_CODES` | The PRH adapter. Unset makes PRH runs skip as "unconfigured". Setup: [imports](imports.md#penguin-random-house). |
+| `PRH_API_KEY`, `PRH_IMPRINT_CODES` | The PRH adapter. Without the key or a non-empty imprint list, a fresh run skips as "unconfigured" and opens none. Removing the key mid-run closes the run as `failed`; removing the codes does not affect it. Setup: [imports](imports.md#penguin-random-house). |
 | `OPENLIBRARY_DUMP_URL` | The filtered Open Library dump. Unset makes those runs skip. Setup: [imports](imports.md#open-library). |
 | `RESEND_API_KEY`, `IMPORT_ALERT_EMAIL_TO`, optional `IMPORT_ALERT_EMAIL_FROM` | Source-health alert emails. Unset logs and skips. |
 | `POSTHOG_PROJECT_TOKEN` | Backend analytics. Required on every deployment: a push fails until it is set, even to an empty string, which turns server events off. |

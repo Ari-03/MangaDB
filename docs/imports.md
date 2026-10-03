@@ -313,7 +313,11 @@ npx convex env set PRH_IMPRINT_CODES CODE1,CODE2,CODE3
 npx convex run prh:sync '{"mode":"full"}'
 ```
 
-Without both variables, PRH runs skip as "unconfigured".
+PRH needs the key and a non-empty imprint list (`PRH_IMPRINT_CODES`, or
+an `imprints` argument). Without them a fresh call skips as
+"unconfigured" and opens no run. A link handed off mid-run carries its
+imprint list, so removing `PRH_IMPRINT_CODES` has no effect on it;
+removing `PRH_API_KEY` closes the run as `failed`.
 
 ### Open Library
 
@@ -409,7 +413,8 @@ closes the run as `stopped`. An operator can force a run with
 `imports:startRun`, then the sync with that run id. On a disabled source,
 a forced run of ANN, Open Library or the Kodansha backlist runs to the end
 and writes. Yen Press runs to the end, but its apply mutation refuses
-every write, so the run reports `succeeded` with nothing imported. PRH
+every catalog write (out-of-scope books are still observed), so the run
+reports `succeeded` with nothing imported. PRH
 keeps its own gate in `convex/prh.ts`: a link that finds the source
 disabled, scheduled or forced, closes the run as `failed` before any
 fetch, and the failure counts toward the source's health alert. Before
