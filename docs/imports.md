@@ -401,7 +401,7 @@ registry and starts every enabled source that is due by its cadence string
 A source whose last run is still `running` is skipped. A failed run
 resumes at the next cadence.
 
-**Disabling a source** stops its scheduled chain at the next link (ANN, PRH,
+**Disabling a source** stops its scheduled chain at the next link (ANN,
 Yen Press, Open Library and the Kodansha backlist share the gate in
 `convex/lib/importRuns.ts`). Runs a sync opens itself are marked
 `automatic`, and a continuation that finds its source disabled closes the
@@ -409,8 +409,10 @@ run as `stopped`. An operator can force a run with `imports:startRun`, then
 the sync with that run id. On a disabled source, a forced run of ANN, Open
 Library or the Kodansha backlist runs to the end and writes. Yen Press runs
 to the end, but its apply mutation refuses every write, so the run reports
-`succeeded` with nothing imported. PRH refuses the run before any fetch and
-closes it as `failed`. Before deploying importer changes, disable the
+`succeeded` with nothing imported. PRH keeps its own gate in
+`convex/prh.ts`: a link that finds the source disabled, scheduled or
+forced, closes the run as `failed` before any fetch, and the failure counts
+toward the source's health alert. Before deploying importer changes, disable the
 sources and let running imports finish. To toggle a source without signing
 in as an Administrator:
 

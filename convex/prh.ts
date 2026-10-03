@@ -34,7 +34,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
-import { registryRow, runToContinue } from "./lib/importRuns";
+import { registryRow } from "./lib/importRuns";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { toPartialDate } from "./lib/pipeline";
@@ -112,7 +112,25 @@ export const sync = internalAction({
     withExceptionCapture("prh.sync", ctx, async () => {
       const linkStartedAt = Date.now();
       const source = await registryRow(ctx, SOURCE_KEY);
-      if (!source.enabled && args.runId === undefined) return { skipped: "disabled" as const };
+      // A continuation link whose source was disabled or unconfigured between
+      // links must not leave its run open forever: close it as failed, saying why.
+      // PRH does not use lib/importRuns.ts runToContinue, so an operator-forced
+      // run on a disabled source is refused here too: applyTitle refuses every
+      // write, and a full sweep that imported nothing would withdraw every title.
+      const closeResumed = async (why: string) => {
+        if (args.runId === undefined) return;
+        await ctx.runMutation(internal.imports.finishRun, {
+          runId: args.runId,
+          status: "failed",
+          recordsSeen: args.seen ?? 0,
+          recordsChanged: args.changed ?? 0,
+          errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
+        });
+      };
+      if (!source.enabled) {
+        await closeResumed("the source was disabled.");
+        return { skipped: "disabled" as const };
+      }
       const apiKey = process.env.PRH_API_KEY;
       const configured = (process.env.PRH_IMPRINT_CODES ?? "")
         .split(",")
@@ -123,40 +141,15 @@ export const sync = internalAction({
         console.warn(
           "[imports] PRH adapter is unconfigured (set PRH_API_KEY and PRH_IMPRINT_CODES) — skipping",
         );
-        // A continuation whose configuration was removed between links must
-        // not leave its run open forever: close it as failed, saying why.
-        if (args.runId !== undefined) {
-          await ctx.runMutation(internal.imports.finishRun, {
-            runId: args.runId,
-            status: "failed",
-            recordsSeen: args.seen ?? 0,
-            recordsChanged: args.changed ?? 0,
-            errors: [
-              ...(args.errors ?? []),
-              "Stopped mid-run: PRH_API_KEY / PRH_IMPRINT_CODES were removed.",
-            ],
-          });
-        }
+        await closeResumed("PRH_API_KEY / PRH_IMPRINT_CODES were removed.");
         return { skipped: "unconfigured" as const };
       }
       const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
-      // The shared gate: a scheduled run whose source is disabled between
-      // links closes as "stopped".
-      const runId = await runToContinue(ctx, source, args);
-      if (runId === null) return { skipped: "disabled" as const };
-      // An operator-forced run on a disabled source is refused: applyTitle
-      // refuses every write, so the run would fetch, import nothing, report
-      // success, and let a full sweep withdraw every title it never bumped.
-      if (!source.enabled) {
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: args.seen ?? 0,
-          recordsChanged: args.changed ?? 0,
-          errors: [...(args.errors ?? []), "Stopped mid-run: the source was disabled."],
-        });
-        return { skipped: "disabled" as const };
-      }
+      const runId: Id<"importRuns"> =
+        args.runId ??
+        (await ctx.runMutation(internal.imports.startRun, {
+          sourceKey: SOURCE_KEY,
+        }));
       const runStartedAt = args.runStartedAt ?? linkStartedAt;
       const delay = args.politeDelayMs ?? 350;
       const maxPages = args.maxPages ?? 50;

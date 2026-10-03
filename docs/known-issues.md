@@ -100,6 +100,12 @@ is fixed.
   `succeeded`. The fix for both this and the Yen Press entry is to carry
   the run's automatic or forced state to the apply mutation, and to skip
   the withdrawal pass when any apply was refused.
+- **Disabling PRH mid-run counts as a failure.** A PRH link that finds its
+  source disabled closes the run as `failed` (`convex/prh.ts`), not
+  `stopped` as the shared gate does for the other chained sources, so the
+  source's `consecutiveFailures` goes up. Three such disables in a row raise
+  the unhealthy alert. This is `main`'s behaviour, kept on purpose when the
+  branch for PR #61 briefly moved PRH onto the shared gate.
 - **Three copies of the apply ladder.** `applyBook` in
   `convex/sevenSeas.ts`, its mirror in `convex/kodansha.ts` and
   `applyCatalogTitle` in `convex/lib/catalogTitle.ts` run the same

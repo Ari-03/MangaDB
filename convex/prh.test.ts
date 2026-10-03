@@ -941,9 +941,10 @@ describe("prh.sync — continuation links", () => {
     });
   });
 
-  // The shared gate (lib/importRuns.ts runToContinue): a scheduled run stops
-  // without counting against the source's health, as the other sources do.
-  it('closes a scheduled run as "stopped" when the source was disabled between links', async () => {
+  // PRH keeps its own gate, not lib/importRuns.ts runToContinue: a run whose
+  // source was disabled between links closes as failed and counts toward the
+  // source's unhealthy alert (docs/known-issues.md).
+  it("closes a resumed run when the source was disabled between links", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     stubApi([
@@ -957,13 +958,30 @@ describe("prh.sync — continuation links", () => {
     await t.run(async (ctx) => {
       if (!("runId" in first)) throw new Error("Expected an import run");
       const run = await ctx.db.get(first.runId);
-      expect(run).toMatchObject({ status: "stopped", automatic: true });
-      expect(run!.errors.at(-1)).toMatch(/disabled mid-run/);
+      expect(run?.status).toBe("failed");
+      expect(run?.automatic).toBeUndefined();
+      expect(run?.errors.at(-1)).toBe("Stopped mid-run: the source was disabled.");
       const source = await ctx.db
         .query("approvedSources")
         .withIndex("by_key", (q) => q.eq("key", "prh"))
         .unique();
-      expect(source?.consecutiveFailures ?? 0).toBe(0);
+      expect(source?.consecutiveFailures).toBe(1);
+    });
+  });
+
+  // The disable is checked before the configuration, so a continuation that
+  // lost both reports the disable.
+  it("reports the disable when a continuation finds the source disabled and unconfigured", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
+    vi.stubEnv("PRH_API_KEY", "");
+    expect(await sync(t, { runId, seen: 3, changed: 1 })).toEqual({ skipped: "disabled" });
+    await t.run(async (ctx) => {
+      const run = await ctx.db.get(runId);
+      expect(run).toMatchObject({ status: "failed", recordsSeen: 3, recordsChanged: 1 });
+      expect(run?.errors.at(-1)).toBe("Stopped mid-run: the source was disabled.");
     });
   });
 
