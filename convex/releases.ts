@@ -17,6 +17,7 @@ import { publisherLink } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { editionTitle, releaseAnchor } from "./lib/titles";
 import { jacketCache, releaseCover } from "./lib/covers";
+import { coverageOf } from "./lib/editionRows";
 import { showMatureArg, visibleTo } from "./lib/mature";
 
 // A month window holds hundreds of releases across all publishers (spec §8);
@@ -76,12 +77,7 @@ export function memoize<A, V>(
  * the Publishers board), so each document is read once.
  */
 export function browseCache(ctx: QueryCtx) {
-  const coverage = memoize((editionId: Id<"editions">) =>
-    ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-      .collect(),
-  );
+  const coverage = memoize((editionId: Id<"editions">) => coverageOf(ctx, editionId));
   const edition = memoize((id: Id<"editions">) => ctx.db.get(id));
   // Edition jackets; an ISBN-less Edition's borrow shares these reads.
   const jackets = jacketCache(ctx, coverage, edition);

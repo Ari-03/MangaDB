@@ -13,6 +13,7 @@ import { followMerges, getActive, requireActive } from "./lib/merges";
 import { seriesStateRow } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
+import { releasesOf } from "./lib/editionRows";
 import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
 import { completelyCoveredVolumes, volumeProgressRow } from "./reading";
@@ -294,12 +295,7 @@ export const volumeOwnership = query({
     for (const coverage of coverages) {
       const edition = await getActive(ctx, "editions", coverage.editionId);
       if (!edition) continue;
-      const releases = (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect()
-      ).filter((doc) => doc.status === "active");
+      const releases = (await releasesOf(ctx, edition._id)).filter((doc) => doc.status === "active");
       for (const release of releases) {
         const link = await releaseLink(ctx, release);
         if (!link) continue;

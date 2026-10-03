@@ -33,6 +33,7 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCoverIsbns, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
+import { releasesOf } from "./lib/editionRows";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
 import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
@@ -378,12 +379,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
       publishers.set(publisher.slug, { name: publisher.name, slug: publisher.slug });
     }
     if (wantEvidence() && publisher?.contentRating === "mature") evidence = true;
-    const releases = (
-      await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-        .collect()
-    ).filter((r) => r.status === "active");
+    const releases = (await releasesOf(ctx, editionId)).filter((r) => r.status === "active");
     for (const release of releases) {
       releaseCount++;
       if (release.format === "physical") hasPhysical = true;

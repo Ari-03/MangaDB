@@ -36,6 +36,7 @@ import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
 import { canonicalLabel } from "./bookTitle";
 import { partialDateSort, type DateParts } from "./dates";
+import { coverageOf, releasesOf } from "./editionRows";
 import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
 import { followMerges, mergeSurvivor } from "./merges";
@@ -1055,10 +1056,7 @@ async function findSiblingEdition(
     if (edition.publisherId !== publisherId) continue;
     if ((edition.editionLineId ?? null) !== (line?.id ?? null)) continue;
     if (line !== null && (edition.linePosition ?? null) !== line.position) continue;
-    const rows = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-      .collect();
+    const rows = await coverageOf(ctx, edition._id);
     if (rows.length !== volumeIds.length) continue;
     const matches = rows
       .sort((a, b) => a.order - b.order)
@@ -1529,12 +1527,9 @@ async function expectedBundleMembers(
       if (edition.publisherId !== publisherId || !(await isWholeSingleVolume(ctx, edition))) {
         continue;
       }
-      const member = (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect()
-      ).find((release) => release.status === "active" && release.format === args.format);
+      const member = (await releasesOf(ctx, edition._id)).find(
+        (release) => release.status === "active" && release.format === args.format,
+      );
       if (member) {
         if (!members.some((m) => m.releaseId === member._id)) {
           members.push({ releaseId: member._id, order: i + 1 });

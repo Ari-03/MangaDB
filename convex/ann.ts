@@ -79,6 +79,7 @@ import { applyRetrying } from "./lib/occ";
 import { closeRun, MAX_CARRIED_ERRORS, openFollowOnRun, registryRow, runToContinue } from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
+import { releasesOf } from "./lib/editionRows";
 import {
   candidateSeries,
   isbnHolders,
@@ -500,10 +501,7 @@ async function matchReleaseInSeries(
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active") continue;
       if (!(await isWholeSingleVolume(ctx, edition))) continue;
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
+      const releases = await releasesOf(ctx, edition._id);
       for (const release of releases) {
         if (release.status !== "active" || release.locked) continue;
         if (release.format !== format) continue;
@@ -1397,10 +1395,7 @@ export const applyReleasePage = internalMutation({
         continue;
       }
       if (!(await isWholeSingleVolume(ctx, edition))) continue;
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
+      const releases = await releasesOf(ctx, edition._id);
       for (const release of releases) {
         if (release.status !== "active" || release.format !== line.format) continue;
         if (release.isbn13 === undefined && !release.locked) return await link(release);

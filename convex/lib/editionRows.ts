@@ -1,6 +1,7 @@
-// An Edition's own rows and the Series its Releases carry, read the same way
-// by every write path that re-derives them (merge and Split, proposal
-// approval, the data repair).
+// An Edition's own rows and the Series its Releases carry. Pages, importers
+// and the write paths that re-derive them (merge and Split, proposal
+// approval, the data repair) all read them through here, so every full read
+// is the same query.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";

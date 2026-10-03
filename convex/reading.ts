@@ -14,6 +14,7 @@ import { getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
+import { coverageOf } from "./lib/editionRows";
 import { releaseAnchor } from "./lib/titles";
 import { seriesStatsRow } from "./seriesBrowse";
 
@@ -65,10 +66,7 @@ export async function completelyCoveredVolumes(
   ctx: QueryCtx,
   editionId: Id<"editions">,
 ): Promise<Array<Doc<"volumes">>> {
-  const rows = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
+  const rows = await coverageOf(ctx, editionId);
   const volumes = new Map<Id<"volumes">, Doc<"volumes">>();
   for (const row of rows) {
     if (row.extent !== "complete") continue;

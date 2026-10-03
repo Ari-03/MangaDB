@@ -18,6 +18,7 @@ import { query, type QueryCtx } from "./_generated/server";
 import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
 import { coverUrl, jacketCache } from "./lib/covers";
 import { representativeDescription } from "./lib/descriptions";
+import { coverageOf, releasesOf } from "./lib/editionRows";
 import { isWholeSingleVolume } from "./lib/matching";
 import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
 import { creditsFor } from "./people";
@@ -40,14 +41,6 @@ export function publisherLink(publisher: Doc<"publishers"> | null) {
     : null;
 }
 
-/** An Edition's Volume Coverage rows in `order` (the index sorts them). */
-function coverageRows(ctx: QueryCtx, editionId: Id<"editions">) {
-  return ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-}
-
 /** A coverage row's Volume and its Series, or null when either is not active. */
 async function activeCoveredVolume(ctx: QueryCtx, row: Doc<"volumeCoverages">) {
   const volume = await ctx.db.get(row.volumeId);
@@ -68,7 +61,7 @@ export async function primaryVolumeSeries(
   ctx: QueryCtx,
   editionId: Id<"editions">,
 ): Promise<Doc<"series"> | null> {
-  for (const row of await coverageRows(ctx, editionId)) {
+  for (const row of await coverageOf(ctx, editionId)) {
     const found = await activeCoveredVolume(ctx, row);
     if (found) return found.series;
   }
@@ -96,7 +89,7 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   const storedLineSeries = contentLine ? await ctx.db.get(contentLine.seriesId) : null;
   let collectsMature = (await mergeSurvivor(ctx, "series", storedLineSeries))?.mature === true;
 
-  const rows = await coverageRows(ctx, edition._id);
+  const rows = await coverageOf(ctx, edition._id);
   const coverage = [];
   for (const row of rows) {
     const volume = await ctx.db.get(row.volumeId);
@@ -245,12 +238,7 @@ const byDate = (a: ReleaseRow, b: ReleaseRow) =>
  * lib/descriptions.ts) and their joined rows, date-sorted.
  */
 async function editionReleases(ctx: QueryCtx, editionId: Id<"editions">) {
-  const docs = (
-    await ctx.db
-      .query("releases")
-      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-      .collect()
-  ).filter((doc) => doc.status === "active");
+  const docs = (await releasesOf(ctx, editionId)).filter((doc) => doc.status === "active");
   const rows = [];
   for (const doc of docs) rows.push(await releaseRow(ctx, doc));
   return { docs, rows: rows.sort(byDate) };

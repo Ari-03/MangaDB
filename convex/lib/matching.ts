@@ -20,6 +20,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isNovelTitle } from "./bookTitle";
+import { releasesOf } from "./editionRows";
 import { factualOverrides } from "./moderationFields";
 import { decodeEntities } from "./text";
 
@@ -324,10 +325,7 @@ export async function workMatch(
     for (const row of coverage) {
       if (seen.has(row.editionId)) continue;
       seen.add(row.editionId);
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", row.editionId))
-        .collect();
+      const releases = await releasesOf(ctx, row.editionId);
       if (releases.some((r) => r.status === "active" && r.isbn13 && formats.has(r.format))) {
         return "different";
       }
@@ -450,10 +448,7 @@ export async function matchRelease(
         const edition = await ctx.db.get(coverage.editionId);
         if (!edition || edition.status !== "active") continue;
         const wholeVolume = await isWholeSingleVolume(ctx, edition);
-        const releases = await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect();
+        const releases = await releasesOf(ctx, edition._id);
         for (const release of releases) {
           if (release.status !== "active") continue;
           // A different ISBN-13 is a different Release by definition

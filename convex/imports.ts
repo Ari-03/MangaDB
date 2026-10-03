@@ -18,6 +18,7 @@ import {
 import type { MutationCtx } from "./_generated/server";
 import { getSourceByKey, recordSourceOutcome } from "./importSources";
 import { todaySortKey } from "./lib/dates";
+import { releasesOf } from "./lib/editionRows";
 import { sendAdminEmail } from "./lib/email";
 import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
@@ -419,10 +420,7 @@ export const attachCover = internalMutation({
       await drop(incoming, current?.storageId);
       return { attached: false, held: same && !frozen ? (current.storageId ?? "placeholder") : null };
     }
-    const siblings = await ctx.db
-      .query("releases")
-      .withIndex("by_edition", (q) => q.eq("editionId", release.editionId))
-      .collect();
+    const siblings = await releasesOf(ctx, release.editionId);
     const storageId =
       siblings.find(
         (r) => r._id !== release._id && r.status === "active" && r.coverImage?.sourceUrl === args.sourceUrl,

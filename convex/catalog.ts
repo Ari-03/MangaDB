@@ -11,6 +11,7 @@ import {
 import { publisherLink } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { coverUrl, seriesCover } from "./lib/covers";
+import { coverageOf, releasesOf } from "./lib/editionRows";
 import { groupEditions } from "./lib/editionGroups";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { canonicalPublisherFor } from "./lib/publishers";
@@ -598,10 +599,7 @@ export const seriesPage = query({
         : null;
 
       // The Edition's ordered Coverage within this Series.
-      const coverageRows = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
+      const coverageRows = await coverageOf(ctx, edition._id);
       const coverage = [];
       for (const cov of coverageRows) {
         const covered = volumeById.get(cov.volumeId);
@@ -614,12 +612,7 @@ export const seriesPage = query({
         });
       }
 
-      const releaseDocs = (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect()
-      ).filter((doc) => doc.status === "active");
+      const releaseDocs = (await releasesOf(ctx, edition._id)).filter((doc) => doc.status === "active");
       // A book's jacket: the first stored cover among its Releases; the page
       // falls back to ISBN-derived art (lib/cover.tsx) when there is none.
       let editionCover: string | null = null;

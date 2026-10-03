@@ -12,6 +12,7 @@ import { editionCover } from "./catalogPages";
 import { getActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { coverUrl } from "./lib/covers";
+import { releasesOf } from "./lib/editionRows";
 import { capture } from "./lib/posthog";
 import {
   omnibusEdition,
@@ -130,10 +131,7 @@ async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
   for (const row of covering) {
     const edition = await ctx.db.get(row.editionId);
     if (!edition || edition.status !== "active") continue;
-    const releases = await ctx.db
-      .query("releases")
-      .withIndex("by_edition", (q) => q.eq("editionId", row.editionId))
-      .collect();
+    const releases = await releasesOf(ctx, row.editionId);
     for (const release of releases) {
       if (release.status !== "active") continue;
       const url = await coverUrl(ctx, release.coverImage?.storageId);
