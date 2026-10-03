@@ -667,6 +667,30 @@ describe("shadowing as a status", () => {
     await moderate(t, held.commentId, "approve");
     expect(await statusOf(t, held.commentId)).toBe("shadowed");
   });
+
+  it("keeps a Shadowed User's Comments hidden while their account deletion waits for the purge", async () => {
+    const t = makeT();
+    const ids = await trustedSetup(t);
+    const held = await post(t, R2, ids, "https://a https://b https://c");
+    const shown = await post(t, R2, ids, "Published before the shadowing");
+    await t.withIdentity({ subject: MOD }).mutation(api.comments.setShadowed, { commentId: shown.commentId, shadowed: true });
+    // An approved row past setShadowed's cap: only the author's flag hides it.
+    await t.run((ctx) => ctx.db.patch(shown.commentId, { status: "approved" }));
+    expect((await listAs(t, null))!.items).toEqual([]);
+
+    // Deletion requested, the purge not yet run.
+    const authorId = await userIdOf(t, R2);
+    await t.run((ctx) => ctx.db.patch(authorId, { deletingSince: Date.now() }));
+
+    for (const subject of [null, R1]) expect((await listAs(t, subject))!.items).toEqual([]);
+    await moderate(t, held.commentId, "approve");
+    expect(await statusOf(t, held.commentId)).toBe("shadowed");
+    // The queue still flags the author as shadowed, and names nobody.
+    await t.run((ctx) => ctx.db.patch(shown.commentId, { reportCount: 1 }));
+    expect((await signedIn(t, bob).query(api.comments.queue, { tab: "reported" })).rows).toMatchObject([
+      { commentId: shown.commentId, username: null, authorShadowed: true },
+    ]);
+  });
 });
 
 describe("placeholders", () => {

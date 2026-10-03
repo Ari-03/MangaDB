@@ -1,7 +1,7 @@
 import { useClerk } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
-import { useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { countLibrary, LibraryCollection } from "~/lib/collection";
@@ -14,7 +14,7 @@ import { LibraryReading } from "~/lib/reading";
 import { MatureSettings } from "~/lib/mature";
 import { ScoreFormatSettings } from "~/lib/ratings";
 import { SharingSettings } from "~/lib/sharing";
-import { convexClient } from "~/providers";
+import { clerkEnabled, convexClient } from "~/providers";
 
 const TABS = [
   { key: "collection", label: "Collection" },
@@ -80,9 +80,18 @@ function MePage() {
     window.history.replaceState(window.history.state, "", viewHref(next.tab, next.shelf));
   };
 
+  if (viewerState.status === "deleting") {
+    // A session still signed in to an account being deleted (from another
+    // device, say): say so and end it.
+    return (
+      <main>
+        {clerkEnabled ? <SignOutDeleted /> : <p className="notice">Your account is being deleted.</p>}
+      </main>
+    );
+  }
   if (viewerState.status !== "ready") {
-    // Only "unconfigured" reaches the component; the /me gate redirects the
-    // signed-out and username-pending states.
+    // Only "unconfigured" is left; the /me gate redirects the signed-out
+    // and username-pending states.
     return (
       <main>
         <p className="notice">
@@ -243,9 +252,10 @@ function ShelfCountInner({ shelf }: { shelf: EntryState }) {
 
 /**
  * MangaDB-initiated account deletion (spec §9): one Convex mutation records
- * the request and schedules the removal of every MangaDB record and the
- * Clerk identity, then the local session is dropped. A refusal (the last
- * Administrator, say) changes nothing; asking twice is harmless.
+ * the request and schedules the removal of every MangaDB record, then of
+ * the Clerk identity, then the local session is dropped (SignOutDeleted).
+ * A refusal (the last Administrator, say) changes nothing; asking twice is
+ * harmless.
  */
 function DeleteAccount() {
   if (!convexClient) return null;
@@ -253,8 +263,6 @@ function DeleteAccount() {
 }
 
 function DeleteAccountInner() {
-  const clerk = useClerk();
-  const navigate = useNavigate();
   const deleteAccount = useMutation(api.users.deleteAccount);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -280,17 +288,9 @@ function DeleteAccountInner() {
     }
     // The account now counts as gone; clear the local session and leave.
     setDeleting(true);
-    await clerk.signOut();
-    await navigate({ to: "/" });
   };
 
-  if (deleting) {
-    return (
-      <div className="danger-zone">
-        <p>Your account is being deleted. Signing you out…</p>
-      </div>
-    );
-  }
+  if (deleting) return <SignOutDeleted />;
 
   return (
     <div className="danger-zone">
@@ -319,6 +319,59 @@ function DeleteAccountInner() {
         </button>
       )}
       {error ? <p className="form-error">{error}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Signs out a session whose account deletion is under way, then goes home.
+ * The deletion goes ahead whether or not this works, so a failed sign-out
+ * says both, with another try and a way off the page.
+ */
+function SignOutDeleted() {
+  const clerk = useClerk();
+  const navigate = useNavigate();
+  const [failed, setFailed] = useState(false);
+  const started = useRef(false);
+
+  const signOut = useCallback(async () => {
+    setFailed(false);
+    try {
+      await clerk.signOut();
+    } catch {
+      setFailed(true);
+      return;
+    }
+    await navigate({ to: "/" });
+  }, [clerk, navigate]);
+
+  // Once on arrival; the button retries.
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void signOut();
+  }, [signOut]);
+
+  if (!failed) {
+    return (
+      <div className="danger-zone">
+        <p>Your account is being deleted. Signing you out…</p>
+      </div>
+    );
+  }
+  return (
+    <div className="danger-zone">
+      <p>
+        Your account is being deleted; that goes ahead on its own. Signing you
+        out of this browser failed, though. Check your connection and try
+        again, or leave this page.
+      </p>
+      <div className="danger-actions">
+        <button type="button" onClick={() => void signOut()}>
+          Try signing out again
+        </button>
+        <Link to="/">Leave this page</Link>
+      </div>
     </div>
   );
 }

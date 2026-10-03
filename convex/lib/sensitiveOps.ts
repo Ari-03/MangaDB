@@ -1746,8 +1746,8 @@ async function ownerExists(ctx: MutationCtx, doc: unknown): Promise<boolean> {
 /**
  * Personal snapshots a deleted User left in merge manifests, removed from one
  * page of manifests at a time. The account purge (users.purgeUser), once it
- * has deleted the User, schedules internal.users.redactMergeManifests, which
- * calls this per page; Split then has nothing of theirs to reinsert.
+ * has emptied the User's tables, schedules internal.users.redactMergeManifests,
+ * which calls this per page; Split then has nothing of theirs to reinsert.
  */
 export async function redactUserFromManifests(
   ctx: MutationCtx,

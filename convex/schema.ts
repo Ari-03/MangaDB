@@ -972,8 +972,13 @@ export default defineSchema({
     scoreFormat: v.optional(scoreFormatValidator),
     // When the User asked to delete their account (users.deleteAccount).
     // From then on they count as gone (lib/auth.ts) while the purge empties
-    // their personal rows; the row itself goes last.
+    // their personal rows; the row itself goes last, once Clerk confirms
+    // the sign-in is deleted.
     deletingSince: v.optional(v.number()),
+    // When the purge found every personal table empty (users.purgeUser).
+    // Set only on a deleting User, whose row then waits for the Clerk
+    // deletion and holds nothing but itself.
+    purgedAt: v.optional(v.number()),
   })
     .index("by_clerkSubject", ["clerkSubject"])
     .index("by_username", ["usernameNormalized"])

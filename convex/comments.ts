@@ -190,13 +190,22 @@ function shownAs(comment: Comment, author: User | null, viewer: User | null): Sh
   return "approved";
 }
 
-/** Memoised author lookups for one query; an account being deleted reads as gone. */
+/**
+ * Memoised author lookups for one query. The row is returned even while its
+ * account deletion is under way, so `shownAs` still sees a Shadowed User's
+ * flag; only the name (`authorName`) reads such an author as gone.
+ */
 function authorCache(ctx: QueryCtx) {
   const cache = new Map<Id<"users">, User | null>();
   return async (userId: Id<"users">) => {
-    if (!cache.has(userId)) cache.set(userId, await liveUser(ctx, userId));
+    if (!cache.has(userId)) cache.set(userId, await ctx.db.get(userId));
     return cache.get(userId) ?? null;
   };
+}
+
+/** The name a Comment is signed with: none once its author's account is gone or being deleted. */
+function authorName(author: User | null): string | null {
+  return author && author.deletingSince === undefined ? author.username : null;
 }
 type AuthorOf = ReturnType<typeof authorCache>;
 
@@ -206,7 +215,7 @@ function card(comment: Comment, author: User | null, viewer: User | null, state:
   const hideBody = placeholder || state === "hidden";
   return {
     commentId: comment._id,
-    username: placeholder ? null : (author?.username ?? null),
+    username: placeholder ? null : authorName(author),
     own: !placeholder && viewer !== null && comment.userId === viewer._id,
     state,
     body: hideBody ? "" : comment.body,
@@ -568,7 +577,8 @@ export const moderate = mutation({
       }
     }
     if (to === "approved") {
-      const author = await liveUser(ctx, comment.userId);
+      // The author's own row, even mid-deletion: a Shadowed User's Comment stays shadowed.
+      const author = await ctx.db.get(comment.userId);
       await dismissReports(ctx, comment);
       await patchComment(ctx, comment, {
         status: author?.commentShadowed ? "shadowed" : "approved",
@@ -686,7 +696,7 @@ export const queue = query({
               title: volumeTitle(series?.title ?? "", volume.label ?? null),
             }
           : { kind: "series" as const, publicId: series?.publicId ?? 0, title: series?.title ?? "(gone)" },
-        username: author?.username ?? null,
+        username: authorName(author),
         authorShadowed: Boolean(author?.commentShadowed),
         isReply: comment.parentId !== undefined,
         body: comment.body,

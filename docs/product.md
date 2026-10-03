@@ -243,13 +243,17 @@ are reinstated.
 
 Settings, Account deletes the account. The request is recorded first;
 from then on the user counts as gone: the profile returns not found, every
-personal page treats them as signed out, and the browser signs out. Their
-collection, reading, follows, ratings, reviews, favorites, comments and
-reports are then deleted in batches, the user row last, which frees the
-username. The Clerk sign-in is deleted alongside, with retries. If those
-fail, the person can sign in to an empty account and delete it again. The
-last active Administrator is refused until they appoint another.
-Revisions, Proposals and audit rows stay, credited to a deleted account.
+personal page treats them as signed out, and the browser signs out. If
+signing out fails, the page says the deletion goes ahead and offers
+another try. Their collection, reading, follows, ratings, reviews,
+favorites, comments and reports are then deleted in batches. Then the
+Clerk sign-in is deleted, with retries, and the user row last, which frees
+the username. Until then, a session on another device that opens `/me` is
+told the account is being deleted and signed out, and the sign-in cannot
+claim a new username. If Clerk keeps failing, an operator finishes it
+([operations](operations.md#account-deletion)). The last active
+Administrator is refused until they appoint another. Revisions, Proposals
+and audit rows stay, credited to a deleted account.
 
 ## Ratings and reviews
 

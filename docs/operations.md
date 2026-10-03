@@ -105,18 +105,37 @@ return after their first action and finish in scheduled continuations.
 ## Account deletion
 
 A user's request (`users.deleteAccount`) sets `deletingSince` on their
-`users` row and schedules two things that need no operator:
-`users:purgeUser`, which deletes their personal rows 200 at a time and the
-row itself last, and `users:deleteClerkIdentity`, which deletes the Clerk
-sign-in and retries five times over about seven hours. If Clerk still
-refuses, the function log has "Gave up deleting Clerk identity" with the
-subject; delete that user in the Clerk dashboard. Their data is gone
-either way.
+`users` row and schedules the rest, in this order, with no operator:
 
-A row with `deletingSince` that stays for more than a few minutes is a
-purge that stopped. Find the error in the logs, then restart it:
-`npx convex run users:purgeUser '{"userId":"…"}'`. It only acts on a row
-marked deleting, so a rerun is safe.
+1. `users:purgeUser` deletes their personal rows, 200 a run and at most 8
+   Ratings a run (each Series Rating reads and may rewrite a library pack
+   of up to 1 MiB). The run that finds every table empty sets `purgedAt`
+   and schedules the next two.
+2. `users:redactMergeManifests` drops their rows from merge manifests.
+3. `users:deleteClerkIdentity` deletes the Clerk sign-in, retrying five
+   times over about seven hours. Once Clerk confirms (a 404 counts), it
+   deletes the `users` row, which frees the username.
+
+Until the row goes, the identity can still sign in to Clerk, but MangaDB
+treats it as gone: it cannot use the account or claim a new username.
+
+Two states need an operator:
+
+- `deletingSince` set, `purgedAt` unset, for more than a few minutes: a
+  purge that stopped. Find the error in the logs, then restart it:
+  `npx convex run users:purgeUser '{"userId":"…"}'`. It only acts on a row
+  marked deleting and not yet purged, so a rerun is safe.
+- `deletingSince` and `purgedAt` both set, and the log has "Gave up
+  deleting Clerk identity": Clerk refused every attempt. The row holds
+  nothing but itself. Once Clerk is reachable (or after deleting the user
+  in the Clerk dashboard), run the command the log gives:
+  `npx convex run users:deleteClerkIdentity '{"clerkSubject":"…","attempt":0}'`.
+  It deletes the identity, treats a 404 as done, deletes the row, and
+  retries on its own again if Clerk still fails.
+
+A user asking again while their row is marked changes nothing. An identity
+with no `users` row (no username claimed) gets only step 3, which stops
+without calling Clerk if the identity has claimed a username since.
 
 ## Catalog repair tool
 

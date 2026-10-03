@@ -14,8 +14,8 @@ ignoring case, checked against the reserved list in
 `convex/lib/usernames.ts`, and can be changed, which frees the old one at
 once. Account deletion (`/me`, Settings, Account) is one Convex mutation
 that marks the user as deleting and schedules the rest: a batched purge of
-every MangaDB record of that user, and the deletion of the Clerk identity
-through Clerk's Backend API, retried if Clerk fails
+every MangaDB record of that user, then the deletion of the Clerk identity
+through Clerk's Backend API, retried if Clerk fails, then the user row
 ([operations](operations.md#account-deletion)).
 
 On each server request `clerkMiddleware()` (`src/start.ts`) authenticates.

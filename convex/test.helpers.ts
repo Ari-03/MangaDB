@@ -97,11 +97,12 @@ export async function seedTeam(t: TestT, users: readonly TestUser[]) {
 }
 
 /**
- * Purges `subject`'s account as users.deleteAccount would, without the
- * Clerk half: marks their User deleting, then runs purgeUser until the row
- * is gone. What the purge schedules (its own continuations, now no-ops, and
- * the manifest redaction) stays queued for `drain`. A no-op for a subject
- * with no User.
+ * Purges `subject`'s account as users.deleteAccount would, with Clerk
+ * answering at once: marks their User deleting, runs purgeUser until it
+ * sets `purgedAt`, then stands in for the Clerk deletion it scheduled,
+ * cancelling it and removing the row as a confirmed one does
+ * (removePurgedUser). The manifest redaction the purge schedules stays
+ * queued for `drain`. A no-op for a subject with no User.
  */
 export async function purgeAccount(t: TestT, subject: string) {
   const userId = await t.run(async (ctx) => {
@@ -112,9 +113,16 @@ export async function purgeAccount(t: TestT, subject: string) {
     if (user) await ctx.db.patch(user._id, { deletingSince: Date.now() });
     return user?._id ?? null;
   });
-  while (userId && (await t.run((ctx) => ctx.db.get(userId)))) {
+  if (!userId) return;
+  while ((await t.run((ctx) => ctx.db.get(userId)))?.purgedAt === undefined) {
     await t.mutation(internal.users.purgeUser, { userId });
   }
+  await t.run(async (ctx) => {
+    for (const job of await ctx.db.system.query("_scheduled_functions").collect()) {
+      if (job.name.endsWith("deleteClerkIdentity") && job.state.kind === "pending") await ctx.scheduler.cancel(job._id);
+    }
+  });
+  await t.mutation(internal.users.removePurgedUser, { clerkSubject: subject });
 }
 
 // ---------- import runs ----------

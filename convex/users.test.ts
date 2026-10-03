@@ -4,9 +4,9 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { purgeUserComments } from "./comments";
 import { applyRatingDelta } from "./lib/ratings";
-import { seedCatalog } from "./test.factories";
+import { insertSeries, seedCatalog } from "./test.factories";
 import { alice, bob, makeT, purgeAccount, seedTeam, signedIn, type TestT } from "./test.helpers";
-import { CLERK_RETRY_DELAYS, PURGE_BATCH } from "./users";
+import { CLERK_RETRY_DELAYS, PURGE_BATCH, PURGE_RATINGS } from "./users";
 
 const SUBJECT_A = "user_2abc";
 const SUBJECT_B = "user_2xyz";
@@ -237,6 +237,15 @@ function without(rows: PersonalRows, userId: Id<"users">): PersonalRows {
 }
 
 describe("users.purgeUser", () => {
+  // Fake timers: the Clerk deletion a finished purge schedules never fires
+  // into a later test's stubs.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("removes the User and every personal record, and nobody else's", async () => {
     const t = makeT();
     const { leaving, staying } = await seedTwoUsers(t);
@@ -275,7 +284,7 @@ describe("users.purgeUser", () => {
     expect(await personalRows(t)).toEqual(before);
   });
 
-  it("purges more rows than one run holds across several runs, the User last", async () => {
+  it("purges more rows than one run holds across several runs, PURGE_RATINGS Ratings a run, keeping the row", async () => {
     const t = makeT({ transactionLimits: true });
     const { leaving, staying, seriesId } = await t.run(async (ctx) => {
       const { seriesId, volumeId, releaseId } = await seedCatalog(ctx);
@@ -292,9 +301,11 @@ describe("users.purgeUser", () => {
       const staying = await user("staying", SUBJECT_B);
       const target = { kind: "series" as const, id: seriesId };
       // Duplicate rows stand in for a large library: only the count matters here.
-      for (let i = 0; i < PURGE_BATCH + 50; i++) {
+      for (let i = 0; i < 50; i++) {
         await ctx.db.insert("ratings", { userId: leaving, seriesId, score: 40, updatedAt: 0 });
         await applyRatingDelta(ctx, target, null, 40);
+      }
+      for (let i = 0; i < PURGE_BATCH + 50; i++) {
         await ctx.db.insert("collectionEntries", { userId: leaving, releaseId, state: "owned" });
       }
       for (let i = 0; i < 80; i++) {
@@ -313,6 +324,7 @@ describe("users.purgeUser", () => {
           (await ctx.db.query(table).collect()).filter((row) => row.userId === leaving).length;
         return {
           user: await ctx.db.get(leaving),
+          ratings: await theirs("ratings"),
           left:
             (await theirs("ratings")) +
             (await theirs("collectionEntries")) +
@@ -322,33 +334,142 @@ describe("users.purgeUser", () => {
             .query("ratingStats")
             .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
             .unique(),
+          jobs: (await ctx.db.system.query("_scheduled_functions").collect()).map((job) => job.name),
         };
       });
 
-    // 660 rows at PURGE_BATCH (200) a run: four runs, the User only in the last.
+    // 460 rows: the other tables empty in three runs, while the 50 Ratings
+    // go PURGE_RATINGS a run. The run that reads every table to its end
+    // marks the row purged and hands it to the Clerk deletion.
     let runs = 0;
     for (;;) {
       await t.mutation(internal.users.purgeUser, { userId: leaving });
       runs += 1;
       const now = await state();
-      if (now.user === null) {
+      expect(now.user).not.toBeNull();
+      if (now.user?.purgedAt !== undefined) {
         expect(now.left).toBe(0);
         break;
       }
       expect(now.left).toBeGreaterThan(0);
       if (runs === 1) {
-        // The first run took 200 Ratings and moved the aggregate with each.
-        expect(now.stats).toMatchObject({ count: 51, sum: 50 * 40 + 90 });
+        // A full batch: PURGE_RATINGS Ratings, each moving the aggregate, and the rest of PURGE_BATCH.
+        expect(now.left).toBe(460 - PURGE_BATCH);
+        expect(now.stats).toMatchObject({ count: 51 - PURGE_RATINGS, sum: (50 - PURGE_RATINGS) * 40 + 90 });
       }
     }
-    expect(runs).toBe(4);
-    expect((await state()).stats).toMatchObject({ count: 1, sum: 90 });
+    expect(runs).toBe(Math.ceil(50 / PURGE_RATINGS));
+    const end = await state();
+    expect(end.stats).toMatchObject({ count: 1, sum: 90 });
+    expect(end.jobs.filter((name) => name.endsWith("deleteClerkIdentity"))).toHaveLength(1);
+    expect(end.jobs.filter((name) => name.endsWith("redactMergeManifests"))).toHaveLength(1);
+
+    // Purged rows are not purged again: another run schedules nothing.
+    await t.mutation(internal.users.purgeUser, { userId: leaving });
+    expect((await state()).jobs).toEqual(end.jobs);
+
     const kept = await t.run(async (ctx) => ({
       user: await ctx.db.get(staying),
       entries: await ctx.db.query("collectionEntries").collect(),
     }));
     expect(kept.user).not.toBeNull();
     expect(kept.entries).toMatchObject([{ userId: staying }]);
+  });
+
+  it("purges 200 Series Ratings beside ~400 KB library packs within transaction limits, projections exact", async () => {
+    const t = makeT({ transactionLimits: true });
+    const SERIES = 200;
+    // Every fourth Series has three other raters, so removing this rating
+    // moves its rank and rewrites the pack; the rest lose their only rating.
+    const shared = (publicId: number) => publicId % 4 === 0;
+    const leaving = await t.run(async (ctx) => {
+      const user = (username: string) =>
+        ctx.db.insert("users", {
+          clerkSubject: `user_${username}`,
+          username,
+          usernameNormalized: username,
+          formatPreference: "both",
+          ownershipVisibility: "private",
+          readingVisibility: "private",
+        });
+      const leaving = await user("leaving");
+      const others = [await user("other1"), await user("other2"), await user("other3")];
+      const entries = Array.from({ length: 1000 }, (_, publicId) => ({
+        publicId,
+        titleSort: `a reasonably long series title ${publicId}`,
+        searchKey: `a reasonably long series title ${publicId} alternative title in english another alternative title`,
+        sourceStatus: "ongoing" as const,
+        publishers: [{ name: "Publisher", slug: "publisher" }],
+        hasPhysical: true,
+        hasDigital: true,
+        volumeCount: 10,
+        latestReleaseSort: 20260901,
+        nextReleaseSort: 20261010,
+        lastReleasedSort: 20260901,
+        followers: 0,
+        collectors: 0,
+        ratingRank: publicId >= 1 && publicId <= SERIES && shared(publicId) ? 70 : 0,
+      }));
+      await ctx.db.insert("seriesStatsPacks", { block: 0, entries });
+      for (let publicId = 1; publicId <= SERIES; publicId++) {
+        const seriesId = await insertSeries(ctx, { publicId });
+        const entry = entries[publicId]!;
+        // Three others at 60 and this user at 100: 70 over four ratings.
+        const raters = shared(publicId) ? others : [];
+        await ctx.db.insert("seriesStats", {
+          ...entry,
+          seriesId,
+          title: entry.titleSort,
+          letter: "a",
+          releaseCount: 10,
+          firstReleaseSort: 20200101,
+          coverUrl: null,
+          coverIsbn: null,
+          rebuiltAt: 0,
+          ratingCount: raters.length + 1,
+          ratingAverage: raters.length ? 70 : 100,
+        });
+        await ctx.db.insert("ratings", { userId: leaving, seriesId, score: 100, updatedAt: 0 });
+        for (const userId of raters) await ctx.db.insert("ratings", { userId, seriesId, score: 60, updatedAt: 0 });
+        await ctx.db.insert("ratingStats", { seriesId, sum: 100 + 60 * raters.length, count: raters.length + 1 });
+      }
+      await ctx.db.patch(leaving, { deletingSince: Date.now() });
+      return leaving;
+    });
+    const packBytes = await t.run(async (ctx) => JSON.stringify(await ctx.db.query("seriesStatsPacks").first()).length);
+    expect(packBytes).toBeGreaterThan(350_000);
+
+    let runs = 0;
+    while ((await t.run((ctx) => ctx.db.get(leaving)))?.purgedAt === undefined) {
+      await t.mutation(internal.users.purgeUser, { userId: leaving });
+      runs += 1;
+    }
+    // Full runs of PURGE_RATINGS, then one more: a full take never proves the table empty.
+    expect(runs).toBe(Math.floor(SERIES / PURGE_RATINGS) + 1);
+
+    const end = await t.run(async (ctx) => ({
+      series: await ctx.db.query("series").collect(),
+      stats: await ctx.db.query("ratingStats").collect(),
+      library: await ctx.db.query("seriesStats").collect(),
+      pack: (await ctx.db.query("seriesStatsPacks").first())!.entries,
+      theirs: (await ctx.db.query("ratings").collect()).filter((row) => row.userId === leaving),
+    }));
+    expect(end.theirs).toEqual([]);
+    for (const series of end.series) {
+      const stats = end.stats.find((row) => row.seriesId === series._id);
+      const library = end.library.find((row) => row.seriesId === series._id);
+      const packed = end.pack.find((entry) => entry.publicId === series.publicId);
+      if (shared(series.publicId)) {
+        expect(stats).toMatchObject({ sum: 180, count: 3 });
+        expect(library).toMatchObject({ ratingCount: 3, ratingAverage: 60, ratingRank: 60 });
+        expect(packed?.ratingRank).toBe(60);
+      } else {
+        expect(stats).toBeUndefined();
+        expect(library).toMatchObject({ ratingCount: 0, ratingRank: 0 });
+        expect(library?.ratingAverage).toBeUndefined();
+        expect(packed?.ratingRank).toBe(0);
+      }
+    }
   });
 
   it("drains Comments a bounded amount at a time, keeping other authors' rows and counts", async () => {
@@ -448,6 +569,15 @@ describe("users.deleteAccount", () => {
     return vi.spyOn(console, "error").mockImplementation(() => {});
   };
   const scheduled = (t: TestT) => t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+  /** Runs every scheduled function already due, and what they schedule at once; later retries wait. */
+  const runDue = async (t: TestT) => {
+    for (;;) {
+      const due = (await scheduled(t)).filter((job) => job.state.kind === "pending" && job.scheduledTime <= Date.now());
+      if (due.length === 0) return;
+      vi.advanceTimersByTime(0);
+      await t.finishInProgressScheduledFunctions();
+    }
+  };
   const deletingSince = (t: TestT, userId: Id<"users">) =>
     t.run(async (ctx) => (await ctx.db.get(userId))?.deletingSince ?? null);
   // Fake timers from the start: scheduled work runs only when a test
@@ -495,6 +625,10 @@ describe("users.deleteAccount", () => {
       data: { code: "unauthenticated" },
     });
     expect(await asA.query(api.users.viewer, {})).toBeNull();
+    // Only deletionPending tells this session from a signed-out one.
+    expect(await asA.query(api.users.deletionPending, {})).toBe(true);
+    expect(await t.query(api.users.deletionPending, {})).toBe(false);
+    expect(await t.withIdentity({ subject: SUBJECT_B }).query(api.users.deletionPending, {})).toBe(false);
     // Overlay queries read the viewer as signed out.
     expect(await asA.query(api.collection.myLibrary, {})).toBeNull();
     expect(await t.query(api.sharing.publicProfile, { username: "leaving" })).toBeNull();
@@ -509,7 +643,7 @@ describe("users.deleteAccount", () => {
     ).rejects.toThrow(/taken/);
     expect((await personalRows(t)).users.map((row) => row._id)).toContain(leaving);
 
-    // Once the purge is done, the name is free.
+    // Once the purge is done and Clerk has confirmed, the name is free.
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     await t.withIdentity({ subject: "user_new" }).mutation(api.users.claimUsername, { username: "leaving" });
   });
@@ -541,7 +675,38 @@ describe("users.deleteAccount", () => {
     expect(await personalRows(t)).toEqual(without(before, leaving));
   });
 
-  it("purges anyway when Clerk keeps failing, and stops after its retries; asking again works", async () => {
+  it("keeps the marked row until a Clerk retry succeeds, so the identity cannot start a new account meanwhile", async () => {
+    const t = makeT();
+    const { leaving } = await seedTwoUsers(t);
+    const before = await personalRows(t);
+    const requests = stubClerk(503, 200);
+    quiet();
+    const asA = t.withIdentity({ subject: SUBJECT_A });
+
+    await asA.mutation(api.users.deleteAccount, {});
+    await runDue(t);
+
+    // The purge finished and Clerk failed once: the row stays, marked and empty-handed.
+    expect(requests).toHaveLength(1);
+    const rows = await personalRows(t);
+    expect(rows).toEqual({ ...without(before, leaving), users: rows.users });
+    expect(rows.users.find((row) => row._id === leaving)).toMatchObject({
+      deletingSince: expect.any(Number),
+      purgedAt: expect.any(Number),
+    });
+    // The identity, still valid at Clerk, can neither use it nor claim another.
+    expect(await asA.query(api.users.viewer, {})).toBeNull();
+    expect(await asA.query(api.users.deletionPending, {})).toBe(true);
+    await expect(asA.mutation(api.users.claimUsername, { username: "after" })).rejects.toMatchObject({
+      data: { code: "unauthenticated" },
+    });
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(requests).toHaveLength(2);
+    expect(await personalRows(t)).toEqual(without(before, leaving));
+  });
+
+  it("holds the purged row when Clerk keeps failing, logs the retry command, and the manual retry finishes it", async () => {
     const t = makeT();
     const { leaving } = await seedTwoUsers(t);
     const before = await personalRows(t);
@@ -553,22 +718,50 @@ describe("users.deleteAccount", () => {
     await t.finishAllScheduledFunctions(vi.runAllTimers);
 
     expect(requests).toHaveLength(CLERK_RETRY_DELAYS.length + 1);
-    expect(errors).toHaveBeenCalledWith(expect.stringContaining("Gave up deleting Clerk identity"));
-    expect(await personalRows(t)).toEqual(without(before, leaving));
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringMatching(/Gave up deleting Clerk identity user_2abc .*npx convex run users:deleteClerkIdentity/),
+    );
+    // Every personal table is empty; only the marked row is left.
+    const rows = await personalRows(t);
+    expect(rows).toEqual({ ...without(before, leaving), users: rows.users });
+    expect(rows.users.find((row) => row._id === leaving)?.purgedAt).toEqual(expect.any(Number));
 
-    // The identity still signs in, to no account, and can ask again.
-    expect(await asA.query(api.users.viewer, {})).toEqual({ needsUsername: true });
+    // Asking again schedules nothing, and neither does another purge run.
+    const queued = (await scheduled(t)).length;
+    expect(await asA.mutation(api.users.deleteAccount, {})).toBeNull();
+    await t.mutation(internal.users.purgeUser, { userId: leaving });
+    expect(await scheduled(t)).toHaveLength(queued);
+    await expect(asA.mutation(api.users.claimUsername, { username: "comeback" })).rejects.toMatchObject({
+      data: { code: "unauthenticated" },
+    });
+
+    // The operator's retry, once Clerk answers.
     const retried = stubClerk(200);
-    await asA.mutation(api.users.deleteAccount, {});
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await t.action(internal.users.deleteClerkIdentity, { clerkSubject: SUBJECT_A, attempt: 0 });
     expect(retried).toHaveLength(1);
+    expect(await personalRows(t)).toEqual(without(before, leaving));
+  });
 
-    // Or claim a fresh account, and delete that.
-    await asA.mutation(api.users.claimUsername, { username: "comeback" });
-    await asA.mutation(api.users.deleteAccount, {});
+  it("deletes an identity with no account through Clerk alone, and spares an account it claims before a retry", async () => {
+    const t = makeT();
+    await seedTwoUsers(t);
+    const requests = stubClerk(503, 200);
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const asNew = t.withIdentity({ subject: "user_unclaimed" });
+
+    expect(await asNew.mutation(api.users.deleteAccount, {})).toBeNull();
+    expect((await scheduled(t)).map((job) => job.name)).toEqual([expect.stringContaining("deleteClerkIdentity")]);
+    await runDue(t);
+    expect(requests).toHaveLength(1);
+
+    // A username claimed before the retry is a new account; the retry leaves it be.
+    await asNew.mutation(api.users.claimUsername, { username: "fresh" });
+    await asNew.mutation(api.users.setScoreFormat, { format: "star5" });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
-    expect(retried).toHaveLength(2);
-    expect((await personalRows(t)).users.map((row) => row.username)).toEqual(["staying"]);
+
+    expect(requests).toHaveLength(1);
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining("Not deleting Clerk identity user_unclaimed"));
+    expect(await asNew.query(api.users.viewer, {})).toMatchObject({ username: "fresh", scoreFormat: "star5" });
   });
 
   it("answers a second request with the same result and schedules nothing more", async () => {

@@ -9,6 +9,7 @@ import { internal } from "./_generated/api";
 import {
   internalAction,
   internalMutation,
+  internalQuery,
   mutation,
   query,
 } from "./_generated/server";
@@ -23,8 +24,9 @@ import { validateUsername } from "./lib/usernames";
 
 /**
  * The signed-in viewer's account state; null when signed out or while their
- * account deletion is under way. Drives the routing decision between the
- * /me shell and the forced username claim.
+ * account deletion is under way (deletionPending tells the two apart).
+ * Drives the routing decision between the /me shell and the forced
+ * username claim.
  */
 export const viewer = query({
   args: {},
@@ -51,13 +53,30 @@ export const viewer = query({
 });
 
 /**
+ * Whether the signed-in identity's account deletion is under way, which
+ * users.viewer and every other query read as signed out. /me asks when
+ * the viewer is null, so a session still signed in to Clerk is told its
+ * account is being deleted and signed out, instead of being sent to
+ * sign in again.
+ */
+export const deletionPending = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return false;
+    const user = await getUserBySubject(ctx, identity.subject);
+    return user?.deletingSince !== undefined;
+  },
+});
+
+/**
  * Claim (or change) the viewer's username. First claim creates the User just
  * in time with private-by-default visibility. A change releases the old
  * name immediately — uniqueness is only ever the normalized-copy index lookup
  * at claim time, so the freed name is claimable in the next mutation. A
  * suspended User cannot change theirs. A User whose account deletion is
- * under way can do neither, and keeps their name taken until the purge
- * deletes their row.
+ * under way can do neither, and keeps their name taken until their row
+ * goes, after the purge and the Clerk deletion.
  */
 export const claimUsername = mutation({
   args: { username: v.string() },
@@ -140,16 +159,18 @@ export const setScoreFormat = mutation({
 });
 
 /**
- * Delete the viewer's account. One transaction marks the User as deleting
- * (`deletingSince`; from then on they count as gone, lib/auth.ts) and
- * schedules both halves, which commit with the mark and run independently:
- * purgeUser empties their personal tables in bounded runs and deletes the
- * User last, and deleteClerkIdentity removes the Clerk sign-in, retrying
- * on its own. Refused for the last active Administrator. Asking again while
- * a deletion is under way changes nothing. An identity with no User (no
- * username claimed yet, or purged while the Clerk deletion failed) gets the
- * Clerk deletion alone. Needs CLERK_SECRET_KEY on the Convex deployment;
- * without it nothing is marked or scheduled.
+ * Delete the viewer's account: the purge, then the Clerk sign-in, then the
+ * User row. One transaction marks the User as deleting (`deletingSince`;
+ * from then on they count as gone, lib/auth.ts) and schedules purgeUser,
+ * which empties their personal tables in bounded runs. Its last run
+ * schedules deleteClerkIdentity, and the row goes only once Clerk confirms
+ * the sign-in is gone (removePurgedUser): until then the marked row keeps
+ * the identity out of the account and from claiming a new one. Refused for
+ * the last active Administrator. Asking again while a deletion is under
+ * way, or waiting on Clerk, changes nothing. An identity with no User (no
+ * username claimed yet) gets the Clerk deletion alone. Needs
+ * CLERK_SECRET_KEY on the Convex deployment; without it nothing is marked
+ * or scheduled.
  */
 export const deleteAccount = mutation({
   args: {},
@@ -169,11 +190,12 @@ export const deleteAccount = mutation({
       );
       await ctx.db.patch(user._id, { deletingSince: Date.now() });
       await ctx.scheduler.runAfter(0, internal.users.purgeUser, { userId: user._id });
+    } else {
+      await ctx.scheduler.runAfter(0, internal.users.deleteClerkIdentity, {
+        clerkSubject: identity.subject,
+        attempt: 0,
+      });
     }
-    await ctx.scheduler.runAfter(0, internal.users.deleteClerkIdentity, {
-      clerkSubject: identity.subject,
-      attempt: 0,
-    });
     return null;
   },
 });
@@ -187,23 +209,38 @@ const MINUTE = 60 * 1000;
 export const CLERK_RETRY_DELAYS = [MINUTE / 2, 2 * MINUTE, 10 * MINUTE, 60 * MINUTE, 6 * 60 * MINUTE];
 
 /**
- * Delete a Clerk identity through the Backend API. A 404 means it is already
- * gone, which counts as done. A failed call (an error status, a network
- * error, a missing CLERK_SECRET_KEY) reschedules this action after the next
- * CLERK_RETRY_DELAYS wait; past the last it logs an error and stops. The
- * account purge never waits on it: if it gives up, the identity can still
- * sign in, to an empty account, and delete it again.
+ * Delete a Clerk identity through the Backend API, then its purged User row
+ * (removePurgedUser). A 404 means the identity is already gone, which
+ * counts as done. A failed call (an error status, a network error, a
+ * missing CLERK_SECRET_KEY) reschedules this action after the next
+ * CLERK_RETRY_DELAYS wait; past the last it logs an error with the command
+ * that retries it and stops, leaving the marked row in place. Run with
+ * `attempt: 0` by hand, it is that retry.
+ *
+ * Before each attempt it stops if the subject holds a live (unmarked) User,
+ * which only an identity that had no User when it asked can come to hold:
+ * that account is new, and its sign-in stays. A username claimed while the
+ * DELETE is in flight is not caught, and loses its sign-in with the rest;
+ * that identity had no data when it asked, and the window is one request.
  */
 export const deleteClerkIdentity = internalAction({
   args: { clerkSubject: v.string(), attempt: v.number() },
   handler: async (ctx, { clerkSubject, attempt }) => {
+    if (await ctx.runQuery(internal.users.holdsLiveUser, { clerkSubject })) {
+      console.warn(`Not deleting Clerk identity ${clerkSubject}: it has claimed a new account since asking.`);
+      return null;
+    }
     const failure = await deleteFromClerk(clerkSubject);
-    if (failure === null) return null;
+    if (failure === null) {
+      await ctx.runMutation(internal.users.removePurgedUser, { clerkSubject });
+      return null;
+    }
     const delay = CLERK_RETRY_DELAYS[attempt];
     if (delay === undefined) {
       console.error(
         `Gave up deleting Clerk identity ${clerkSubject} after ${attempt + 1} attempts (${failure}). ` +
-          "Its MangaDB data is purged regardless; delete the identity in the Clerk dashboard.",
+          "Its MangaDB data is purged; its User row stays, marked deleting, until the identity is gone. " +
+          `Once Clerk is reachable, run: npx convex run users:deleteClerkIdentity '{"clerkSubject":"${clerkSubject}","attempt":0}'`,
       );
       return null;
     }
@@ -231,55 +268,101 @@ async function deleteFromClerk(clerkSubject: string): Promise<string | null> {
   }
 }
 
+/** Whether a Clerk subject holds a User that is not being deleted. */
+export const holdsLiveUser = internalQuery({
+  args: { clerkSubject: v.string() },
+  handler: async (ctx, { clerkSubject }) => {
+    const user = await getUserBySubject(ctx, clerkSubject);
+    return user !== null && user.deletingSince === undefined;
+  },
+});
+
 /**
- * The most rows one purgeUser run deletes or detaches. Each costs a few
- * reads and at most two writes (a Rating also moves its target's
- * ratingStats row, a filed Comment Report its Comment's count), and the
- * largest row is a Review of at most 5,000 characters. So a run reads and
- * writes at most a few hundred documents and a few megabytes, well inside
- * a transaction's limits.
+ * Delete a subject's User row once its Clerk identity is gone, only if it
+ * is still the marked row the purge has emptied (`purgedAt`). Anything else
+ * (no row, a live one, a purge still running) is left alone; a running
+ * purge schedules the Clerk deletion again when it finishes.
+ */
+export const removePurgedUser = internalMutation({
+  args: { clerkSubject: v.string() },
+  handler: async (ctx, { clerkSubject }) => {
+    const user = await getUserBySubject(ctx, clerkSubject);
+    if (user?.deletingSince === undefined || user.purgedAt === undefined) return;
+    await ctx.db.delete(user._id);
+  },
+});
+
+/**
+ * The most rows one purgeUser run deletes or detaches, Ratings included.
+ * Every row but a Rating is small: deleting a Review (at most 5,000
+ * characters), a Comment (2,000) or a tracking row, or detaching a reply,
+ * reads and writes at most two such documents (the row, and a Comment a
+ * report counted on or a reply belonged to), under 16 KB each way. So the
+ * batch, Ratings aside, stays near 3 MB read and written.
  */
 export const PURGE_BATCH = 200;
 
 /**
- * Empty a deleting User's personal tables, PURGE_BATCH rows per run,
- * rescheduling itself until a run finds every table empty. That run, in
- * the same transaction, deletes the User and schedules
- * redactMergeManifests, so no row inserted meanwhile (by a merge, say) is
- * left behind. Comments (with Comment Reports) and Reviews go first, then
- * Ratings, decrementing their targets' aggregates, then Favorites and the
- * tracking rows. Public catalog history (Revisions, Proposals, roleAudit,
- * reviewAudit, commentAudit) is append-only and survives; it renders as a
- * deleted author. Does nothing unless the User is marked deleting
- * (deleteAccount), so rerunning it is safe.
+ * The most Ratings one purgeUser run deletes. A Rating writes up to four
+ * documents: itself, its target's ratingStats row and, for a Series, its
+ * library row and the pack of about 1,000 Series it shares
+ * (seriesBrowse.syncRatingProjection), which is read every time and
+ * rewritten when the rank moves. A pack may grow to the 1 MiB document
+ * limit, so a Rating is budgeted just over 1 MiB read and as much written:
+ * eight of them and the rest of the batch stay under 12 MiB each way,
+ * inside the 16 MiB transaction limits. A fixed count rather than a check
+ * of getTransactionMetrics, because the bound follows from the document
+ * limit alone and holds whatever else the run read first.
+ */
+export const PURGE_RATINGS = 8;
+
+/**
+ * Empty a deleting User's personal tables, PURGE_BATCH rows per run (at
+ * most PURGE_RATINGS of them Ratings), rescheduling itself until one run
+ * reads every table to its end. That run, in the same transaction, sets
+ * `purgedAt` and schedules redactMergeManifests and deleteClerkIdentity,
+ * so no row inserted meanwhile (by a merge, say) is left behind. The row
+ * itself stays, marked, until Clerk has deleted the sign-in
+ * (removePurgedUser); no function adds rows for a marked User meanwhile.
+ * Comments (with Comment Reports) and Reviews go first, then Ratings, each
+ * with its aggregate update in the same transaction, then Favorites and
+ * the tracking rows.
+ * Public catalog history (Revisions, Proposals, roleAudit, reviewAudit,
+ * commentAudit) is append-only and survives; it renders as a deleted
+ * author. Does nothing unless the User is marked deleting (deleteAccount)
+ * and not yet purged, so rerunning it is safe.
  */
 export const purgeUser = internalMutation({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
     const user = await ctx.db.get(userId);
-    if (user?.deletingSince === undefined) return;
+    if (user?.deletingSince === undefined || user.purgedAt !== undefined) return;
 
+    // Finished only when every read in this run came back short of what it
+    // asked for: a full take, or none for want of room, may have left rows
+    // behind.
     let left = PURGE_BATCH - (await purgeUserComments(ctx, userId, PURGE_BATCH));
-    if (left > 0) {
-      const reviews = await ctx.db
-        .query("reviews")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .take(left);
-      for (const row of reviews) await ctx.db.delete(row._id);
-      left -= reviews.length;
+    let finished = left > 0;
+
+    const reviews =
+      left > 0 ? await ctx.db.query("reviews").withIndex("by_user", (q) => q.eq("userId", userId)).take(left) : [];
+    for (const row of reviews) await ctx.db.delete(row._id);
+    finished &&= reviews.length < left;
+    left -= reviews.length;
+
+    const ratingRoom = Math.min(left, PURGE_RATINGS);
+    const ratings =
+      ratingRoom > 0
+        ? await ctx.db.query("ratings").withIndex("by_user", (q) => q.eq("userId", userId)).take(ratingRoom)
+        : [];
+    for (const row of ratings) {
+      await ctx.db.delete(row._id);
+      const target = targetOfRow(row);
+      if (target) await applyRatingDelta(ctx, target, row.score, null);
     }
-    if (left > 0) {
-      const ratings = await ctx.db
-        .query("ratings")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .take(left);
-      for (const row of ratings) {
-        await ctx.db.delete(row._id);
-        const target = targetOfRow(row);
-        if (target) await applyRatingDelta(ctx, target, row.score, null);
-      }
-      left -= ratings.length;
-    }
+    finished &&= ratings.length < ratingRoom;
+    left -= ratings.length;
+
     const rest = [
       (n: number) => ctx.db.query("favorites").withIndex("by_user", (q) => q.eq("userId", userId)).take(n),
       (n: number) => ctx.db.query("collectionEntries").withIndex("by_user", (q) => q.eq("userId", userId)).take(n),
@@ -288,21 +371,24 @@ export const purgeUser = internalMutation({
       (n: number) => ctx.db.query("volumeProgress").withIndex("by_user_volume", (q) => q.eq("userId", userId)).take(n),
     ];
     for (const next of rest) {
-      if (left === 0) break;
-      const rows = await next(left);
+      const rows = left > 0 ? await next(left) : [];
       for (const row of rows) await ctx.db.delete(row._id);
+      finished &&= rows.length < left;
       left -= rows.length;
     }
 
-    if (left === 0) {
-      // The batch is spent; whatever remains goes in the next run.
+    if (!finished) {
       await ctx.scheduler.runAfter(0, internal.users.purgeUser, { userId });
       return;
     }
-    await ctx.db.delete(userId);
+    await ctx.db.patch(userId, { purgedAt: Date.now() });
     await ctx.scheduler.runAfter(0, internal.users.redactMergeManifests, {
       userId,
       cursor: null,
+    });
+    await ctx.scheduler.runAfter(0, internal.users.deleteClerkIdentity, {
+      clerkSubject: user.clerkSubject,
+      attempt: 0,
     });
   },
 });
@@ -313,9 +399,9 @@ const MANIFEST_PAGE = 8;
 /**
  * Drop a deleted User's personal snapshots (Ratings, Reviews, tracking rows)
  * from every merge manifest, one page per transaction, rescheduling itself
- * until the table is walked. Scheduled by purgeUser once the User is
- * deleted; Split also refuses to reinsert rows of a missing User, so the
- * walk may take its time.
+ * until the table is walked. Scheduled by purgeUser once the User's tables
+ * are empty; Split also refuses to reinsert rows of a User being deleted or
+ * gone, so the walk may take its time.
  */
 export const redactMergeManifests = internalMutation({
   args: { userId: v.id("users"), cursor: v.union(v.string(), v.null()) },

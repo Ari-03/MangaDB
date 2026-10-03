@@ -4,9 +4,11 @@
 //
 // A User whose account deletion is under way (`deletingSince` set by
 // users.deleteAccount) counts as gone from that moment: signed out to
-// themselves, absent to everyone else. Their row stays only until the purge
-// has emptied every personal table, and still holds their username and
-// Clerk subject so neither can be claimed again in the meantime.
+// themselves, absent to everyone else. Their row stays until the purge has
+// emptied every personal table and Clerk has deleted the sign-in, and still
+// holds their username and Clerk subject so neither can be claimed again in
+// the meantime. Moderation reads the row itself: a Shadowed User's
+// Comments stay hidden while they wait for the purge (comments.ts).
 
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -38,7 +40,8 @@ export async function getUserBySubject(
 
 /**
  * A User by id as everyone else sees them: null when the row is gone or
- * its account deletion is under way. For authorship, profiles and owners.
+ * its account deletion is under way. For author names, profiles and
+ * owners; a moderation check (a Shadowed User's flag) reads the row itself.
  */
 export async function liveUser(
   ctx: QueryCtx | MutationCtx,
