@@ -1,7 +1,7 @@
 // The dev seed (seed.ts): it allocates public ids from the counters, refuses
 // a non-empty catalog unless wiping, dates a live month window from the
-// clock, and leaves a browsable catalog. What the seed contains is its own
-// business; these tests pin only what the app and the dev workflow rely on.
+// clock, and leaves a browsable catalog. These tests pin what the app, the
+// dev workflow and docs/operations.md rely on, not every row the seed holds.
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,7 @@ async function seeded() {
 }
 
 describe("seed.run", () => {
-  it("allocates per-entity sequential public IDs from the counters table", async () => {
+  it("allocates per-entity sequential public IDs from the counters table and builds the documented corners", async () => {
     const { t } = await seeded();
     await t.run(async (ctx) => {
       const tablesByEntity = {
@@ -38,6 +38,18 @@ describe("seed.run", () => {
       }
       const bundles = await ctx.db.query("releaseBundles").collect();
       expect(bundles.map((b) => b.publicId)).toEqual([1]);
+
+      // The corners docs/operations.md promises: a box set of four with its
+      // Volume 1 member pinned to the one Variant, a partial Coverage with
+      // its note, and a oneshot whose Volume has no Label.
+      const variants = await ctx.db.query("releaseVariants").collect();
+      expect(variants).toHaveLength(1);
+      const memberships = await ctx.db.query("bundleMemberships").collect();
+      expect(memberships.map((m) => m.variantId)).toEqual([variants[0]!._id, undefined, undefined, undefined]);
+      const coverages = await ctx.db.query("volumeCoverages").collect();
+      expect(coverages.filter((c) => c.extent === "partial").map((c) => Boolean(c.note))).toEqual([true]);
+      const volumes = await ctx.db.query("volumes").collect();
+      expect(volumes.filter((v) => v.label === undefined)).toHaveLength(1);
     });
   });
 
@@ -64,7 +76,9 @@ describe("releases.monthBrowse over the seed", () => {
       const { t } = await seeded();
       const month = (year: number, month: number) => t.query(api.releases.monthBrowse, { year, month });
       const current = await month(2027, 1);
-      expect(current.releases.length).toBeGreaterThan(0);
+      // Quiet Cartographer Vol. 4 in both formats, Tokyo Ghoul:re Vol. 3
+      // in print and with a day-TBA digital date.
+      expect(current.releases).toHaveLength(4);
       expect(current.releases.filter((r) => r.day === null)).toHaveLength(1);
       // Neighbours for the browser's prev/next navigation.
       expect((await month(2026, 12)).releases.length).toBeGreaterThan(0);
