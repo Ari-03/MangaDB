@@ -24,6 +24,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { annCreditValidator, parseApiResponse, type AnnCredit } from "./lib/ann";
+import { statsCoverIsbns } from "./lib/covers";
 import { politeFetch } from "./lib/http";
 import { survivorOf } from "./lib/matching";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
@@ -1370,7 +1371,7 @@ export const authorPage = query({
         roles,
         sourceStatus: series.sourceStatus ?? null,
         coverUrl: stats?.coverUrl ?? null,
-        coverIsbn: stats?.coverIsbn ?? null,
+        coverIsbn: statsCoverIsbns(stats),
         volumeCount: stats?.volumeCount ?? 0,
         publishers: stats?.publishers ?? [],
         firstReleaseSort: stats?.firstReleaseSort ?? 0,

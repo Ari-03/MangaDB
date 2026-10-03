@@ -13,7 +13,7 @@ import { editionCoverage } from "./catalogPages";
 import { getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
-import { releaseCover } from "./lib/covers";
+import { releaseCover, statsCoverIsbns } from "./lib/covers";
 import { coverageOf } from "./lib/editionRows";
 import { releaseAnchor } from "./lib/titles";
 import { seriesStatsRow } from "./seriesBrowse";
@@ -266,7 +266,7 @@ export const myReading = query({
       volumesRead: number;
       totalVolumes: number;
       coverUrl: string | null;
-      coverIsbn: string | null;
+      coverIsbn: string[];
       passes: Array<Awaited<ReturnType<typeof passEntry>>>;
     };
     const rows = new Map<Id<"series">, Row>();
@@ -290,7 +290,7 @@ export const myReading = query({
         volumesRead,
         totalVolumes: active.length,
         coverUrl: stats?.coverUrl ?? null,
-        coverIsbn: stats?.coverIsbn ?? null,
+        coverIsbn: statsCoverIsbns(stats),
         passes: [],
       };
       rows.set(series._id, row);

@@ -98,7 +98,7 @@ describe("favorites.mine", () => {
       ["volume", 21, "Frieren (duplicate) Vol 1"],
       ["series", 1, "Frieren"],
     ]);
-    expect(mine!.items[0]).toMatchObject({ mature: false, coverUrl: null, coverIsbn: null });
+    expect(mine!.items[0]).toMatchObject({ mature: false, coverUrl: null, coverIsbn: [] });
 
     await t.run((ctx) => ctx.db.patch(ids.two.seriesId, { status: "hidden" }));
     expect((await reader.query(api.favorites.mine, {}))!.items.map((i) => i.publicId)).toEqual([1]);

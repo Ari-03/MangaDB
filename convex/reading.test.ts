@@ -478,7 +478,7 @@ describe("reading.myReading", () => {
       volumesRead: 1,
       totalVolumes: 3,
       coverUrl: null,
-      coverIsbn: null,
+      coverIsbn: [],
     });
     expect(overview?.series[0]?.passes).toHaveLength(1);
     expect(overview?.series[0]?.passes[0]).toMatchObject({

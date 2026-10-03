@@ -109,6 +109,35 @@ describe("seriesBrowse.rebuild", () => {
     expect(quiet).toMatchObject({ titleSort: "quiet cartographer", letter: "q", nextReleaseSort: 0, followers: 0 });
   });
 
+  it("stores the jacket's ISBNs best first, deduped and capped, the first also alone", async () => {
+    const { t, ids } = await seeded();
+    // A print Release of Volume 2 filed under Volume 1's ISBN: a duplicate
+    // candidate, ranked between Volume 1's print book and Volume 3's.
+    await t.run(async (ctx) => {
+      const twin = (await ctx.db.get(ids.ghoul.releaseIds[1]!))!;
+      await ctx.db.insert("releases", {
+        status: "active",
+        editionId: twin.editionId,
+        publisherId: twin.publisherId,
+        seriesIds: twin.seriesIds,
+        format: "physical",
+        language: "en",
+        isbn13: "9781999000010",
+        pubDate: twin.pubDate,
+      });
+    });
+    await t.action(internal.seriesBrowse.rebuild, {});
+    const row = await t.run((ctx) =>
+      ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.ghoul.seriesId))
+        .unique(),
+    );
+    // Print before digital, then by Volume; the forthcoming ebook is past the cap.
+    expect(row?.coverIsbns).toEqual(["9781999000010", "9781999000012", "9781999000011"]);
+    expect(row?.coverIsbn).toBe("9781999000010");
+  });
+
   it("sweeps rows whose Series was hidden since", async () => {
     const { t, ids } = await seeded();
     await t.run((ctx) => ctx.db.patch(ids.quiet.seriesId, { status: "hidden" }));
@@ -193,6 +222,21 @@ describe("seriesBrowse.browse", () => {
     expect(digital.items.map((i) => i.title)).toEqual(["Tokyo Ghoul"]);
     const q = await t.query(api.seriesBrowse.browse, { sort: "title", letter: "q" });
     expect(q.items.map((i) => i.title)).toEqual(["The Quiet Cartographer"]);
+  });
+
+  it("offers a card every jacket ISBN, or the lone one of a row not rebuilt since", async () => {
+    const { t, ids } = await seeded();
+    const ghoul = async () =>
+      (await t.query(api.seriesBrowse.browse, { sort: "title" })).items.find((i) => i.title === "Tokyo Ghoul");
+    expect((await ghoul())?.coverIsbn).toEqual(["9781999000010", "9781999000012", "9781999000011"]);
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("seriesStats")
+        .withIndex("by_series", (q) => q.eq("seriesId", ids.ghoul.seriesId))
+        .unique();
+      await ctx.db.patch(row!._id, { coverIsbns: undefined });
+    });
+    expect((await ghoul())?.coverIsbn).toEqual(["9781999000010"]);
   });
 
   it("searches titles and never surfaces hidden Series", async () => {

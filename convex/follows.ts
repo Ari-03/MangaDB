@@ -9,6 +9,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
 import { bundleReleases } from "./collection";
+import { statsCoverIsbns } from "./lib/covers";
 import { getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
@@ -91,7 +92,7 @@ export const myFollowing = query({
         seriesPublicId: doc.publicId,
         title: doc.title,
         coverUrl: stats?.coverUrl ?? null,
-        coverIsbn: stats?.coverIsbn ?? null,
+        coverIsbn: statsCoverIsbns(stats),
         nextReleaseSort: stats?.nextReleaseSort ?? 0,
         volumeCount: stats?.volumeCount ?? null,
       });

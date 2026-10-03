@@ -96,7 +96,7 @@ describe("catalog.search", () => {
         altTitles: ["Toukyou Kushu"],
         altMatch: null,
         coverUrl: null,
-        coverIsbn: null,
+        coverIsbn: [],
         volumeCount: null,
         publisher: null,
       },
@@ -133,7 +133,7 @@ describe("catalog.search", () => {
     const [hit] = (await t.query(api.catalog.search, { query: "witch" })).series;
     expect(hit).toMatchObject({
       title: "Witch Hat Atelier",
-      coverIsbn: "9781632367709",
+      coverIsbn: ["9781632367709"],
       volumeCount: 13,
       publisher: "Kodansha",
     });

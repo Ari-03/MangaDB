@@ -184,14 +184,14 @@ describe("follows.myFollowing", () => {
     expect(following?.series[0]).toMatchObject({
       seriesId: seriesB,
       seriesPublicId: 2,
-      coverIsbn: "9781234567897",
+      coverIsbn: ["9781234567897"],
       nextReleaseSort: 20261001,
       volumeCount: 1,
     });
     expect(following?.series[1]).toMatchObject({
       seriesId: seriesA,
       nextReleaseSort: 0,
-      coverIsbn: null,
+      coverIsbn: [],
       volumeCount: null,
     });
   });

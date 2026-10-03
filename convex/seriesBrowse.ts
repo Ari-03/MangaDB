@@ -31,7 +31,12 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { coverUrl, seriesCoverIsbns, type SeriesCoverCandidate } from "./lib/covers";
+import {
+  coverUrl,
+  seriesCoverIsbns,
+  statsCoverIsbns,
+  type SeriesCoverCandidate,
+} from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
 import { releasesOf } from "./lib/editionRows";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
@@ -425,6 +430,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   const rating = await ratingSummary(ctx, { kind: "series", id: series._id });
 
   const titleSort = sortKeyFor(series.title);
+  const coverIsbns = seriesCoverIsbns(coverCandidates);
   const row = {
     seriesId: series._id,
     publicId: series.publicId,
@@ -448,7 +454,8 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     ratingCount: rating.count,
     ratingRank: ratingRankOf(rating),
     coverUrl: storedCover,
-    coverIsbn: seriesCoverIsbns(coverCandidates)[0] ?? null,
+    coverIsbn: coverIsbns[0] ?? null,
+    coverIsbns,
     ...(mature ? { mature: true as const } : {}),
     rebuiltAt,
   };
@@ -701,7 +708,7 @@ function card(row: StatsRow) {
     ratingAverage: row.ratingAverage ?? null,
     ratingCount: row.ratingCount ?? 0,
     coverUrl: row.coverUrl,
-    coverIsbn: row.coverIsbn,
+    coverIsbn: statsCoverIsbns(row),
   };
 }
 

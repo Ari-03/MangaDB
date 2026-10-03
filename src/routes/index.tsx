@@ -3,10 +3,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { useMemo, type CSSProperties, type ReactNode } from "react";
 
-import { api } from "../../convex/_generated/api";
-import { catalogQuery, releaseTitle, type BrowseRelease } from "~/lib/catalogData";
+import { fetchHomeCatalog, releaseTitle, type BrowseRelease } from "~/lib/catalogData";
 import { plural } from "~/lib/format";
-import { showMature } from "~/lib/mature";
 import { clothColor, Cover } from "~/lib/cover";
 import {
   coverShelf,
@@ -19,7 +17,6 @@ import {
   type CoversOnFile,
 } from "~/lib/homeShelves";
 import {
-  addMonths,
   currentMonth,
   MONTH_NAMES,
   monthParam,
@@ -48,17 +45,14 @@ const fetchCoversOnFile = createServerFn({ method: "POST" })
 export const Route = createFileRoute("/")({
   // The shelves are server-rendered from the same public month window the
   // Releases browser uses (lib/catalogData.ts) — a loader read, never a
-  // reactive subscription for public catalog data.
+  // reactive subscription for public catalog data — and never hold a Mature
+  // Series, whatever the viewer chose.
   loader: async () => {
     const month = currentMonth();
-    const mature = showMature();
-    const [stats, series, releases, nextReleases] = await Promise.all([
-      catalogQuery(api.catalog.stats, {}),
-      catalogQuery(api.catalog.recentSeries, { limit: SERIES_SHELF_POOL, showMature: mature }),
-      catalogQuery(api.releases.monthBrowse, { ...month, showMature: mature }),
-      // The hero wall runs on into next month when this one is nearly done.
-      catalogQuery(api.releases.monthBrowse, { ...addMonths(month, 1), showMature: mature }),
-    ]);
+    const [stats, series, releases, nextReleases] = await fetchHomeCatalog(
+      month,
+      SERIES_SHELF_POOL,
+    );
     // The "today" boundary travels with the loader data so SSR and hydration
     // group the shelves identically.
     const todaySort = todaySortKey();

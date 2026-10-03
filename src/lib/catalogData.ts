@@ -8,7 +8,7 @@ import type {
 import { api } from "../../convex/_generated/api";
 import { convexUrl } from "~/lib/convexUrl";
 import { showMature } from "~/lib/mature";
-import { timingNeedsToday, todaySortKey } from "~/lib/month";
+import { addMonths, timingNeedsToday, todaySortKey, type YearMonth } from "~/lib/month";
 
 // Public catalog reads for route loaders (spec §9: SSR reads go through the
 // Convex HTTP client). They run wherever the loader runs: in the Worker for
@@ -117,4 +117,20 @@ export function fetchSeriesBrowse(args: SeriesBrowseArgs) {
     todaySort: needsToday ? todaySortKey() : undefined,
     showMature: showMature(),
   });
+}
+
+/**
+ * The home page's catalog reads: the headline counts, the `seriesPool`
+ * newest Series, and the Releases of `month` and the month after it (the
+ * hero wall runs on into next month when this one is nearly done). The home
+ * page never shows a Mature Series or its books, whatever the viewer chose
+ * (lib/mature.tsx), so every read asks for the non-mature pool.
+ */
+export function fetchHomeCatalog(month: YearMonth, seriesPool: number) {
+  return Promise.all([
+    catalogQuery(api.catalog.stats, {}),
+    catalogQuery(api.catalog.recentSeries, { limit: seriesPool, showMature: false }),
+    catalogQuery(api.releases.monthBrowse, { ...month, showMature: false }),
+    catalogQuery(api.releases.monthBrowse, { ...addMonths(month, 1), showMature: false }),
+  ]);
 }

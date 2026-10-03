@@ -12,7 +12,7 @@ import { editionCoverage, publisherLink } from "./catalogPages";
 import { followMerges, getActive, requireActive } from "./lib/merges";
 import { seriesStateRow } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
-import { releaseCover } from "./lib/covers";
+import { releaseCover, statsCoverIsbns } from "./lib/covers";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
@@ -606,11 +606,12 @@ export const myLibrary = query({
           (a.kind === "line" ? 1 : 0) - (b.kind === "line" ? 1 : 0) ||
           a.name.localeCompare(b.name),
       );
+      const coverIsbns = statsCoverIsbns(stats);
       series.push({
         seriesPublicId: shelf.seriesPublicId,
         title: shelf.title,
         coverUrl: stats?.coverUrl ?? paths[0]?.books[0]?.coverUrl ?? null,
-        coverIsbn: stats?.coverIsbn ?? paths[0]?.books[0]?.coverIsbns[0] ?? null,
+        coverIsbn: coverIsbns.length > 0 ? coverIsbns : (paths[0]?.books[0]?.coverIsbns ?? []),
         paths,
       });
     }

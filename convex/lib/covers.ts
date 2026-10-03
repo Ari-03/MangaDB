@@ -301,9 +301,9 @@ export type SeriesCoverCandidate = Pick<Doc<"releases">, "isbn13" | "format" | "
  * before forthcoming (unannounced books have no art yet), then the earliest
  * Volume, the standard run before an Edition Line covering the same Volume,
  * and the earliest release — so a standard-edition Volume 1 in print when
- * one is on file, else the earliest book that is. Only the first is stored
- * per Series (`seriesStats.coverIsbn`), so the order favours the Releases
- * the cover upstreams know best.
+ * one is on file, else the earliest book that is. Stored per Series
+ * (`seriesStats.coverIsbns`) and tried in turn by its cards, so the order
+ * favours the Releases the cover upstreams know best.
  */
 export function seriesCoverIsbns(
   candidates: ReadonlyArray<SeriesCoverCandidate>,
@@ -328,6 +328,18 @@ export function seriesCoverIsbns(
       return n < 0 ? 0 : a.key[n]! - b.key[n]!;
     });
   return [...new Set(ranked.map((c) => c.isbn13))].slice(0, COVER_CANDIDATES);
+}
+
+/**
+ * The ISBNs a Series card built from its `seriesStats` row looks its jacket
+ * up by, best first: the stored candidates, or the lone `coverIsbn` of a row
+ * written before they were stored. Empty for a Series with no row yet.
+ */
+export function statsCoverIsbns(
+  row: Pick<Doc<"seriesStats">, "coverIsbn" | "coverIsbns"> | null | undefined,
+): string[] {
+  if (!row) return [];
+  return row.coverIsbns ?? (row.coverIsbn ? [row.coverIsbn] : []);
 }
 
 /**

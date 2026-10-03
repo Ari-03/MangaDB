@@ -232,6 +232,14 @@ describe("public discovery without and with showMature", () => {
     expect(titles((await search(true)).series)).toEqual(["Heat Garden", "Quiet Garden"]);
   });
 
+  it("leaves Mature Series out of the newest Series shelf", async () => {
+    const { t } = await matureHeat();
+    const newest = async (showMature?: boolean) =>
+      titles(await t.query(api.catalog.recentSeries, { limit: 10, showMature }));
+    expect(await newest(false)).toEqual(["Quiet Garden"]);
+    expect(await newest(true)).toEqual(["Heat Garden", "Quiet Garden"]);
+  });
+
   it("leaves a Mature Series' books out of the calendar and the Publishers board", async () => {
     const { t } = await matureHeat();
     const month = { year: 2026, month: 9 };

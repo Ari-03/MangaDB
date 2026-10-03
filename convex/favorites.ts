@@ -11,7 +11,7 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 import { editionCover } from "./catalogPages";
 import { getActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
-import { coverUrl } from "./lib/covers";
+import { coverUrl, statsCoverIsbns } from "./lib/covers";
 import { releasesOf } from "./lib/editionRows";
 import { capture } from "./lib/posthog";
 import {
@@ -210,7 +210,7 @@ export const mine = query({
           label: null,
           mature: series.mature === true,
           coverUrl: stats?.coverUrl ?? null,
-          coverIsbn: stats?.coverIsbn ?? null,
+          coverIsbn: statsCoverIsbns(stats),
         });
       }
     }

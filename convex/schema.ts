@@ -272,7 +272,11 @@ export default defineSchema({
     followers: v.number(),
     collectors: v.number(),
     coverUrl: v.union(v.string(), v.null()),
+    // The ISBNs the jacket is looked up by, best first (lib/covers.ts
+    // seriesCoverIsbns), and the first of them. Optional only until every
+    // row has been rebuilt; readers fall back to coverIsbn (statsCoverIsbns).
     coverIsbn: v.union(v.string(), v.null()),
+    coverIsbns: v.optional(v.array(v.string())),
     // Copied from series.mature, so the library can leave Mature Series out.
     mature: v.optional(v.literal(true)),
     // Copied from the Series' ratingStats row by the rebuild and, at once, by

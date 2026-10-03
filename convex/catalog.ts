@@ -10,7 +10,7 @@ import {
 } from "./_generated/server";
 import { publisherLink } from "./catalogPages";
 import { followMerges } from "./lib/merges";
-import { coverUrl, seriesCover } from "./lib/covers";
+import { coverUrl, seriesCover, statsCoverIsbns } from "./lib/covers";
 import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { groupEditions } from "./lib/editionGroups";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
@@ -332,7 +332,7 @@ async function seriesCard(ctx: QueryCtx, doc: Doc<"series">, altMatch: string | 
     altTitles: doc.altTitles,
     altMatch,
     coverUrl: stats?.coverUrl ?? null,
-    coverIsbn: stats?.coverIsbn ?? null,
+    coverIsbn: statsCoverIsbns(stats),
     volumeCount: stats?.volumeCount ?? null,
     publisher: stats?.publishers[0]?.name ?? null,
   };

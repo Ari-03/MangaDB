@@ -301,12 +301,13 @@ deploy both halves. Staff the queue first.
 
 ## Mature titles
 
-A Mature Series (see CONTEXT.md) stays out of browse, search, the home
-shelf, the calendar, the Publishers board, author shelves and the sitemap
-until the viewer opts in. Its own pages still load. For a viewer who has
-not opted in they lead with a notice and draw every cover as an 18+ cloth
-binding without requesting the art. They also carry
-`<meta name="rating" content="adult">` and no cover-led social card.
+A Mature Series (see CONTEXT.md) stays out of browse, search, the calendar,
+the Publishers board, author shelves and the sitemap until the viewer opts
+in. The home page leaves it and its books out even then. Its own pages
+still load. For a viewer who has not opted in they lead with a notice and
+draw every cover as an 18+ cloth binding without requesting the art. They
+also carry `<meta name="rating" content="adult">` and no cover-led social
+card.
 
 The Series library and Series pages ask "Allow mature content?" once per
 browser and store the answer in the `mangadb-mature` cookie. The choice can
