@@ -14,7 +14,7 @@ export async function coverageOf(ctx: QueryCtx, editionId: Id<"editions">) {
     .collect();
 }
 
-/** The Volume Coverage rows of every Edition covering a Volume, oldest first. */
+/** The Volume Coverage rows of every Edition covering a Volume, in the order the rows were written. */
 export async function coveringOf(ctx: QueryCtx, volumeId: Id<"volumes">) {
   return await ctx.db
     .query("volumeCoverages")
