@@ -277,8 +277,8 @@ export async function reconcileCatalogBox(
  * links it to the existing skeleton record, then the source's dates/ISBNs/
  * prices, titles/format, and blurb reconcile in at its registry authority.
  * Unmatched titles follow the standard creation boundaries under the
- * imprint's publisher. A disabled source applies nothing (the kill switch
- * for an in-flight sync).
+ * imprint's publisher. It applies whatever the source's enabled flag says:
+ * a sync stops at its gate (lib/importRuns.ts), never mid-record.
  */
 export async function applyCatalogTitle(
   ctx: MutationCtx,
@@ -293,9 +293,6 @@ export async function applyCatalogTitle(
   const { snapshot } = opts;
   const now = Date.now();
   const source = await getSourceByKey(ctx, opts.sourceKey);
-  // Kill switch: disabling the source stops an in-flight sync's applies
-  // too, not just the next run's top-of-sync gate.
-  if (source && !source.enabled) return { status: "recordOnly", changed: false };
   const sourceName = source?.name ?? opts.defaultSourceName;
   const citation = { sourceName, url: snapshot.url };
 

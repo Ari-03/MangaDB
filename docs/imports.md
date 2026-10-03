@@ -317,7 +317,7 @@ PRH needs the key and a non-empty imprint list (`PRH_IMPRINT_CODES`, or
 an `imprints` argument). Without them a fresh call skips as
 "unconfigured" and opens no run. A link handed off mid-run carries its
 imprint list, so removing `PRH_IMPRINT_CODES` has no effect on it;
-removing `PRH_API_KEY` closes the run as `failed`.
+removing `PRH_API_KEY` closes the run as `failed`, a forced run's too.
 
 ### Open Library
 
@@ -405,21 +405,35 @@ registry and starts every enabled source that is due by its cadence string
 A source whose last run is still `running` is skipped. A failed run
 resumes at the next cadence.
 
-**Disabling a source** stops its scheduled chain at the next link (ANN,
-Yen Press, Open Library and the Kodansha backlist share the gate in
-`convex/lib/importRuns.ts`). Runs these syncs open themselves are marked
-`automatic`, and a continuation of one that finds its source disabled
-closes the run as `stopped`. An operator can force a run with
-`imports:startRun`, then the sync with that run id. On a disabled source,
-a forced run of ANN, Open Library or the Kodansha backlist runs to the end
-and writes. Yen Press runs to the end, but its apply mutation refuses
-every catalog write (out-of-scope books are still observed), so the run
-reports `succeeded` with nothing imported. PRH
-keeps its own gate in `convex/prh.ts`: a link that finds the source
-disabled, scheduled or forced, closes the run as `failed` before any
-fetch, and the failure counts toward the source's health alert. Before
-deploying importer changes, disable the sources and let running imports
-finish. To toggle a source without signing in as an Administrator:
+**Disabling a source** follows one rule for every source, enforced by the
+gate in `convex/lib/importRuns.ts`:
+
+- A scheduled call on a disabled source does not start a run. A run a
+  sync opens itself (the hourly tick's, or a bare `sync '{}'`) is marked
+  `automatic`.
+- Every sync checks the gate at each link, at page or batch boundaries
+  inside a link, and before a withdrawal pass. Seven Seas checks before
+  each listing page, the Kodansha calendar every 50 records, the Kodansha
+  backlist before each series, ANN before each report page and each batch
+  of release pages, Open Library every 1,000 dump lines, Yen Press every
+  100 titles, and PRH before each list page.
+- A disable is not an instant stop. The page or batch already under way
+  finishes and writes; the automatic run stops at the next check and closes
+  as `stopped` with its counts and errors. A stopped run does not count
+  toward the source's failures or its unhealthy alert, and a stopped sweep
+  never withdraws anything. A source disabled and enabled again between
+  two checks is not interrupted.
+- An operator forces a run with `imports:startRun`, then the sync with
+  that run id. A forced run carries on and imports while the source is
+  disabled, for every source, and withdraws only after a complete sweep.
+- The flag gates runs, never applies. Direct calls to an apply mutation
+  and the operator backfills write on a disabled source. The Kodansha
+  backlist is gated on its own row, `kodansha-backlist`, not `kodansha`.
+
+PRH's missing configuration is separate: a run that loses `PRH_API_KEY`
+closes as `failed`, forced or not. Before deploying importer changes,
+disable the sources and let running imports finish. To toggle a source
+without signing in as an Administrator:
 
 ```sh
 npx convex run importSources:setEnabledInternal '{"key":"sevenseas","enabled":false}'

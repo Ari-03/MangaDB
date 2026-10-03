@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
+import type { MutationCtx } from "./_generated/server";
 import * as catalogTitle from "./lib/catalogTitle";
 import { parseTitle } from "./lib/prh";
 import {
@@ -922,6 +923,84 @@ describe("prh.sync — hidden Series stay hidden", () => {
   }
 });
 
+/** PRH's registry row. */
+const prhSource = (ctx: MutationCtx) =>
+  ctx.db
+    .query("approvedSources")
+    .withIndex("by_key", (q) => q.eq("key", "prh"))
+    .unique();
+
+/** Queued reviews; in these runs, only withdrawal's possible-cancellation hides. */
+const reviews = async (ctx: MutationCtx) =>
+  (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview");
+
+/** A listed entry the parser drops as out of scope: it fills a page without applying. */
+const LIGHT_NOVEL: FixtureTitle = { isbn: "9781646519811", title: "Excluded Story (Light Novel) Vol. 1" };
+
+/** Two list pages, one manga each: 199 light novels and a manga, then another manga. */
+const TWO_PAGES: FixtureTitle[] = [
+  ...Array.from({ length: 199 }, () => LIGHT_NOVEL),
+  { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
+  { isbn: "9781646519835", title: "Included Manga 2", seriesNumber: 2 },
+];
+
+/** The listed title of `seedListedAndGone`, as a full sweep still lists it. */
+const LISTED_TITLE: FixtureTitle = {
+  isbn: "9781646094356",
+  title: "Witch Hat Atelier 15",
+  seriesNumber: 15,
+  onsale: "2099-01-15",
+};
+
+/**
+ * Two future-dated Releases PRH observed on an earlier sweep: `listed` is
+ * still listed (LISTED_TITLE), `gone` no longer is, so only a complete sweep
+ * may withdraw it, queueing one possible-cancellation review.
+ */
+async function seedListedAndGone(t: TestT) {
+  return await t.run(async (ctx) => {
+    const pubDate = { year: 2099, month: 1, day: 15, sort: 20990115 };
+    const listedRelease = await seedCatalog(ctx, {
+      series: { title: "Witch Hat Atelier" },
+      volume: { position: 15 },
+      release: { isbn13: LISTED_TITLE.isbn, pubDate },
+    });
+    const goneRelease = await seedCatalog(ctx, {
+      series: { title: "Gone Manga" },
+      volume: { position: 1 },
+      release: { isbn13: "9781646519842", pubDate },
+    });
+    const listed = await insertObservation(ctx, {
+      sourceKey: "prh",
+      sourceRecordId: LISTED_TITLE.isbn,
+      recordRef: { type: "release", id: listedRelease.releaseId },
+    });
+    const gone = await insertObservation(ctx, {
+      sourceKey: "prh",
+      sourceRecordId: "9781646519842",
+      recordRef: { type: "release", id: goneRelease.releaseId },
+    });
+    return { listed, gone };
+  });
+}
+
+/**
+ * Disable PRH while the action reads the list page at `start` (and turn it
+ * back on before the page arrives, with `reenable`), wrapping the stub
+ * stubApi installed.
+ */
+function disableOnPage(t: TestT, start: number, { reenable = false } = {}) {
+  const inner = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const url = typeof input === "object" && "url" in input ? input.url : String(input);
+    if (new URL(url).searchParams.get("start") === String(start)) {
+      await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
+      if (reenable) await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: true });
+    }
+    return await inner(input);
+  });
+}
+
 describe("prh.sync — continuation links", () => {
   it("hands off between imprints too, carrying the effective imprint list", async () => {
     const t = makeT();
@@ -941,10 +1020,9 @@ describe("prh.sync — continuation links", () => {
     });
   });
 
-  // PRH keeps its own gate, not lib/importRuns.ts runToContinue: a run whose
-  // source was disabled between links closes as failed and counts toward the
-  // source's unhealthy alert (docs/known-issues.md).
-  it("closes a resumed run when the source was disabled between links", async () => {
+  // The shared gate (lib/importRuns.ts): a scheduled run whose source was
+  // disabled between links closes as stopped, which leaves source health alone.
+  it("stops a scheduled run at its next link once the source is disabled", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     stubApi([
@@ -958,41 +1036,41 @@ describe("prh.sync — continuation links", () => {
     await t.run(async (ctx) => {
       if (!("runId" in first)) throw new Error("Expected an import run");
       const run = await ctx.db.get(first.runId);
-      expect(run?.status).toBe("failed");
-      expect(run?.automatic).toBeUndefined();
-      expect(run?.errors.at(-1)).toBe("Stopped mid-run: the source was disabled.");
-      const source = await ctx.db
-        .query("approvedSources")
-        .withIndex("by_key", (q) => q.eq("key", "prh"))
-        .unique();
-      expect(source?.consecutiveFailures).toBe(1);
+      expect(run).toMatchObject({ status: "stopped", automatic: true });
+      expect(run?.errors.at(-1)).toBe("Stopped: the source was disabled mid-run.");
+      expect(await prhSource(ctx)).toMatchObject({ consecutiveFailures: 0, healthState: "healthy" });
     });
   });
 
-  // The disable is checked before the configuration, so a continuation that
-  // lost both reports the disable.
-  it("reports the disable when a continuation finds the source disabled and unconfigured", async () => {
+  // The gate is checked before the configuration, so a scheduled run that
+  // lost both stops rather than fails.
+  it("stops a scheduled continuation that finds the source disabled and unconfigured", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh", automatic: true });
     await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
     vi.stubEnv("PRH_API_KEY", "");
     expect(await sync(t, { runId, seen: 3, changed: 1, errors: ["carried"] })).toEqual({ skipped: "disabled" });
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
-      expect(run).toMatchObject({ status: "failed", recordsSeen: 3, recordsChanged: 1 });
-      expect(run?.errors).toEqual(["carried", "Stopped mid-run: the source was disabled."]);
+      expect(run).toMatchObject({ status: "stopped", recordsSeen: 3, recordsChanged: 1 });
+      expect(run?.errors).toEqual(["carried", "Stopped: the source was disabled mid-run."]);
+      expect(await prhSource(ctx)).toMatchObject({ consecutiveFailures: 0 });
     });
   });
 
   // A fresh call without a key only skips (see "prh.sync — configuration");
-  // a continuation that loses its key closes its run as failed.
+  // a continuation that loses its key closes its run as failed, a forced run
+  // on a disabled source included: a missing key is a configuration failure.
   it("closes a resumed run when the key was removed between links", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
     vi.stubEnv("PRH_API_KEY", "");
     expect(await sync(t, { runId, errors: ["carried"] })).toEqual({ skipped: "unconfigured" });
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
+    const forcedId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
+    expect(await sync(t, { runId: forcedId })).toEqual({ skipped: "unconfigured" });
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
       expect(run?.status).toBe("failed");
@@ -1000,6 +1078,8 @@ describe("prh.sync — continuation links", () => {
         "carried",
         "Stopped mid-run: PRH_API_KEY / PRH_IMPRINT_CODES were removed.",
       ]);
+      expect((await ctx.db.get(forcedId))?.status).toBe("failed");
+      expect(await prhSource(ctx)).toMatchObject({ consecutiveFailures: 2 });
     });
   });
 
@@ -1018,45 +1098,121 @@ describe("prh.sync — continuation links", () => {
     });
   });
 
-  // applyTitle refuses every write on a disabled source, so a forced run
-  // could only fetch, write nothing, and let a full sweep's withdrawal pass
-  // mark every title it never bumped. It is refused before any fetch.
-  it("refuses an operator-forced run on a disabled source", async () => {
+  // A forced run means the same for every source: it imports while the
+  // source is disabled, and its complete full sweep withdraws only what PRH
+  // no longer lists.
+  it("imports and withdraws through an operator-forced run on a disabled source", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    const isbn13 = "9781646094356";
-    const observationId = await t.run(async (ctx) => {
-      const { releaseId } = await seedCatalog(ctx, {
-        series: { title: "Witch Hat Atelier" },
-        volume: { position: 15 },
-        release: { isbn13, pubDate: { year: 2099, month: 1, day: 15, sort: 20990115 } },
-      });
-      return await insertObservation(ctx, {
-        sourceKey: "prh",
-        sourceRecordId: isbn13,
-        recordRef: { type: "release", id: releaseId },
-      });
-    });
-    const proposalsBefore = await t.run(async (ctx) => (await ctx.db.query("proposals").collect()).length);
+    const { listed, gone } = await seedListedAndGone(t);
     await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
     expect(await sync(t)).toEqual({ skipped: "disabled" });
 
     // A full sweep that still lists the imported title, and one new title.
-    stubApi([
-      { isbn: isbn13, title: "Witch Hat Atelier 15", seriesNumber: 15, onsale: "2099-01-15" },
-      { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
-    ]);
+    stubApi([LISTED_TITLE, { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 }]);
     const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
-    expect(await sync(t, { runId })).toEqual({ skipped: "disabled" });
-    expect(requestedUrls).toHaveLength(0);
+    expect(await sync(t, { runId })).toMatchObject({ runId, recordsSeen: 2, completeSweep: true });
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
-      expect(run?.status).toBe("failed");
-      expect(run?.errors.at(-1)).toMatch(/source was disabled/);
+      expect(run?.status).toBe("succeeded");
+      expect(run?.automatic).toBeUndefined();
+      expect(await ctx.db.get(listed)).toMatchObject({ withdrawn: false });
+      expect(await ctx.db.get(gone)).toMatchObject({ withdrawn: true });
+      const fresh = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "9781646519828",
+      );
+      expect(fresh?.recordRef?.type).toBe("release");
+      // One possible-cancellation review: the future-dated Release PRH dropped.
+      const queued = await reviews(ctx);
+      expect(queued).toHaveLength(1);
+      expect((await ctx.db.get(gone))?.queuedProposalId).toBe(queued[0]?._id);
+    });
+  });
+
+  it("withdraws nothing when the source is disabled inside the final link of a full sweep", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    const { listed, gone } = await seedListedAndGone(t);
+    // Two list pages, one per link: the source is disabled while the second
+    // link reads its page.
+    stubApi([...Array.from({ length: 200 }, () => LIGHT_NOVEL), LISTED_TITLE]);
+    disableOnPage(t, 200);
+    const first = await sync(t, { linkBudgetMs: 0 });
+    expect(first).toMatchObject({ continued: true });
+    await drain(t);
+    expect(requestedUrls).toHaveLength(2);
+    if (!("runId" in first)) throw new Error("Expected an import run");
+    await t.run(async (ctx) => {
+      const run = await ctx.db.get(first.runId);
+      expect(run).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 1 });
+      // The page already under way finished: the listed title was seen.
+      expect((await ctx.db.get(listed))?.lastSeenAt).toBeGreaterThan(0);
+      expect(await ctx.db.get(listed)).toMatchObject({ withdrawn: false });
+      expect(await ctx.db.get(gone)).toMatchObject({ withdrawn: false });
+      expect(await reviews(ctx)).toHaveLength(0);
+      expect(await prhSource(ctx)).toMatchObject({ consecutiveFailures: 0 });
+    });
+
+    // Re-enabled, the next complete sweep withdraws what is really gone.
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: true });
+    vi.unstubAllGlobals();
+    stubApi([LISTED_TITLE]);
+    expect(await sync(t)).toMatchObject({ completeSweep: true });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(listed)).toMatchObject({ withdrawn: false });
+      expect(await ctx.db.get(gone)).toMatchObject({ withdrawn: true });
+      const queued = await reviews(ctx);
+      expect(queued).toHaveLength(1);
+      expect((await ctx.db.get(gone))?.queuedProposalId).toBe(queued[0]?._id);
+    });
+  });
+
+  it("finishes the page under way and stops before the next when the source is disabled", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi(TWO_PAGES);
+    disableOnPage(t, 0);
+    const result = await sync(t);
+    expect(result).toMatchObject({ stopped: true, recordsSeen: 1, recordsChanged: 1, completeSweep: false });
+    expect(requestedUrls).toHaveLength(1);
+    await t.run(async (ctx) => {
+      if (!("runId" in result)) throw new Error("Expected an import run");
+      const run = await ctx.db.get(result.runId);
+      expect(run).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 1, recordsChanged: 1 });
       const observations = await ctx.db.query("sourceObservations").collect();
-      expect(observations.map((o) => o._id)).toEqual([observationId]);
-      expect(observations[0]).toMatchObject({ withdrawn: false });
-      expect(await ctx.db.query("proposals").collect()).toHaveLength(proposalsBefore);
+      expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519828"]);
+    });
+  });
+
+  it("does not interrupt a run whose source is disabled and re-enabled within one page", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    stubApi(TWO_PAGES);
+    disableOnPage(t, 0, { reenable: true });
+    expect(await sync(t)).toMatchObject({ recordsSeen: 2, completeSweep: true });
+    expect(requestedUrls).toHaveLength(2);
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("importRuns").first())?.status).toBe("succeeded");
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId).sort()).toEqual(["9781646519828", "9781646519835"]);
+    });
+  });
+
+  it("leaves source health alone through repeated disables", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    for (let i = 0; i < 3; i++) {
+      vi.unstubAllGlobals();
+      requestedUrls.length = 0;
+      stubApi(TWO_PAGES);
+      disableOnPage(t, 0);
+      expect(await sync(t)).toMatchObject({ stopped: true });
+      await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: true });
+    }
+    await t.run(async (ctx) => {
+      const runs = await ctx.db.query("importRuns").collect();
+      expect(runs.map((run) => run.status)).toEqual(["stopped", "stopped", "stopped"]);
+      expect(await prhSource(ctx)).toMatchObject({ consecutiveFailures: 0, healthState: "healthy" });
     });
   });
 

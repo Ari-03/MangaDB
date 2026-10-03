@@ -1,14 +1,25 @@
 // Run plumbing shared by the sync actions: the registry lookup, the cover
-// store, closing a finished run, and the enablement gate of the chained
-// importers (ANN, Yen Press, OpenLibrary, the Kodansha backlist). A run spans
-// many action links; disabling a source must stop the runs the scheduler
-// started. The gate lets a run an operator forced on a disabled source
-// (imports:startRun, then the sync with its runId) through; what happens next
-// is the source's own: ANN, Open Library and the Kodansha backlist write to
-// the end, and Yen Press's applies refuse every catalog write, though
-// out-of-scope books are still observed. PRH keeps its own gate
-// (convex/prh.ts): any link that finds the source disabled, forced or not,
-// closes the run as failed, which counts toward the source's unhealthy alert.
+// store, closing a finished run, and the gate every sync checks while it
+// runs.
+//
+// Disabling a source, the same rule for every sync:
+// - A fresh call (the cadence dispatcher's, or an operator's bare
+//   `sync '{}'`) on a disabled source opens no run. On an enabled one it
+//   opens an automatic run.
+// - The gate (`stopAtGate`) is checked at each link's entry, at page or
+//   batch boundaries inside a link, and just before a withdrawal pass. An
+//   automatic run that finds its source disabled there closes as "stopped"
+//   with its counts and errors so far. A stop does not count toward the
+//   source's failure streak or its unhealthy alert, and a stopped sweep
+//   never withdraws anything.
+// - A disable is not an instant stop: the page or batch already under way
+//   finishes and writes, and the run stops at the next boundary.
+// - A run an operator forced (imports:startRun, then the sync with its
+//   runId) carries on and imports while the source is disabled.
+// - The apply mutations never check the flag, so operator backfills, direct
+//   applies and the Kodansha backlist crawl write whatever the "kodansha"
+//   row says. Each sync is gated on its own registry row; the backlist's is
+//   "kodansha-backlist".
 
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -58,11 +69,37 @@ export async function storeRunCover(
   }
 }
 
+/** A sync's running totals: what a stop or a close records on the run. */
+type RunTotals = { seen: number; changed: number; errors: string[] };
+
+/**
+ * The gate (imports.stopIfAutomatic), checked before a run's next page,
+ * batch, link or withdrawal pass. Null when the run may go on. Otherwise the
+ * run is over (closed as "stopped" with these totals if it was automatic)
+ * and this is what the sync reports for it:
+ * `if (stopped) return { ...stopped, completeSweep: false }`.
+ */
+export async function stopAtGate(ctx: ActionCtx, runId: Id<"importRuns">, totals: RunTotals) {
+  const stopped: boolean = await ctx.runMutation(internal.imports.stopIfAutomatic, {
+    runId,
+    recordsSeen: totals.seen,
+    recordsChanged: totals.changed,
+    errors: totals.errors,
+  });
+  if (!stopped) return null;
+  return {
+    runId,
+    recordsSeen: totals.seen,
+    recordsChanged: totals.changed,
+    errorCount: totals.errors.length,
+    stopped: true as const,
+  };
+}
+
 /**
  * The run this link should work on, or null to stop. A fresh call on a
  * disabled source skips; a fresh call on an enabled one opens an automatic
- * run; a continuation of an automatic run whose source has since been
- * disabled is closed with its counts so far.
+ * run; a continuation, or an operator's forced run, passes the gate.
  */
 export async function runToContinue(
   ctx: ActionCtx,
@@ -73,14 +110,12 @@ export async function runToContinue(
     if (!source.enabled) return null;
     return await ctx.runMutation(internal.imports.startRun, { sourceKey: source.key, automatic: true });
   }
-  if (source.enabled) return args.runId;
-  const stopped: boolean = await ctx.runMutation(internal.imports.stopIfAutomatic, {
-    runId: args.runId,
-    recordsSeen: args.seen ?? 0,
-    recordsChanged: args.changed ?? 0,
+  const stopped = await stopAtGate(ctx, args.runId, {
+    seen: args.seen ?? 0,
+    changed: args.changed ?? 0,
     errors: args.errors ?? [],
   });
-  return stopped ? null : args.runId;
+  return stopped === null ? args.runId : null;
 }
 
 /**
@@ -93,7 +128,7 @@ export async function closeRun(
   ctx: ActionCtx,
   runId: Id<"importRuns">,
   status: "succeeded" | "failed",
-  totals: { seen: number; changed: number; errors: string[]; healthNeutral?: boolean },
+  totals: RunTotals & { healthNeutral?: boolean },
 ) {
   await ctx.runMutation(internal.imports.finishRun, {
     runId,

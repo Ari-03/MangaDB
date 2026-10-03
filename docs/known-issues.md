@@ -67,35 +67,6 @@ is fixed.
   `fetchedAt` into each R2 object's metadata and never reads it. A copy in
   R2 is served indefinitely, so a publisher's corrected jacket does not
   reach the site without deleting the object.
-
-- **A disabled source can keep writing for the rest of a run.** Seven Seas,
-  Kodansha, ANN and Open Library check the registry flag only when a link
-  starts, so a link already running when the source is disabled keeps
-  writing to its end. Kodansha's, ANN's and Open Library's apply mutations
-  also serve the backlist crawl and the operator backfills, which must
-  ignore the flag. The fix passes the run id into the apply mutation and
-  stops only scheduled runs.
-- **A forced Yen Press run on a disabled source reports success.** The
-  shared gate (`runToContinue` in `convex/lib/importRuns.ts`) lets the
-  forced run through, and `applyCatalogTitle` (`convex/lib/catalogTitle.ts`)
-  refuses every apply while the source is disabled. The run fetches every
-  page, imports nothing and closes as `succeeded`. The fix is to carry the
-  run's automatic or forced state to the apply mutation.
-- **Disabling PRH inside the final link of a scheduled full sweep withdraws
-  what it was listing.** `applyCatalogTitle` refuses the rest of that
-  link's applies, so their observations never get a new last-seen time,
-  but `prh.sync` still runs `imports.markWithdrawn` at the end of a
-  complete sweep. Those observations are marked withdrawn, and a
-  future-dated Release among them gets a hide Proposal. The run closes as
-  `succeeded`. The fix is to skip the withdrawal pass when an apply was
-  refused. PRH runs carry no automatic flag, and a forced PRH run on a
-  disabled source is already refused before any fetch.
-- **Disabling PRH mid-run counts as a failure.** A PRH link that finds its
-  source disabled closes the run as `failed` (`convex/prh.ts`), not
-  `stopped` as the shared gate does for the other chained sources, so the
-  source's `consecutiveFailures` goes up. Three such disables in a row raise
-  the unhealthy alert. This is kept on purpose; PRH does not use the shared
-  gate.
 - **Three copies of the apply ladder.** `applyBook` in
   `convex/sevenSeas.ts`, its mirror in `convex/kodansha.ts` and
   `applyCatalogTitle` in `convex/lib/catalogTitle.ts` run the same

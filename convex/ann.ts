@@ -76,7 +76,14 @@ import {
 import { errorMessage, politeFetch } from "./lib/http";
 import { decodeUtf8OrWindows1252 } from "./lib/text";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, openFollowOnRun, registryRow, runToContinue } from "./lib/importRuns";
+import {
+  closeRun,
+  MAX_CARRIED_ERRORS,
+  openFollowOnRun,
+  registryRow,
+  runToContinue,
+  stopAtGate,
+} from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
 import { coveringOf, releasesOf } from "./lib/editionRows";
@@ -138,11 +145,14 @@ type SyncResult =
       continued: boolean;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
  * One link of the weekly mirror chain. Called with no args by the cadence
- * dispatcher; continuation links carry the run state.
+ * dispatcher; continuation links carry the run state. Each report page, and
+ * the withdrawal pass, starts at the import gate (lib/importRuns.ts); a run
+ * it stops chains no page pass.
  *
  *   npx convex run ann:sync '{}'
  */
@@ -192,6 +202,8 @@ export const sync = internalAction({
         let reachedEnd = false;
 
         while (batchesDone < maxBatches && !reachedEnd) {
+          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          if (stopped) return { ...stopped, continued: false };
           let ids: string[];
           let rawCount: number;
           if (targeted) {
@@ -311,6 +323,8 @@ export const sync = internalAction({
         }
         const complete = errors.length === 0;
         if (complete && !targeted) {
+          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          if (stopped) return { ...stopped, continued: false };
           // The full mirror completed: entries the sweep no longer lists have
           // disappeared at ANN → withdrawn (spec §6; retained, never deleted).
           await ctx.runMutation(internal.imports.markWithdrawn, {
@@ -966,6 +980,7 @@ type PageSyncResult =
       continued: boolean;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
@@ -998,7 +1013,8 @@ export const chainReleasePages = internalMutation({
  * Release lacks a description is fetched once more to offer the page's
  * (`descriptionRefetch`), at most DESCRIPTION_REFETCHES_PER_RUN per run.
  * Chained after each finished mirror, complete or errored; self-continues
- * after `maxFetches` fetches or LINK_BUDGET_MS, whichever comes first.
+ * after `maxFetches` fetches or LINK_BUDGET_MS, whichever comes first. Each
+ * candidate page starts at the import gate (lib/importRuns.ts).
  *
  *   npx convex run ann:syncReleasePages '{}'
  */
@@ -1044,6 +1060,8 @@ export const syncReleasePages = internalAction({
 
       try {
         pages: while (!done && fetchedHere < maxFetches) {
+          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          if (stopped) return { ...stopped, fetched: fetchedTotal, continued: false };
           const page: {
             candidates: Array<{ annId: string; fetch: boolean; refetch?: true }>;
             continueCursor: string;

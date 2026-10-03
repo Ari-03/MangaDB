@@ -819,13 +819,13 @@ export default defineSchema({
 
   importRuns: defineTable({
     sourceKey: v.string(),
-    // "stopped": an automatic run closed early because its source was disabled.
+    // "stopped": an automatic run closed early because its source was
+    // disabled. It never counts toward the source's health.
     status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("stopped")),
-    // Set only by the syncs on the shared gate (lib/importRuns.ts), on a run
-    // they open themselves (the cadence dispatcher, or an operator's bare
-    // `sync '{}'`): such a run stops at its next link once its source is
-    // disabled, and an operator's explicit run (imports:startRun) carries
-    // on. PRH and the single-link syncs never set it.
+    // Set on a run a sync opens itself (the cadence dispatcher, or an
+    // operator's bare `sync '{}'`): once its source is disabled, it stops at
+    // the next link, page, batch or withdrawal boundary (lib/importRuns.ts).
+    // An operator's forced run (imports:startRun) lacks it and carries on.
     automatic: v.optional(v.boolean()),
     finishedAt: v.optional(v.number()),
     recordsSeen: v.number(),

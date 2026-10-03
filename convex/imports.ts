@@ -32,10 +32,11 @@ import { revisionsOf } from "./moderation";
 const MAX_RUN_ERRORS = 50;
 
 /**
- * Open an Import Run. Syncs on the shared gate (lib/importRuns.ts) open
- * their own with `automatic: true`; PRH and the single-link syncs do not. An
- * operator forcing a run of a disabled source calls this by hand and passes
- * the id to the sync; lib/importRuns.ts says what each source then does.
+ * Open an Import Run. A sync opens its own runs with `automatic: true`
+ * (lib/importRuns.ts runToContinue): the cadence dispatcher's, and an
+ * operator's bare `sync '{}'`. An operator forces a run by calling this
+ * without `automatic` and passing the id to the sync; such a run carries on
+ * while its source is disabled (lib/importRuns.ts).
  */
 export const startRun = internalMutation({
   args: { sourceKey: v.string(), automatic: v.optional(v.boolean()) },
@@ -52,9 +53,13 @@ export const startRun = internalMutation({
 });
 
 /**
- * A continuation link found its source disabled: close an automatic run with
- * what it has done so far and report that it stopped; an operator's run is
- * left running. Returns whether the run is over.
+ * The import gate (lib/importRuns.ts stopAtGate), checked at link entry
+ * and at page, batch and withdrawal boundaries. Reads the run's own source
+ * row: while it is enabled the run goes on. Once it is disabled, an
+ * automatic run is closed as "stopped" with the totals given (health-neutral:
+ * it never touches the source's failure streak), an operator's run goes on,
+ * and a run that is missing or already closed stops. Returns whether the run
+ * is over.
  */
 export const stopIfAutomatic = internalMutation({
   args: {
@@ -65,7 +70,10 @@ export const stopIfAutomatic = internalMutation({
   },
   handler: async (ctx, args) => {
     const run = await ctx.db.get(args.runId);
-    if (!run || run.status !== "running") return true;
+    if (!run) return true;
+    const source = await getSourceByKey(ctx, run.sourceKey);
+    if (source?.enabled) return false;
+    if (run.status !== "running") return true;
     if (!run.automatic) return false;
     // Its own status, not "succeeded": the sweep is incomplete.
     const errors = [...args.errors, "Stopped: the source was disabled mid-run."].slice(0, MAX_RUN_ERRORS);

@@ -979,10 +979,9 @@ describe("sevenSeas.sync — failure handling", () => {
     });
   });
 
-  // As on main: only the top of sync checks the flag, so a link already
-  // running keeps applying (docs/known-issues.md). Flip this when applies
-  // learn the run's automatic or forced state.
-  it("keeps applying after the source is disabled mid-run", async () => {
+  // The flag gates runs, never applies (lib/importRuns.ts): an operator's
+  // direct call to the apply mutation writes on a disabled source.
+  it("applies a direct applyBook call while the source is disabled", async () => {
     const t = makeT();
     await seedRegistry(t, true);
     stubSite([ALPHA_1]);
@@ -999,6 +998,57 @@ describe("sevenSeas.sync — failure handling", () => {
     const snapshot = { ...(stored.snapshot as BookSnapshot), title: "Alpha Manga Vol. 1 (Renamed)" };
     await t.mutation(internal.sevenSeas.applyBook, { sourceRecordId, snapshot });
     expect((await observationOf(t, ALPHA_1)).snapshot).toEqual(snapshot);
+  });
+
+  it("finishes the listing page under way and stops before the next once the source is disabled", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    // A book an earlier sweep saw: only a complete sweep may withdraw it.
+    await t.run((ctx) => insertObservation(ctx, { sourceKey: "sevenseas", sourceRecordId: "999" }));
+    stubSite([ALPHA_1, ALPHA_2]);
+    const site = globalThis.fetch;
+    const listingPages: string[] = [];
+    // Two listing pages, one book each; the source is disabled while page 1 loads.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.startsWith(`${BASE}/wp-json/wp/v2/books`)) return await site(input);
+      const page = new URL(url).searchParams.get("page")!;
+      listingPages.push(page);
+      if (page === "1") {
+        await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+      }
+      return new Response(JSON.stringify([listingItem(page === "1" ? ALPHA_1 : ALPHA_2)]), {
+        headers: { "x-wp-totalpages": "2", "content-type": "application/json" },
+      });
+    });
+    expect(await sync(t)).toMatchObject({ stopped: true, recordsSeen: 1, completeSweep: false });
+    expect(listingPages).toEqual(["1"]);
+    await t.run(async (ctx) => {
+      const [run] = await ctx.db.query("importRuns").collect();
+      expect(run).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 1, recordsChanged: 1 });
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.find((o) => o.sourceRecordId === "999")?.withdrawn).toBe(false);
+      expect(observations.some((o) => o.sourceRecordId === String(ALPHA_2.id))).toBe(false);
+      const source = await ctx.db
+        .query("approvedSources")
+        .withIndex("by_key", (q) => q.eq("key", "sevenseas"))
+        .unique();
+      expect(source?.consecutiveFailures).toBe(0);
+    });
+    expect((await observationOf(t, ALPHA_1)).recordRef?.type).toBe("release");
+  });
+
+  it("imports through a run an operator forced on the disabled source", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+    stubSite([ALPHA_1]);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "sevenseas" });
+    expect(await sync(t, { runId })).toMatchObject({ runId, recordsSeen: 1, completeSweep: true });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(runId)).toMatchObject({ status: "succeeded" });
+    });
+    expect((await observationOf(t, ALPHA_1)).recordRef?.type).toBe("release");
   });
 });
 

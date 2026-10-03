@@ -29,7 +29,7 @@ import {
 } from "./lib/covers";
 import type { ApplyResult } from "./lib/catalogTitle";
 import { errorMessage, politeFetch } from "./lib/http";
-import { closeRun, registryRow, storeRunCover } from "./lib/importRuns";
+import { closeRun, registryRow, runToContinue, stopAtGate, storeRunCover } from "./lib/importRuns";
 import { applyRetrying } from "./lib/occ";
 import { parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { inferCoverage } from "./lib/coverage";
@@ -80,6 +80,7 @@ type SyncResult =
       completeSweep: boolean;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
@@ -87,7 +88,10 @@ type SyncResult =
  * listing sweep (~65 pages of 100) with a bounded number of book-page
  * detail fetches, so the initial backfill converges over repeated runs
  * (modified-desc ordering surfaces new/changed books first) while a
- * steady-state run does the sweep plus a handful of detail fetches.
+ * steady-state run does the sweep plus a handful of detail fetches. Each
+ * listing page, and the withdrawal pass, starts at the import gate
+ * (lib/importRuns.ts): a disable stops a scheduled run there, as "stopped"
+ * and without withdrawing anything.
  *
  *   npx convex run sevenSeas:sync '{"maxDetailFetches":50}'
  */
@@ -103,15 +107,14 @@ export const sync = internalAction({
     politeDelayMs: v.optional(v.number()),
     /** Re-fetch details even for observations whose modified_gmt is unchanged. */
     force: v.optional(v.boolean()),
+    /** A run an operator opened with imports:startRun (forced). */
+    runId: v.optional(v.id("importRuns")),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("sevenSeas.sync", ctx, async () => {
       const source = await registryRow(ctx, SOURCE_KEY);
-      if (!source.enabled) return { skipped: "disabled" as const };
-
-      const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
-        sourceKey: SOURCE_KEY,
-      });
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
       const runStartedAt = Date.now();
       const delay = args.politeDelayMs ?? 350;
       const errors: string[] = [];
@@ -134,6 +137,8 @@ export const sync = internalAction({
             completeSweep = false;
             break;
           }
+          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          if (stopped) return { ...stopped, completeSweep: false };
           const res = await politeFetch(
             `${BASE_URL}/wp-json/wp/v2/books?per_page=100&page=${page}&orderby=modified&order=desc`,
             delay,
@@ -258,8 +263,11 @@ export const sync = internalAction({
 
         // Disappearance → withdrawn, only after a COMPLETE sweep (absence is
         // never evidence on a partial one). Failed individual books are safe:
-        // noteListing already bumped their observations.
+        // noteListing already bumped their observations. A run the gate stops
+        // here closes "stopped" without withdrawing.
         if (completeSweep) {
+          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          if (stopped) return { ...stopped, completeSweep: false };
           await ctx.runMutation(internal.imports.markWithdrawn, {
             sourceKey: SOURCE_KEY,
             notSeenSince: runStartedAt,

@@ -1511,6 +1511,25 @@ describe("kodansha.backlistSync — incremental and resumable", () => {
   });
 });
 
+describe("kodansha.sync — a forced run", () => {
+  it("imports a daily window an operator forced on its disabled row", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha", enabled: false });
+    stubSite([IRUMA]);
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "kodansha" });
+    expect(await t.action(internal.kodansha.sync, { politeDelayMs: 0, runId })).toMatchObject({
+      runId,
+      recordsSeen: 2,
+      recordsChanged: 2,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(runId)).toMatchObject({ status: "succeeded" });
+      expect(await ctx.db.query("releases").collect()).toHaveLength(2);
+    });
+  });
+});
+
 describe("kodansha.backlistSync — onlySeries (operator-targeted recovery)", () => {
   it("recrawls just the named series' pending volumes, ignoring cadence", async () => {
     const t = makeT();

@@ -305,7 +305,7 @@ describe("yenPress.sync — disabling a source", () => {
     expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(1);
   });
 
-  it("finishes a run an operator forced on the disabled source", async () => {
+  it("imports through a run an operator forced on the disabled source", async () => {
     const t = makeT();
     await seed(t);
     await t.mutation(internal.importSources.setEnabledInternal, {
@@ -326,8 +326,28 @@ describe("yenPress.sync — disabling a source", () => {
     await drain(t);
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
-      expect(run?.status).toBe("succeeded");
+      expect(run).toMatchObject({ status: "succeeded", recordsSeen: 5 });
       expect(run?.errors.some((e) => /disabled mid-run/.test(e))).toBe(false);
+      // Every book is observed and placed, as on an enabled source: Vol. 4
+      // print + digital and the Deluxe hardback + digital become Releases,
+      // the box an observation of its own.
+      const observations = await ctx.db.query("sourceObservations").collect();
+      expect(observations.map((o) => o.sourceRecordId).sort()).toEqual([
+        "9798400906855",
+        "9798855431483",
+        "9798855431490",
+        "9798855438611",
+        "9798855438628",
+      ]);
+      const releases = await ctx.db.query("releases").collect();
+      expect(releases.map((r) => r.isbn13).sort()).toEqual([
+        "9798855431483",
+        "9798855431490",
+        "9798855438611",
+        "9798855438628",
+      ]);
+      const linked = observations.filter((o) => o.recordRef?.type === "release");
+      expect(linked).toHaveLength(4);
     });
     expect(requested.filter((url) => url !== "https://yenpress.com/sitemap.xml")).toHaveLength(3);
   });
@@ -620,7 +640,9 @@ describe("yenPress.reconcileLinkedBox", () => {
     expect(await mignonMembers(t)).toEqual(["9781975300012@1", "9781975300029@2"]);
   });
 
-  it("adds nothing for a Release, or while the source is disabled", async () => {
+  // Operator and scheduled runs alike: whether to run is the sync's gate, so
+  // the mutation fills a box while the source is disabled too.
+  it("adds nothing for a Release, and fills a box whatever the source's flag", async () => {
     const t = makeT();
     await seedMignon(t);
     await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX });
@@ -628,17 +650,11 @@ describe("yenPress.reconcileLinkedBox", () => {
     expect(
       await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: "9781975300012" }),
     ).toEqual({ added: 0 });
-    const enable = (enabled: boolean) =>
-      t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled });
-    await enable(false);
-    expect(
-      await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: MIGNON_BOX.isbn13 }),
-    ).toEqual({ added: 0 });
-    expect(await mignonMembers(t)).toEqual([]);
-    await enable(true);
+    await t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled: false });
     expect(
       await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: MIGNON_BOX.isbn13 }),
     ).toEqual({ added: 1 });
+    expect(await mignonMembers(t)).toEqual(["9781975300012@1"]);
   });
 });
 

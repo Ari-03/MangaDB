@@ -20,6 +20,8 @@
 // mutation (each reads one Series' Volumes). A run
 // spends a bounded number of fetches per
 // action invocation and chains itself (cursor = the last slug/ISBN handled).
+// Each link, and each chunk of titles inside it, starts at the import gate
+// (lib/importRuns.ts), where a disable stops a scheduled run.
 // The sitemap has no lastmod and pages are skipped when fresh, so absence
 // proves nothing: this adapter never marks observations withdrawn.
 
@@ -32,7 +34,7 @@ import { applyCatalogTitle, reconcileCatalogBox, type ApplyResult } from "./lib/
 import type { BundleReconcile } from "./lib/pipeline";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
+import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue, stopAtGate } from "./lib/importRuns";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   skipsWithoutFetch,
@@ -124,7 +126,6 @@ export const reconcileLinkedBox = internalMutation({
   args: { isbn: v.string() },
   handler: async (ctx, { isbn }): Promise<BundleReconcile> => {
     const source = await getSourceByKey(ctx, SOURCE_KEY);
-    if (source && !source.enabled) return { added: 0 };
     const observation = await getObservation(ctx, SOURCE_KEY, isbn);
     if (observation?.recordRef?.type !== "releaseBundle") return { added: 0 };
     const snapshot = observation.snapshot as YenTitleSnapshot;
@@ -151,6 +152,7 @@ type SyncResult =
       continued: boolean;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
@@ -207,6 +209,8 @@ export const sync = internalAction({
 
         let budgetSpent = false;
         for (let offset = 0; offset < slugs.length && !budgetSpent; offset += PLAN_CHUNK) {
+          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          if (stopped) return { ...stopped, fetched: fetchedTotal, continued: false };
           const chunk = slugs.slice(offset, offset + PLAN_CHUNK);
           const plan: { due: number[]; boxes: number[] } = await ctx.runQuery(
             internal.yenPress.booksToFetch,

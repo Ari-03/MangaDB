@@ -35,6 +35,10 @@
 // other non-manga volume (lib/kodansha.ts `outOfScope`) is observed and
 // never placed. The crawl never even fetches Kodansha's ~310 novel-type series.
 //
+// Each feed is gated on its own registry row (lib/importRuns.ts): the window
+// before each batch of applies, the crawl at each link and before each
+// series. Disabling "kodansha" stops the window, not the crawl.
+//
 // Neither feed is a withdrawal sweep: the calendar is a rolling window, and
 // the crawl skips fresh series, so absence proves nothing.
 
@@ -52,7 +56,14 @@ import type { ApplyResult } from "./lib/catalogTitle";
 import { coverKey, coverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue, storeRunCover } from "./lib/importRuns";
+import {
+  closeRun,
+  MAX_CARRIED_ERRORS,
+  registryRow,
+  runToContinue,
+  stopAtGate,
+  storeRunCover,
+} from "./lib/importRuns";
 import {
   baseRecordId,
   crawlMode,
@@ -122,6 +133,8 @@ const DEFAULT_MAX_FETCHES = 200;
 const PLAN_CHUNK = 100;
 /** Listing pages read before giving up (1,170 series = 12 pages). */
 const MAX_LISTING_PAGES = 40;
+/** The daily window's applies between two checks of the import gate. */
+const WINDOW_BATCH = 50;
 
 // ---------- the daily window ----------
 
@@ -133,11 +146,13 @@ type SyncResult =
       recordsChanged: number;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
  * One Kodansha window run: two JSON fetches, then one apply mutation per
- * (volume, format). Runs daily per the registry cadence.
+ * (volume, format), with the import gate before each WINDOW_BATCH of them.
+ * Runs daily per the registry cadence.
  *
  *   npx convex run kodansha:sync '{}'
  */
@@ -145,15 +160,14 @@ export const sync = internalAction({
   args: {
     /** Pause before every request; tests pass 0. */
     politeDelayMs: v.optional(v.number()),
+    /** A run an operator opened with imports:startRun (forced). */
+    runId: v.optional(v.id("importRuns")),
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("kodansha.sync", ctx, async () => {
       const source = await registryRow(ctx, SOURCE_KEY);
-      if (!source.enabled) return { skipped: "disabled" as const };
-
-      const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
-        sourceKey: SOURCE_KEY,
-      });
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
       const delay = args.politeDelayMs ?? 350;
       const errors: string[] = [];
       let seen = 0;
@@ -184,7 +198,12 @@ export const sync = internalAction({
         ingest(parseNewReleases(await newRes.json()));
 
         const covers: StoredCovers = new Map();
+        let applied = 0;
         for (const [recordId, { snapshot }] of items) {
+          if (applied++ % WINDOW_BATCH === 0) {
+            const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+            if (stopped) return stopped;
+          }
           seen++;
           try {
             const result = await applyRetrying(ctx, internal.kodansha.applyVolume, {
@@ -352,6 +371,7 @@ type BacklistResult =
       continued: boolean;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
@@ -389,8 +409,8 @@ export const backlistSync = internalAction({
   handler: async (ctx, args): Promise<BacklistResult> =>
     withExceptionCapture("kodansha.backlistSync", ctx, async () => {
       const source = await registryRow(ctx, BACKLIST_KEY);
-      // The shared gate: disabling the row stops a scheduled crawl at its next
-      // link (the run closes as "stopped"); an operator-forced run finishes.
+      // Disabling the row stops a scheduled crawl at its next link or series
+      // (the run closes as "stopped"); an operator-forced run finishes.
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
       const delay = args.politeDelayMs ?? BACKLIST_DELAY_MS;
@@ -450,6 +470,8 @@ export const backlistSync = internalAction({
               budgetSpent = true;
               break;
             }
+            const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+            if (stopped) return { ...stopped, seriesCrawled, fetched: fetchedTotal, continued: false };
 
             // The series page: its volume list and blurb.
             const seriesUrl = `${BASE_URL}/series/${entry.slug}/`;
@@ -640,9 +662,9 @@ async function withPageFacts(
  * catalog — one atomic mutation per record (spec §6). Mirrors
  * sevenSeas.applyBook on the shared pipeline; a snapshot with an ISBN
  * (volume pages) matches by ISBN first, and is stored under the identity its
- * ISBN owns (`offerRecordId`), whatever id the page order proposed. Each feed
- * gates itself on its own registry row ("kodansha" / "kodansha-backlist");
- * authority is always the "kodansha" row's.
+ * ISBN owns (`offerRecordId`), whatever id the page order proposed. It
+ * applies whatever either registry row's enabled flag says (each feed's
+ * sync gates its own run); authority is always the "kodansha" row's.
  */
 export const applyVolume = internalMutation({
   args: { sourceRecordId: v.string(), snapshot: kodanshaSnapshotValidator },

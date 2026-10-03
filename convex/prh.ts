@@ -28,6 +28,11 @@
 // so removing PRH_IMPRINT_CODES mid-run has no effect on it; removing
 // PRH_API_KEY closes the run as failed.
 //
+// Disabling the source follows the shared rule (lib/importRuns.ts): the gate
+// is checked at each link, before each list page and before the withdrawal
+// pass, so a scheduled run stops as "stopped" and withdraws nothing, while a
+// forced run imports and withdraws only after a complete full sweep.
+//
 // The API cannot filter by date (lib/prh.ts), so future mode pages an
 // imprint newest-first and cuts off at today client-side.
 
@@ -38,7 +43,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
-import { closeRun, registryRow } from "./lib/importRuns";
+import { closeRun, registryRow, runToContinue, stopAtGate } from "./lib/importRuns";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { toPartialDate } from "./lib/pipeline";
@@ -73,6 +78,7 @@ type SyncResult =
       failed?: boolean;
       /** This link ran out of time budget and scheduled the next one. */
       continued?: true;
+      stopped?: true;
     };
 
 /**
@@ -116,42 +122,34 @@ export const sync = internalAction({
     withExceptionCapture("prh.sync", ctx, async () => {
       const linkStartedAt = Date.now();
       const source = await registryRow(ctx, SOURCE_KEY);
-      // A continuation link whose source was disabled or unconfigured between
-      // links must not leave its run open forever: close it as failed, saying why.
-      // PRH does not use lib/importRuns.ts runToContinue, so an operator-forced
-      // run on a disabled source is refused here too: applyTitle refuses every
-      // write, and a full sweep that imported nothing would withdraw every title.
-      const closeResumed = async (why: string) => {
-        if (args.runId === undefined) return;
-        await closeRun(ctx, args.runId, "failed", {
-          seen: args.seen ?? 0,
-          changed: args.changed ?? 0,
-          errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
-        });
-      };
-      if (!source.enabled) {
-        await closeResumed("the source was disabled.");
-        return { skipped: "disabled" as const };
-      }
       const apiKey = process.env.PRH_API_KEY;
       const configured = (process.env.PRH_IMPRINT_CODES ?? "")
         .split(",")
         .map((code) => code.trim())
         .filter((code) => code !== "");
       const imprints = args.imprints ?? configured;
-      if (!apiKey || imprints.length === 0) {
+      const unconfigured = !apiKey || imprints.length === 0;
+      if (unconfigured) {
         console.warn(
           "[imports] PRH adapter is unconfigured (set PRH_API_KEY and PRH_IMPRINT_CODES) — skipping",
         );
-        await closeResumed("PRH_API_KEY / PRH_IMPRINT_CODES were removed.");
+        if (args.runId === undefined) return { skipped: "unconfigured" as const };
+      }
+      // A continuation's gate comes before its configuration: a scheduled
+      // run on a disabled source stops whatever its configuration.
+      const runId = await runToContinue(ctx, source, args);
+      if (runId === null) return { skipped: "disabled" as const };
+      // A run that lost its configuration between links must not stay open
+      // forever: it closes as failed, saying why.
+      if (unconfigured) {
+        await closeRun(ctx, runId, "failed", {
+          seen: args.seen ?? 0,
+          changed: args.changed ?? 0,
+          errors: [...(args.errors ?? []), "Stopped mid-run: PRH_API_KEY / PRH_IMPRINT_CODES were removed."],
+        });
         return { skipped: "unconfigured" as const };
       }
       const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
-      const runId: Id<"importRuns"> =
-        args.runId ??
-        (await ctx.runMutation(internal.imports.startRun, {
-          sourceKey: SOURCE_KEY,
-        }));
       const runStartedAt = args.runStartedAt ?? linkStartedAt;
       const delay = args.politeDelayMs ?? 350;
       const maxPages = args.maxPages ?? 50;
@@ -207,6 +205,8 @@ export const sync = internalAction({
               completeSweep = false;
               break;
             }
+            const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+            if (stopped) return { ...stopped, mode, completeSweep: false };
             const params = new URLSearchParams({
               api_key: apiKey,
               rows: String(ROWS_PER_PAGE),
@@ -283,8 +283,11 @@ export const sync = internalAction({
           }
         }
         // Disappearance → withdrawn, only after a COMPLETE full-catalog sweep
-        // (absence is never evidence on a future-only or capped run).
+        // (absence is never evidence on a future-only or capped run) by a run
+        // the gate still lets go on.
         if (mode === "full" && completeSweep) {
+          const stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+          if (stopped) return { ...stopped, mode, completeSweep: false };
           await ctx.runMutation(internal.imports.markWithdrawn, {
             sourceKey: SOURCE_KEY,
             notSeenSince: runStartedAt,

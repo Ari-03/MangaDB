@@ -46,7 +46,7 @@ import {
 import { getSourceByKey } from "./importSources";
 import { errorMessage, USER_AGENT } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
+import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue, stopAtGate } from "./lib/importRuns";
 import { resolveBaseSeries } from "./lib/catalogTitle";
 import { coveringOf, releasesOf } from "./lib/editionRows";
 import { isbnHolders, labelsEqual, matchRelease, type ReleaseFact } from "./lib/matching";
@@ -81,6 +81,8 @@ const IMPORT_COMMENT = "Imported from OpenLibrary (CC0).";
 
 /** Lines per invocation before scheduling a continuation. */
 const DEFAULT_MAX_LINES = 20000;
+/** Lines between two checks of the import gate inside a link. */
+const GATE_LINES = 1000;
 
 // ---------- the sync action ----------
 
@@ -95,11 +97,14 @@ type SyncResult =
       nextLine?: number;
       errorCount: number;
       failed?: boolean;
+      stopped?: true;
     };
 
 /**
  * One link of a dump pass. Called with no args by the monthly cadence tick
  * (requires OPENLIBRARY_DUMP_URL); continuation links carry the run state.
+ * The import gate (lib/importRuns.ts) is checked at each link and every
+ * GATE_LINES lines.
  *
  *   npx convex run openLibrary:sync '{"dumpUrl":"https://…/filtered.txt"}'
  */
@@ -168,6 +173,7 @@ export const sync = internalAction({
         let lineNo = 0;
         let processed = 0;
         let done = false;
+        let stopped: Awaited<ReturnType<typeof stopAtGate>> = null;
 
         const handleLine = async (line: string) => {
           // 0-based, like startLine/nextLine: an error's line number is the
@@ -198,13 +204,19 @@ export const sync = internalAction({
           buffer += decoder.decode(chunk.value, { stream: true });
           let newline = buffer.indexOf("\n");
           while (newline >= 0 && processed < maxLines) {
+            if (processed > 0 && processed % GATE_LINES === 0) {
+              stopped = await stopAtGate(ctx, runId, { seen, changed, errors });
+              if (stopped) break;
+            }
             const line = buffer.slice(0, newline);
             buffer = buffer.slice(newline + 1);
             if (line.trim() !== "") await handleLine(line);
             newline = buffer.indexOf("\n");
           }
+          if (stopped) break;
         }
         await reader.cancel().catch(() => undefined);
+        if (stopped) return { ...stopped, continued: false, nextLine: startLine + processed };
 
         if (!done && args.noContinue !== true) {
           await ctx.scheduler.runAfter(0, internal.openLibrary.sync, {
