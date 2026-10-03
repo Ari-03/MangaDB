@@ -40,12 +40,20 @@ describe("seed.run", () => {
       expect(bundles.map((b) => b.publicId)).toEqual([1]);
 
       // The corners docs/operations.md promises: a box set of four with its
-      // Volume 1 member pinned to the one Variant, a partial Coverage with
-      // its note, and a oneshot whose Volume has no Label.
+      // Volume 1 member pinned to the one Variant, which belongs to that
+      // member's Release, a partial Coverage with its note, a oneshot whose
+      // Volume has no Label, and a plain Series with no family or line.
       const variants = await ctx.db.query("releaseVariants").collect();
       expect(variants).toHaveLength(1);
       const memberships = await ctx.db.query("bundleMemberships").collect();
       expect(memberships.map((m) => m.variantId)).toEqual([variants[0]!._id, undefined, undefined, undefined]);
+      expect(variants[0]!.releaseId).toBe(memberships[0]!.releaseId);
+      expect(await ctx.db.query("editionLines").collect()).toHaveLength(1);
+      const series = await ctx.db.query("series").collect();
+      expect(series.filter((s) => s.familyId === undefined).map((s) => s.title)).toEqual([
+        "The Quiet Cartographer",
+        "One Rainy Evening",
+      ]);
       const coverages = await ctx.db.query("volumeCoverages").collect();
       expect(coverages.filter((c) => c.extent === "partial").map((c) => Boolean(c.note))).toEqual([true]);
       const volumes = await ctx.db.query("volumes").collect();
