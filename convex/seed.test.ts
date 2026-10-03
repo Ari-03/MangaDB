@@ -1,6 +1,6 @@
 // The dev seed (seed.ts): it allocates public ids from the counters, refuses
-// a non-empty catalog unless wiping, dates a live month window from the
-// clock, and leaves a browsable catalog. These tests pin what the app, the
+// any catalog that is not empty, dates a live month window from the clock,
+// and leaves a browsable catalog. These tests pin what the app, the
 // dev workflow and docs/operations.md rely on, not every row the seed holds.
 
 import { describe, expect, it, vi } from "vitest";
@@ -61,14 +61,38 @@ describe("seed.run", () => {
     });
   });
 
-  it("refuses to run on a non-empty catalog unless wiping, and reseeds from 1 after a wipe", async () => {
+  it("refuses a second run and leaves the seeded catalog as it was", async () => {
     const { t } = await seeded();
-    await expect(t.mutation(internal.seed.run, {})).rejects.toThrow(/wipe/);
-    const ids = await t.mutation(internal.seed.run, { wipe: true });
-    expect(ids.seriesPublicIds.tokyoGhoul).toBe(1);
+    const snapshot = () =>
+      t.run(async (ctx) => ({
+        series: await ctx.db.query("series").collect(),
+        releases: await ctx.db.query("releases").collect(),
+        counters: await ctx.db.query("counters").collect(),
+      }));
+    const before = await snapshot();
+    await expect(t.mutation(internal.seed.run, {})).rejects.toThrow(/already has data/);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("refuses a partly populated catalog with no Series and writes nothing", async () => {
+    const t = makeT();
+    await t.run((ctx) =>
+      ctx.db.insert("publishers", { status: "active", name: "VIZ Media", slug: "viz-media" }),
+    );
+    await expect(t.mutation(internal.seed.run, {})).rejects.toThrow(/publishers is not empty/);
     await t.run(async (ctx) => {
-      const series = await ctx.db.query("series").collect();
-      expect(series.filter((s) => s.publicId === 1)).toHaveLength(1);
+      expect(await ctx.db.query("publishers").collect()).toHaveLength(1);
+      expect(await ctx.db.query("series").collect()).toEqual([]);
+      expect(await ctx.db.query("counters").collect()).toEqual([]);
+    });
+  });
+
+  it("has no wipe option", async () => {
+    const { t } = await seeded();
+    // @ts-expect-error The validator accepts no arguments.
+    await expect(t.mutation(internal.seed.run, { wipe: true })).rejects.toThrow(/Unexpected field `wipe`/);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("series").collect()).toHaveLength(4);
     });
   });
 });

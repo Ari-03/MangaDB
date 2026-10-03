@@ -1,13 +1,14 @@
-// Runner for the one-time catalog repair (convex/repair.ts). Reads
-// repair-plan.json (built by /tmp/mangadb-audit/plan/build_plan.py) and feeds
-// it to `npx convex run repair:runBatch` step by step, batch by batch.
+// Runner for the one-time catalog repair (convex/repair.ts). Reads the
+// repair-plan.json named by --plan (built outside this repo) and feeds it to
+// `npx convex run repair:runBatch` step by step, batch by batch.
 // Dry-run is the default; nothing writes without --apply.
 //
 //   node scripts/repair.ts metrics [label]
-//   node scripts/repair.ts run --stage 3 [--step 3a] [--apply] [--actor ari]
+//   node scripts/repair.ts run --plan <repair-plan.json> --stage 3 [--step 3a] [--apply] [--actor ari]
 //   node scripts/repair.ts rebuild            # seriesBrowse:rebuild
 //
-// Options: --plan <repair-plan.json>  --out <dir for run reports; default runs/ next to the plan>
+// Options: --plan <repair-plan.json>  required for run; there is no default plan
+//          --out <dir>                where metrics and run reports go; default ./runs
 //          --deployment <name|prod>   passed to `convex run`; anything other
 //                                     than the local deployment needs --yes
 //          --force                    run stage 4 without complete research
@@ -17,7 +18,7 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 type Entry = { key: string; reason: string } & Record<string, unknown>;
 type Step = { step: string; title: string; kind: string; batchSize: number; entries: Entry[] };
@@ -33,8 +34,16 @@ const option = (name: string, fallback: string) => {
   return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1]! : fallback;
 };
 
-const planPath = option("plan", "/tmp/mangadb-audit/plan/repair-plan.json");
-const outDir = option("out", join(dirname(planPath), "runs"));
+const USAGE =
+  "usage: node scripts/repair.ts metrics [label] | run --plan <repair-plan.json> --stage N [--step ID] [--apply] | rebuild";
+
+// `run` refuses before anything else when --plan or its value is missing.
+const planPath = option("plan", "");
+if (command === "run" && (planPath === "" || planPath.startsWith("--"))) {
+  console.error(USAGE);
+  process.exit(1);
+}
+const outDir = option("out", "runs");
 const deployment = option("deployment", "");
 const actor = option("actor", "ari");
 const apply = flag("apply");
@@ -188,6 +197,6 @@ switch (command) {
     break;
   default:
     // Fail, so a scripted caller cannot mistake a typo for a finished command.
-    console.error("usage: node scripts/repair.ts metrics [label] | run --stage N [--step ID] [--apply] | rebuild");
+    console.error(USAGE);
     process.exitCode = 1;
 }

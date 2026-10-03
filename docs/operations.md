@@ -11,8 +11,7 @@ With `npx convex dev` running, load a small hand-written catalog
 (`convex/seed.ts`):
 
 ```sh
-npx convex run seed:run '{}'            # only when the catalog is empty
-npx convex run seed:run '{"wipe":true}' # wipe catalog tables and reseed
+npx convex run seed:run '{}'
 ```
 
 It covers the model's corner cases: a Series Family with a sequel edge,
@@ -21,8 +20,8 @@ omnibus covering Volumes 1 to 3, a split digital Edition with partial
 coverage, a box-set-exclusive Variant and a Bundle that pins it, plus a
 plain Series and a oneshot. A few Releases are dated relative to the day
 you seed, so the calendar always has a current month. All facts are fake.
-`{"wipe":true}` deletes every catalog table on whatever deployment you
-point it at, and nothing stops you running it on a real one.
+The seed runs only on an empty catalog: if any table it writes holds a
+row, it refuses and changes nothing.
 
 ## Refresh local or staging from production
 
@@ -114,7 +113,7 @@ A one-time repair of imported catalog data, written after the September
 
 ```sh
 node scripts/repair.ts metrics [label]
-node scripts/repair.ts run --stage 3 [--step 3a] [--apply] [--actor ari]
+node scripts/repair.ts run --plan <repair-plan.json> --stage 3 [--step 3a] [--apply] [--actor ari]
 node scripts/repair.ts rebuild            # seriesBrowse:rebuild
 ```
 
@@ -122,8 +121,9 @@ node scripts/repair.ts rebuild            # seriesBrowse:rebuild
   entry and rolls it back, so its report is what a real run would do.
 - The script refuses any deployment but the local one unless you pass
   `--yes`. Choose another with `--deployment <name|prod>`.
-- `--plan` defaults to `/tmp/mangadb-audit/plan/repair-plan.json`. Pass the
-  real path. Reports go to `runs/` beside the plan (`--out` to change).
+- `run` needs `--plan`; without it the script prints its usage and exits
+  before touching any deployment. Metrics and run reports go to `./runs`
+  (`--out` to change).
 - Stage 4 needs the plan's packaging research and refuses without it
   unless `--force`.
 - `--actor` must be an existing Moderator or Administrator. Each entry that

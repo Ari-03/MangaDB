@@ -55,7 +55,7 @@ export async function requireDataTeam(
 
 /**
  * Count of active (non-suspended) Administrators. Guards the lockout case:
- * the last Administrator can never be revoked or suspended.
+ * the last Administrator can never be revoked or moved to another role.
  */
 export async function countActiveAdministrators(
   ctx: QueryCtx | MutationCtx,

@@ -3,17 +3,6 @@
 Open problems confirmed in the code on 2026-10-02. Remove an entry when it
 is fixed.
 
-## Deployment
-
-- The production deploy from Actions on 2026-10-02 failed at
-  `wrangler deploy` with "Could not find zone for `mangadb.org`", after
-  Convex had been pushed and the Worker uploaded. The production token
-  passed the credentials check, so it can read the Worker but not the
-  `mangadb.org` zone. Add zone access for `mangadb.org` to that token
-  ([deployment](deployment.md#one-time-setup), step 2).
-- The `staging` GitHub environment has no `CLOUDFLARE_API_TOKEN` secret, so
-  staging deploys from Actions stop at the secrets check.
-
 ## Personal data and tracking
 
 - **Reading Undo depends on current coverage.** `reading.undoCompletion`
@@ -116,10 +105,6 @@ is fixed.
 
 ## Moderation
 
-- **The last-Administrator guard in `roles.suspend` cannot fire.**
-  Self-suspension is refused first, so the acting Administrator always
-  stays active. The guard is dead code, or the rule it was meant to
-  enforce (for example on role revocation) is missing.
 - **A suspended user's public profile still shows.** `sharing.publicProfile`
   has no suspension check.
 
@@ -144,11 +129,3 @@ is fixed.
   does not: `reading.setVolumeReadCount`, `adjustVolumeReadCount`,
   `setEditionRead`, `completePass` and `undoCompletion` all write such
   Volumes. Whether reads on them should stay editable is the owner's call.
-
-## Operator tools
-
-- **`seed:run '{"wipe":true}'` has no guard.** It deletes every catalog
-  table on any deployment it is pointed at.
-- **`scripts/repair.ts` defaults to a `/tmp` plan.** `--plan` defaults to
-  `/tmp/mangadb-audit/plan/repair-plan.json`, a path from the machine the
-  repair was built on. Always pass `--plan`.

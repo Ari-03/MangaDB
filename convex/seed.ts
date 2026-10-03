@@ -7,11 +7,9 @@
 // that touch none of those concepts. Public IDs come from the counters table
 // like every real write. Publication facts are fake; only for dev.
 //
-// Run against a dev deployment:
-//   npx convex run seed:run '{}'            # only when the catalog is empty
-//   npx convex run seed:run '{"wipe":true}' # wipe catalog tables and reseed
+// Run against a dev deployment whose catalog is empty; it refuses otherwise:
+//   npx convex run seed:run '{}'
 
-import { v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { allocatePublicId } from "./lib/publicIds";
@@ -163,7 +161,7 @@ async function addRelease(
   });
 }
 
-/** Catalog tables the seed owns; wiped in reverse-dependency order. */
+/** Every table the seed writes; it runs only when all of them are empty. */
 const CATALOG_TABLES = [
   "bundleMemberships",
   "releaseBundles",
@@ -184,18 +182,14 @@ const CATALOG_TABLES = [
 // ---------- the seed ----------
 
 export const run = internalMutation({
-  args: { wipe: v.optional(v.boolean()) },
-  handler: async (ctx, { wipe }) => {
-    if (wipe) {
-      for (const table of CATALOG_TABLES) {
-        for (const doc of await ctx.db.query(table).collect()) {
-          await ctx.db.delete(doc._id);
-        }
+  args: {},
+  handler: async (ctx) => {
+    for (const table of CATALOG_TABLES) {
+      if ((await ctx.db.query(table).take(1)).length > 0) {
+        throw new Error(
+          `The catalog already has data (${table} is not empty); the seed runs only on an empty catalog.`,
+        );
       }
-    } else if ((await ctx.db.query("series").take(1)).length > 0) {
-      throw new Error(
-        'The catalog already has data. Run with {"wipe":true} to wipe catalog tables and reseed.',
-      );
     }
 
     // -- Publishers --

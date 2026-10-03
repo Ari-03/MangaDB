@@ -163,7 +163,7 @@ export const suspend = mutation({
     const actor = await requireGovernanceOver(ctx, governedRole);
     if (target._id === actor._id) fail("forbidden", "You cannot suspend yourself.");
     if (target.suspended) fail("noChange", `@${target.username} is already suspended.`);
-    await guardLastAdministrator(ctx, target);
+    // No last-Administrator guard: only another active Administrator can suspend one.
     await ctx.db.patch(target._id, { suspended: true });
     await ctx.db.insert("roleAudit", {
       userId: target._id,
