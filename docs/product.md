@@ -238,6 +238,18 @@ the same to everyone, its owner included.
 Profiles are noindex, absent from sitemaps, and show current state only,
 with no activity feed.
 
+## Account deletion
+
+Settings, Account deletes the account. The request is recorded first;
+from then on the user counts as gone: the profile returns not found, every
+personal page treats them as signed out, and the browser signs out. Their
+collection, reading, follows, ratings, reviews, favorites, comments and
+reports are then deleted in batches, the user row last, which frees the
+username. The Clerk sign-in is deleted alongside, with retries. If those
+fail, the person can sign in to an empty account and delete it again. The
+last active Administrator is refused until they appoint another.
+Revisions, Proposals and audit rows stay, credited to a deleted account.
+
 ## Ratings and reviews
 
 A rating is a whole number from 1 to 100, one per user per Series, Volume

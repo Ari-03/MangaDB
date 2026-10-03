@@ -19,6 +19,7 @@ import { editionCoverage } from "./catalogPages";
 import { followMerges } from "./lib/merges";
 import { getSourceByKey } from "./importSources";
 import { recordRef, recordType } from "./schema";
+import { liveUser } from "./lib/auth";
 import { latestTouch } from "./lib/authority";
 import { fail } from "./lib/errors";
 import { ratedByDataTeam } from "./lib/mature";
@@ -517,7 +518,7 @@ export const sourceBlurbs = query({
         : touch.author.kind === "user"
           ? {
               kind: "user" as const,
-              username: (await ctx.db.get(touch.author.userId))?.username ?? null,
+              username: (await liveUser(ctx, touch.author.userId))?.username ?? null,
             }
           : { kind: "source" as const, sourceKey: touch.author.sourceKey };
 

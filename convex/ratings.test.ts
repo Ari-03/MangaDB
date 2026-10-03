@@ -9,7 +9,7 @@ import type { Id } from "./_generated/dataModel";
 import { targetOfRow, type TargetId } from "./lib/ratings";
 import { createAudit, replaceCoverage, resolveActor } from "./lib/repair/audit";
 import { insertCoverage, insertEdition, insertPublisher, insertRelease } from "./test.factories";
-import { alice, bob, makeT, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { alice, bob, makeT, purgeAccount, seedTeam, signedIn, type TestT } from "./test.helpers";
 import { edition, frierenTwins, merge, omnibusEditions, series, split, volume } from "./test.tracking";
 
 const READERS = ["user_a", "user_b", "user_c", "user_d"] as const;
@@ -188,7 +188,7 @@ describe("rating upkeep", () => {
     await rate(t, "user_a", { kind: "volume", id: ids.one.volumeId }, 20);
     await rate(t, "user_b", { kind: "series", id: ids.one.seriesId }, 60);
 
-    await t.mutation(internal.users.purgeUser, { clerkSubject: "user_a" });
+    await purgeAccount(t, "user_a");
     expect(await t.query(api.ratings.summary, { target: series(1) })).toEqual({ average: 60, count: 1 });
     expect(await t.query(api.ratings.summary, { target: volume(11) })).toEqual({ average: null, count: 0 });
     expect(await t.run((ctx) => ctx.db.query("ratings").collect())).toHaveLength(1);
@@ -351,7 +351,7 @@ describe("omnibus Editions", () => {
     const { t, books } = await seedBooks();
     await rate(t, "user_a", { kind: "edition", id: books.omnibus }, 100);
     await rate(t, "user_b", { kind: "edition", id: books.omnibus }, 60);
-    await t.mutation(internal.users.purgeUser, { clerkSubject: "user_a" });
+    await purgeAccount(t, "user_a");
     expect(await t.query(api.ratings.summary, { target: edition(901) })).toEqual({ average: 60, count: 1 });
     expect(await t.run((ctx) => ctx.db.query("ratings").collect())).toHaveLength(1);
   });

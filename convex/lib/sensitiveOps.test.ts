@@ -32,7 +32,7 @@ import {
   insertSeries,
   insertVolume,
 } from "../test.factories";
-import { alice, bob, dave, makeT, seedTeam, signedIn, type TestT as T } from "../test.helpers";
+import { alice, bob, dave, makeT, purgeAccount, seedTeam, signedIn, type TestT as T } from "../test.helpers";
 import { hideRecord, insertBook, mergeAs, splitAs } from "../test.moderation";
 import { recountRatings } from "./ratings";
 import { IMPRINT_PREVIEW_CAP, stricterVisibility } from "./sensitiveOps";
@@ -1294,7 +1294,7 @@ describe("split — deleted Users", () => {
     const f = await setup(t);
     await rateAndReviewBoth(t, f);
     await mergeSeries(t, f);
-    await t.mutation(internal.users.purgeUser, { clerkSubject: dave.subject });
+    await purgeAccount(t, dave.subject);
     await splitSeries(t, f);
 
     const left = await t.run(async (ctx) => ({
@@ -1309,6 +1309,29 @@ describe("split — deleted Users", () => {
     expect(left.stats.reduce((n, row) => n + row.count, 0)).toBe(0);
   });
 
+  it("never restores the rows of a User whose deletion is under way", async () => {
+    const t = makeT();
+    const f = await setup(t);
+    await rateAndReviewBoth(t, f);
+    await mergeSeries(t, f);
+    const daves = () =>
+      t.run(async (ctx) => {
+        const theirs = async (table: "ratings" | "reviews" | "userSeriesStates") =>
+          (await ctx.db.query(table).collect()).filter((row) => row.userId === f.daveId);
+        return { ratings: await theirs("ratings"), reviews: await theirs("reviews"), states: await theirs("userSeriesStates") };
+      });
+    const before = await daves();
+    // The merge kept the survivor's rows and logged the loser's for Split.
+    expect(before.ratings).toHaveLength(1);
+    expect(before.reviews).toHaveLength(1);
+
+    // Marked, with the purge not yet run.
+    await t.run((ctx) => ctx.db.patch(f.daveId, { deletingSince: Date.now() }));
+    await splitSeries(t, f);
+
+    expect(await daves()).toEqual(before);
+  });
+
   it("redacts the deleted User's rows from open merge manifests", async () => {
     const t = makeT();
     const f = await setup(t);
@@ -1321,7 +1344,7 @@ describe("split — deleted Users", () => {
 
     // Redaction runs as a scheduled, paginated follow-up of the purge.
     vi.useFakeTimers();
-    await t.mutation(internal.users.purgeUser, { clerkSubject: dave.subject });
+    await purgeAccount(t, dave.subject);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     vi.useRealTimers();
 
@@ -1357,7 +1380,7 @@ describe("split — deleted Users", () => {
     });
 
     vi.useFakeTimers();
-    await t.mutation(internal.users.purgeUser, { clerkSubject: dave.subject });
+    await purgeAccount(t, dave.subject);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     vi.useRealTimers();
 

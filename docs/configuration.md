@@ -12,9 +12,11 @@ a new user to `/claim-username`, and claiming a username inserts the row,
 keyed by the Clerk subject and never by email. Usernames are unique
 ignoring case, checked against the reserved list in
 `convex/lib/usernames.ts`, and can be changed, which frees the old one at
-once. Account deletion (`/me`, Settings, Account) is one Convex action that
-deletes the Clerk identity through Clerk's Backend API and then purges
-every MangaDB record of that user.
+once. Account deletion (`/me`, Settings, Account) is one Convex mutation
+that marks the user as deleting and schedules the rest: a batched purge of
+every MangaDB record of that user, and the deletion of the Clerk identity
+through Clerk's Backend API, retried if Clerk fails
+([operations](operations.md#account-deletion)).
 
 On each server request `clerkMiddleware()` (`src/start.ts`) authenticates.
 The gated routes read a Convex token minted from the Clerk JWT template
@@ -55,7 +57,7 @@ Settings, Environment Variables.
 | Variable | Purpose |
 |---|---|
 | `CLERK_JWT_ISSUER_DOMAIN` | Issuer domain of the `convex` JWT template. Unset falls back to a placeholder so codegen and tests run, and sign-in tokens then fail to validate. |
-| `CLERK_SECRET_KEY` | The same Clerk secret key, used by account deletion to delete the Clerk identity. |
+| `CLERK_SECRET_KEY` | The same Clerk secret key, used by account deletion to delete the Clerk identity. Unset refuses account deletion. |
 | `PRH_API_KEY`, `PRH_IMPRINT_CODES` | The PRH adapter. Without the key or a non-empty imprint list, a fresh run skips as "unconfigured" and opens none. Removing the key mid-run closes the run as `failed`; removing the codes does not affect it. Setup: [imports](imports.md#penguin-random-house). |
 | `OPENLIBRARY_DUMP_URL` | The filtered Open Library dump. Unset makes those runs skip. Setup: [imports](imports.md#open-library). |
 | `RESEND_API_KEY`, `IMPORT_ALERT_EMAIL_TO`, optional `IMPORT_ALERT_EMAIL_FROM` | Source-health alert emails. Unset logs and skips. |

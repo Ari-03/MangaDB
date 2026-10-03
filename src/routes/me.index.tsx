@@ -1,10 +1,11 @@
 import { useClerk } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useAction, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useState, type MouseEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { countLibrary, LibraryCollection } from "~/lib/collection";
+import { mutationErrorMessage } from "~/lib/errors";
 import { LibraryFavorites } from "~/lib/favorites";
 import { LibraryUpcoming } from "~/lib/follows";
 import { todaySortKey } from "~/lib/month";
@@ -241,8 +242,10 @@ function ShelfCountInner({ shelf }: { shelf: EntryState }) {
 }
 
 /**
- * MangaDB-initiated account deletion (spec §9): one Convex action removes the
- * Clerk identity and every MangaDB record, then the local session is dropped.
+ * MangaDB-initiated account deletion (spec §9): one Convex mutation records
+ * the request and schedules the removal of every MangaDB record and the
+ * Clerk identity, then the local session is dropped. A refusal (the last
+ * Administrator, say) changes nothing; asking twice is harmless.
  */
 function DeleteAccount() {
   if (!convexClient) return null;
@@ -252,9 +255,10 @@ function DeleteAccount() {
 function DeleteAccountInner() {
   const clerk = useClerk();
   const navigate = useNavigate();
-  const deleteAccount = useAction(api.users.deleteAccount);
+  const deleteAccount = useMutation(api.users.deleteAccount);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const run = async () => {
@@ -262,14 +266,31 @@ function DeleteAccountInner() {
     setError(null);
     try {
       await deleteAccount({});
-      // The Clerk user is gone; clear the local session and leave.
-      await clerk.signOut();
-      await navigate({ to: "/" });
-    } catch {
-      setError("Account deletion failed. Nothing was removed — try again.");
+    } catch (err) {
+      // A ConvexError is a refusal, made before anything changed. Anything
+      // else may have failed before or after the request was recorded.
+      const refusal = mutationErrorMessage(err, "");
+      setError(
+        refusal
+          ? `Your account was not deleted. ${refusal}`
+          : "The deletion request could not be confirmed. Check your connection and try again.",
+      );
       setBusy(false);
+      return;
     }
+    // The account now counts as gone; clear the local session and leave.
+    setDeleting(true);
+    await clerk.signOut();
+    await navigate({ to: "/" });
   };
+
+  if (deleting) {
+    return (
+      <div className="danger-zone">
+        <p>Your account is being deleted. Signing you out…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="danger-zone">

@@ -96,6 +96,27 @@ export async function seedTeam(t: TestT, users: readonly TestUser[]) {
   }
 }
 
+/**
+ * Purges `subject`'s account as users.deleteAccount would, without the
+ * Clerk half: marks their User deleting, then runs purgeUser until the row
+ * is gone. What the purge schedules (its own continuations, now no-ops, and
+ * the manifest redaction) stays queued for `drain`. A no-op for a subject
+ * with no User.
+ */
+export async function purgeAccount(t: TestT, subject: string) {
+  const userId = await t.run(async (ctx) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkSubject", (q) => q.eq("clerkSubject", subject))
+      .unique();
+    if (user) await ctx.db.patch(user._id, { deletingSince: Date.now() });
+    return user?._id ?? null;
+  });
+  while (userId && (await t.run((ctx) => ctx.db.get(userId)))) {
+    await t.mutation(internal.users.purgeUser, { userId });
+  }
+}
+
 // ---------- import runs ----------
 
 /** Seeds the approved-source registry; a boolean `bootstrap` also turns Bootstrap Mode on or off. */

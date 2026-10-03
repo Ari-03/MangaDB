@@ -14,7 +14,7 @@ import { ConvexError, v } from "convex/values";
 import { components } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { requireUser, viewerOrNull } from "./lib/auth";
+import { liveUser, requireUser, viewerOrNull } from "./lib/auth";
 import { FEATURES } from "./lib/features";
 import { capture, captureModeration } from "./lib/posthog";
 import {
@@ -79,7 +79,7 @@ export function lengthBucket(length: number): string {
 
 /** One Review as the page shows it: author, their Rating of the same target, and the text. */
 async function reviewCard(ctx: QueryCtx, review: Doc<"reviews">) {
-  const author = await ctx.db.get(review.userId);
+  const author = await liveUser(ctx, review.userId);
   const target = targetOfRow(review);
   const rating = target ? await ratingRow(ctx, review.userId, target) : null;
   return {

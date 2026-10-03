@@ -23,6 +23,7 @@
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { primaryVolumeSeries } from "../catalogPages";
+import { liveUser } from "./auth";
 import { followMerges } from "./merges";
 import {
   displayInfo,
@@ -1730,22 +1731,23 @@ async function reversibleManifestsOf(
 
 /**
  * Whether a manifest snapshot may be reinserted: a personal row (one with a
- * `userId`) only while its User still exists. Account deletion redacts these
- * snapshots (redactUserFromManifests), and this guard covers any the
- * redaction has not reached yet.
+ * `userId`) only while its User still exists and is not being deleted, so a
+ * Split never refills a table the account purge has drained. Account
+ * deletion redacts these snapshots (redactUserFromManifests), and this
+ * guard covers any the redaction has not reached yet.
  */
 async function ownerExists(ctx: MutationCtx, doc: unknown): Promise<boolean> {
   const userId = (doc as { userId?: unknown }).userId;
   if (typeof userId !== "string") return true;
   const id = ctx.db.normalizeId("users", userId);
-  return id !== null && (await ctx.db.get(id)) !== null;
+  return id !== null && (await liveUser(ctx, id)) !== null;
 }
 
 /**
  * Personal snapshots a deleted User left in merge manifests, removed from one
- * page of manifests at a time. The account purge (users.purgeUser) schedules
- * internal.users.redactMergeManifests, which calls this per page; Split then
- * has nothing of theirs to reinsert.
+ * page of manifests at a time. The account purge (users.purgeUser), once it
+ * has deleted the User, schedules internal.users.redactMergeManifests, which
+ * calls this per page; Split then has nothing of theirs to reinsert.
  */
 export async function redactUserFromManifests(
   ctx: MutationCtx,
@@ -1931,7 +1933,8 @@ async function splitGovernance(ctx: MutationCtx, loser: RecordRef, manifests: Ar
   const before = await seriesByRecord(ctx, records);
   const snapshots = new Map<Id<"users">, Map<Id<"series">, VisibilityOverrides | null>>();
   for (const [userId, tracked] of users) {
-    if (!(await ctx.db.get(userId))) continue;
+    // A User gone or being deleted gets no override rows written for them.
+    if (!(await liveUser(ctx, userId))) continue;
     const snapshot = new Map<Id<"series">, VisibilityOverrides | null>();
     for (const recordId of tracked.keys()) {
       for (const seriesId of before.get(recordId) ?? []) {

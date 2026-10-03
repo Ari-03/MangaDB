@@ -49,7 +49,7 @@ export async function resolveActor(ctx: MutationCtx, username: string): Promise<
     .query("users")
     .withIndex("by_username", (q) => q.eq("usernameNormalized", username.toLowerCase()))
     .unique();
-  if (!user || (user.role !== "administrator" && user.role !== "moderator")) {
+  if (!user || user.deletingSince !== undefined || (user.role !== "administrator" && user.role !== "moderator")) {
     throw new ConvexError(`Repair actor "${username}" must be an existing Moderator or Administrator.`);
   }
   return { userId: user._id, role: user.role };

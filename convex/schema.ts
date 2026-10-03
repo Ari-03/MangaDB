@@ -964,9 +964,15 @@ export default defineSchema({
     // Rating Format (CONTEXT.md): how this User enters and reads scores.
     // Absent means DEFAULT_SCORE_FORMAT (lib/scoreFormat.ts).
     scoreFormat: v.optional(scoreFormatValidator),
+    // When the User asked to delete their account (users.deleteAccount).
+    // From then on they count as gone (lib/auth.ts) while the purge empties
+    // their personal rows; the row itself goes last.
+    deletingSince: v.optional(v.number()),
   })
     .index("by_clerkSubject", ["clerkSubject"])
-    .index("by_username", ["usernameNormalized"]),
+    .index("by_username", ["usernameNormalized"])
+    // Role holders, for the governance checks and /mod/roles (lib/roles.ts).
+    .index("by_role", ["role"]),
 
   // Exactly one of releaseId/bundleId is set (enforced in mutations — the
   // two-optional-fields shape keeps both sides indexable). One entry per

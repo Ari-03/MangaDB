@@ -29,7 +29,7 @@ import { v } from "convex/values";
 import { components } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { requireUser, viewerOrNull } from "./lib/auth";
+import { liveUser, requireUser, viewerOrNull } from "./lib/auth";
 import { fail } from "./lib/errors";
 import { FEATURES } from "./lib/features";
 import { captureModeration } from "./lib/posthog";
@@ -190,11 +190,11 @@ function shownAs(comment: Comment, author: User | null, viewer: User | null): Sh
   return "approved";
 }
 
-/** Memoised author lookups for one query. */
+/** Memoised author lookups for one query; an account being deleted reads as gone. */
 function authorCache(ctx: QueryCtx) {
   const cache = new Map<Id<"users">, User | null>();
   return async (userId: Id<"users">) => {
-    if (!cache.has(userId)) cache.set(userId, await ctx.db.get(userId));
+    if (!cache.has(userId)) cache.set(userId, await liveUser(ctx, userId));
     return cache.get(userId) ?? null;
   };
 }
@@ -568,7 +568,7 @@ export const moderate = mutation({
       }
     }
     if (to === "approved") {
-      const author = await ctx.db.get(comment.userId);
+      const author = await liveUser(ctx, comment.userId);
       await dismissReports(ctx, comment);
       await patchComment(ctx, comment, {
         status: author?.commentShadowed ? "shadowed" : "approved",
@@ -617,7 +617,7 @@ export const setShadowed = mutation({
     const moderator = await requireModerator(ctx);
     const comment = await ctx.db.get(args.commentId);
     if (!comment) return fail("notFound", "That comment is gone.");
-    const author = await ctx.db.get(comment.userId);
+    const author = await liveUser(ctx, comment.userId);
     if (!author) return fail("notFound", "Its author's account is gone.");
     if (Boolean(author.commentShadowed) === args.shadowed) return null;
     if (args.shadowed && isDataTeam(author)) fail("forbidden", "Data Team members can't be shadowed.");
@@ -720,17 +720,20 @@ export const queueCounts = query({
 // ---------- upkeep (users.purgeUser) ----------
 
 /**
- * Hard-delete a User's Comments and Comment Reports: reports they filed
- * (lowering those Comments' counts, never unhiding one), reports on their
- * Comments, and the Comments themselves. Replies to a deleted Comment lose
- * their parent and become top-level. commentAudit rows stay, like
- * reviewAudit.
+ * Hard-delete up to `limit` of a User's Comment rows, for one run of the
+ * account purge: reports they filed (lowering those Comments' counts, never
+ * unhiding one), then each of their Comments once its reports are deleted
+ * and its replies detached. A detached reply loses its parent and becomes
+ * top-level; one of their own is then deleted in its turn. Each unit is one
+ * row deleted or detached. Returns the units used: fewer than `limit`
+ * means none of their reports or Comments remain. commentAudit rows stay,
+ * like reviewAudit.
  */
-export async function purgeUserComments(ctx: MutationCtx, userId: Id<"users">) {
+export async function purgeUserComments(ctx: MutationCtx, userId: Id<"users">, limit: number): Promise<number> {
   const filed = await ctx.db
     .query("commentReports")
     .withIndex("by_reporter", (q) => q.eq("reporterId", userId))
-    .collect();
+    .take(limit);
   for (const row of filed) {
     await ctx.db.delete(row._id);
     const comment = await ctx.db.get(row.commentId);
@@ -738,21 +741,31 @@ export async function purgeUserComments(ctx: MutationCtx, userId: Id<"users">) {
       await ctx.db.patch(comment._id, { reportCount: Math.max(0, comment.reportCount - 1) });
     }
   }
-  const own = await ctx.db
-    .query("comments")
-    .withIndex("by_user", (q) => q.eq("userId", userId))
-    .collect();
-  for (const comment of own) {
-    await dismissReports(ctx, comment);
+  let used = filed.length;
+  while (used < limit) {
+    const comment = await ctx.db
+      .query("comments")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first();
+    if (!comment) break;
+    const reports = await ctx.db
+      .query("commentReports")
+      .withIndex("by_comment_reporter", (q) => q.eq("commentId", comment._id))
+      .take(limit - used);
+    for (const row of reports) await ctx.db.delete(row._id);
+    used += reports.length;
+    if (used === limit) break;
     const replies = await ctx.db
       .query("comments")
       .withIndex("by_parent", (q) => q.eq("parentId", comment._id))
-      .collect();
-    for (const reply of replies) {
-      if (reply.userId !== userId) await ctx.db.patch(reply._id, { parentId: undefined, replyCount: 0 });
-    }
-    // Another user's thread loses one approved reply (a no-op once its head is gone).
+      .take(limit - used);
+    for (const reply of replies) await ctx.db.patch(reply._id, { parentId: undefined, replyCount: 0 });
+    used += replies.length;
+    if (used === limit) break;
+    // Another user's thread loses one approved reply.
     if (comment.parentId && comment.status === "approved") await bumpReplyCount(ctx, comment.parentId, -1);
     await ctx.db.delete(comment._id);
+    used += 1;
   }
+  return used;
 }

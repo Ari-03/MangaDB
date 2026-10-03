@@ -102,6 +102,22 @@ a change now, or where nothing scheduled will.
 `seriesBrowse:rebuild`, `publisher:rebuildBoards` and `people:rebuild`
 return after their first action and finish in scheduled continuations.
 
+## Account deletion
+
+A user's request (`users.deleteAccount`) sets `deletingSince` on their
+`users` row and schedules two things that need no operator:
+`users:purgeUser`, which deletes their personal rows 200 at a time and the
+row itself last, and `users:deleteClerkIdentity`, which deletes the Clerk
+sign-in and retries five times over about seven hours. If Clerk still
+refuses, the function log has "Gave up deleting Clerk identity" with the
+subject; delete that user in the Clerk dashboard. Their data is gone
+either way.
+
+A row with `deletingSince` that stays for more than a few minutes is a
+purge that stopped. Find the error in the logs, then restart it:
+`npx convex run users:purgeUser '{"userId":"…"}'`. It only acts on a row
+marked deleting, so a rerun is safe.
+
 ## Catalog repair tool
 
 A one-time repair of imported catalog data, written after the September

@@ -14,7 +14,8 @@ import { internalMutation, mutation, query, type MutationCtx } from "./_generate
 import { fail } from "./lib/errors";
 import {
   canGovern,
-  countActiveAdministrators,
+  DATA_ROLES,
+  guardLastAdministrator,
   requireModerator,
   requireRole,
   type DataRole,
@@ -23,6 +24,7 @@ import { usernameLookup } from "./lib/usernameLookup";
 import { normalizeUsername } from "./lib/usernames";
 import { dataRole } from "./schema";
 
+/** The User a username names; a User deleting their account counts as none. */
 async function findUserByUsername(
   ctx: MutationCtx,
   username: string,
@@ -33,19 +35,8 @@ async function findUserByUsername(
       q.eq("usernameNormalized", normalizeUsername(username)),
     )
     .unique();
-  if (!user) fail("notFound", `No user named "${username}".`);
+  if (!user || user.deletingSince !== undefined) fail("notFound", `No user named "${username}".`);
   return user;
-}
-
-/**
- * Refuse any change that would leave MangaDB without a working Administrator
- * (spec §4 makes the Administrator the root of governance).
- */
-async function guardLastAdministrator(ctx: MutationCtx, target: Doc<"users">) {
-  if (target.role !== "administrator" || target.suspended) return;
-  if ((await countActiveAdministrators(ctx)) <= 1) {
-    fail("lastAdministrator", "Cannot remove the last active Administrator.");
-  }
 }
 
 /**
@@ -60,10 +51,11 @@ async function guardLastAdministrator(ctx: MutationCtx, target: Doc<"users">) {
 export const bootstrapAdministrator = internalMutation({
   args: { username: v.string() },
   handler: async (ctx, { username }) => {
-    const existingAdmins = (await ctx.db.query("users").collect()).filter(
-      (u) => u.role === "administrator",
-    );
-    if (existingAdmins.length > 0) {
+    const existingAdmin = await ctx.db
+      .query("users")
+      .withIndex("by_role", (q) => q.eq("role", "administrator"))
+      .first();
+    if (existingAdmin) {
       fail("alreadyBootstrapped", "An Administrator already exists; appoint further roles through them.");
     }
     const user = await findUserByUsername(ctx, username);
@@ -196,20 +188,27 @@ export const reinstate = mutation({
   },
 });
 
-/** Current role holders, for the /mod/roles page. Data team only. */
+/**
+ * Current role holders, for the /mod/roles page. Data team only. Reads only
+ * the role holders (by_role, one range per role; the team is a handful of
+ * people) and leaves out anyone deleting their account.
+ */
 export const roster = query({
   args: {},
   handler: async (ctx) => {
     await requireModerator(ctx);
-    const users = await ctx.db.query("users").collect();
-    return users
-      .filter((u) => u.role)
-      .map((u) => ({
-        username: u.username,
-        role: u.role as DataRole,
-        suspended: u.suspended ?? false,
-      }))
-      .sort((a, b) => a.username.localeCompare(b.username));
+    const rows = [];
+    for (const role of DATA_ROLES) {
+      const holders = await ctx.db
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", role))
+        .collect();
+      for (const u of holders) {
+        if (u.deletingSince !== undefined) continue;
+        rows.push({ username: u.username, role, suspended: u.suspended ?? false });
+      }
+    }
+    return rows.sort((a, b) => a.username.localeCompare(b.username));
   },
 });
 

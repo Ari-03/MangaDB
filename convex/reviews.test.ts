@@ -10,7 +10,7 @@ import type { Id } from "./_generated/dataModel";
 import type { TargetId, TargetRef } from "./lib/ratings";
 import { REVIEW_MAX_LENGTH, REVIEW_MIN_LENGTH, REVIEW_REASON_MAX } from "./reviews";
 import { insertCoverage, insertEdition, insertPublisher, insertVolume } from "./test.factories";
-import { ADMIN, MOD, alice, bob, makeT, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { ADMIN, MOD, alice, bob, makeT, purgeAccount, seedTeam, signedIn, type TestT } from "./test.helpers";
 import { edition, frierenTwins, merge, omnibusEditions, series, seriesWithVolume, volume } from "./test.tracking";
 
 // These tests cover Reviews as public content, so they run with the flag on;
@@ -224,7 +224,7 @@ describe("review upkeep", () => {
     const { t, ids } = await seed();
     await write(t, AUTHOR, ids);
     await write(t, OTHER, ids);
-    await t.mutation(internal.users.purgeUser, { clerkSubject: AUTHOR });
+    await purgeAccount(t, AUTHOR);
     const page = await list(t);
     expect(page!.items.map((i) => i.username)).toEqual(["dave"]);
     expect(await t.run((ctx) => ctx.db.query("reviews").collect())).toHaveLength(1);
@@ -452,7 +452,7 @@ describe("Reviews of an omnibus Edition", () => {
   it("purging a user deletes their Edition Reviews", async () => {
     const { t, ids, books } = await seedBooks();
     await save(t, { kind: "edition", id: books.omnibus });
-    await t.mutation(internal.users.purgeUser, { clerkSubject: AUTHOR });
+    await purgeAccount(t, AUTHOR);
     expect(await t.run((ctx) => ctx.db.query("reviews").collect())).toEqual([]);
   });
 

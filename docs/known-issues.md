@@ -11,11 +11,6 @@ is fixed.
   completion that touched only partial coverage cannot be undone, and a
   coverage change after completion leaves its reads behind. The fix is a
   stored completion event with the original pass and Volume ids.
-- **Account deletion is not durable.** `users.deleteAccount` deletes the
-  Clerk identity first, then runs `purgeUser` as one unbounded transaction.
-  If the purge fails, personal rows stay and the user can no longer sign in
-  to retry. It needs a deletion job recorded before the Clerk call and
-  processed in bounded batches.
 - **Library badges run full queries.** Each tab label on `/me` subscribes
   to its tab's full query (`collection.myLibrary`, `reading.myReading`,
   `follows.myUpcoming`, `favorites.mine`) just to show a count, including

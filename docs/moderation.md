@@ -12,8 +12,10 @@ propose changes; Moderators and Administrators approve them
 (`convex/roles.ts`, `convex/lib/roles.ts`). Every appointment, revocation,
 suspension and reinstatement writes a permanent `roleAudit` row that
 survives account deletion. Revoking or suspending someone removes their
-privileges but never rewrites what they authored. `/mod/roles` shows the
-roster, the actions and the audit trail.
+privileges but never rewrites what they authored. The last active
+Administrator (not suspended, not deleting their account) cannot be
+revoked, moved to another role, or delete their account; appoint another
+first. `/mod/roles` shows the roster, the actions and the audit trail.
 
 The first Administrator is appointed once, by the operator, after that
 person has signed in and claimed a username:

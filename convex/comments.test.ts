@@ -12,7 +12,7 @@ import type { Id } from "./_generated/dataModel";
 import { COMMENT_POLICY } from "./comments";
 import type { PageTargetRef } from "./lib/ratings";
 import { insertEdition, insertPublisher, insertVolume } from "./test.factories";
-import { ADMIN, EDITOR, MOD, alice, bob, makeT, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { ADMIN, EDITOR, MOD, alice, bob, makeT, purgeAccount, seedTeam, signedIn, type TestT } from "./test.helpers";
 import { merge, series, seriesWithVolume, split, volume } from "./test.tracking";
 
 // These tests cover Comments switched on; features.test.ts covers them off.
@@ -540,7 +540,7 @@ describe("upkeep", () => {
     await t.withIdentity({ subject: AUTHOR }).mutation(api.comments.report, { commentId: other.commentId, reason: "spam" });
     await t.withIdentity({ subject: R1 }).mutation(api.comments.report, { commentId: theirs.commentId, reason: "spam" });
 
-    await t.mutation(internal.users.purgeUser, { clerkSubject: AUTHOR });
+    await purgeAccount(t, AUTHOR);
 
     const rows = await t.run((ctx) => ctx.db.query("comments").collect());
     const leaverId = theirs.commentId;
@@ -912,7 +912,7 @@ describe("upkeep, more", () => {
     await post(t, AUTHOR, ids, "My reply there", { parentId: elsewhere.commentId });
     expect((await t.run((ctx) => ctx.db.get(elsewhere.commentId)))!.replyCount).toBe(1);
 
-    await t.mutation(internal.users.purgeUser, { clerkSubject: AUTHOR });
+    await purgeAccount(t, AUTHOR);
     const rows = await t.run((ctx) => ctx.db.query("comments").collect());
     expect(rows.filter((row) => row.body.startsWith("My"))).toEqual([]);
     const orphan = rows.find((row) => row._id === kept.commentId)!;

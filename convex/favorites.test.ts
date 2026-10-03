@@ -8,7 +8,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { TargetId } from "./lib/ratings";
 import { insertCoverage, insertEdition, insertPublisher, insertRelease } from "./test.factories";
-import { alice, makeT, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { alice, makeT, purgeAccount, seedTeam, signedIn, type TestT } from "./test.helpers";
 import { edition, frierenTwins, merge, omnibusEditions, series, split, volume } from "./test.tracking";
 
 const READER = "user_a";
@@ -115,7 +115,7 @@ describe("favorite upkeep", () => {
     await toggle(t, READER, { kind: "series", id: ids.one.seriesId });
     await toggle(t, READER, { kind: "volume", id: ids.one.volumeId });
     await toggle(t, OTHER, { kind: "series", id: ids.one.seriesId });
-    await t.mutation(internal.users.purgeUser, { clerkSubject: READER });
+    await purgeAccount(t, READER);
     expect(await rows(t)).toHaveLength(1);
   });
 
@@ -280,7 +280,7 @@ describe("Favorites of an omnibus Edition", () => {
     const { t, ids, books } = await seedBooks();
     await toggle(t, READER, { kind: "edition", id: books.omnibus });
     await toggle(t, OTHER, { kind: "edition", id: books.omnibus });
-    await t.mutation(internal.users.purgeUser, { clerkSubject: READER });
+    await purgeAccount(t, READER);
     expect(await rows(t)).toEqual([expect.objectContaining({ editionId: books.omnibus })]);
   });
 
