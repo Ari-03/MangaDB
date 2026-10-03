@@ -1,38 +1,33 @@
-// Sensitive catalog operations — the Moderator surface (ticket #33, spec §5):
+// Sensitive catalog operations — the Moderator surface (spec §5):
 // Hide, Restore, Merge, Split, and temporary Locks. Every mutation demands a
 // reason and explicit confirmation of the impact preview (`manageForm`
 // computes it; `confirmImpact` asserts the human saw it), and each applies as
 // an immediately approved Proposal through the same apply functions the
 // review queue uses (lib/sensitiveOps.ts) — the single write path.
 
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import {
   displayInfo,
   getCanonical,
-  recordTypeArg,
+  insertApprovedProposal,
+  insertFirstVersion,
   resolveEditTarget,
   revisionsOf,
   type RecordRef,
 } from "./moderation";
 import {
-  applyHide,
-  applyLock,
   applyMerge,
-  applyRestore,
-  applySplit,
-  applyUnlock,
   impactOf,
   reversibleManifestOf,
+  SINGLE_RECORD_OPS,
   type OpMeta,
+  type SingleRecordOp,
 } from "./lib/sensitiveOps";
+import { fail } from "./lib/errors";
 import { requireModerator } from "./lib/roles";
-import { recordRef } from "./schema";
-
-const fail = (code: string, message: string): never => {
-  throw new ConvexError({ code, message });
-};
+import { recordRef, recordType } from "./schema";
 
 // ---------- the manage panel query ----------
 
@@ -44,7 +39,7 @@ const fail = (code: string, message: string): never => {
  * merge form reuses this same query to preview its survivor target.
  */
 export const manageForm = query({
-  args: { type: recordTypeArg, key: v.string() },
+  args: { type: recordType, key: v.string() },
   handler: async (ctx, { type, key }) => {
     await requireModerator(ctx);
     const doc = await resolveEditTarget(ctx, type, key);
@@ -111,22 +106,8 @@ async function beginOperation(
     userId: user._id,
     roleAtAuthorship: user.role,
   };
-  const now = Date.now();
-  const proposalId = await ctx.db.insert("proposals", {
-    author,
-    state: "approved",
-    currentVersionNo: 1,
-    submittedAt: now,
-    decidedBy: user._id,
-    decidedAt: now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
-    ops: [storedOp],
-    evidence: [],
-    changeComment: reason,
-  });
+  const proposalId = await insertApprovedProposal(ctx, author, user._id);
+  await insertFirstVersion(ctx, proposalId, { ops: [storedOp], evidence: [], changeComment: reason });
   return { proposalId, author, approvedBy: user._id, comment: reason };
 }
 
@@ -136,64 +117,39 @@ const singleRefArgs = {
   confirmImpact: v.boolean(),
 };
 
+/**
+ * The mutation for one single-record operation: recorded as its Proposal op
+ * (hide, restore and split name the record's base Revision; locks do not),
+ * then applied through the same function as the review queue.
+ */
+function singleRecordMutation(kind: SingleRecordOp) {
+  return mutation({
+    args: singleRefArgs,
+    handler: async (ctx, args) => {
+      const ref = args.ref;
+      const meta = await beginOperation(ctx, args, async (baseOf): Promise<StoredOp> => {
+        if (kind === "lock" || kind === "unlock") return { kind, ref };
+        const baseRevisionId = await baseOf(ref);
+        return kind === "split" ? { kind, ref, baseRevisionId, details: {} } : { kind, ref, baseRevisionId };
+      });
+      const revisionIds = await SINGLE_RECORD_OPS[kind](ctx, ref, meta);
+      return { proposalId: meta.proposalId, revisionIds };
+    },
+  });
+}
+
 // ---------- the operations ----------
 
 /** Hide: remove from public discovery, preserving identity/history/tracking. */
-export const hideRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
-    const meta = await beginOperation(ctx, args, async (baseOf) => ({
-      kind: "hide",
-      ref: ref as never,
-      baseRevisionId: await baseOf(ref),
-    }));
-    const revisionIds = await applyHide(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const hideRecord = singleRecordMutation("hide");
 
 /** Restore: reactivate a hidden record. Never reverses a merge. */
-export const restoreRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
-    const meta = await beginOperation(ctx, args, async (baseOf) => ({
-      kind: "restore",
-      ref: ref as never,
-      baseRevisionId: await baseOf(ref),
-    }));
-    const revisionIds = await applyRestore(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const restoreRecord = singleRecordMutation("restore");
 
 /** Temporarily lock an active record against ordinary edits (disputes). */
-export const lockRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
-    const meta = await beginOperation(ctx, args, async () => ({
-      kind: "lock",
-      ref: ref as never,
-    }));
-    const revisionIds = await applyLock(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const lockRecord = singleRecordMutation("lock");
 
-export const unlockRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
-    const meta = await beginOperation(ctx, args, async () => ({
-      kind: "unlock",
-      ref: ref as never,
-    }));
-    const revisionIds = await applyUnlock(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const unlockRecord = singleRecordMutation("unlock");
 
 /**
  * Merge: pick the survivor, transfer observations, compatible relationships,
@@ -208,8 +164,8 @@ export const mergeRecords = mutation({
     confirmImpact: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const survivor = args.survivor as RecordRef;
-    const loser = args.loser as RecordRef;
+    const survivor = args.survivor;
+    const loser = args.loser;
     const meta = await beginOperation(ctx, args, async (baseOf) => {
       const bases: Id<"revisions">[] = [];
       const survivorBase = await baseOf(survivor);
@@ -218,8 +174,8 @@ export const mergeRecords = mutation({
       if (loserBase) bases.push(loserBase);
       return {
         kind: "merge",
-        survivor: survivor as never,
-        merged: loser as never,
+        survivor,
+        merged: loser,
         baseRevisionIds: bases,
       };
     });
@@ -229,17 +185,4 @@ export const mergeRecords = mutation({
 });
 
 /** Split: the explicit reversal of a mistaken merge. */
-export const splitRecord = mutation({
-  args: singleRefArgs,
-  handler: async (ctx, args) => {
-    const ref = args.ref as RecordRef;
-    const meta = await beginOperation(ctx, args, async (baseOf) => ({
-      kind: "split",
-      ref: ref as never,
-      baseRevisionId: await baseOf(ref),
-      details: {},
-    }));
-    const revisionIds = await applySplit(ctx, ref, meta);
-    return { proposalId: meta.proposalId, revisionIds };
-  },
-});
+export const splitRecord = singleRecordMutation("split");

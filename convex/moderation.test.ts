@@ -3,65 +3,39 @@
 // immutable public Revision), validation and staleness rules, the implicit
 // Human Override on import-authored fields, and the public record history.
 
-import { convexTest } from "convex-test";
-import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 
-import { api, internal } from "./_generated/api";
+import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
+import type { MutationCtx } from "./_generated/server";
+import {
+  insertEdition,
+  insertObservation,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertSourceRevision,
+  type Overrides,
+} from "./test.factories";
+import { EDITOR, MOD, PLAIN, alice, bob, carol, dave, makeT, seedTeam, type TestT } from "./test.helpers";
 
-const ADMIN = "user_admin";
-const MOD = "user_mod";
-const EDITOR = "user_editor";
-const PLAIN = "user_plain";
+const setup = (t: TestT) => seedTeam(t, [alice, bob, carol, dave]);
 
-async function setup(t: ReturnType<typeof convexTest>) {
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.users.claimUsername, { username: "alice" });
-  await t
-    .withIdentity({ subject: MOD })
-    .mutation(api.users.claimUsername, { username: "bob" });
-  await t
-    .withIdentity({ subject: EDITOR })
-    .mutation(api.users.claimUsername, { username: "carol" });
-  await t
-    .withIdentity({ subject: PLAIN })
-    .mutation(api.users.claimUsername, { username: "dave" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.roles.appoint, { username: "carol", role: "editor" });
+/** "Alpha" (public id 1, alt title "A-side") unless overridden. */
+async function addSeries(t: TestT, overrides: Overrides<"series"> = {}) {
+  return await t.run((ctx) => insertSeries(ctx, { publicId: 1, title: "Alpha", altTitles: ["A-side"], ...overrides }));
 }
 
-async function addSeries(
-  t: ReturnType<typeof convexTest>,
-  overrides: Partial<{
-    status: "active" | "hidden" | "merged";
-    locked: boolean;
-    title: string;
-    publicId: number;
-  }> = {},
-) {
-  return await t.run((ctx) =>
-    ctx.db.insert("series", {
-      status: overrides.status ?? "active",
-      locked: overrides.locked,
-      publicId: overrides.publicId ?? 1,
-      title: overrides.title ?? "Alpha",
-      altTitles: ["A-side"],
-      searchText: `${overrides.title ?? "Alpha"} A-side`,
-    }),
-  );
+/** A Release on a bare Edition (public id 1) with no Series. */
+async function insertLooseRelease(ctx: MutationCtx, fields: Overrides<"releases"> = {}) {
+  const publisherId = await insertPublisher(ctx, { name: "Pub" });
+  const editionId = await insertEdition(ctx, { publicId: 1, publisherId });
+  return await insertRelease(ctx, { editionId, publisherId, seriesIds: [], ...fields });
 }
 
 describe("moderation.submitDirectEdit — authorization", () => {
   it("rejects signed-out, plain, and Editor callers", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     const args = {
@@ -69,9 +43,9 @@ describe("moderation.submitDirectEdit — authorization", () => {
       changes: [{ field: "title", value: "Beta" }],
       comment: "Nope.",
     };
-    await expect(t.mutation(api.moderation.submitDirectEdit, args)).rejects.toThrow(
-      ConvexError,
-    );
+    await expect(t.mutation(api.moderation.submitDirectEdit, args)).rejects.toMatchObject({
+      data: { code: "unauthenticated" },
+    });
     for (const subject of [PLAIN, EDITOR]) {
       await expect(
         t.withIdentity({ subject }).mutation(api.moderation.submitDirectEdit, args),
@@ -82,7 +56,7 @@ describe("moderation.submitDirectEdit — authorization", () => {
 
 describe("moderation.submitDirectEdit — the proposal write path", () => {
   it("saves as an immediately approved Proposal Version with one Revision", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
 
@@ -136,7 +110,7 @@ describe("moderation.submitDirectEdit — the proposal write path", () => {
   });
 
   it("enforces staleness: the base Revision must be the record's latest", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     const asMod = t.withIdentity({ subject: MOD });
@@ -166,7 +140,7 @@ describe("moderation.submitDirectEdit — the proposal write path", () => {
   });
 
   it("validates: comment required, whitelisted fields only, no no-ops", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     const asMod = t.withIdentity({ subject: MOD });
@@ -218,12 +192,14 @@ describe("moderation.submitDirectEdit — the proposal write path", () => {
   });
 
   it("refuses hidden, merged, and locked records", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const asMod = t.withIdentity({ subject: MOD });
+    const survivor = await addSeries(t);
     const hidden = await addSeries(t, { status: "hidden", publicId: 2 });
     const locked = await addSeries(t, { locked: true, publicId: 3 });
-    for (const id of [hidden, locked]) {
+    const merged = await addSeries(t, { status: "merged", mergedIntoId: survivor, publicId: 4 });
+    for (const id of [hidden, merged, locked]) {
       await expect(
         asMod.mutation(api.moderation.submitDirectEdit, {
           ref: { type: "series", id },
@@ -235,32 +211,11 @@ describe("moderation.submitDirectEdit — the proposal write path", () => {
   });
 
   it("normalizes partial dates (sort key) and enforces the binding invariant", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const asMod = t.withIdentity({ subject: MOD });
 
-    const { editionId, digitalId } = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Pub",
-        slug: "pub",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 1,
-        publisherId,
-      });
-      const digitalId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "digital",
-        language: "en",
-        publisherId,
-        seriesIds: [],
-      });
-      return { editionId, digitalId };
-    });
-    void editionId;
+    const digitalId = await t.run((ctx) => insertLooseRelease(ctx, { format: "digital" }));
 
     await expect(
       asMod.mutation(api.moderation.submitDirectEdit, {
@@ -285,32 +240,21 @@ describe("moderation.submitDirectEdit — the proposal write path", () => {
 });
 
 describe("moderation — implicit Human Override (spec §4)", () => {
-  async function withImportedTitle(
-    t: ReturnType<typeof convexTest>,
-    seriesId: Id<"series">,
-  ) {
+  async function withImportedTitle(t: TestT, seriesId: Id<"series">) {
     // Simulate an importer-authored Revision having set the title (imports
     // author Proposals too; here only the Revision matters for provenance).
-    await t.run(async (ctx) => {
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "sevenSeas" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
+    await t.run((ctx) =>
+      insertSourceRevision(ctx, {
+        sourceKey: "sevenSeas",
         ref: { type: "series", id: seriesId },
-        seq: 1,
-        proposalId,
-        author: { kind: "source", sourceKey: "sevenSeas" },
         changes: [{ field: "title", before: undefined, after: "Alpha" }],
-        comment: "Imported from Seven Seas.",
         citation: { sourceName: "Seven Seas", url: "https://example.test/alpha" },
-      });
-    });
+      }),
+    );
   }
 
   it("marks an approved human change to an import-authored field as overridden", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     await withImportedTitle(t, seriesId);
@@ -337,7 +281,7 @@ describe("moderation — implicit Human Override (spec §4)", () => {
   });
 
   it("does not mark human-authored fields, and override marking is sticky", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     const asMod = t.withIdentity({ subject: MOD });
@@ -368,7 +312,7 @@ describe("moderation — implicit Human Override (spec §4)", () => {
 
 describe("moderation.recordHistory", () => {
   it("returns the public history: diff, author, approver, timestamp, comment", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     const asMod = t.withIdentity({ subject: MOD });
@@ -402,25 +346,12 @@ describe("moderation.recordHistory", () => {
   });
 
   it("hides hidden records and resolves merged records to their survivor", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const survivor = await addSeries(t, { publicId: 1, title: "Alpha" });
     await t.run(async (ctx) => {
-      await ctx.db.insert("series", {
-        status: "merged",
-        mergedIntoId: survivor,
-        publicId: 2,
-        title: "Alpha (dup)",
-        altTitles: [],
-        searchText: "Alpha (dup)",
-      });
-      await ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 3,
-        title: "Hidden",
-        altTitles: [],
-        searchText: "Hidden",
-      });
+      await insertSeries(ctx, { status: "merged", mergedIntoId: survivor, publicId: 2, title: "Alpha (dup)" });
+      await insertSeries(ctx, { status: "hidden", publicId: 3, title: "Hidden" });
     });
     await t.withIdentity({ subject: MOD }).mutation(
       api.moderation.submitDirectEdit,
@@ -444,7 +375,7 @@ describe("moderation.recordHistory", () => {
 
 describe("moderation.editForm", () => {
   it("returns registry fields with current values and the base revision", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     const asMod = t.withIdentity({ subject: MOD });
@@ -476,7 +407,7 @@ describe("moderation.editForm", () => {
   });
 
   it("is data-team-only and resolves releases by document ID", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     // Editors read the form too since #32 (they draft update proposals from
     // it); anyone without a data-team role is refused.
@@ -486,27 +417,7 @@ describe("moderation.editForm", () => {
         .query(api.moderation.editForm, { type: "series", key: "1" }),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
-    const releaseId = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Pub",
-        slug: "pub",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 1,
-        publisherId,
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        binding: "paperback",
-        language: "en",
-        publisherId,
-        seriesIds: [],
-      });
-    });
+    const releaseId = await t.run((ctx) => insertLooseRelease(ctx, { binding: "paperback" }));
     const form = await t
       .withIdentity({ subject: MOD })
       .query(api.moderation.editForm, { type: "release", key: releaseId });
@@ -519,7 +430,7 @@ describe("moderation.editForm", () => {
 
 describe("moderation — series synopsis is editorial and editable", () => {
   it("appears on the edit form and saves through a direct edit", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     const asMod = t.withIdentity({ subject: MOD });
@@ -542,27 +453,9 @@ describe("moderation — series synopsis is editorial and editable", () => {
 describe("moderation.sourceBlurbs", () => {
   // A Release whose description Kodansha authored, with a Kodansha and an
   // ANN observation linked; ANN's lower-authority offer was recorded only.
-  async function seedRelease(t: ReturnType<typeof convexTest>) {
+  async function seedRelease(t: TestT) {
     return await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Pub",
-        slug: "pub",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 1,
-        publisherId,
-      });
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        publisherId,
-        seriesIds: [],
-        description: "Kodansha's own blurb.",
-      });
+      const releaseId = await insertLooseRelease(ctx, { description: "Kodansha's own blurb." });
       for (const [key, name] of [
         ["kodansha", "Kodansha USA"],
         ["ann", "Anime News Network Encyclopedia"],
@@ -578,34 +471,25 @@ describe("moderation.sourceBlurbs", () => {
           consecutiveFailures: 0,
         });
       }
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "kodansha" },
-        state: "approved",
-        currentVersionNo: 1,
-      });
-      await ctx.db.insert("revisions", {
+      await insertSourceRevision(ctx, {
+        sourceKey: "kodansha",
         ref: { type: "release", id: releaseId },
-        seq: 1,
-        proposalId,
-        author: { kind: "source", sourceKey: "kodansha" },
         changes: [{ field: "description", before: undefined, after: "Kodansha's own blurb." }],
         comment: "Imported from Kodansha USA.",
       });
-      await ctx.db.insert("sourceObservations", {
+      await insertObservation(ctx, {
         sourceKey: "kodansha",
         sourceRecordId: "vol-1",
         recordRef: { type: "release", id: releaseId },
         snapshot: { url: "https://kodansha.test/vol-1", description: "Kodansha's own blurb." },
         lastSeenAt: 1000,
-        withdrawn: false,
       });
-      await ctx.db.insert("sourceObservations", {
+      await insertObservation(ctx, {
         sourceKey: "ann",
         sourceRecordId: "line:9",
         recordRef: { type: "release", id: releaseId },
         snapshot: { url: "https://ann.test/9", description: "ANN's summary." },
         lastSeenAt: 2000,
-        withdrawn: false,
         conflicts: [
           {
             field: "description",
@@ -616,7 +500,7 @@ describe("moderation.sourceBlurbs", () => {
         ],
       });
       // Another source linked without any blurb: nothing to list.
-      await ctx.db.insert("sourceObservations", {
+      await insertObservation(ctx, {
         sourceKey: "openlibrary",
         sourceRecordId: "OL1M",
         recordRef: { type: "release", id: releaseId },
@@ -629,7 +513,7 @@ describe("moderation.sourceBlurbs", () => {
   }
 
   it("lists every source's text with its source and marks the canonical one", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const releaseId = await seedRelease(t);
     const result = await t
@@ -664,7 +548,7 @@ describe("moderation.sourceBlurbs", () => {
   });
 
   it("reports a human author and is Moderator-only", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const releaseId = await seedRelease(t);
     const base = await t.run(async (ctx) => (await ctx.db.query("revisions").collect())[0]!);
@@ -693,22 +577,16 @@ describe("moderation.sourceBlurbs", () => {
   });
 
   it("reads a series link observation's synopsis", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
     await t.run((ctx) =>
-      ctx.db.insert("sourceObservations", {
+      insertObservation(ctx, {
         sourceKey: "sevenseas",
         sourceRecordId: "series:alpha",
         recordRef: { type: "series", id: seriesId },
-        snapshot: {
-          kind: "series",
-          title: "Alpha",
-          url: "https://ss.test/alpha",
-          synopsis: "Alpha begins.",
-        },
+        snapshot: { kind: "series", title: "Alpha", url: "https://ss.test/alpha", synopsis: "Alpha begins." },
         lastSeenAt: 1,
-        withdrawn: false,
       }),
     );
     const result = await t

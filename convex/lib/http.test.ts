@@ -24,12 +24,17 @@ describe("politeFetch", () => {
   it("waits out a rate limit and then succeeds", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response("slow down", { status: 429, headers: { "Retry-After": "5" } }))
+      .mockResolvedValueOnce(new Response("slow down", { status: 429, headers: { "Retry-After": "30" } }))
       .mockResolvedValueOnce(new Response("<ann/>", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const { res } = await fetchWithClock("https://example.test/api");
+    vi.useFakeTimers();
+    const pending = politeFetch("https://example.test/api", 0);
+    // The server asked for 30 s, longer than the 4 s backoff: no retry before then.
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(await res?.text()).toBe("<ann/>");
+    expect(await (await pending).text()).toBe("<ann/>");
   });
 
   it("retries a body that fails to read", async () => {

@@ -1,4 +1,4 @@
-// The PRH API adapter (ticket #36, spec §6/§7): overlays authoritative
+// The PRH API adapter (spec §6/§7): overlays authoritative
 // onsale dates and ISBNs on PRH-distributed records — Kodansha, Seven Seas,
 // Dark Horse, Square Enix, Denpa, Vertical Comics, and the rest of PRH
 // Publisher Services (VIZ is not PRH-distributed). The API only returns
@@ -17,28 +17,31 @@
 // uncapped full sweep; a listed entry the parser drops still counts as
 // present (notePresent), and one with no readable ISBN voids completeness.
 //
-// Configuration (no live key exists in this repo — see README):
+// Configuration (no live key exists in this repo — see docs/imports.md):
 //   PRH_API_KEY        the Enhanced API key (manual activation by PRH)
 //   PRH_IMPRINT_CODES  comma-separated imprint codes to mirror (verify the
 //                      codes against /title/domains/PRH.US/imprints once a
 //                      key is active)
-// Without both, a run is skipped as "unconfigured" — never a failure.
+// Without a key and a non-empty imprint list (PRH_IMPRINT_CODES or the
+// `imprints` argument), a fresh call skips as "unconfigured" and opens no
+// run. A link the sync hands off carries its imprint list in its arguments,
+// so removing PRH_IMPRINT_CODES mid-run has no effect on it; removing
+// PRH_API_KEY closes the run as failed.
 //
-// Only the imprint-scoped path filters: the flat /titles endpoint silently
-// IGNORES its `imprint` and `onsaleFrom` params (re-verified live
-// 2026-09-25: every "imprint=" query returns the whole ~313k-title domain,
-// and sorting that set 504s). Future mode therefore pages an imprint
-// newest-first and cuts off at today client-side.
+// The API cannot filter by date (lib/prh.ts), so future mode pages an
+// imprint newest-first and cuts off at today client-side.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
+import { closeRun, registryRow } from "./lib/importRuns";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
+import { toPartialDate } from "./lib/pipeline";
 import { parseTitleList, prhTitleValidator } from "./lib/prh";
 import { withExceptionCapture } from "./lib/posthog";
 
@@ -52,11 +55,6 @@ const LINK_BUDGET_MS = 4 * 60 * 1000;
 const CONTENT_ZOOM = "https://api.penguinrandomhouse.com/title/titles/content/definition";
 
 // ---------- the sync action ----------
-
-/** An onsale date as a yyyymmdd number, comparable to `todaySortKey()`. */
-function dateKey(date: { year: number; month: number; day: number }): number {
-  return date.year * 10000 + date.month * 100 + date.day;
-}
 
 /** Masks the api_key query value in a message (fetch errors quote URLs). */
 export function redactKey(message: string): string {
@@ -117,25 +115,17 @@ export const sync = internalAction({
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("prh.sync", ctx, async () => {
       const linkStartedAt = Date.now();
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: SOURCE_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"prh\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
+      const source = await registryRow(ctx, SOURCE_KEY);
       // A continuation link whose source was disabled or unconfigured between
       // links must not leave its run open forever: close it as failed, saying why.
+      // PRH does not use lib/importRuns.ts runToContinue, so an operator-forced
+      // run on a disabled source is refused here too: applyTitle refuses every
+      // write, and a full sweep that imported nothing would withdraw every title.
       const closeResumed = async (why: string) => {
         if (args.runId === undefined) return;
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId: args.runId,
-          status: "failed",
-          recordsSeen: args.seen ?? 0,
-          recordsChanged: args.changed ?? 0,
+        await closeRun(ctx, args.runId, "failed", {
+          seen: args.seen ?? 0,
+          changed: args.changed ?? 0,
           errors: [...(args.errors ?? []), `Stopped mid-run: ${why}`],
         });
       };
@@ -236,7 +226,7 @@ export const sync = internalAction({
               throw new Error("PRH returned an empty page before its reported record count");
             }
 
-            // A listed entry is present whether or not it parsed (B09): bump
+            // A listed entry is present whether or not it parsed: bump
             // its observation's last-seen so a full sweep never withdraws a
             // record PRH still lists. An entry with no readable ISBN could be
             // any record, so the sweep can no longer prove absence.
@@ -257,10 +247,10 @@ export const sync = internalAction({
             // imprint; undated titles neither apply nor end it.
             const pastReached =
               mode === "future" &&
-              titles.some((t) => t.onsale !== undefined && dateKey(t.onsale) < todayKey);
+              titles.some((t) => t.onsale !== undefined && toPartialDate(t.onsale).sort < todayKey);
             const toApply =
               mode === "future"
-                ? titles.filter((t) => t.onsale !== undefined && dateKey(t.onsale) >= todayKey)
+                ? titles.filter((t) => t.onsale !== undefined && toPartialDate(t.onsale).sort >= todayKey)
                 : titles;
 
             for (const snapshot of toApply) {
@@ -301,41 +291,20 @@ export const sync = internalAction({
           });
         }
 
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: recordFailures > 0 ? "failed" : "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
+        const status = recordFailures > 0 ? "failed" : "succeeded";
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, status, { seen, changed, errors })),
           mode,
           completeSweep: mode === "full" && completeSweep,
-          errorCount: errors.length,
-          ...(recordFailures > 0 ? { failed: true } : {}),
         };
       } catch (e) {
         // politeFetch errors quote the request URL, api_key included; run
         // errors are operator-visible, so the key never reaches them.
         errors.push(redactKey(errorMessage(e)));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
           mode,
           completeSweep: false,
-          errorCount: errors.length,
-          failed: true,
         };
       }
     }),

@@ -1,4 +1,4 @@
-// Authority-gated field reconciliation (ticket #35, spec §6): what happens
+// Authority-gated field reconciliation (spec §6): what happens
 // after the matching ladder links an observation to a canonical record and
 // the source's offered values disagree with the canonical ones. Pure
 // decisions live in lib/authority.ts; this module resolves each field's
@@ -17,8 +17,9 @@
 // this record is retired, and so is a possible-cancellation review whose
 // withdrawal no longer applies (the source lists the record again).
 //
-// Source-agnostic: every adapter (Seven Seas today; Kodansha, PRH, ANN,
-// OpenLibrary later) funnels linked updates through reconcileFields.
+// Source-agnostic: every adapter funnels linked updates through
+// reconcileFields, and every importer-authored Proposal is written by
+// insertSourceProposal.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
@@ -45,16 +46,81 @@ export type ReconcileResult = {
   changed: boolean;
   applied: string[];
   queued: string[];
-  recorded: string[];
-  suppressed: string[];
 };
 
+// The same query as moderation.ts revisionsOf. Importing that one would pull
+// the moderation module graph into every importer, and its cycle back
+// through people.ts → lib/prh.ts reads catalogTitleFields before
+// lib/catalogTitle.ts has initialized.
 async function revisionsOf(ctx: MutationCtx, ref: ReconcileRef): Promise<Doc<"revisions">[]> {
   return await ctx.db
     .query("revisions")
     .withIndex("by_record", (q) => q.eq("ref.type", ref.type).eq("ref.id", ref.id as never))
     .order("desc")
     .collect();
+}
+
+/** A source-authored Proposal: in review, or approved with its Revisions. */
+export type SourceProposal = {
+  sourceKey: string;
+  ops: Doc<"proposalVersions">["ops"];
+  /** The observations it cites (deduplicated). */
+  evidence: Id<"sourceObservations">[];
+  comment: string;
+  now: number;
+} & (
+  | { state: "inReview" }
+  | {
+      state: "approved";
+      citation: { sourceName: string; url: string };
+      /** One public Revision per changed record, in insertion order. */
+      revisions: Array<Pick<Doc<"revisions">, "ref" | "seq" | "changes">>;
+    }
+);
+
+/**
+ * Insert a source-authored Proposal with its single version, and for an
+ * approved one the Revisions citing the source. Every importer write to
+ * the moderation history goes through here; callers do their own patches.
+ * Returns the Proposal and the inserted Revisions' ids.
+ */
+export async function insertSourceProposal(
+  ctx: MutationCtx,
+  args: SourceProposal,
+): Promise<{ proposalId: Id<"proposals">; revisionIds: Id<"revisions">[] }> {
+  const author = { kind: "source" as const, sourceKey: args.sourceKey };
+  const proposalId = await ctx.db.insert("proposals", {
+    author,
+    state: args.state,
+    currentVersionNo: 1,
+    submittedAt: args.now,
+    ...(args.state === "approved" ? { decidedAt: args.now } : {}),
+  });
+  await ctx.db.insert("proposalVersions", {
+    proposalId,
+    versionNo: 1,
+    ops: args.ops,
+    evidence: [...new Set(args.evidence)].map((observationId) => ({
+      kind: "observation" as const,
+      observationId,
+    })),
+    changeComment: args.comment,
+  });
+  const revisionIds: Id<"revisions">[] = [];
+  if (args.state === "approved") {
+    for (const revision of args.revisions) {
+      revisionIds.push(
+        await ctx.db.insert("revisions", {
+          ...revision,
+          proposalId,
+          author,
+          comment: args.comment,
+          citation: args.citation,
+        }),
+      );
+    }
+  }
+  return { proposalId, revisionIds };
 }
 
 /** Is this exact offer suppressed — rejected before, value unchanged? */
@@ -128,8 +194,6 @@ export async function reconcileFields(
     changed: false,
     applied: [],
     queued: [],
-    recorded: [],
-    suppressed: [],
   };
 
   const registryCache = new Map<string, Doc<"approvedSources"> | null>();
@@ -219,28 +283,18 @@ export async function reconcileFields(
       before,
       after,
     }));
-    const comment = `Imported from ${args.citation.sourceName}.`;
-    const proposalId = await ctx.db.insert("proposals", {
-      author: { kind: "source", sourceKey: args.sourceKey },
+    const { revisionIds } = await insertSourceProposal(ctx, {
+      sourceKey: args.sourceKey,
       state: "approved",
-      currentVersionNo: 1,
-      submittedAt: now,
-      decidedAt: now,
+      ops: [{ kind: "update", ref, baseRevisionId: latestRevisionId ?? undefined, changes }],
+      evidence: [observation._id],
+      comment: `Imported from ${args.citation.sourceName}.`,
+      now,
+      citation: args.citation,
+      revisions: [{ ref, seq: nextSeq, changes }],
     });
-    await ctx.db.insert("proposalVersions", {
-      proposalId,
-      versionNo: 1,
-      ops: [
-        {
-          kind: "update" as const,
-          ref: ref as never,
-          baseRevisionId: latestRevisionId ?? undefined,
-          changes,
-        },
-      ],
-      evidence: [{ kind: "observation" as const, observationId: observation._id }],
-      changeComment: comment,
-    });
+    latestRevisionId = revisionIds[0]!;
+    nextSeq++;
 
     const patch: Record<string, unknown> = {};
     for (const change of changes) patch[change.field] = change.after;
@@ -250,17 +304,6 @@ export async function reconcileFields(
       patch.searchText = seriesSearchText(patch.title as string, series.altTitles);
     }
     await ctx.db.patch(ref.id as Id<"releases">, patch as never);
-
-    latestRevisionId = await ctx.db.insert("revisions", {
-      ref: ref as never,
-      seq: nextSeq,
-      proposalId,
-      author: { kind: "source", sourceKey: args.sourceKey },
-      changes,
-      comment,
-      citation: args.citation,
-    });
-    nextSeq++;
     result.applied = changes.map((c) => c.field);
     result.changed = true;
   }
@@ -268,9 +311,7 @@ export async function reconcileFields(
   // ----- queue bucket: one open In-Review conflict Proposal -----
   const unsuppressed: typeof queue = [];
   for (const change of queue) {
-    if (await isSuppressed(ctx, ref, change.field, args.sourceKey, change.after)) {
-      result.suppressed.push(change.field);
-    } else {
+    if (!(await isSuppressed(ctx, ref, change.field, args.sourceKey, change.after))) {
       unsuppressed.push(change);
     }
   }
@@ -296,25 +337,13 @@ export async function reconcileFields(
         await ctx.db.patch(open._id, { state: "withdrawn", decidedAt: now });
       }
       const reasons = unsuppressed.map((c) => `${c.field} (${c.decision.reason})`).join("; ");
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: args.sourceKey },
+      const { proposalId } = await insertSourceProposal(ctx, {
+        sourceKey: args.sourceKey,
         state: "inReview",
-        currentVersionNo: 1,
-        submittedAt: now,
-      });
-      await ctx.db.insert("proposalVersions", {
-        proposalId,
-        versionNo: 1,
-        ops: [
-          {
-            kind: "update" as const,
-            ref: ref as never,
-            baseRevisionId: latestRevisionId ?? undefined,
-            changes,
-          },
-        ],
-        evidence: [{ kind: "observation" as const, observationId: observation._id }],
-        changeComment: `Import conflict from ${args.citation.sourceName}: ${reasons}. The importer never overwrites — approve to accept the source's value, reject to suppress this exact offer.`,
+        ops: [{ kind: "update", ref, baseRevisionId: latestRevisionId ?? undefined, changes }],
+        evidence: [observation._id],
+        comment: `Import conflict from ${args.citation.sourceName}: ${reasons}. The importer never overwrites — approve to accept the source's value, reject to suppress this exact offer.`,
+        now,
       });
       await ctx.db.patch(observation._id, { queuedProposalId: proposalId });
       result.queued = changes.map((c) => c.field);
@@ -361,7 +390,6 @@ export async function reconcileFields(
         })),
       ],
     });
-    result.recorded = recordOnly.map((c) => c.field);
   }
 
   return result;

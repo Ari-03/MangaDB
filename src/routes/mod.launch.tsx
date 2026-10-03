@@ -1,39 +1,28 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ConvexError } from "convex/values";
 import { useAction, useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
+import { mutationErrorMessage } from "~/lib/errors";
+import { CommentsQueueLink, ModGate, timestamp } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
+import { useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
 /**
- * The launch dashboard (ticket #40, spec §7): seed-stage progress and
+ * The launch dashboard (spec §7): seed-stage progress and
  * controls, the quality-gate samples and duplicate sweep, Bootstrap Mode,
  * the correction-loop attestation, and the computed launch-ready checklist.
  * Data-Team-visible; the actions are Moderator/Administrator-gated
  * server-side. Never indexed.
  */
 export const Route = createFileRoute("/mod/launch")({
-  head: () => ({
-    meta: [
-      { title: "Launch — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Launch — MangaDB" }] }),
   component: LaunchPage,
 });
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    const message = (err.data as { message?: string }).message;
-    if (message) return message;
-  }
-  return "That didn't go through. Try again.";
-}
 
 function LaunchPage() {
   if (!convexClient) {
@@ -46,53 +35,22 @@ function LaunchPage() {
       </main>
     );
   }
-  return <LaunchGate />;
-}
-
-function LaunchGate() {
-  const viewer = useQuery(api.users.viewer, {});
-  const isModerator = useIsModerator();
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  const isDataTeam = Boolean(
-    viewer && !viewer.needsUsername && viewer.role !== null,
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="The launch dashboard is visible to Editors, Moderators, and Administrators."
+    >
+      <Launch />
+    </ModGate>
   );
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          The launch dashboard is visible to Editors, Moderators, and
-          Administrators.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <Launch canAct={isModerator} />;
 }
 
-const timestamp = (ms: number) =>
-  new Date(ms).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
-function Launch({ canAct }: { canAct: boolean }) {
+/** Editors watch the dashboard; Moderators and Administrators act on it. */
+function Launch() {
+  const canAct = useIsModerator();
   return (
     <main className="mod-page launch-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Launch</span>
-      </nav>
+      <Breadcrumbs trail={["Launch"]} />
       <h1>Seeding, quality gates &amp; launch</h1>
       <p className="section-hint">
         Spec §7: run the four seed stages in order under Bootstrap Mode, pass
@@ -176,7 +134,7 @@ function SeedStages({ canAct }: { canAct: boolean }) {
               onClick={() => {
                 setError(null);
                 setBootstrap({ on: !status.bootstrapMode }).catch(
-                  (err: unknown) => setError(errorMessage(err)),
+                  (err: unknown) => setError(mutationErrorMessage(err)),
                 );
               }}
             >
@@ -220,7 +178,7 @@ function SeedStages({ canAct }: { canAct: boolean }) {
                 onClick={() => {
                   setError(null);
                   start({ stage: stage.stage }).catch((err: unknown) =>
-                    setError(errorMessage(err)),
+                    setError(mutationErrorMessage(err)),
                   );
                 }}
               >
@@ -297,7 +255,7 @@ function SampleTable({
                 setError(null);
                 setDrawing(true);
                 draw({ kind })
-                  .catch((err: unknown) => setError(errorMessage(err)))
+                  .catch((err: unknown) => setError(mutationErrorMessage(err)))
                   .finally(() => setDrawing(false));
               }}
             >
@@ -354,7 +312,7 @@ function SampleTable({
                             setFailing(null);
                             setNote("");
                           })
-                          .catch((err: unknown) => setError(errorMessage(err)));
+                          .catch((err: unknown) => setError(mutationErrorMessage(err)));
                       }}
                     >
                       Record failure
@@ -377,7 +335,7 @@ function SampleTable({
                         record({
                           checkId: row._id as Id<"qaChecks">,
                           status: "verified",
-                        }).catch((err: unknown) => setError(errorMessage(err)));
+                        }).catch((err: unknown) => setError(mutationErrorMessage(err)));
                       }}
                     >
                       Verified
@@ -436,7 +394,7 @@ function DuplicateSweep({ canAct }: { canAct: boolean }) {
                 setError(null);
                 setRunning(true);
                 run({})
-                  .catch((err: unknown) => setError(errorMessage(err)))
+                  .catch((err: unknown) => setError(mutationErrorMessage(err)))
                   .finally(() => setRunning(false));
               }}
             >
@@ -462,7 +420,7 @@ function DuplicateSweep({ canAct }: { canAct: boolean }) {
                       resolve({
                         candidateId: row.candidateId,
                         resolution: "distinct",
-                      }).catch((err: unknown) => setError(errorMessage(err)));
+                      }).catch((err: unknown) => setError(mutationErrorMessage(err)));
                     }}
                   >
                     Distinct
@@ -531,7 +489,7 @@ function CorrectionLoop({ canAct }: { canAct: boolean }) {
             event.preventDefault();
             setError(null);
             attest({ proposalId: proposalId.trim() as Id<"proposals"> }).catch(
-              (err: unknown) => setError(errorMessage(err)),
+              (err: unknown) => setError(mutationErrorMessage(err)),
             );
           }}
         >

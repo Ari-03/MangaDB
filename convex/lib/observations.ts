@@ -1,4 +1,4 @@
-// Source Observation bookkeeping (ticket #34, spec §6): identity is
+// Source Observation bookkeeping (spec §6): identity is
 // (source, source-record-id); `snapshot` holds the latest normalized form —
 // what reconciliation reads — and every superseded snapshot is retained
 // append-only in observationSnapshots. Unchanged fetches bump last-seen
@@ -27,7 +27,6 @@ export type UpsertResult = {
   observation: Doc<"sourceObservations">;
   /** False exactly when the snapshot equals the stored one (last-seen bump). */
   changed: boolean;
-  isNew: boolean;
 };
 
 /**
@@ -113,12 +112,12 @@ export async function upsertObservation(
       withdrawn: false,
     });
     const observation = (await ctx.db.get(id))!;
-    return { observation, changed: true, isNew: true };
+    return { observation, changed: true };
   }
 
   if (sameValue(existing.snapshot, args.snapshot)) {
     const observation = await markSeen(ctx, existing, args.now);
-    return { observation, changed: false, isNew: false };
+    return { observation, changed: false };
   }
 
   await ctx.db.insert("observationSnapshots", {
@@ -138,5 +137,5 @@ export async function upsertObservation(
     withdrawn: false,
   };
   if (existing.withdrawn) await retireLapsedCancellation(ctx, observation, args.now);
-  return { observation, changed: true, isNew: false };
+  return { observation, changed: true };
 }

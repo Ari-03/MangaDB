@@ -5,24 +5,24 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import {
-  EDITABLE_FIELDS,
-  type RecordType,
-} from "../../convex/lib/moderationFields";
+import type { RecordType } from "../../convex/lib/moderationFields";
 import {
   draftChanges,
   draftIsStale,
   editDraft,
   FieldInput,
   freshDraft,
+  isRecordType,
   type EditDraft,
 } from "~/lib/editForm";
+import { mutationErrorMessage } from "~/lib/errors";
 import { slugParams } from "~/lib/slug";
-import { useIsModerator } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
+import { useIsModerator } from "~/lib/viewer";
 import { convexClient } from "~/providers";
 
 /**
- * The Administrator/Moderator direct-edit form (ticket #31, spec §5): the
+ * The Administrator/Moderator direct-edit form (spec §5): the
  * save is an immediately approved Proposal Version — the single write path —
  * producing one immutable public Revision on the record. The form renders
  * from the same field registry the mutation validates against
@@ -38,18 +38,9 @@ import { convexClient } from "~/providers";
  * every call. Never indexed.
  */
 export const Route = createFileRoute("/mod/edit/$type/$key")({
-  head: () => ({
-    meta: [
-      { title: "Edit record — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Edit record — MangaDB" }] }),
   component: ModEditPage,
 });
-
-function isRecordType(raw: string): raw is RecordType {
-  return raw in EDITABLE_FIELDS;
-}
 
 function ModEditPage() {
   const { type, key } = Route.useParams();
@@ -168,13 +159,11 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
         await navigate({ to, params: slugParams(publicId, title) });
       }
     } catch (err) {
-      const message =
-        err instanceof ConvexError && typeof err.data === "object" && err.data !== null
-          ? String((err.data as { message?: string }).message ?? "Save failed.")
-          : err instanceof ConvexError
-            ? String(err.data)
-            : "Save failed. Nothing was changed — try again.";
-      setError(message);
+      setError(
+        err instanceof ConvexError
+          ? mutationErrorMessage(err, "Save failed.")
+          : "Save failed. Nothing was changed — try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -182,10 +171,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
 
   return (
     <main className="mod-page mod-edit-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Edit</span>
-      </nav>
+      <Breadcrumbs trail={["Edit"]} />
       <h1>Edit: {form.title}</h1>
       <p className="section-hint">
         Saving applies immediately as an approved proposal and adds a public

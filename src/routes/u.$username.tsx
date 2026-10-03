@@ -18,7 +18,7 @@ const STATUS_LABELS = {
 } as const;
 
 /**
- * The public profile page (ticket #30, spec §3/§11): `/u/{username}` is a
+ * The public profile page (spec §3/§11): `/u/{username}` is a
  * current-state snapshot of what the user chooses to share — public Ownership
  * (Owned Releases with selected Variants, Bundles with derived member
  * ownership; never Wanted/Ordered) and public Reading (Series Reading Status,

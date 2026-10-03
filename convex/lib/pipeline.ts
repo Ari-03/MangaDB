@@ -1,7 +1,6 @@
-// Source-agnostic apply machinery for import adapters (tickets #34/#36,
-// spec §6/§7): everything between a source's normalized snapshot and the
-// canonical catalog that is not source-specific. Extracted from the Seven
-// Seas adapter so Kodansha, ANN, PRH, and OpenLibrary run the exact same
+// Source-agnostic apply machinery for import adapters (spec §6/§7):
+// everything between a source's normalized snapshot and the canonical
+// catalog that is not source-specific, so every adapter runs the same
 // pipeline:
 //
 // - partial-date normalization with the yyyymmdd sort key (spec §8)
@@ -29,13 +28,20 @@
 // `release` is optional on both paths: a series-structured source (ANN)
 // creates or queues the Series/Volume backbone without any Release.
 
+import type { FunctionReference } from "convex/server";
+import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { ActionCtx, MutationCtx, QueryCtx } from "../_generated/server";
 import { getSourceByKey } from "../importSources";
 import { authorityRank } from "./authority";
 import { canonicalLabel } from "./bookTitle";
+import { partialDateSort, type DateParts } from "./dates";
+import { coverageOf, coveringOf, releasesOf } from "./editionRows";
+import { errorMessage } from "./http";
 import { hiddenSeriesTitled, isWholeSingleVolume, labelsEqual, survivorOf } from "./matching";
+import { followMerges, mergeSurvivor } from "./merges";
 import { getObservation, upsertObservation } from "./observations";
+import { applyRetrying } from "./occ";
 import { allocatePublicId } from "./publicIds";
 import {
   canonicalPublisherBySlug,
@@ -43,20 +49,16 @@ import {
   publisherNameKey,
   type CanonicalPublisher,
 } from "./publishers";
-import { reconcileFields } from "./reconcile";
+import { insertSourceProposal, reconcileFields } from "./reconcile";
 import { seriesSearchText } from "./searchMatch";
 
 // ---------- dates & labels ----------
 
-export type PartialDateInput = { year: number; month?: number; day?: number };
-export type PartialDate = PartialDateInput & { sort: number };
+export type PartialDate = DateParts & { sort: number };
 
 /** Partial-precision date with its yyyymmdd sort key, zeroed unknown parts (spec §8). */
-export function toPartialDate(date: PartialDateInput): PartialDate {
-  return {
-    ...date,
-    sort: date.year * 10000 + (date.month ?? 0) * 100 + (date.day ?? 0),
-  };
+export function toPartialDate(date: DateParts): PartialDate {
+  return { ...date, sort: partialDateSort(date) };
 }
 
 // A release that implies an Edition Line — deluxe, omnibus, n-in-1, box-set
@@ -104,21 +106,6 @@ export async function alreadyHandled(
 
 // ---------- publishers ----------
 
-/** A merged publisher row → its surviving company row (cycle-safe). */
-async function survivingPublisher(
-  ctx: MutationCtx,
-  doc: Doc<"publishers"> | null,
-): Promise<Doc<"publishers"> | null> {
-  let current = doc;
-  const visited = new Set<string>();
-  while (current && current.status === "merged" && current.mergedIntoId) {
-    if (visited.has(current._id)) return null;
-    visited.add(current._id);
-    current = await ctx.db.get(current.mergedIntoId);
-  }
-  return current;
-}
-
 /** The row a slug means today: current slug, rename redirect, then merges. */
 export async function publisherBySlug(
   ctx: MutationCtx,
@@ -136,7 +123,7 @@ export async function publisherBySlug(
       .unique();
     doc = redirect ? await ctx.db.get(redirect.publisherId) : null;
   }
-  return await survivingPublisher(ctx, doc);
+  return await mergeSurvivor(ctx, "publishers", doc);
 }
 
 /**
@@ -193,8 +180,8 @@ export async function findPublisherByName(
   // Every row's name, answered by its surviving company row.
   const rows: Array<{ doc: Doc<"publishers">; key: string }> = [];
   for (const pub of await ctx.db.query("publishers").collect()) {
-    const survivor = await survivingPublisher(ctx, pub);
-    if (survivor && survivor.status === "active") {
+    const survivor = await followMerges(ctx, "publishers", pub);
+    if (survivor) {
       rows.push({ doc: survivor, key: publisherNameKey(pub.name) });
     }
   }
@@ -278,19 +265,30 @@ export async function linkSeriesObservation(
 }
 
 /**
- * The active Series a source's series link (`series:{key}`) names, a
- * merged one answered by its survivor; null without one. The read-only
- * half of `reconcileLinkedSeries`, for callers that only place a record.
+ * A source's series link (`series:{key}`) and the active Series it names,
+ * a merged one answered by its survivor; null without one.
+ */
+async function linkedSeries(
+  ctx: MutationCtx,
+  sourceKey: string,
+  seriesKey: string,
+): Promise<{ link: Doc<"sourceObservations">; series: Doc<"series"> } | null> {
+  const link = await getObservation(ctx, sourceKey, `series:${seriesKey}`);
+  if (link?.recordRef?.type !== "series") return null;
+  const series = await survivorOf<"series">(ctx, await ctx.db.get(link.recordRef.id));
+  return series?.status === "active" ? { link, series } : null;
+}
+
+/**
+ * The linked Series' id: the read-only half of `reconcileLinkedSeries`, for
+ * callers that only place a record.
  */
 export async function linkedSeriesId(
   ctx: MutationCtx,
   sourceKey: string,
   seriesKey: string,
 ): Promise<Id<"series"> | null> {
-  const seriesObs = await getObservation(ctx, sourceKey, `series:${seriesKey}`);
-  if (seriesObs?.recordRef?.type !== "series") return null;
-  const series = await survivorOf<"series">(ctx, await ctx.db.get(seriesObs.recordRef.id));
-  return series?.status === "active" ? series._id : null;
+  return (await linkedSeries(ctx, sourceKey, seriesKey))?.series._id ?? null;
 }
 
 /**
@@ -312,17 +310,12 @@ export async function reconcileLinkedSeries(
     now: number;
   },
 ): Promise<{ seriesId: Id<"series"> | null; changed: boolean }> {
-  let seriesObs = await getObservation(ctx, args.sourceKey, `series:${args.seriesKey}`);
-  if (seriesObs?.recordRef?.type !== "series") {
-    return { seriesId: null, changed: false };
-  }
+  const linked = await linkedSeries(ctx, args.sourceKey, args.seriesKey);
+  if (linked === null) return { seriesId: null, changed: false };
+  const { series } = linked;
+  let seriesObs = linked.link;
   // A repair merged the linked Series: the link follows it to the survivor.
-  const linked = await ctx.db.get(seriesObs.recordRef.id);
-  const series = await survivorOf<"series">(ctx, linked);
-  if (!series || series.status !== "active") {
-    return { seriesId: null, changed: false };
-  }
-  if (series._id !== linked?._id) {
+  if (series._id !== seriesObs.recordRef?.id) {
     await ctx.db.patch(seriesObs._id, {
       recordRef: { type: "series", id: series._id },
     });
@@ -387,26 +380,37 @@ async function publisherHouse(
   return row?.parentPublisherId !== undefined ? [row._id, row.parentPublisherId] : [publisherId];
 }
 
+/**
+ * Every Edition (any status) covering one of the Series' Volumes, once per
+ * coverage: an Edition covering several Volumes repeats.
+ */
+export async function seriesEditions(
+  ctx: MutationCtx,
+  seriesId: Id<"series">,
+): Promise<Doc<"editions">[]> {
+  const editions: Doc<"editions">[] = [];
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
+  for (const volume of volumes) {
+    const coverages = await coveringOf(ctx, volume._id);
+    for (const coverage of coverages) {
+      const edition = await ctx.db.get(coverage.editionId);
+      if (edition) editions.push(edition);
+    }
+  }
+  return editions;
+}
+
 /** Every publisher house the Series' Editions (any status) were published by. */
 async function seriesPublishers(
   ctx: MutationCtx,
   seriesId: Id<"series">,
 ): Promise<Set<Id<"publishers">>> {
   const houses = new Set<Id<"publishers">>();
-  const volumes = await ctx.db
-    .query("volumes")
-    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-    .collect();
-  for (const volume of volumes) {
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
-    for (const coverage of coverages) {
-      const edition = await ctx.db.get(coverage.editionId);
-      if (!edition) continue;
-      for (const id of await publisherHouse(ctx, edition.publisherId)) houses.add(id);
-    }
+  for (const edition of await seriesEditions(ctx, seriesId)) {
+    for (const id of await publisherHouse(ctx, edition.publisherId)) houses.add(id);
   }
   return houses;
 }
@@ -551,7 +555,6 @@ export const IMPORT_LANGUAGE = "en";
 export type ReleasePayload = {
   format: "physical" | "digital";
   binding?: string;
-  language?: string;
   isbn13?: string;
   isbn10?: string;
   pubDate?: PartialDate;
@@ -597,23 +600,28 @@ export async function blurbOutranked(
   ) {
     return false;
   }
+  const revision = await lastDescriptionRevision(ctx, release._id);
+  if (revision?.author.kind !== "source") return false;
+  const [incoming, incumbent] = await Promise.all([
+    getSourceByKey(ctx, sourceKey),
+    getSourceByKey(ctx, revision.author.sourceKey),
+  ]);
+  return (
+    authorityRank(incumbent?.fieldAuthority, "description") <
+    authorityRank(incoming?.fieldAuthority, "description")
+  );
+}
+
+/** The latest Revision that touched a Release's description, or null. */
+async function lastDescriptionRevision(ctx: QueryCtx, releaseId: Id<"releases">) {
   const history = ctx.db
     .query("revisions")
-    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
+    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", releaseId))
     .order("desc");
   for await (const revision of history) {
-    if (!revision.changes.some((change) => change.field === "description")) continue;
-    if (revision.author.kind !== "source") return false;
-    const [incoming, incumbent] = await Promise.all([
-      getSourceByKey(ctx, sourceKey),
-      getSourceByKey(ctx, revision.author.sourceKey),
-    ]);
-    return (
-      authorityRank(incumbent?.fieldAuthority, "description") <
-      authorityRank(incoming?.fieldAuthority, "description")
-    );
+    if (revision.changes.some((change) => change.field === "description")) return revision;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -623,31 +631,24 @@ export async function blurbOutranked(
  * nobody did.
  */
 export async function descriptionEvidence(
-  ctx: QueryCtx | MutationCtx,
+  ctx: QueryCtx,
   release: Doc<"releases">,
   sourceKey: string,
-): Promise<string[] | null> {
-  const history = ctx.db
-    .query("revisions")
-    .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id as never))
-    .order("desc");
-  for await (const revision of history) {
-    if (!revision.changes.some((change) => change.field === "description")) continue;
-    if (revision.author.kind !== "source" || revision.author.sourceKey !== sourceKey) return null;
-    const proposal = revision.proposalId ? await ctx.db.get(revision.proposalId) : null;
-    const version = proposal
-      ? await ctx.db
-          .query("proposalVersions")
-          .withIndex("by_proposal", (q) =>
-            q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
-          )
-          .unique()
-      : null;
-    return (version?.evidence ?? []).flatMap((row) =>
-      row.kind === "observation" ? [row.observationId as string] : [],
-    );
-  }
-  return null;
+): Promise<Id<"sourceObservations">[] | null> {
+  const revision = await lastDescriptionRevision(ctx, release._id);
+  if (revision?.author.kind !== "source" || revision.author.sourceKey !== sourceKey) return null;
+  const proposal = await ctx.db.get(revision.proposalId);
+  const version = proposal
+    ? await ctx.db
+        .query("proposalVersions")
+        .withIndex("by_proposal", (q) =>
+          q.eq("proposalId", proposal._id).eq("versionNo", proposal.currentVersionNo),
+        )
+        .unique()
+    : null;
+  return (version?.evidence ?? []).flatMap((row) =>
+    row.kind === "observation" ? [row.observationId] : [],
+  );
 }
 
 /**
@@ -695,6 +696,176 @@ export async function rewriteOwnDescription(
   });
   if (!result.applied.includes("description")) return null;
   return text === undefined ? "cleared" : "updated";
+}
+
+// ---------- the description repair (ann.ts, openLibrary.ts) ----------
+
+/** A source's description cleaner: the text to keep, or undefined when no blurb remains. */
+type DescriptionCleaner = (text: string) => string | undefined;
+
+/** Observations scanned per repair lookup. */
+export const REPAIR_SCAN = 100;
+/** Failed records whose message a repair link logs (the count is complete). */
+const REPAIR_ERROR_SAMPLES = 20;
+
+export const repairCountsValidator = v.object({
+  scanned: v.number(),
+  snapshotFixed: v.number(),
+  releaseUpdated: v.number(),
+  releaseCleared: v.number(),
+  errors: v.number(),
+});
+type RepairCounts = Infer<typeof repairCountsValidator>;
+
+/** What repairing one observation did. */
+export type DescriptionRepair = { snapshotFixed: boolean; release: "updated" | "cleared" | null };
+
+/** Text `clean` would change. A non-string is listed too, so its record fails loudly and is counted. */
+function staleDescription(text: unknown, clean: DescriptionCleaner): boolean {
+  return text !== undefined && (typeof text !== "string" || clean(text) !== text);
+}
+
+/**
+ * The repair work in a scanned page of observations: those whose stored
+ * description (`stored`) or linked Release's current text `clean` would
+ * change, whoever wrote that text (the repair mutation decides). `next` is
+ * null once the scan is exhausted.
+ */
+export async function descriptionRepairWork(
+  ctx: QueryCtx,
+  docs: Doc<"sourceObservations">[],
+  stored: (doc: Doc<"sourceObservations">) => unknown,
+  clean: DescriptionCleaner,
+) {
+  const ids: Id<"sourceObservations">[] = [];
+  for (const doc of docs) {
+    const release = doc.recordRef?.type === "release" ? await ctx.db.get(doc.recordRef.id) : null;
+    if (staleDescription(stored(doc), clean) || staleDescription(release?.description, clean)) {
+      ids.push(doc._id);
+    }
+  }
+  const last = docs.at(-1);
+  return {
+    ids,
+    scanned: docs.length,
+    next: docs.length < REPAIR_SCAN || !last ? null : last.sourceRecordId,
+  };
+}
+
+/**
+ * A stored snapshot part with its description re-cleaned (dropped when
+ * nothing remains), or null when it is already clean. Patched in place:
+ * the same fetch re-read, so no history row.
+ */
+export function recleaned<T extends { description?: string }>(
+  holder: T,
+  clean: DescriptionCleaner,
+): (Omit<T, "description"> & { description?: string }) | null {
+  if (!staleDescription(holder.description, clean)) return null;
+  const fixed = clean(holder.description!);
+  const { description: _, ...rest } = holder;
+  return fixed === undefined ? rest : { ...rest, description: fixed };
+}
+
+/**
+ * Re-clean the text of the Release an observation links to when `clean`
+ * would change it, through `rewriteOwnDescription` (only text the source
+ * wrote from this observation; no lock, no Human Override), citing `url`
+ * under the registry's name for the source (else `sourceName`).
+ */
+export async function repairLinkedDescription(
+  ctx: MutationCtx,
+  observation: Doc<"sourceObservations">,
+  args: { sourceKey: string; clean: DescriptionCleaner; sourceName: string; url: string },
+): Promise<DescriptionRepair["release"]> {
+  if (observation.recordRef?.type !== "release") return null;
+  const release = await ctx.db.get(observation.recordRef.id);
+  if (
+    release === null ||
+    typeof release.description !== "string" ||
+    !staleDescription(release.description, args.clean)
+  ) {
+    return null;
+  }
+  const source = await getSourceByKey(ctx, args.sourceKey);
+  return await rewriteOwnDescription(ctx, {
+    sourceKey: args.sourceKey,
+    observation,
+    release,
+    text: args.clean(release.description),
+    citation: { sourceName: source?.name ?? args.sourceName, url: args.url },
+    now: Date.now(),
+  });
+}
+
+/**
+ * The walk behind `ann:repairDescriptions` and `openLibrary:repairDescriptions`:
+ * page through `candidates`, repair each observation with work in its own
+ * mutation (`repair`), and hand the cursor and counts to a fresh action
+ * (`self`) after `budgetMs`. A record that fails is counted and logged and
+ * the walk goes on. Counts are logged at every hand-off and at the end,
+ * since the CLI stops listening after a few minutes.
+ */
+export async function runDescriptionRepair(
+  ctx: ActionCtx,
+  args: { after?: string; counts?: RepairCounts },
+  walk: {
+    /** Log prefix and the noun for a failed record ("ann.repairDescriptions", "line"). */
+    label: string;
+    noun: string;
+    budgetMs: number;
+    candidates: FunctionReference<
+      "query",
+      "internal",
+      { after: string | null },
+      Awaited<ReturnType<typeof descriptionRepairWork>>
+    >;
+    repair: FunctionReference<
+      "mutation",
+      "internal",
+      { observationId: Id<"sourceObservations"> },
+      DescriptionRepair
+    >;
+    self: FunctionReference<"action", "internal", { after?: string; counts?: RepairCounts }>;
+  },
+): Promise<RepairCounts & { continued: boolean }> {
+  const started = Date.now();
+  const counts: RepairCounts = args.counts ?? {
+    scanned: 0,
+    snapshotFixed: 0,
+    releaseUpdated: 0,
+    releaseCleared: 0,
+    errors: 0,
+  };
+  let logged = 0;
+  let cursor: string | null = args.after ?? null;
+  for (;;) {
+    const batch = await ctx.runQuery(walk.candidates, { after: cursor });
+    counts.scanned += batch.scanned;
+    for (const observationId of batch.ids) {
+      try {
+        const done = await applyRetrying(ctx, walk.repair, { observationId });
+        if (done.snapshotFixed) counts.snapshotFixed++;
+        if (done.release === "updated") counts.releaseUpdated++;
+        if (done.release === "cleared") counts.releaseCleared++;
+      } catch (e) {
+        counts.errors++;
+        if (logged++ < REPAIR_ERROR_SAMPLES) {
+          console.error(`[${walk.label}] ${walk.noun} ${observationId}: ${errorMessage(e)}`);
+        }
+      }
+    }
+    cursor = batch.next;
+    if (cursor === null) {
+      console.log(`[${walk.label}] done: ${JSON.stringify(counts)}`);
+      return { ...counts, continued: false };
+    }
+    if (Date.now() - started > walk.budgetMs) {
+      await ctx.scheduler.runAfter(0, walk.self, { after: cursor, counts });
+      console.log(`[${walk.label}] continuing after ${cursor}: ${JSON.stringify(counts)}`);
+      return { ...counts, continued: true };
+    }
+  }
 }
 
 type PublisherRef = { name: string; slug: string; parentSlug?: string };
@@ -872,20 +1043,14 @@ async function findSiblingEdition(
   line: { id: Id<"editionLines">; position: string | null } | null,
 ): Promise<Id<"editions"> | null> {
   if (volumeIds.length === 0) return null;
-  const coverages = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", volumeIds[0]!))
-    .collect();
+  const coverages = await coveringOf(ctx, volumeIds[0]!);
   for (const coverage of coverages) {
     const edition = await ctx.db.get(coverage.editionId);
     if (!edition || edition.status !== "active" || edition.locked) continue;
     if (edition.publisherId !== publisherId) continue;
     if ((edition.editionLineId ?? null) !== (line?.id ?? null)) continue;
     if (line !== null && (edition.linePosition ?? null) !== line.position) continue;
-    const rows = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-      .collect();
+    const rows = await coverageOf(ctx, edition._id);
     if (rows.length !== volumeIds.length) continue;
     const matches = rows
       .sort((a, b) => a.order - b.order)
@@ -921,6 +1086,24 @@ async function findUnmappedSibling(
   return sibling?._id ?? null;
 }
 
+/** The Series' active Edition Line of this name (any case) for one publisher. */
+async function activeEditionLine(
+  ctx: MutationCtx,
+  args: { seriesId: Id<"series">; publisherId: Id<"publishers">; name: string },
+): Promise<Doc<"editionLines"> | undefined> {
+  const lines = await ctx.db
+    .query("editionLines")
+    .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
+    .collect();
+  const wanted = args.name.toLowerCase();
+  return lines.find(
+    (line) =>
+      line.status === "active" &&
+      line.publisherId === args.publisherId &&
+      line.name.toLowerCase() === wanted,
+  );
+}
+
 /** Find-or-create the base Series' Edition Line for one publisher (spec §2). */
 async function ensureEditionLine(
   ctx: MutationCtx,
@@ -932,17 +1115,7 @@ async function ensureEditionLine(
   },
   created: CreatedRecord[],
 ): Promise<Id<"editionLines">> {
-  const lines = await ctx.db
-    .query("editionLines")
-    .withIndex("by_series", (q) => q.eq("seriesId", args.seriesId))
-    .collect();
-  const wanted = args.name.toLowerCase();
-  const existing = lines.find(
-    (line) =>
-      line.status === "active" &&
-      line.publisherId === args.publisherId &&
-      line.name.toLowerCase() === wanted,
-  );
+  const existing = await activeEditionLine(ctx, args);
   if (existing) return existing._id;
   const id = await ctx.db.insert("editionLines", {
     status: "active",
@@ -977,42 +1150,23 @@ async function recordCreation(
   created: CreatedRecord[],
 ): Promise<void> {
   if (created.length === 0) return;
-  const author = { kind: "source" as const, sourceKey: args.sourceKey };
-  const proposalId = await ctx.db.insert("proposals", {
-    author,
+  await insertSourceProposal(ctx, {
+    ...args,
     state: "approved",
-    currentVersionNo: 1,
-    submittedAt: args.now,
-    decidedAt: args.now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
     ops: created.map((record) => ({
       kind: "create" as const,
       table: record.table,
       tempId: record.ref.type === "volume" ? record.ref.id : record.ref.type,
       fields: record.fields,
     })),
-    evidence: [...new Set(args.evidence)].map((observationId) => ({
-      kind: "observation" as const,
-      observationId,
-    })),
-    changeComment: args.comment,
-  });
-  for (const record of created) {
-    await ctx.db.insert("revisions", {
+    revisions: created.map((record) => ({
       ref: record.ref as never,
       seq: 1,
-      proposalId,
-      author,
       changes: Object.entries(record.fields)
         .filter(([, value]) => value !== undefined)
         .map(([field, after]) => ({ field, after })),
-      comment: args.comment,
-      citation: args.citation,
-    });
-  }
+    })),
+  });
 }
 
 /**
@@ -1173,7 +1327,7 @@ export async function createCanonicalRecords(
     const releaseFields = {
       format: args.release.format,
       binding: args.release.binding,
-      language: args.release.language ?? IMPORT_LANGUAGE,
+      language: IMPORT_LANGUAGE,
       isbn13: args.release.isbn13,
       isbn10: args.release.isbn10,
       pubDate: args.release.pubDate,
@@ -1354,10 +1508,7 @@ async function expectedBundleMembers(
   for (const [i, label] of args.labels.entries()) {
     const volume = volumes.find((vol) => vol.status === "active" && labelsEqual(vol.label, label));
     if (!volume) continue;
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active") continue;
@@ -1367,12 +1518,9 @@ async function expectedBundleMembers(
       if (edition.publisherId !== publisherId || !(await isWholeSingleVolume(ctx, edition))) {
         continue;
       }
-      const member = (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect()
-      ).find((release) => release.status === "active" && release.format === args.format);
+      const member = (await releasesOf(ctx, edition._id)).find(
+        (release) => release.status === "active" && release.format === args.format,
+      );
       if (member) {
         if (!members.some((m) => m.releaseId === member._id)) {
           members.push({ releaseId: member._id, order: i + 1 });
@@ -1505,29 +1653,15 @@ async function addLateBundleMembers(
         .sort((a, b) => place.get(a)! - place.get(b)!)
     : [...before, ...missing.map((member) => member.releaseId)];
   const changes = [{ field: "members", before, after }];
-  const author = { kind: "source" as const, sourceKey: args.sourceKey };
-  const proposalId = await ctx.db.insert("proposals", {
-    author,
+  await insertSourceProposal(ctx, {
+    sourceKey: args.sourceKey,
     state: "approved",
-    currentVersionNo: 1,
-    submittedAt: args.now,
-    decidedAt: args.now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
     ops: [{ kind: "update", ref, baseRevisionId: latest?._id, changes }],
-    evidence: [{ kind: "observation", observationId: args.observation._id }],
-    changeComment: args.importComment,
-  });
-  await ctx.db.insert("revisions", {
-    ref,
-    seq: (latest?.seq ?? 0) + 1,
-    proposalId,
-    author,
-    changes,
+    evidence: [args.observation._id],
     comment: args.importComment,
+    now: args.now,
     citation: args.citation,
+    revisions: [{ ref, seq: (latest?.seq ?? 0) + 1, changes }],
   });
   return { expected: expected.length, added: missing.length };
 }
@@ -1618,19 +1752,11 @@ async function queueEditionLine(
     .withIndex("by_slug", (q) => q.eq("slug", args.publisherSlug))
     .unique();
   if (args.seriesId !== null && publisher !== null) {
-    const seriesId = args.seriesId;
-    const wanted = args.name.toLowerCase();
-    const existing = (
-      await ctx.db
-        .query("editionLines")
-        .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-        .collect()
-    ).find(
-      (line) =>
-        line.status === "active" &&
-        line.publisherId === publisher._id &&
-        line.name.toLowerCase() === wanted,
-    );
+    const existing = await activeEditionLine(ctx, {
+      seriesId: args.seriesId,
+      publisherId: publisher._id,
+      name: args.name,
+    });
     if (existing) return existing._id;
   }
   args.ops.push({
@@ -1652,7 +1778,7 @@ async function queueEditionLine(
  * temp-ID create ops for whatever does not exist yet (Series, Volumes,
  * Edition Line, Edition, Release), evidence citing the observation, the gate
  * or matching-ladder flag in the change comment.
- * These land in the shared review queue (proposals.ts, #32); a Moderator's
+ * These land in the shared review queue (proposals.ts); a Moderator's
  * approval applies the ops via the creation registry. The observation
  * remembers the proposal (queuedProposalId) so an unchanged snapshot never
  * re-queues — not while one is open, and not after a rejection.
@@ -1750,7 +1876,7 @@ export async function queueCreationProposal(
         editionId: "edition",
         format: args.release.format,
         binding: args.release.binding,
-        language: args.release.language ?? IMPORT_LANGUAGE,
+        language: IMPORT_LANGUAGE,
         isbn13: args.release.isbn13,
         isbn10: args.release.isbn10,
         pubDate: args.release.pubDate,
@@ -1760,18 +1886,13 @@ export async function queueCreationProposal(
     });
   }
 
-  const proposalId = await ctx.db.insert("proposals", {
-    author: { kind: "source", sourceKey: args.sourceKey },
+  const { proposalId } = await insertSourceProposal(ctx, {
+    sourceKey: args.sourceKey,
     state: "inReview",
-    currentVersionNo: 1,
-    submittedAt: args.now,
-  });
-  await ctx.db.insert("proposalVersions", {
-    proposalId,
-    versionNo: 1,
     ops,
-    evidence: [{ kind: "observation", observationId: args.observation._id }],
-    changeComment: args.comment,
+    evidence: [args.observation._id],
+    comment: args.comment,
+    now: args.now,
   });
   await ctx.db.patch(args.observation._id, { queuedProposalId: proposalId });
   return proposalId;

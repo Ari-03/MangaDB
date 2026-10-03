@@ -1,4 +1,4 @@
-// The ANN Encyclopedia adapter (ticket #36, spec §6/§7): the weekly full
+// The ANN Encyclopedia adapter (spec §6/§7): the weekly full
 // mirror that builds the all-publisher, series-structured Series/Volume
 // backbone — including the publishers whose sites are never scraped (VIZ,
 // Square Enix) — and, through the per-release page pass, the Releases of
@@ -56,14 +56,15 @@
 // the operator's `backfillDescriptions`. A failed refetch never replaces a
 // stored page.
 
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
 import {
   annMangaValidator,
+  annReleasePageValidator,
   cleanAnnDescription,
   parseApiResponse,
   parseReleasePage,
@@ -71,16 +72,17 @@ import {
   releaseUrl,
   toSnapshot,
   type AnnMangaSnapshot,
-  type AnnReleasePage,
 } from "./lib/ann";
 import { errorMessage, politeFetch } from "./lib/http";
 import { decodeUtf8OrWindows1252 } from "./lib/text";
 import { applyRetrying } from "./lib/occ";
-import { openFollowOnRun, runToContinue } from "./lib/importRuns";
+import { closeRun, MAX_CARRIED_ERRORS, openFollowOnRun, registryRow, runToContinue } from "./lib/importRuns";
 import { canonicalLabel, parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { coverageFromLine } from "./lib/coverage";
+import { coveringOf, releasesOf } from "./lib/editionRows";
 import {
   candidateSeries,
+  isbnHolders,
   isWholeSingleVolume,
   labelsEqual,
   survivorOf,
@@ -93,17 +95,26 @@ import {
   createCanonicalRecords,
   blurbWanted,
   descriptionEvidence,
+  descriptionRepairWork,
   findPublisherByName,
+  recleaned,
+  repairCountsValidator,
+  repairLinkedDescription,
   rewriteOwnDescription,
   queueCreationProposal,
   recordUnplaced,
   removedSeriesFor,
+  runDescriptionRepair,
+  REPAIR_SCAN,
   toPartialDate,
+  type DescriptionRepair,
 } from "./lib/pipeline";
 import { reconcileFields } from "./lib/reconcile";
 import { withExceptionCapture } from "./lib/posthog";
 
 export const SOURCE_KEY = "ann";
+/** The source's name in a citation when the registry row has none. */
+const SOURCE_NAME = "Anime News Network Encyclopedia";
 const REPORT_URL = "https://www.animenewsnetwork.com/encyclopedia/reports.xml?id=155&type=manga";
 const API_URL = "https://cdn.animenewsnetwork.com/encyclopedia/api.xml";
 const IMPORT_COMMENT = "Imported from the Anime News Network Encyclopedia.";
@@ -114,8 +125,6 @@ const ANN_DELAY_MS = 1100;
 const BATCH_SIZE = 50;
 /** Report page size — one report fetch covers several detail batches. */
 const REPORT_PAGE = 500;
-/** Errors carried across continuation links (finishRun caps at 50 anyway). */
-const MAX_CARRIED_ERRORS = 50;
 
 // ---------- the mirror action ----------
 
@@ -165,16 +174,7 @@ export const sync = internalAction({
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("ann.sync", ctx, async () => {
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: SOURCE_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"ann\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
+      const source = await registryRow(ctx, SOURCE_KEY);
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
       const runStartedAt = args.runStartedAt ?? Date.now();
@@ -320,11 +320,9 @@ export const sync = internalAction({
         } else if (!complete) {
           errors.push("ANN mirror was incomplete; withdrawal skipped");
         }
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: complete ? "succeeded" : "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
+        const closed = await closeRun(ctx, runId, complete ? "succeeded" : "failed", {
+          seen,
+          changed,
           errors,
         });
         // The mirror refreshed the lines it could: now place the unlinked
@@ -339,31 +337,10 @@ export const sync = internalAction({
             ...(complete ? {} : { afterFailedMirror: true }),
           });
         }
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          continued: false,
-          errorCount: errors.length,
-          ...(complete ? {} : { failed: true }),
-        };
+        return { ...closed, continued: false };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          continued: false,
-          errorCount: errors.length,
-          failed: true,
-        };
+        return { ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })), continued: false };
       }
     }),
 });
@@ -371,7 +348,7 @@ export const sync = internalAction({
 // ---------- release-line snapshots ----------
 
 /** Fetch state of a line's Encyclopedia page, stored on its observation. */
-const pageStateValidator = v.object({
+const pageStateValidator = annReleasePageValidator.extend({
   status: v.union(
     v.literal("ok"),
     // 404: the release was removed at ANN.
@@ -383,26 +360,10 @@ const pageStateValidator = v.object({
   ),
   fetchedAt: v.number(),
   error: v.optional(v.string()),
-  title: v.optional(v.string()),
-  volume: v.optional(v.string()),
-  distributor: v.optional(v.string()),
-  distributorId: v.optional(v.string()),
-  date: v.optional(
-    v.object({
-      year: v.number(),
-      month: v.optional(v.number()),
-      day: v.optional(v.number()),
-    }),
-  ),
-  isbn13: v.optional(v.string()),
-  isbn10: v.optional(v.string()),
-  priceCents: v.optional(v.number()),
-  mangaId: v.optional(v.string()),
-  description: v.optional(v.string()),
   /**
-   * The page was parsed by a reader that looks for its Description: set on
-   * every ok fetch since descriptions were imported, so a page without one
-   * is not refetched for it again. Older ok pages lack it.
+   * The page was parsed by a reader that looks for its Description, so a
+   * page without one is not refetched for it again. Ok pages stored before
+   * that reader lack it.
    */
   descriptionChecked: v.optional(v.literal(true)),
   /**
@@ -417,15 +378,7 @@ const pageStateValidator = v.object({
   ),
 });
 
-type FailedStatus = "notFound" | "unparsed" | "error";
-
-type PageState = AnnReleasePage & {
-  status: "ok" | FailedStatus;
-  fetchedAt: number;
-  error?: string;
-  descriptionChecked?: true;
-  refetchFailed?: { status: FailedStatus; at: number };
-};
+type PageState = Infer<typeof pageStateValidator>;
 
 /**
  * The page state to store after a fetch: the fresh one, except that a
@@ -453,11 +406,7 @@ async function releaseByIsbn(
   ctx: MutationCtx,
   isbn13: string,
 ): Promise<{ active: Doc<"releases"> | null; hidden: boolean }> {
-  const hits = await ctx.db
-    .query("releases")
-    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
-    .collect();
-  const resolved = await Promise.all(hits.map((hit) => survivorOf<"releases">(ctx, hit)));
+  const resolved = await isbnHolders(ctx, isbn13);
   return {
     active: resolved.find((release) => release?.status === "active") ?? null,
     hidden: resolved.some((release) => release?.status === "hidden"),
@@ -544,18 +493,12 @@ async function matchReleaseInSeries(
   for (const volume of volumes) {
     if (volume.status !== "active") continue;
     if (!labelsEqual(volume.label, label ?? null)) continue;
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active") continue;
       if (!(await isWholeSingleVolume(ctx, edition))) continue;
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
+      const releases = await releasesOf(ctx, edition._id);
       for (const release of releases) {
         if (release.status !== "active" || release.locked) continue;
         if (release.format !== format) continue;
@@ -633,7 +576,7 @@ export const applyManga = internalMutation({
   handler: async (ctx, { snapshot }): Promise<ApplyResult> => {
     const now = Date.now();
     const source = await getSourceByKey(ctx, SOURCE_KEY);
-    const sourceName = source?.name ?? "Anime News Network Encyclopedia";
+    const sourceName = source?.name ?? SOURCE_NAME;
     const citation = { sourceName, url: snapshot.url };
 
     const { observation } = await upsertObservation(ctx, {
@@ -905,7 +848,7 @@ const LINK_BUDGET_MS = 5 * 60 * 1000;
 const NOVEL_DISTRIBUTORS = /^(?:yen on|j-novel club novels?|seven seas airship|airship)$/i;
 // ANN's encyclopedia is worldwide: a release line under a French or German
 // house is a real book, just not an English one. Out of this catalog's scope,
-// so it is skipped rather than reported as a missing publisher row (#48).
+// so it is skipped rather than reported as a missing publisher row.
 const FOREIGN_DISTRIBUTORS =
   /^(?:kana|panini(?: comics| manga)?|bruno gm[üu]nder(?: verlag)?|glénat|glenat|carlsen(?: manga)?|egmont(?: manga)?|pika(?: [ée]dition)?|ki-oon|tokyopop gmbh|star comics|planeta(?: c[oó]mic)?|norma editorial|ivrea)$/i;
 
@@ -1170,39 +1113,18 @@ export const syncReleasePages = internalAction({
           };
         }
         if (errors.length > 0) throw new Error("ANN release-page pass was incomplete");
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-          healthNeutral: args.afterFailedMirror,
-        });
+        const totals = { seen, changed, errors, healthNeutral: args.afterFailedMirror };
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "succeeded", totals)),
           fetched: fetchedTotal,
           continued: false,
-          errorCount: errors.length,
         };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
           fetched: fetchedTotal,
           continued: false,
-          errorCount: errors.length,
-          failed: true,
         };
       }
     }),
@@ -1212,7 +1134,7 @@ export const syncReleasePages = internalAction({
  * Fetch + parse one release page into its stored fetch state. The bytes
  * are decoded here (`decodeUtf8OrWindows1252`), not by `Response.text()`:
  * a legacy Windows-1252 byte inside ANN's UTF-8 page becomes its character
- * instead of an unrecoverable U+FFFD. Well-formed pages decode as before.
+ * instead of an unrecoverable U+FFFD.
  */
 async function fetchReleasePage(annId: string, delay: number): Promise<PageState> {
   const fetchedAt = Date.now();
@@ -1270,6 +1192,12 @@ function pageDescriptionText(page: PageState | undefined): string | undefined {
   return page?.description !== undefined ? cleanAnnDescription(page.description) : undefined;
 }
 
+/** The citation a fact read from a release page carries. */
+async function pageCitation(ctx: QueryCtx, annId: string) {
+  const source = await getSourceByKey(ctx, SOURCE_KEY);
+  return { sourceName: source?.name ?? SOURCE_NAME, url: releaseUrl(annId) };
+}
+
 /**
  * Place one release line from its page (freshly fetched, or the stored
  * one): link the Release carrying its ISBN, else create a leaf Release
@@ -1317,11 +1245,7 @@ export const applyReleasePage = internalMutation({
     if (page === undefined || page.status !== "ok") {
       return { status: fetched ? "stored" : "skipped", changed };
     }
-    const source = await getSourceByKey(ctx, SOURCE_KEY);
-    const citation = {
-      sourceName: source?.name ?? "Anime News Network Encyclopedia",
-      url: releaseUrl(annId),
-    };
+    const citation = await pageCitation(ctx, annId);
     const hold = async (reason: string): Promise<PlaceResult> => {
       const current = (observation!.conflicts ?? []).find((c) => c.field === "placement");
       if (current?.reason !== reason) {
@@ -1458,20 +1382,14 @@ export const applyReleasePage = internalMutation({
     // whole-Volume Editions count: an omnibus, a split part, or a line's
     // packaging covering this Volume is another book, neither this line's
     // Release nor a reason to hold it.
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     for (const coverage of coverages) {
       const edition = await ctx.db.get(coverage.editionId);
       if (!edition || edition.status !== "active" || edition.publisherId !== publisher._id) {
         continue;
       }
       if (!(await isWholeSingleVolume(ctx, edition))) continue;
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
+      const releases = await releasesOf(ctx, edition._id);
       for (const release of releases) {
         if (release.status !== "active" || release.format !== line.format) continue;
         if (release.isbn13 === undefined && !release.locked) return await link(release);
@@ -1553,10 +1471,7 @@ async function fillLinked(
   releaseId: Id<"releases">,
   fetched: PageState | undefined,
   now: number,
-  { refresh, allowClear }: { refresh: boolean; allowClear: boolean } = {
-    refresh: false,
-    allowClear: false,
-  },
+  { refresh, allowClear }: { refresh: boolean; allowClear: boolean },
 ): Promise<PlaceResult> {
   const line = observation.snapshot as AnnReleaseSnapshot;
   let stored = observation;
@@ -1578,16 +1493,12 @@ async function fillLinked(
     if (shrinks && !allowClear && text !== release.description) {
       return { status: "held", changed, releaseId };
     }
-    const source = await getSourceByKey(ctx, SOURCE_KEY);
     const rewritten = await rewriteOwnDescription(ctx, {
       sourceKey: SOURCE_KEY,
       observation: stored,
       release,
       text,
-      citation: {
-        sourceName: source?.name ?? "Anime News Network Encyclopedia",
-        url: releaseUrl(line.annId),
-      },
+      citation: await pageCitation(ctx, line.annId),
       now,
     });
     const status = rewritten === "cleared" ? "cleared" : rewritten === "updated" ? "refreshed" : "stored";
@@ -1597,17 +1508,13 @@ async function fillLinked(
   if (release === null || offered.description === undefined) {
     return { status: changed ? "stored" : "skipped", changed, releaseId };
   }
-  const source = await getSourceByKey(ctx, SOURCE_KEY);
   const result = await reconcileFields(ctx, {
     sourceKey: SOURCE_KEY,
     ref: { type: "release", id: release._id },
     doc: release,
     offered,
     observation: stored,
-    citation: {
-      sourceName: source?.name ?? "Anime News Network Encyclopedia",
-      url: releaseUrl(line.annId),
-    },
+    citation: await pageCitation(ctx, line.annId),
     now,
   });
   return {
@@ -1732,20 +1639,15 @@ type BackfillResult = {
  * BACKFILL_MAX_FAILURES consecutive failed fetches across its links (ANN
  * is down; a failed refetch never replaces a stored page), and never
  * touches a withdrawn line. A stop is logged with its reason, since a
- * continuation link's return value is seen by nobody. Like people.backfillAnnCredits this is an explicit operator
- * command: it runs whatever the source's enabled flag says and opens no
- * Import Run.
+ * continuation link's return value is seen by nobody. Like
+ * people.backfillAnnCredits this is an explicit operator command: it runs
+ * whatever the source's enabled flag says and opens no Import Run.
+ * `refresh` replaces text ANN already wrote on the named pages
+ * (`fillLinked`); `ann:listRefreshCandidates` names the pages worth it.
  *
  *   npx convex run ann:backfillDescriptions '{"limit": 300}'
  *   npx convex run ann:backfillDescriptions '{"annIds": ["10948", "23227"]}'
  *   npx convex run ann:backfillDescriptions '{"annIds": ["49313"], "refresh": true}'
- *
- * `refresh` (with `annIds` only) re-reads text ANN already wrote: the
- * Release gets the page's freshly cleaned text while ANN wrote its current
- * text from that line and no Human Override or lock stands (`fillLinked`).
- * It only replaces: a page with no description, or text under half as
- * long, is `held` unless `allowClear` is also passed. `ann:listRefreshCandidates`
- * names the pages worth it.
  */
 export const backfillDescriptions = internalAction({
   args: {
@@ -1899,32 +1801,9 @@ export const backfillDescriptions = internalAction({
 
 // ---------- the description repair ----------
 
-/** Release-line observations scanned per repair lookup. */
-const REPAIR_SCAN = 100;
-/** Failed lines whose message a repair link keeps (the count is complete). */
-const REPAIR_ERROR_SAMPLES = 20;
-
-const repairCounts = v.object({
-  scanned: v.number(),
-  snapshotFixed: v.number(),
-  releaseUpdated: v.number(),
-  releaseCleared: v.number(),
-  errors: v.number(),
-});
-type RepairCounts = typeof repairCounts.type;
-
-/** Text the cleaner would change: a stored or shown ANN description to repair. */
-function stale(text: unknown): boolean {
-  // A non-string is malformed: listed so its line fails loudly and is counted.
-  return text !== undefined && (typeof text !== "string" || cleanAnnDescription(text) !== text);
-}
-
-
 /**
- * Up to REPAIR_SCAN release lines after `after`, and the ones with work:
- * a stored page Description the cleaner would change, or a linked Release
- * whose current description it would change (whoever wrote it; the repair
- * mutation decides). Where to look next is null once exhausted.
+ * Up to REPAIR_SCAN release lines after `after`, and the ones whose stored
+ * page Description or linked Release text the cleaner would change.
  */
 export const repairCandidates = internalQuery({
   args: { after: v.union(v.string(), v.null()) },
@@ -1938,85 +1817,47 @@ export const repairCandidates = internalQuery({
           .lt("sourceRecordId", "release;"),
       )
       .take(REPAIR_SCAN);
-    const ids: Id<"sourceObservations">[] = [];
-    for (const doc of docs) {
-      const line = doc.snapshot as AnnReleaseSnapshot;
-      const release = doc.recordRef?.type === "release" ? await ctx.db.get(doc.recordRef.id) : null;
-      if (stale(line.page?.description) || stale(release?.description)) ids.push(doc._id);
-    }
-    const last = docs.at(-1);
-    return {
-      ids,
-      scanned: docs.length,
-      next: docs.length < REPAIR_SCAN || !last ? null : last.sourceRecordId,
-    };
+    return await descriptionRepairWork(
+      ctx,
+      docs,
+      (doc) => (doc.snapshot as AnnReleaseSnapshot).page?.description,
+      cleanAnnDescription,
+    );
   },
 });
 
 /**
- * Repair one release line. Its stored page Description is re-cleaned
- * (`cleanAnnDescription`; patched in place, no history row: it is the same
- * fetch, re-read). Its linked Release is repaired when the Release's own
- * current text needs it, whatever the snapshot says (a Release skipped
- * while locked is fixed on a rerun): only when ANN wrote that text from
- * THIS line (the Revision's evidence), the Release is active or hidden,
- * unlocked, and carries no Human Override on the field. The new text — or
- * a cleared field, when nothing remains — goes through reconcileFields as
- * ANN's own fact, as the backfill writes it: one approved Proposal, its
- * version, one Revision citing the release page.
+ * Repair one release line: its stored page Description re-cleaned, and its
+ * linked Release's text rewritten or cleared when ANN wrote it from this
+ * line (`repairLinkedDescription`). The Release is judged by its own text,
+ * whatever the snapshot says, so one skipped while locked is fixed on a
+ * rerun.
  */
 export const repairDescriptionLine = internalMutation({
   args: { observationId: v.id("sourceObservations") },
-  handler: async (
-    ctx,
-    { observationId },
-  ): Promise<{ snapshotFixed: boolean; release: "updated" | "cleared" | null }> => {
+  handler: async (ctx, { observationId }): Promise<DescriptionRepair> => {
     const observation = await ctx.db.get(observationId);
     if (observation === null) return { snapshotFixed: false, release: null };
     const line = observation.snapshot as AnnReleaseSnapshot;
-    let snapshotFixed = false;
-    if (line.page !== undefined && stale(line.page.description)) {
-      const fixed = cleanAnnDescription(line.page.description!);
-      const { description: _, ...rest } = line.page;
-      await ctx.db.patch(observation._id, {
-        snapshot: { ...line, page: fixed === undefined ? rest : { ...rest, description: fixed } },
-      });
-      snapshotFixed = true;
-    }
-
-    if (observation.recordRef?.type !== "release") return { snapshotFixed, release: null };
-    const release = await ctx.db.get(observation.recordRef.id);
-    if (release === null || typeof release.description !== "string" || !stale(release.description)) {
-      return { snapshotFixed, release: null };
-    }
-    const source = await getSourceByKey(ctx, SOURCE_KEY);
-    const rewritten = await rewriteOwnDescription(ctx, {
+    const page = line.page ? recleaned(line.page, cleanAnnDescription) : null;
+    if (page !== null) await ctx.db.patch(observation._id, { snapshot: { ...line, page } });
+    const release = await repairLinkedDescription(ctx, observation, {
       sourceKey: SOURCE_KEY,
-      observation,
-      release,
-      text: cleanAnnDescription(release.description),
-      citation: {
-        sourceName: source?.name ?? "Anime News Network Encyclopedia",
-        url: releaseUrl(line.annId),
-      },
-      now: Date.now(),
+      clean: cleanAnnDescription,
+      sourceName: SOURCE_NAME,
+      url: releaseUrl(line.annId),
     });
-    return { snapshotFixed, release: rewritten };
+    return { snapshotFixed: page !== null, release };
   },
 });
 
 /**
  * Re-clean every stored ANN release-page Description with today's
- * `cleanAnnDescription` (credit tails, page chrome, "Notes:" sections,
- * mojibake) and repair the Releases still showing ANN's text
- * (`repairDescriptionLine`). No network. Weak text that filled a blank is
- * never replaced by a refetch, so this is how already-written descriptions
- * get fixed. Each line is its own mutation: one that fails is counted
- * under `errors` (its message logged) and the walk goes on. Safe beside a
- * running `backfillDescriptions` and safe to rerun: clean text cleans to
- * itself. Continues itself across the action time limit and logs its
- * counts at every hand-off and at the end (the CLI stops listening after a
- * few minutes).
+ * `cleanAnnDescription` and repair the Releases still showing ANN's text
+ * (`repairDescriptionLine`), with no network. A refetch never replaces weak
+ * text that filled a blank, so this is how already-written descriptions
+ * get fixed. Safe beside a running `backfillDescriptions` and safe to
+ * rerun: clean text cleans to itself.
  *
  *   npx convex run ann:repairDescriptions '{}'
  */
@@ -2024,61 +1865,30 @@ export const repairDescriptions = internalAction({
   args: {
     // ----- continuation state (never passed by callers) -----
     after: v.optional(v.string()),
-    counts: v.optional(repairCounts),
+    counts: v.optional(repairCountsValidator),
   },
-  handler: async (ctx, args): Promise<RepairCounts & { continued: boolean }> => {
-    const started = Date.now();
-    const counts: RepairCounts = args.counts ?? {
-      scanned: 0,
-      snapshotFixed: 0,
-      releaseUpdated: 0,
-      releaseCleared: 0,
-      errors: 0,
-    };
-    let logged = 0;
-    let cursor: string | null = args.after ?? null;
-    for (;;) {
-      const batch: { ids: Id<"sourceObservations">[]; scanned: number; next: string | null } =
-        await ctx.runQuery(internal.ann.repairCandidates, { after: cursor });
-      counts.scanned += batch.scanned;
-      for (const observationId of batch.ids) {
-        try {
-          const done = await applyRetrying(ctx, internal.ann.repairDescriptionLine, { observationId });
-          if (done.snapshotFixed) counts.snapshotFixed++;
-          if (done.release === "updated") counts.releaseUpdated++;
-          if (done.release === "cleared") counts.releaseCleared++;
-        } catch (e) {
-          counts.errors++;
-          if (logged++ < REPAIR_ERROR_SAMPLES) {
-            console.error(`[ann.repairDescriptions] line ${observationId}: ${errorMessage(e)}`);
-          }
-        }
-      }
-      cursor = batch.next;
-      if (cursor === null) {
-        console.log(`[ann.repairDescriptions] done: ${JSON.stringify(counts)}`);
-        return { ...counts, continued: false };
-      }
-      if (Date.now() - started > LINK_BUDGET_MS) {
-        await ctx.scheduler.runAfter(0, internal.ann.repairDescriptions, { after: cursor, counts });
-        console.log(`[ann.repairDescriptions] continuing after ${cursor}: ${JSON.stringify(counts)}`);
-        return { ...counts, continued: true };
-      }
-    }
-  },
+  handler: (ctx, args): ReturnType<typeof runDescriptionRepair> =>
+    runDescriptionRepair(ctx, args, {
+      label: "ann.repairDescriptions",
+      noun: "line",
+      budgetMs: LINK_BUDGET_MS,
+      candidates: internal.ann.repairCandidates,
+      repair: internal.ann.repairDescriptionLine,
+      self: internal.ann.repairDescriptions,
+    }),
 });
 
 // ---------- refresh candidates ----------
 
 /** Why a line's Release text is worth a refresh (`ann:listRefreshCandidates`). */
 type RefreshReason = "danglingEnd" | "replacementChar" | "c1Control";
+type RefreshLine = { annId: string; reason: RefreshReason };
 
 /**
- * Text cut mid-phrase. The old rule that stripped a glued two-clause credit
- * left exactly these endings ("…save the Child and himself. Based on the
- * series", "Created by Masashi Kishimoto and features", "Or will it?
- * Originally"); in the 2026-10 export it also catches 6 texts ANN itself
- * truncated, which a refresh leaves as they are.
+ * Text cut mid-phrase, the endings an earlier credit rule left ("…save the
+ * Child and himself. Based on the series", "Created by Masashi Kishimoto
+ * and features", "Or will it? Originally"). It also matches text ANN itself
+ * truncated, which a refresh leaves as it is.
  */
 const DANGLING_END =
   /(?:\bBased on the (?:series|manga|novel|anime|game|film|movie)|\band features|\bfeaturing|\b(?:and|with|by|of|the|from|a|an|to)|[.!?…]\s+(?:Originally|Based|Created|Written|Story|Art|Adapted))$/i;
@@ -2108,7 +1918,7 @@ export const refreshCandidates = internalQuery({
           .lt("sourceRecordId", "release;"),
       )
       .take(REPAIR_SCAN);
-    const lines: Array<{ annId: string; reason: RefreshReason }> = [];
+    const lines: RefreshLine[] = [];
     for (const doc of docs) {
       if (doc.withdrawn || doc.recordRef?.type !== "release") continue;
       const line = doc.snapshot as AnnReleaseSnapshot;
@@ -2128,11 +1938,10 @@ export const refreshCandidates = internalQuery({
 /**
  * The ANN release ids whose Release text is worth a refresh, by reason, so
  * an operator refreshes those pages and not the whole catalog. Read-only,
- * no network. `danglingEnd`: cut mid-phrase by the old credit rule (or
- * truncated at ANN). `replacementChar`: U+FFFD, which ANN itself served
- * in the pages checked (2026-10-02); a refresh helps only where the page
- * has legacy bytes the new decoder reads. `c1Control`: already fixed
- * offline by `ann:repairDescriptions`, listed for completeness. Then:
+ * no network. `danglingEnd`: cut mid-phrase (`DANGLING_END`).
+ * `replacementChar`: U+FFFD, which ANN often serves itself; a refresh helps
+ * only where the page has legacy bytes `decodeUtf8OrWindows1252` reads.
+ * `c1Control`: `ann:repairDescriptions` fixes these offline. Then:
  *
  *   npx convex run ann:listRefreshCandidates '{}'
  *   npx convex run ann:backfillDescriptions '{"annIds": [...], "refresh": true}'
@@ -2147,8 +1956,10 @@ export const listRefreshCandidates = internalAction({
     };
     let cursor: string | null = null;
     do {
-      const batch: { lines: Array<{ annId: string; reason: RefreshReason }>; next: string | null } =
-        await ctx.runQuery(internal.ann.refreshCandidates, { after: cursor });
+      const batch: { lines: RefreshLine[]; next: string | null } = await ctx.runQuery(
+        internal.ann.refreshCandidates,
+        { after: cursor },
+      );
       for (const { annId, reason } of batch.lines) found[reason].push(annId);
       cursor = batch.next;
     } while (cursor !== null);

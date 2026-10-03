@@ -1,4 +1,4 @@
-// Volume, Edition, and Bundle pages + /isbn resolution (ticket #23, spec §2,
+// Volume, Edition, and Bundle pages + /isbn resolution (spec §2,
 // §10, §11): the rest of the public catalog surface beyond the Series page
 // (catalog.ts). One query per page, each returning exactly the joined shape
 // its route renders; `isbnLookup` resolves an ISBN to its redirect target.
@@ -18,7 +18,9 @@ import { query, type QueryCtx } from "./_generated/server";
 import { editionTitle, releaseAnchor, volumeTitle } from "./lib/titles";
 import { coverUrl, jacketCache } from "./lib/covers";
 import { representativeDescription } from "./lib/descriptions";
+import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { isWholeSingleVolume } from "./lib/matching";
+import { followMerges, getActive, mergeSurvivor } from "./lib/merges";
 import { creditsFor } from "./people";
 
 // ---------- shared resolution & joins ----------
@@ -32,58 +34,11 @@ async function creditsForPublicId(ctx: QueryCtx, publicId: number) {
   return series ? await creditsFor(ctx, series._id) : [];
 }
 
-type MergeableTable =
-  | "publishers"
-  | "series"
-  | "volumes"
-  | "editionLines"
-  | "editions"
-  | "releases"
-  | "releaseBundles";
-
-/**
- * The record a merge chain ends at, whatever its status (spec §4/§8),
- * cycle-guarded. Maturity reads content through this rather than
- * `followMerges`, so hiding a record never makes what it holds general.
- */
-async function mergeSurvivor<T extends MergeableTable>(
-  ctx: QueryCtx,
-  // The table name anchors T's inference — `Doc<T>` alone is an indexed
-  // access type TypeScript cannot infer backward from.
-  _table: T,
-  doc: Doc<T> | null,
-): Promise<Doc<T> | null> {
-  let current = doc;
-  const visited = new Set<string>();
-  while (current && current.status === "merged" && current.mergedIntoId) {
-    if (visited.has(current._id)) return null;
-    visited.add(current._id);
-    current = (await ctx.db.get(current.mergedIntoId as Id<T>)) as Doc<T> | null;
-  }
-  return current;
-}
-
-/**
- * Follow a merged record to its surviving record (spec §4/§8), cycle-guarded;
- * hidden records read as absent. Mirrors catalog.ts's resolveActiveSeries.
- * Exported for moderation.ts (revision history resolves the same way) and
- * reading.ts (tracking mutations follow merges before touching state).
- */
-export async function followMerges<T extends MergeableTable>(
-  ctx: QueryCtx,
-  table: T,
-  doc: Doc<T> | null,
-): Promise<Doc<T> | null> {
-  const survivor = await mergeSurvivor(ctx, table, doc);
-  return survivor && survivor.status === "active" ? survivor : null;
-}
-
-/** An Edition's Volume Coverage rows in `order` (the index sorts them). */
-function coverageRows(ctx: QueryCtx, editionId: Id<"editions">) {
-  return ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
+/** A Publisher as catalog rows link it, or null when it is hidden or gone. */
+export function publisherLink(publisher: Doc<"publishers"> | null) {
+  return publisher && publisher.status === "active"
+    ? { name: publisher.name, slug: publisher.slug }
+    : null;
 }
 
 /** A coverage row's Volume and its Series, or null when either is not active. */
@@ -106,7 +61,7 @@ export async function primaryVolumeSeries(
   ctx: QueryCtx,
   editionId: Id<"editions">,
 ): Promise<Doc<"series"> | null> {
-  for (const row of await coverageRows(ctx, editionId)) {
+  for (const row of await coverageOf(ctx, editionId)) {
     const found = await activeCoveredVolume(ctx, row);
     if (found) return found.series;
   }
@@ -127,14 +82,14 @@ export async function editionCoverage(ctx: QueryCtx, edition: Doc<"editions">) {
   const line = storedLine && storedLine.status === "active" ? storedLine : null;
   const lineName = line?.name ?? null;
 
-  // Maturity is the content's (B34, R15), judged through merges and before
+  // Maturity is the content's, judged through merges and before
   // any hiding: the Edition Line's Series and every covered Volume's Series
   // count though hidden Volumes, Series and lines drop out of the listing.
   const contentLine = await mergeSurvivor(ctx, "editionLines", storedLine);
   const storedLineSeries = contentLine ? await ctx.db.get(contentLine.seriesId) : null;
   let collectsMature = (await mergeSurvivor(ctx, "series", storedLineSeries))?.mature === true;
 
-  const rows = await coverageRows(ctx, edition._id);
+  const rows = await coverageOf(ctx, edition._id);
   const coverage = [];
   for (const row of rows) {
     const volume = await ctx.db.get(row.volumeId);
@@ -283,12 +238,7 @@ const byDate = (a: ReleaseRow, b: ReleaseRow) =>
  * lib/descriptions.ts) and their joined rows, date-sorted.
  */
 async function editionReleases(ctx: QueryCtx, editionId: Id<"editions">) {
-  const docs = (
-    await ctx.db
-      .query("releases")
-      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-      .collect()
-  ).filter((doc) => doc.status === "active");
+  const docs = (await releasesOf(ctx, editionId)).filter((doc) => doc.status === "active");
   const rows = [];
   for (const doc of docs) rows.push(await releaseRow(ctx, doc));
   return { docs, rows: rows.sort(byDate) };
@@ -346,7 +296,7 @@ async function editionDescription(
 // ---------- Volume page ----------
 
 /**
- * Everything the Volume page renders (spec §10, ticket #23): every Release
+ * Everything the Volume page renders (spec §10): every Release
  * covering this Volume grouped under its Edition, each Edition carrying its
  * extent for THIS Volume (`extentForVolume`) so the route lists complete and
  * partial coverage distinctly — including the omnibus case, where the full
@@ -374,10 +324,7 @@ export const volumePage = query({
     // A hidden Series hides its Volumes from the public site.
     if (!series || series.status !== "active") return null;
 
-    const coveringRows = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coveringRows = await coveringOf(ctx, volume._id);
     const synopsis = volume.synopsis?.trim();
     const editions = [];
     // Releases of whole single-volume Editions, the borrowable blurbs when
@@ -390,10 +337,7 @@ export const volumePage = query({
       const edition = await ctx.db.get(row.editionId);
       if (!edition || edition.status !== "active") continue;
       const publisher = await ctx.db.get(edition.publisherId);
-      const activePublisher =
-        publisher && publisher.status === "active"
-          ? { name: publisher.name, slug: publisher.slug }
-          : null;
+      const activePublisher = publisherLink(publisher);
       const { title, lineName, coverage } = await editionCoverage(ctx, edition);
       const { docs, rows } = await editionReleases(ctx, edition._id);
       if (!synopsis && (await isWholeSingleVolume(ctx, edition))) {
@@ -450,7 +394,7 @@ export const volumePage = query({
 // ---------- Edition page ----------
 
 /**
- * The book detail page (spec §2/§10, ticket #23): the Edition's identity
+ * The book detail page (spec §2/§10): the Edition's identity
  * (composed title, Publisher, Edition Line membership + Edition Line
  * Position, ordered Volume Coverage with canonical positions kept separate),
  * its one Edition Description (`editionDescription`: `source` says whether
@@ -492,9 +436,7 @@ export const editionPage = query({
         linePosition: edition.linePosition ?? null,
         coverageUnmapped,
         publisher:
-          publisher && publisher.status === "active"
-            ? { name: publisher.name, slug: publisher.slug }
-            : null,
+          publisherLink(publisher),
       },
       series,
       /** Collects a Mature Series (lib/mature.ts): art hidden from viewers who have not opted in. */
@@ -519,7 +461,7 @@ export const editionPage = query({
  * followed; hidden ones dropped) and the Edition's composed title, and
  * whether the box set is mature: an adult-only publisher's, or holding a
  * Mature Series' book. Maturity is judged through merges before hidden
- * members drop out (B35, R14), so hiding a member's Release or Edition never
+ * members drop out, so hiding a member's Release or Edition never
  * makes the box set general. Shared by `bundlePage` and the sitemap (seo.ts)
  * so both judge a box set alike.
  */
@@ -545,7 +487,7 @@ export async function bundleMembers(ctx: QueryCtx, bundle: Doc<"releaseBundles">
 }
 
 /**
- * The Bundle page (spec §2, ticket #23): the Release Bundle's own publication
+ * The Bundle page (spec §2): the Release Bundle's own publication
  * facts (box-set ISBN, date, price) and its member Releases in order, each
  * linking back to its Edition page anchored at the Release row, with the
  * pinned Release Variant named when the box set specifies one. Members whose
@@ -588,7 +530,7 @@ export const bundlePage = query({
 
     return {
       bundle: {
-        // Document id, for the signed-in collection controls (#27).
+        // Document id, for the signed-in collection controls.
         id: bundle._id,
         publicId: bundle.publicId,
         name: bundle.name,
@@ -599,9 +541,7 @@ export const bundlePage = query({
         price: bundle.price ?? null,
         description: bundle.description ?? null,
         publisher:
-          publisher && publisher.status === "active"
-            ? { name: publisher.name, slug: publisher.slug }
-            : null,
+          publisherLink(publisher),
         coverUrl: await coverUrl(ctx, bundle.coverImage?.storageId),
       },
       /** Art hidden from viewers who have not opted in (lib/mature.ts). */
@@ -638,11 +578,7 @@ export const isbnLookup = query({
     for (const doc of releaseDocs) {
       const release = await followMerges(ctx, "releases", doc);
       if (!release) continue;
-      const edition = await followMerges(
-        ctx,
-        "editions",
-        await ctx.db.get(release.editionId),
-      );
+      const edition = await getActive(ctx, "editions", release.editionId);
       if (!edition) continue;
       const { title } = await editionCoverage(ctx, edition);
       return {

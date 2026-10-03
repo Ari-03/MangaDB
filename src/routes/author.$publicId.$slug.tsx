@@ -4,15 +4,15 @@ import { api } from "../../convex/_generated/api";
 import { ROLE_NAMES, type CreditRole } from "~/lib/byline";
 import { catalogQuery, type AuthorPageData } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
-import { Cover } from "~/lib/cover";
+import { SeriesShelfItem } from "~/lib/shelfItem";
+import { plural } from "~/lib/format";
 import {
   authorTitleTag,
-  breadcrumbListJsonLd,
-  jsonLdScript,
   pageHead,
   personJsonLd,
 } from "~/lib/seo";
-import { authorPath, parsePublicId, slugParams } from "~/lib/slug";
+import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
+import { authorPath, parsePublicId } from "~/lib/slug";
 
 /**
  * An author page (`/author/{id}/{slug}`): everyone credited on a Series
@@ -47,34 +47,17 @@ export const Route = createFileRoute("/author/$publicId/$slug")({
     const series = loaderData.series.filter(made);
     const path = authorPath(author.publicId, author.name);
     const titles = series.slice(0, 3).map((s) => s.title).join(", ");
-    return {
-      ...pageHead({
-        title: authorTitleTag(author.name),
-        description: `Manga by ${author.name} in English: ${series.length} series${titles ? `, including ${titles}` : ""}, with every edition and release date.`,
-        path,
-        image: series[0]?.coverUrl ?? null,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: "Authors", path: "/authors" },
-            { name: author.name },
-          ]),
-        ),
-        jsonLdScript(personJsonLd({ name: author.name, path, sameAs: author.annUrl })),
-      ],
-    };
+    return pageHead({
+      title: authorTitleTag(author.name),
+      description: `Manga by ${author.name} in English: ${series.length} series${titles ? `, including ${titles}` : ""}, with every edition and release date.`,
+      path,
+      image: series[0]?.coverUrl ?? null,
+      breadcrumbs: [{ name: "Authors", path: "/authors" }, { name: author.name }],
+      jsonLd: [personJsonLd({ name: author.name, path, sameAs: author.annUrl })],
+    });
   },
   component: AuthorPage,
-  notFoundComponent: () => (
-    <main>
-      <h1>Author not found</h1>
-      <p className="notice">
-        No author lives at this address. <Link to="/authors">Browse authors</Link>.
-      </p>
-    </main>
-  ),
+  notFoundComponent: () => <NotFound noun="Author" browse="authors" />,
 });
 
 
@@ -100,10 +83,7 @@ function AuthorPage() {
   const volumes = series.reduce((sum, entry) => sum + entry.volumeCount, 0);
   return (
     <main className="author-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <Link to="/authors">Authors</Link>
-      </nav>
+      <Breadcrumbs trail={[<Link to="/authors">Authors</Link>]} />
 
       <header className="author-hero">
         <p className="page-kicker">Author</p>
@@ -170,43 +150,24 @@ function AuthorPage() {
 
 /** One Series on the author's shelf: jacket, title, their role, its size. */
 function AuthorSeriesItem({ entry, eager }: { entry: AuthorSeries; eager: boolean }) {
-  const params = slugParams(entry.publicId, entry.title);
   return (
-    <div className="shelf-item">
-      <div className="cover-wrap">
-        <Link
-          className="cover-link"
-          to="/series/$publicId/$slug"
-          params={params}
-          tabIndex={-1}
-          aria-hidden="true"
-        >
-          <Cover src={entry.coverUrl} isbn13={entry.coverIsbn} title={entry.title} lazy={!eager} />
-        </Link>
+    <SeriesShelfItem series={entry} lazy={!eager}>
+      <div className="caption-meta">
+        <span>{plural(entry.volumeCount, "vol")}</span>
+        {entry.publishers[0] ? (
+          <>
+            <span className="dot" />
+            <span>{entry.publishers.map((p) => p.name).join(", ")}</span>
+          </>
+        ) : null}
       </div>
-      <div className="caption">
-        <Link className="caption-title" to="/series/$publicId/$slug" params={params}>
-          {entry.title}
-        </Link>
-        <div className="caption-meta">
-          <span>
-            {entry.volumeCount} {entry.volumeCount === 1 ? "vol" : "vols"}
+      <p className="caption-sub author-role-chips">
+        {entry.roles.map((role) => (
+          <span key={role} className="chip">
+            {ROLE_NAMES[role]}
           </span>
-          {entry.publishers[0] ? (
-            <>
-              <span className="dot" />
-              <span>{entry.publishers.map((p) => p.name).join(", ")}</span>
-            </>
-          ) : null}
-        </div>
-        <p className="caption-sub author-role-chips">
-          {entry.roles.map((role) => (
-            <span key={role} className="chip">
-              {ROLE_NAMES[role]}
-            </span>
-          ))}
-        </p>
-      </div>
-    </div>
+        ))}
+      </p>
+    </SeriesShelfItem>
   );
 }

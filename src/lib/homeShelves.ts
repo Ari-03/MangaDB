@@ -89,7 +89,7 @@ export function oneCoverPer<Book extends Jacket>(
 }
 
 type Dated = { day: number | null; sort: number };
-export type DayGroup<Book> = { day: number; sort: number; releases: Array<Book> };
+type DayGroup<Book> = { day: number; sort: number; releases: Array<Book> };
 
 /**
  * The month window bucketed by publication day, chronological (the query

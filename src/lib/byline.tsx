@@ -17,7 +17,7 @@ export type Credit = NonNullable<
 export type CreditRole = Credit["role"];
 
 /** How a role reads before a name: "Story & Art by", "Original work by". */
-export const ROLE_LABELS: Record<CreditRole, string> = {
+const ROLE_LABELS: Record<CreditRole, string> = {
   story_art: "Story & Art by",
   story: "Story by",
   art: "Art by",

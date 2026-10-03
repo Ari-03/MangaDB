@@ -4,37 +4,25 @@
 // placeholders, the reply cap), the queue, rate limits, and upkeep through
 // purge, merge, and split.
 
-import { convexTest } from "convex-test";
+import type { FunctionArgs } from "convex/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
 import { COMMENT_POLICY } from "./comments";
 import type { PageTargetRef } from "./lib/ratings";
+import { insertEdition, insertPublisher, insertVolume } from "./test.factories";
+import { ADMIN, EDITOR, MOD, alice, bob, makeT, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { merge, series, seriesWithVolume, split, volume } from "./test.tracking";
 
 // These tests cover Comments switched on; features.test.ts covers them off.
 vi.mock("./lib/features", () => ({ FEATURES: { publicReviews: true, comments: true } }));
 
-const ADMIN = "user_admin";
-const MOD = "user_mod";
-const EDITOR = "user_editor";
 const AUTHOR = "user_author";
 const OTHER = "user_other";
 const R1 = "user_r1";
 const R2 = "user_r2";
 const R3 = "user_r3";
-
-function makeT() {
-  const t = convexTest(schema);
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
-}
-type T = ReturnType<typeof makeT>;
-
-const series = (publicId: number) => ({ kind: "series" as const, publicId });
-const volume = (publicId: number) => ({ kind: "volume" as const, publicId });
 
 afterEach(() => {
   vi.useRealTimers();
@@ -46,41 +34,28 @@ function ageAccounts() {
   vi.setSystemTime(Date.now() + COMMENT_POLICY.minAccountAgeMs + 60_000);
 }
 
-async function seed(t: T) {
-  for (const [subject, username] of [
-    [ADMIN, "alice"],
-    [MOD, "bob"],
-    [EDITOR, "erin"],
-    [AUTHOR, "carol"],
-    [OTHER, "dave"],
-    [R1, "rae"],
-    [R2, "rob"],
-    [R3, "ria"],
-  ] as const) {
-    await t.withIdentity({ subject }).mutation(api.users.claimUsername, { username });
-  }
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  const admin = t.withIdentity({ subject: ADMIN });
-  await admin.mutation(api.roles.appoint, { username: "bob", role: "moderator" });
-  await admin.mutation(api.roles.appoint, { username: "erin", role: "editor" });
+/**
+ * Administrator alice, Moderator bob, Editor erin, and five ordinary users
+ * (carol the author, dave, rae, rob, ria); Series 1 "Frieren", its duplicate
+ * Series 2, and Series 9 "Elsewhere", each with Volumes 1 and 2 (publicIds
+ * N1 and N2).
+ */
+async function seed(t: TestT) {
+  await seedTeam(t, [
+    alice,
+    bob,
+    { subject: EDITOR, username: "erin", role: "editor" },
+    { subject: AUTHOR, username: "carol" },
+    { subject: OTHER, username: "dave" },
+    { subject: R1, username: "rae" },
+    { subject: R2, username: "rob" },
+    { subject: R3, username: "ria" },
+  ]);
   return await t.run(async (ctx) => {
     const mk = async (publicId: number, title: string) => {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId,
-        title,
-        altTitles: [],
-        searchText: title,
-      });
-      const mkVolume = (n: number) =>
-        ctx.db.insert("volumes", {
-          status: "active",
-          publicId: publicId * 10 + n,
-          seriesId,
-          position: n,
-          label: String(n),
-        });
-      return { seriesId, volumeId: await mkVolume(1), volume2Id: await mkVolume(2) };
+      const { seriesId, volumeId } = await seriesWithVolume(ctx, publicId, title);
+      const volume2Id = await insertVolume(ctx, { seriesId, publicId: publicId * 10 + 2, position: 2 });
+      return { seriesId, volumeId, volume2Id };
     };
     return {
       one: await mk(1, "Frieren"),
@@ -92,7 +67,7 @@ async function seed(t: T) {
 type Ids = Awaited<ReturnType<typeof seed>>;
 
 /** Give a user three approved Comments on another Series, lifting the approved-count hold. */
-async function trust(t: T, ids: Ids, subject: string) {
+async function trust(t: TestT, ids: Ids, subject: string) {
   await t.run(async (ctx) => {
     const user = await ctx.db
       .query("users")
@@ -113,7 +88,7 @@ async function trust(t: T, ids: Ids, subject: string) {
 }
 
 /** Seed, age the accounts, and trust the ordinary users: every post publishes. */
-async function trustedSetup(t: T) {
+async function trustedSetup(t: TestT) {
   const ids = await seed(t);
   ageAccounts();
   for (const subject of [AUTHOR, OTHER, R1, R2, R3]) await trust(t, ids, subject);
@@ -121,7 +96,7 @@ async function trustedSetup(t: T) {
 }
 
 function post(
-  t: T,
+  t: TestT,
   subject: string,
   ids: Ids,
   body = "Loved the pacing of this arc.",
@@ -135,13 +110,17 @@ function post(
   });
 }
 
-const listAs = (t: T, subject: string | null, target: PageTargetRef = series(1)) =>
+const listAs = (t: TestT, subject: string | null, target: PageTargetRef = series(1)) =>
   subject === null
     ? t.query(api.comments.list, { target })
     : t.withIdentity({ subject }).query(api.comments.list, { target });
 
-const statusOf = (t: T, commentId: Id<"comments">) => t.run(async (ctx) => (await ctx.db.get(commentId))?.status);
-const auditActions = (t: T) =>
+/** bob's decision on one Comment. */
+const moderate = (t: TestT, commentId: Id<"comments">, action: FunctionArgs<typeof api.comments.moderate>["action"]) =>
+  signedIn(t, bob).mutation(api.comments.moderate, { commentId, action });
+
+const statusOf = (t: TestT, commentId: Id<"comments">) => t.run(async (ctx) => (await ctx.db.get(commentId))?.status);
+const auditActions = (t: TestT) =>
   t.run(async (ctx) => (await ctx.db.query("commentAudit").collect()).map((row) => row.action));
 
 describe("comments.post: hold rules", () => {
@@ -218,7 +197,7 @@ describe("replies", () => {
     await expect(post(t, OTHER, ids, "Wrong page.", { parentId: top.commentId, onVolume: true })).rejects.toMatchObject({
       data: { code: "wrongTarget" },
     });
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId: top.commentId, action: "hide" });
+    await moderate(t, top.commentId, "hide");
     await expect(post(t, OTHER, ids, "Too late.", { parentId: top.commentId })).rejects.toMatchObject({
       data: { code: "closed" },
     });
@@ -315,7 +294,7 @@ describe("author edit and delete", () => {
     expect(await auditActions(t)).toEqual(["remove"]);
     // A Moderator cannot restore what its author deleted.
     await expect(
-      t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId, action: "restore" }),
+      moderate(t, commentId, "restore"),
     ).rejects.toMatchObject({ data: { code: "authorDeleted" } });
   });
 });
@@ -412,7 +391,7 @@ describe("moderation", () => {
     for (const subject of [R1, R2]) {
       await t.withIdentity({ subject }).mutation(api.comments.report, { commentId, reason: "spoiler" });
     }
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId, action: "approve" });
+    await moderate(t, commentId, "approve");
     const row = await t.run((ctx) => ctx.db.get(commentId));
     expect(row).toMatchObject({ status: "approved", reportCount: 0 });
     expect(await t.run((ctx) => ctx.db.query("commentReports").collect())).toEqual([]);
@@ -451,12 +430,12 @@ describe("visibility", () => {
     await post(t, AUTHOR, ids, "Approved");
     await post(t, AUTHOR, ids, "Pending https://a https://b https://c");
     const hidden = await post(t, AUTHOR, ids, "Hidden");
-    await mod.mutation(api.comments.moderate, { commentId: hidden.commentId, action: "hide" });
+    await moderate(t, hidden.commentId, "hide");
     const lonely = await post(t, AUTHOR, ids, "Removed, no replies");
-    await mod.mutation(api.comments.moderate, { commentId: lonely.commentId, action: "remove" });
+    await moderate(t, lonely.commentId, "remove");
     const threaded = await post(t, OTHER, ids, "Removed, with a reply");
     await post(t, R1, ids, "A reply that keeps the thread", { parentId: threaded.commentId });
-    await mod.mutation(api.comments.moderate, { commentId: threaded.commentId, action: "remove" });
+    await moderate(t, threaded.commentId, "remove");
     const shadowed = await post(t, R2, ids, "From a shadowed user");
     await mod.mutation(api.comments.setShadowed, { commentId: shadowed.commentId, shadowed: true });
     // Posted after shadowing: still visible to its author only.
@@ -544,7 +523,7 @@ describe("the queue", () => {
     expect(await editor.query(api.comments.queueCounts, {})).toEqual({ pending: 1, reported: 1, hidden: 1 });
     expect((await editor.query(api.comments.queue, { tab: "hidden" })).rows[0]!.body).toBe("Reported twice");
 
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId: once.commentId, action: "remove" });
+    await moderate(t, once.commentId, "remove");
     expect((await editor.query(api.comments.queue, { tab: "removed" })).rows.map((row) => row.body)).toEqual([
       "Reported once",
     ]);
@@ -586,12 +565,7 @@ describe("upkeep", () => {
     await onLoser("On the loser", { kind: "series", id: ids.two.seriesId });
     const volumeComment = await onLoser("On the loser's volume", { kind: "volume", id: ids.two.volumeId });
 
-    await t.withIdentity({ subject: MOD }).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "series", id: ids.one.seriesId },
-      loser: { type: "series", id: ids.two.seriesId },
-      reason: "Duplicate.",
-      confirmImpact: true,
-    });
+    await merge(signedIn(t, bob), { type: "series", id: ids.one.seriesId }, { type: "series", id: ids.two.seriesId });
     expect((await listAs(t, null))!.items.map((item) => item.body)).toEqual(["On the loser", "On the survivor"]);
     const moved = await t.run((ctx) => ctx.db.get(volumeComment.commentId));
     expect(moved).toMatchObject({ seriesId: ids.one.seriesId, volumeId: ids.two.volumeId });
@@ -607,18 +581,13 @@ describe("upkeep", () => {
       body: "On volume 2",
       spoiler: false,
     });
-    await t.withIdentity({ subject: MOD }).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "volume", id: ids.one.volumeId },
-      loser: { type: "volume", id: ids.one.volume2Id },
-      reason: "Duplicate.",
-      confirmImpact: true,
-    });
+    await merge(signedIn(t, bob), { type: "volume", id: ids.one.volumeId }, { type: "volume", id: ids.one.volume2Id });
     expect((await listAs(t, null, volume(11)))!.items.map((item) => item.body)).toEqual(["On volume 2"]);
   });
 });
 
 /** A user's ID by Clerk subject. */
-const userIdOf = (t: T, subject: string) =>
+const userIdOf = (t: TestT, subject: string) =>
   t.run(async (ctx) => {
     const user = await ctx.db
       .query("users")
@@ -628,7 +597,7 @@ const userIdOf = (t: T, subject: string) =>
   });
 
 /** Insert `count` top-level Comments by `subject` on Series 1, oldest first. */
-async function insertHeads(t: T, ids: Ids, subject: string, count: number, status: "approved" | "removed" | "pending") {
+async function insertHeads(t: TestT, ids: Ids, subject: string, count: number, status: "approved" | "removed" | "pending") {
   const userId = await userIdOf(t, subject);
   return await t.run(async (ctx) => {
     const made = [];
@@ -650,7 +619,7 @@ async function insertHeads(t: T, ids: Ids, subject: string, count: number, statu
   });
 }
 
-const suspend = async (t: T, subject: string) => {
+const suspend = async (t: TestT, subject: string) => {
   const userId = await userIdOf(t, subject);
   await t.run((ctx) => ctx.db.patch(userId, { suspended: true }));
 };
@@ -695,7 +664,7 @@ describe("shadowing as a status", () => {
     const held = await post(t, R2, ids, "https://a https://b https://c");
     await t.withIdentity({ subject: MOD }).mutation(api.comments.setShadowed, { commentId: held.commentId, shadowed: true });
     expect(await statusOf(t, held.commentId)).toBe("pending");
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId: held.commentId, action: "approve" });
+    await moderate(t, held.commentId, "approve");
     expect(await statusOf(t, held.commentId)).toBe("shadowed");
   });
 });
@@ -706,7 +675,7 @@ describe("placeholders", () => {
     const ids = await trustedSetup(t);
     const head = await post(t, OTHER, ids, "Old thread");
     await post(t, R1, ids, "Its reply", { parentId: head.commentId });
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId: head.commentId, action: "remove" });
+    await moderate(t, head.commentId, "remove");
     await insertHeads(t, ids, R2, COMMENT_POLICY.page + 1, "removed");
     const page = await listAs(t, null);
     expect(page!.items).toHaveLength(1);
@@ -731,7 +700,7 @@ describe("placeholders", () => {
       spoiler: false,
     });
     await post(t, R1, ids, "A reply that keeps it", { parentId: head.commentId });
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId: head.commentId, action: "hide" });
+    await moderate(t, head.commentId, "hide");
 
     for (const subject of [null, R1]) {
       const [item] = (await listAs(t, subject))!.items;
@@ -788,10 +757,10 @@ describe("reply cap", () => {
     expect(await t.query(api.comments.replies, { target: series(1), commentId: made[0]! })).toBeNull();
 
     // Status changes keep the count in step.
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId: made[0]!, action: "hide" });
+    await moderate(t, made[0]!, "hide");
     await t.withIdentity({ subject: R1 }).mutation(api.comments.remove, { commentId: made[1]! });
     expect((await t.run((ctx) => ctx.db.get(head.commentId)))!.replyCount).toBe(repliers.length - 2);
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId: made[0]!, action: "unhide" });
+    await moderate(t, made[0]!, "unhide");
     expect((await t.run((ctx) => ctx.db.get(head.commentId)))!.replyCount).toBe(repliers.length - 1);
   });
 
@@ -826,7 +795,7 @@ describe("guards", () => {
     const t = makeT();
     const ids = await trustedSetup(t);
     const { commentId } = await post(t, AUTHOR, ids);
-    await t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId, action: "hide" });
+    await moderate(t, commentId, "hide");
     await expect(
       t.withIdentity({ subject: AUTHOR }).mutation(api.comments.edit, { commentId, body: "Sneaky", spoiler: false }),
     ).rejects.toMatchObject({ data: { code: "badState" } });
@@ -856,7 +825,7 @@ describe("guards", () => {
     ).rejects.toMatchObject({ data: { code: "suspended" } });
     await suspend(t, MOD);
     await expect(
-      t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId, action: "hide" }),
+      moderate(t, commentId, "hide"),
     ).rejects.toMatchObject({ data: { code: "suspended" } });
     await expect(t.withIdentity({ subject: MOD }).query(api.comments.queue, { tab: "pending" })).rejects.toMatchObject({
       data: { code: "suspended" },
@@ -869,7 +838,7 @@ describe("guards", () => {
     const ids = await trustedSetup(t);
     const { commentId } = await post(t, AUTHOR, ids);
     await expect(
-      t.withIdentity({ subject: MOD }).mutation(api.comments.moderate, { commentId, action: "approve" }),
+      moderate(t, commentId, "approve"),
     ).rejects.toMatchObject({ data: { code: "badState" } });
   });
 
@@ -879,8 +848,8 @@ describe("guards", () => {
     const comments = () => t.run(async (ctx) => (await ctx.db.query("comments").collect()).length);
     const before = await comments();
     const editionId = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
-      return await ctx.db.insert("editions", { status: "active", publicId: 901, publisherId });
+      const publisherId = await insertPublisher(ctx, { name: "VIZ", slug: "viz" });
+      return await insertEdition(ctx, { publicId: 901, publisherId });
     });
     await expect(
       t.withIdentity({ subject: AUTHOR }).mutation(api.comments.post, {
@@ -961,12 +930,7 @@ describe("upkeep, more", () => {
       body: "On the other Series' volume",
       spoiler: false,
     });
-    await t.withIdentity({ subject: MOD }).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "volume", id: ids.one.volumeId },
-      loser: { type: "volume", id: ids.two.volumeId },
-      reason: "Duplicate.",
-      confirmImpact: true,
-    });
+    await merge(signedIn(t, bob), { type: "volume", id: ids.one.volumeId }, { type: "volume", id: ids.two.volumeId });
     expect(await t.run((ctx) => ctx.db.get(moved.commentId))).toMatchObject({
       seriesId: ids.one.seriesId,
       volumeId: ids.one.volumeId,
@@ -982,19 +946,10 @@ describe("upkeep, more", () => {
       body: "On the loser",
       spoiler: false,
     });
-    const mod = t.withIdentity({ subject: MOD });
-    await mod.mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "series", id: ids.one.seriesId },
-      loser: { type: "series", id: ids.two.seriesId },
-      reason: "Duplicate.",
-      confirmImpact: true,
-    });
+    const mod = signedIn(t, bob);
+    await merge(mod, { type: "series", id: ids.one.seriesId }, { type: "series", id: ids.two.seriesId });
     expect((await t.run((ctx) => ctx.db.get(onLoser.commentId)))!.seriesId).toBe(ids.one.seriesId);
-    await mod.mutation(api.sensitiveOps.splitRecord, {
-      ref: { type: "series", id: ids.two.seriesId },
-      reason: "Not a duplicate after all.",
-      confirmImpact: true,
-    });
+    await split(mod, { type: "series", id: ids.two.seriesId });
     expect((await t.run((ctx) => ctx.db.get(onLoser.commentId)))!.seriesId).toBe(ids.two.seriesId);
     expect((await listAs(t, null, series(2)))!.items.map((item) => item.body)).toEqual(["On the loser"]);
     expect((await listAs(t, null))!.items).toEqual([]);

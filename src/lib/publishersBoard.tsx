@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 
 import type { PublishersBoardData } from "~/lib/catalogData";
 import { Cover } from "~/lib/cover";
+import { plural } from "~/lib/format";
 import {
   addMonths,
   MONTH_NAMES,
@@ -27,9 +28,6 @@ type BoardCard = PublishersBoardData["board"][number];
 type DirectoryEntry = PublishersBoardData["directory"][number];
 
 const shortMonth = (ym: YearMonth) => MONTH_NAMES[ym.month - 1]!.slice(0, 3);
-
-const plural = (n: number, one: string, many = `${one}s`) =>
-  `${n} ${n === 1 ? one : many}`;
 
 /**
  * A link to one month of the board: the bare `/publishers` for the current

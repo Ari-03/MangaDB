@@ -1,4 +1,4 @@
-// The Publisher Spotlight page (ticket #25, spec §10/§11): `/publisher/{slug}`
+// The Publisher Spotlight page (spec §10/§11): `/publisher/{slug}`
 // is a publisher-led profile with a bounded upcoming-Releases lane and a clear
 // route into the main Releases browser. The cross-publisher overview is the
 // Publishers board (`/publishers`, monthBoard below): one month of the
@@ -25,48 +25,26 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { COUNT_CAP, PUBLISHER_SCAN_CAP } from "./catalog";
-import { followMerges } from "./catalogPages";
+import { getActive } from "./lib/merges";
 import {
   browseCache,
   joinBrowseRows,
   memoize,
+  resolvePublisher,
   WINDOW_CAP,
   type BrowseCache,
 } from "./releases";
 import { showMatureArg, visibleTo } from "./lib/mature";
 import { withExceptionCapture } from "./lib/posthog";
+import { seriesStatsRow } from "./seriesBrowse";
 
-// The Spotlight's months after this one are bounded (prototype #17): at most
+// The Spotlight's months after this one are bounded: at most
 // LANE_CAP books within the horizon the route requests (~3 months), enough
 // for a busy publisher's next three months, which the page previews a dozen
 // at a time; the full calendar lives in the Releases browser. The scan cap
 // covers hidden-row attrition and formats folding into one book.
 export const LANE_CAP = 72;
 const LANE_SCAN_CAP = 300;
-
-/**
- * Find the Publisher a requested slug means: the current slug first, then the
- * rename-redirect table (spec §11), then merged docs to their survivor.
- * Returns the surviving active Publisher — the caller compares its slug to
- * the requested one to decide whether to 301 — or null for unknown/hidden.
- */
-async function resolveBySlug(
-  ctx: QueryCtx,
-  slug: string,
-): Promise<Doc<"publishers"> | null> {
-  let doc = await ctx.db
-    .query("publishers")
-    .withIndex("by_slug", (q) => q.eq("slug", slug))
-    .unique();
-  if (!doc) {
-    const redirect = await ctx.db
-      .query("publisherSlugRedirects")
-      .withIndex("by_fromSlug", (q) => q.eq("fromSlug", slug))
-      .unique();
-    doc = redirect ? await ctx.db.get(redirect.publisherId) : null;
-  }
-  return await followMerges(ctx, "publishers", doc);
-}
 
 type BrowseRow = Awaited<ReturnType<typeof joinBrowseRows>>[number];
 
@@ -129,7 +107,7 @@ export const publisherPage = query({
     ...showMatureArg,
   },
   handler: async (ctx, { slug, todaySort, horizonSort, showMature }) => {
-    const publisher = await resolveBySlug(ctx, slug);
+    const publisher = await resolvePublisher(ctx, slug);
     if (!publisher) return null;
     if (publisher.slug !== slug) {
       return { redirectTo: publisher.slug } as const;
@@ -169,11 +147,7 @@ export const publisherPage = query({
 
     // Imprint family, one level deep: the parent company, or the imprints.
     const parentDoc = publisher.parentPublisherId
-      ? await followMerges(
-          ctx,
-          "publishers",
-          await ctx.db.get(publisher.parentPublisherId),
-        )
+      ? await getActive(ctx, "publishers", publisher.parentPublisherId)
       : null;
     const imprintDocs = await ctx.db
       .query("publishers")
@@ -363,10 +337,7 @@ async function buildMonthBoard(
     if (siblings.some((doc) => doc.status === "active" && earlier(doc.pubDate?.sort ?? 0))) {
       return null;
     }
-    const stats = await ctx.db
-      .query("seriesStats")
-      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-      .unique();
+    const stats = await seriesStatsRow(ctx, seriesId);
     return earlier(stats?.firstReleaseSort ?? 0) ? null : seriesId;
   });
 

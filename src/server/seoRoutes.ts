@@ -1,4 +1,4 @@
-// On-demand sitemaps + robots.txt (ticket #39, spec §11), served from the
+// On-demand sitemaps + robots.txt (spec §11), served from the
 // custom Workers entry (src/server.ts) alongside the canonical-host redirect:
 // `/sitemap.xml` is an index of per-entity child sitemaps (series, volumes,
 // editions, publishers, bundles, months) containing exactly the indexable
@@ -16,8 +16,10 @@ import { waitUntil } from "cloudflare:workers";
 import { ConvexHttpClient } from "convex/browser";
 
 import { api } from "../../convex/_generated/api";
+import { convexUrl } from "~/lib/convexUrl";
 import { addMonths, monthParam, type YearMonth } from "~/lib/month";
 import { siteOrigin } from "~/lib/seo";
+import { readEdgeCache } from "~/server/edgeCache";
 import { bundlePath, editionPath, seriesPath, volumePath } from "~/lib/slug";
 
 // Sitemap-protocol ceiling per file; v1 stays far below it. If a child ever
@@ -37,7 +39,7 @@ export const SITEMAP_CHILDREN = [
   "bundles",
   "months",
 ] as const;
-export type SitemapChild = (typeof SITEMAP_CHILDREN)[number];
+type SitemapChild = (typeof SITEMAP_CHILDREN)[number];
 
 // The record-backed children, mapped to convex/seo.ts's entity argument.
 const ENTITY_FOR_CHILD = {
@@ -70,8 +72,7 @@ export type SitemapData = {
 
 /** SitemapData backed by the Convex deployment; null when unconfigured. */
 export function convexSitemapData(): SitemapData | null {
-  const url =
-    import.meta.env.VITE_CONVEX_URL ?? process.env.VITE_CONVEX_URL ?? null;
+  const url = convexUrl();
   if (!url) return null;
   const convex = new ConvexHttpClient(url);
   return {
@@ -264,14 +265,9 @@ async function cachedChildSitemap(
   data: SitemapData | null,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const cache = (caches as unknown as { default: Cache }).default;
+  const cache = caches.default;
   const cacheKey = new Request(`${url.origin}${url.pathname}`);
-  // A failed read is a miss, as a failed write is only logged: the cache
-  // may cost a regeneration, never the sitemap.
-  const cached = await cache.match(cacheKey).catch((error: unknown) => {
-    console.error("sitemap cache read failed", error);
-    return undefined;
-  });
+  const cached = await readEdgeCache(cacheKey, "sitemap cache read failed");
   if (cached) return cached;
   const response = xmlResponse(await childSitemapXml(child, origin, data));
   waitUntil(

@@ -5,12 +5,7 @@ import { catalogQuery } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
 import { currentMonth, monthParam, monthTitle, parseMonthParam } from "~/lib/month";
 import { PublishersBoard } from "~/lib/publishersBoard";
-import {
-  breadcrumbListJsonLd,
-  jsonLdScript,
-  pageHead,
-  SITE_NAME,
-} from "~/lib/seo";
+import { pageHead, SITE_NAME } from "~/lib/seo";
 
 /**
  * `/publishers/{yyyy-mm}` — the Publishers board for any month, so last
@@ -28,22 +23,15 @@ export const Route = createFileRoute("/publishers/$month")({
   head: ({ loaderData }) => {
     if (!loaderData) return {};
     const month = monthTitle(loaderData.anchor);
-    return {
-      ...pageHead({
-        title: `English Manga Publishers – ${month} Releases | ${SITE_NAME}`,
-        description: `What every English manga publisher released in ${month}: release counts, new series, formats, and covers, publisher by publisher.`,
-        path: `/publishers/${monthParam(loaderData.anchor)}`,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: "Publishers", path: "/publishers" },
-            { name: month },
-          ]),
-        ),
+    return pageHead({
+      title: `English Manga Publishers – ${month} Releases | ${SITE_NAME}`,
+      description: `What every English manga publisher released in ${month}: release counts, new series, formats, and covers, publisher by publisher.`,
+      path: `/publishers/${monthParam(loaderData.anchor)}`,
+      breadcrumbs: [
+        { name: "Publishers", path: "/publishers" },
+        { name: month },
       ],
-    };
+    });
   },
   component: MonthBoardPage,
   notFoundComponent: MonthNotFound,

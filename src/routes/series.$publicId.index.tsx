@@ -1,32 +1,15 @@
-import { createFileRoute, Link, notFound, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 
 import { api } from "../../convex/_generated/api";
 import { catalogQuery } from "~/lib/catalogData";
-import { parsePublicId, seriesPath } from "~/lib/slug";
+import { slugRedirect } from "~/lib/pageScaffold";
+import { seriesPath } from "~/lib/slug";
 
-/**
- * Slugless `/series/{id}` (and any merged loser's ID): permanent redirect to
- * the canonical `/series/{id}/{slug}` URL (spec §11). The slug is cosmetic;
- * the ID alone identifies the Series.
- */
-export const Route = createFileRoute("/series/$publicId/")({
-  loader: async ({ params }) => {
-    const publicId = parsePublicId(params.publicId);
-    if (publicId === null) throw notFound();
-    const page = await catalogQuery(api.catalog.seriesPage, { publicId });
-    if (!page) throw notFound();
-    throw redirect({
-      href: seriesPath(page.series.publicId, page.series.title),
-      statusCode: 301,
-    });
-  },
-  component: () => null,
-  notFoundComponent: () => (
-    <main>
-      <h1>Series not found</h1>
-      <p className="notice">
-        No series lives at this address. <Link to="/">Browse the catalog</Link>.
-      </p>
-    </main>
+/** Slugless `/series/{id}`: 301 to the canonical Series URL. */
+export const Route = createFileRoute("/series/$publicId/")(
+  slugRedirect(
+    (publicId) => catalogQuery(api.catalog.seriesPage, { publicId }),
+    (page) => seriesPath(page.series.publicId, page.series.title),
+    { noun: "Series" },
   ),
-});
+);

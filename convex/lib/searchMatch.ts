@@ -1,4 +1,4 @@
-// Pure text matching for search (ticket #38 follow-up): deciding whether a
+// Pure text matching for search: deciding whether a
 // search-index hit really contains what was typed, which prefixes to probe
 // the index with for typo help, and ranking near-miss titles ("berzerk" →
 // Berserk). The Convex search index only prefix-matches the last term and

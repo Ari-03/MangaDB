@@ -20,7 +20,8 @@ import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { resolveActiveSeries } from "../catalog";
-import { editionCoverage, followMerges } from "../catalogPages";
+import { editionCoverage } from "../catalogPages";
+import { followMerges, getActive } from "./merges";
 import { syncRatingProjection } from "../seriesBrowse";
 import { statsRow, summaryOf, type TargetId } from "./ratingStats";
 
@@ -151,7 +152,7 @@ async function activeTarget(
 ): Promise<Active<TargetId> | Refusal> {
   switch (target.kind) {
     case "series": {
-      const series = await followMerges(ctx, "series", await ctx.db.get(target.id));
+      const series = await getActive(ctx, "series", target.id);
       return series ? { target: { kind: "series", id: series._id }, series } : { code: "notFound" };
     }
     case "volume": {

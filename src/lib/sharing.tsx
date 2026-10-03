@@ -1,4 +1,4 @@
-// Tracking-visibility UI (ticket #30, spec §3). Two surfaces:
+// Tracking-visibility UI (spec §3). Two surfaces:
 // - SharingSettings on /me: the separate Ownership and Reading defaults
 //   (private until explicitly opened) and the link to the public profile.
 // - SeriesVisibilityControls on the Series page: the per-Series overrides,
@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { convexClient } from "~/providers";
+import { useReadyViewer } from "~/lib/viewer";
 
 type Kind = "ownership" | "reading";
 type Visibility = "public" | "private";
@@ -83,9 +84,9 @@ export function SharingSettings() {
 }
 
 function SharingSettingsInner() {
-  const viewer = useQuery(api.users.viewer, {});
+  const viewer = useReadyViewer();
   const setDefault = useMutation(api.sharing.setDefaultVisibility);
-  if (!viewer || viewer.needsUsername) return null;
+  if (!viewer) return null;
 
   const defaults: Record<Kind, Visibility> = {
     ownership: viewer.ownershipVisibility,

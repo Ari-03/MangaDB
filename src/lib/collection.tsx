@@ -1,4 +1,4 @@
-// Personal collection UI (ticket #27, spec §3), rendered as a signed-in
+// Personal collection UI (spec §3), rendered as a signed-in
 // overlay on the public catalog pages: Wanted / Ordered / Owned toggles on
 // every Release row and Bundle page, the pinned-Variant picker, Derived
 // Ownership badges, the Volume ownership summary, and the library's
@@ -26,25 +26,17 @@ import {
   bookBadges,
   BookQuickActions,
   ENTRY_LABELS,
+  ENTRY_STATES,
   NO_PROMPTS,
   ShelfPrompts,
   useRunLock,
   type EntryState,
   type ShelfPromptState,
 } from "~/lib/quickActions";
-import { bookLabel, PathShelf, plural } from "~/lib/seriesShelf";
+import { plural } from "~/lib/format";
+import { bookLabel, PathShelf } from "~/lib/seriesShelf";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
-
-const STATE_LABELS = {
-  wanted: "Wanted",
-  ordered: "Ordered",
-  owned: "Owned",
-} as const;
-
-type CollectionState = keyof typeof STATE_LABELS;
-
-const STATE_ORDER: CollectionState[] = ["wanted", "ordered", "owned"];
 
 /**
  * The three-state segmented control. Exactly one state can be active;
@@ -58,8 +50,8 @@ function StateButtons({
   onPick,
   disabled = false,
 }: {
-  current: CollectionState | null;
-  onPick: (state: CollectionState | null) => void;
+  current: EntryState | null;
+  onPick: (state: EntryState | null) => void;
   disabled?: boolean;
 }) {
   return (
@@ -68,7 +60,7 @@ function StateButtons({
       role="group"
       aria-label="Collection state"
     >
-      {STATE_ORDER.map((state) => (
+      {ENTRY_STATES.map((state) => (
         <button
           key={state}
           type="button"
@@ -78,11 +70,11 @@ function StateButtons({
           title={
             current === state
               ? "Remove this from your collection"
-              : `Mark as ${STATE_LABELS[state].toLowerCase()}`
+              : `Mark as ${ENTRY_LABELS[state].toLowerCase()}`
           }
           onClick={() => onPick(current === state ? null : state)}
         >
-          {STATE_LABELS[state]}
+          {ENTRY_LABELS[state]}
         </button>
       ))}
     </span>
@@ -102,18 +94,16 @@ function StateButtons({
 export function ReleaseCollectionControls({
   releaseId,
 }: {
-  releaseId: string;
+  releaseId: Id<"releases">;
 }) {
   if (!convexClient) return null;
-  // Release rows carry the Convex document id serialized through the SSR
-  // loader; re-brand it for the typed function references.
-  return <ReleaseControlsInner releaseId={releaseId as Id<"releases">} />;
+  return <ReleaseControlsInner releaseId={releaseId} />;
 }
 
 function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
   const data = useQuery(api.collection.entryForRelease, { releaseId });
   const setEntry = useMutation(api.collection.setReleaseEntry);
-  // The post-first-entry follow suggestion (#29) the last mutation returned;
+  // The post-first-entry follow suggestion the last mutation returned;
   // ephemeral — following and permanent dismissal go through FollowPrompt.
   const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
   const lock = useRunLock(
@@ -195,15 +185,15 @@ function ReleaseControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {
 // ---------- Bundle page controls ----------
 
 /** Collection controls on the Bundle page; renders nothing signed out. */
-export function BundleCollectionControls({ bundleId }: { bundleId: string }) {
+export function BundleCollectionControls({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
   if (!convexClient) return null;
-  return <BundleControlsInner bundleId={bundleId as Id<"releaseBundles">} />;
+  return <BundleControlsInner bundleId={bundleId} />;
 }
 
 function BundleControlsInner({ bundleId }: { bundleId: Id<"releaseBundles"> }) {
   const data = useQuery(api.collection.entryForBundle, { bundleId });
   const setEntry = useMutation(api.collection.setBundleEntry);
-  // Follow suggestions (#29) for the member Releases' Series.
+  // Follow suggestions for the member Releases' Series.
   const [suggestFollow, setSuggestFollow] = useState<FollowSuggestion[]>([]);
   if (!data) return null;
   return (

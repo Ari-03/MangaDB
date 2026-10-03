@@ -1,4 +1,4 @@
-// ANN Encyclopedia parsing (ticket #36, spec §6/§7): pure functions from
+// ANN Encyclopedia parsing (spec §6/§7): pure functions from
 // ANN's XML wire formats to normalized snapshots. Two endpoints feed the
 // mirror (both verified live 2026-08-20):
 //
@@ -24,7 +24,8 @@
 
 import { v, type Infer } from "convex/values";
 import { canonicalLabel, coverRangeValidator, type CoverRange } from "./bookTitle";
-import { toIsbn13 } from "./openLibrary";
+import { datePartsValidator, type DateParts } from "./dates";
+import { toIsbn13 } from "./isbn";
 import {
   cleanBlurb,
   cleanTitleText,
@@ -44,6 +45,27 @@ export const annCreditValidator = v.object({
 });
 export type AnnCredit = Infer<typeof annCreditValidator>;
 
+/** One `<release>` line of a manga entry. */
+const annReleaseValidator = v.object({
+  /** ANN's stable release id (releases.php?id=NNN) — observation identity. */
+  annId: v.string(),
+  date: v.optional(datePartsValidator),
+  /** The English release title before the "(GN n)" designator. */
+  title: v.string(),
+  /** Volume label ("14", "7.5"); absent = an unnumbered oneshot. */
+  label: v.optional(v.string()),
+  /** A "(GN 1-3)" range or omnibus/box-set designator (multi-volume). */
+  multi: v.boolean(),
+  format: v.union(v.literal("physical"), v.literal("digital")),
+  /** Omnibus/box-set/deluxe packaging — an Edition Line shape. */
+  editionLineHint: v.boolean(),
+  /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
+  isbn13: v.optional(v.string()),
+  /** The Volumes a "(GN 97-99)" designator says the book collects. */
+  coverRange: v.optional(coverRangeValidator),
+});
+export type AnnRelease = Infer<typeof annReleaseValidator>;
+
 // What reconciliation reads (spec §6): one observation per manga entry, its
 // releases embedded (they also get per-release observations keyed on ANN's
 // own release ids — see ann.ts).
@@ -60,27 +82,7 @@ export const annMangaValidator = v.object({
   credits: v.optional(v.array(annCreditValidator)),
   /** ANN rates the entry for adults (`isMatureEntry`); absent otherwise. */
   mature: v.optional(v.literal(true)),
-  releases: v.array(
-    v.object({
-      annId: v.string(),
-      date: v.optional(
-        v.object({
-          year: v.number(),
-          month: v.optional(v.number()),
-          day: v.optional(v.number()),
-        }),
-      ),
-      title: v.string(),
-      label: v.optional(v.string()),
-      multi: v.boolean(),
-      format: v.union(v.literal("physical"), v.literal("digital")),
-      editionLineHint: v.boolean(),
-      /** The line's ISBN-13 (from ANN's `ean` attribute), when valid. */
-      isbn13: v.optional(v.string()),
-      /** The Volumes a "(GN 97-99)" designator says the book collects. */
-      coverRange: v.optional(coverRangeValidator),
-    }),
-  ),
+  releases: v.array(annReleaseValidator),
 });
 
 export type AnnMangaSnapshot = Infer<typeof annMangaValidator>;
@@ -140,25 +142,6 @@ export function parseReport(xml: string): AnnReport {
 
 // ---------- release lines ----------
 
-export type AnnRelease = {
-  /** ANN's stable release id (releases.php?id=NNN) — observation identity. */
-  annId: string;
-  date?: { year: number; month?: number; day?: number };
-  /** The English release title before the "(GN n)" designator. */
-  title: string;
-  /** Volume label ("14", "7.5"); absent = an unnumbered oneshot. */
-  label?: string;
-  /** A "(GN 1-3)" range or omnibus/box-set designator (multi-volume). */
-  multi: boolean;
-  format: "physical" | "digital";
-  /** Omnibus/box-set/deluxe packaging — an Edition Line shape. */
-  editionLineHint: boolean;
-  /** The book's ISBN-13, from the line's `ean` attribute. */
-  isbn13?: string;
-  /** The Volumes a "(GN 97-99)" designator says the book collects. */
-  coverRange?: CoverRange;
-};
-
 // Before 2010 ANN recorded month-only dates as the 1st (day 1 is a third of
 // its 2000-04 dates against ~3% elsewhere): such a day is a placeholder.
 const MONTH_PLACEHOLDER_BEFORE = 2010;
@@ -168,9 +151,7 @@ const MONTH_PLACEHOLDER_BEFORE = 2010;
  * A pre-2010 "day 01" reads as month precision, so a real day from another
  * source can refine it (spec §6) instead of losing to false precision.
  */
-export function parseAnnDate(
-  text: string,
-): { year: number; month?: number; day?: number } | undefined {
+export function parseAnnDate(text: string): DateParts | undefined {
   const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(text.trim());
   if (!m) return undefined;
   const year = Number(m[1]);
@@ -204,15 +185,7 @@ const TITLE_PACKAGING =
 export function splitReleaseTitle(
   text: string,
   entryName = "",
-): {
-  title: string;
-  label?: string;
-  multi: boolean;
-  format: "physical" | "digital";
-  editionLineHint: boolean;
-  /** "(GN 97-99)": the stated coverage, the best placement signal there is. */
-  coverRange?: CoverRange;
-} | null {
+): Omit<AnnRelease, "annId" | "date" | "isbn13"> | null {
   const m = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(text.trim());
   if (!m) return null;
   const title = m[1]!.trim();
@@ -240,15 +213,13 @@ export function splitReleaseTitle(
 
 // ---------- manga records ----------
 
-export type AnnManga = {
-  id: string;
-  title: string;
-  altTitles: string[];
-  synopsis?: string;
-  staff: string[];
+/**
+ * One parsed manga entry: its snapshot before `toSnapshot` adds the identity
+ * fields, with every credit row and the rating as a plain flag.
+ */
+export type AnnManga = Omit<AnnMangaSnapshot, "kind" | "url" | "credits" | "mature"> & {
   credits: AnnCredit[];
   mature: boolean;
-  releases: AnnRelease[];
 };
 
 /**
@@ -370,22 +341,23 @@ export function parseApiResponse(xml: string): AnnManga[] {
  * on the line's observation as `page` (the fetch state that keeps the pass
  * incremental).
  */
-export type AnnReleasePage = {
-  title?: string;
+export const annReleasePageValidator = v.object({
+  title: v.optional(v.string()),
   /** The designator as the page shows it ("GN 2 / 2", "eBook 1"). */
-  volume?: string;
-  distributor?: string;
+  volume: v.optional(v.string()),
+  distributor: v.optional(v.string()),
   /** ANN's company id for the distributor (company.php?id=N). */
-  distributorId?: string;
-  date?: { year: number; month?: number; day?: number };
-  isbn13?: string;
-  isbn10?: string;
-  priceCents?: number;
+  distributorId: v.optional(v.string()),
+  date: v.optional(datePartsValidator),
+  isbn13: v.optional(v.string()),
+  isbn10: v.optional(v.string()),
+  priceCents: v.optional(v.number()),
   /** The manga entry the page belongs to. */
-  mangaId?: string;
+  mangaId: v.optional(v.string()),
   /** The book's blurb (publisher copy an ANN contributor entered), cleaned. */
-  description?: string;
-};
+  description: v.optional(v.string()),
+});
+export type AnnReleasePage = Infer<typeof annReleasePageValidator>;
 
 /** One labelled field's raw HTML: `<b>Label:</b> …` up to the next break. */
 function pageField(html: string, label: string): string | undefined {
@@ -403,16 +375,15 @@ const NEXT_FIELD = /<p class="easyread-width">\s*<b>[^<]{1,40}:<\/b>/i;
 const ADDED_ON = /<p>\s*<small>\s*\(added on\b/i;
 const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
 
-// Site chrome ANN renders inside the Description field itself. A page with
-// no description (release 8116, seen 2026-10-02) carries only its review
-// link there: `<b>Description:</b><br><a href="0/0/reviews/new">Submit your
-// own review of this item.</a></p>`.
+// Site chrome ANN renders inside the Description field itself: a page with
+// no description carries only its review link there
+// (`<a href="0/0/reviews/new">Submit your own review of this item.</a>`).
 const REVIEW_LINK = /<a\b[^>]*\breviews\/new\b[^>]*>[\s\S]*?<\/a>/gi;
 const CHROME = ["Submit your own review of this item."];
 
-// Retail and listing rows ANN contributors pasted in place of a blurb,
-// each seen in the 2026-10 production export. Only a description that is
-// wholly one of these is rejected; nothing judges blurb quality otherwise.
+// Retail and listing rows ANN contributors pasted in place of a blurb. Only
+// a description that is wholly one of these is rejected; nothing judges
+// blurb quality otherwise.
 const NOT_A_BLURB = [
   // A seller's condition notes, whole.
   /^Book is in like-new condition\.$/,
@@ -432,16 +403,14 @@ const NOT_A_BLURB = [
 ];
 
 // The credit ANN appends to publisher copy ("… a friend or a foe? Story
-// and art by Eiichiro Oda."): the byline already shows it. In the first
-// 1,604 production descriptions it ends 87% of them, in these shapes:
+// and art by Eiichiro Oda."): the byline already shows it. Its shapes:
 // "Story and art by X.", "Story by X and Art by Y.", "Story and art by X
 // and Original Concept by Y.", "Manga by X and original story by Y.",
 // "Originally written by X, adapted by Y.", "Story by X. Art by Y.". A
 // credit tail is one or more clauses ROLE by NAMES, joined by "and", a
 // comma or a sentence break, running to the very end of the text.
 const CREDIT_ROLES = [
-  // ANN's own typos, seen in production: "Sotyr and art by", "Story and
-  // and art by", "Written and art by".
+  // ANN's own typos.
   "sotyr and art",
   "story and and art",
   "written and art",
@@ -475,10 +444,10 @@ const NAME_WORD = /^\(?[\p{Lu}\d]\S*$/u;
  * Lower-case name words ANN's contributors wrote in a credit that is a
  * sentence of its own ("Story by ufotable and Art by tartan check.",
  * "Story and art by est em.", "atsushi Suzumi", "Oh! great", "Girls und
- * Panzer Projekt"). An explicit list, from the 30 such credits in the
- * 2026-10 export: no rule tells "tartan check" from "pure accident", and
- * a constructed sentence ("Created by pure accident.", "Script by day, art
- * by night.") must stay. New pages are rare; extend the list if one shows.
+ * Panzer Projekt"). An explicit list because no rule tells "tartan check"
+ * from "pure accident", and a constructed sentence ("Created by pure
+ * accident.", "Script by day, art by night.") must stay. Extend it when a
+ * new page needs a word.
  */
 const LOWERCASE_NAME_WORDS = new Set(["atsushi", "check", "em", "est", "great", "tartan", "ufotable", "und"]);
 const MAX_LOOSE_NAME_WORDS = 5;
@@ -575,8 +544,8 @@ function isNameList(words: string[]): boolean {
   );
 }
 
-// ANN's own typo, three times in the sample: "Story and Kazuo Koike and
-// Art by Goseki Kojima." ("and" for "by").
+// ANN's own typo: "Story and Kazuo Koike and Art by Goseki Kojima." ("and"
+// for "by").
 const STORY_AND_TYPO = /^Story and (.+?) and Art by (.+)$/;
 
 /**
@@ -587,8 +556,8 @@ const STORY_AND_TYPO = /^Story and (.+?) and Art by (.+)$/;
  * clauses it has: "Based on the series created by Jon Favreau and written
  * by Dave Filoni." and "Created by Masashi Kishimoto and features story by
  * …" stay whole. A single clause naming one word ("Created by God.", "Art
- * by Committee.") is kept unless its role is ANN's fused "Story and art"
- * ("Story and art by CLAMP.", every one-word credit in the sample).
+ * by Committee.") is kept unless its role is ANN's fused "Story and art",
+ * the only role ANN gives one-word names ("Story and art by CLAMP.").
  */
 function stripCreditTail(text: string): string {
   const words = text.split(" ");
@@ -657,13 +626,8 @@ function stripNotesTail(text: string): string {
 
 /**
  * The cleaner every ANN release-page description goes through, at parse
- * time and again on stored text (`ann:repairDescriptions`), so it is
- * idempotent and works on already-cleaned text: zero-width spaces and
- * Windows-1252 mojibake and C1 controls repaired, stray entities decoded,
- * ANN page chrome and a trailing "Notes:" section rejected, a credit tail
- * (and a fused credit opening the text) dropped, and a text that is only
- * retail or listing junk (`NOT_A_BLURB`) rejected. Undefined when nothing
- * of the publisher's copy remains.
+ * time and again on stored text (`ann:repairDescriptions`), so it must be
+ * idempotent. Undefined when nothing of the publisher's copy remains.
  */
 export function cleanAnnDescription(text: string): string | undefined {
   // Mojibake first: its runs carry C1 code points ("â€\u009d") that the
@@ -689,23 +653,20 @@ export function cleanAnnDescription(text: string): string | undefined {
 
 /**
  * The page's Description, cleaned to one paragraph. It opens with a `<br>`
- * and spans paragraphs, so `pageField` cannot read it. Seen live
- * (2026-10-02) in two shapes: older pages run the text inline
+ * and spans paragraphs, so `pageField` cannot read it. It comes in two
+ * shapes: older pages run the text inline
  * (`<b>Description:</b><br>Text<br>\n<br>More</p>`), newer ones close the
  * paragraph and carry it in `<div class="simple-html">Text</div>`. The
  * field ends at ANN's next field (`NEXT_FIELD`, its Notes) or the "added
- * on" trailer, so markup inside the text (a list, an inline `<small>`, a
- * bold "Note:" or "Bonus Features:" paragraph, a nested div) never cuts it
- * short: the div runs to its last `</div>`, inline text to its closing
- * `</p>`. Without either bound both stop at the first close. The review link ANN puts in an empty field
- * is dropped, and the text goes through `cleanAnnDescription`.
+ * on" trailer, whichever comes first, so markup inside the text (a list,
+ * an inline `<small>`, a bold "Bonus Features:" paragraph, a nested div)
+ * never cuts it short: the div runs to its last `</div>`, inline text to
+ * its closing `</p>`. Without either bound both stop at the first close.
  */
 function pageDescription(html: string): string | undefined {
   const label = /<b>Description:<\/b>/i.exec(html);
   if (!label) return undefined;
   const rest = html.slice(label.index + label[0].length);
-  // The field ends at ANN's next field (Notes:) or at the "added on"
-  // trailer, whichever comes first; inside that bound any markup is copy.
   const ends = [rest.search(NEXT_FIELD), rest.search(ADDED_ON)].filter((at) => at >= 0);
   const bounded = ends.length > 0;
   const field = (bounded ? rest.slice(0, Math.min(...ends)) : rest).replace(REVIEW_LINK, "");
@@ -775,17 +736,11 @@ export function releaseUrl(annId: string): string {
   return `https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${annId}`;
 }
 
-export function toSnapshot(manga: AnnManga): AnnMangaSnapshot {
+export function toSnapshot({ mature, ...manga }: AnnManga): AnnMangaSnapshot {
   return {
     kind: "annManga",
-    id: manga.id,
     url: mangaUrl(manga.id),
-    title: manga.title,
-    altTitles: manga.altTitles,
-    synopsis: manga.synopsis,
-    staff: manga.staff,
-    credits: manga.credits,
-    ...(manga.mature ? { mature: true as const } : {}),
-    releases: manga.releases,
+    ...manga,
+    ...(mature ? { mature: true as const } : {}),
   };
 }

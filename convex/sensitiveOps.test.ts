@@ -5,54 +5,15 @@
 // Hidden/Merged records plus temporary Moderator locks, and the
 // reason + impact preview + explicit confirmation every operation demands.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
-import schema from "./schema";
+import { insertEdition, insertPublisher, insertSeries, insertVolume } from "./test.factories";
+import { EDITOR, PLAIN, alice, bob, carol, dave, makeT, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { insertBook, mergeAs, moderate, splitAs } from "./test.moderation";
 
-function makeT() {
-  const t = convexTest(schema);
-  // The rate-limiter component (convex.config.ts) backs the proposal rate
-  // limits saveDraft hits in the lock test.
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
-}
-
-const ADMIN = "user_admin";
-const MOD = "user_mod";
-const EDITOR = "user_editor";
-const PLAIN = "user_plain";
-
-async function setup(t: ReturnType<typeof convexTest>) {
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.users.claimUsername, { username: "alice" });
-  await t
-    .withIdentity({ subject: MOD })
-    .mutation(api.users.claimUsername, { username: "bob" });
-  await t
-    .withIdentity({ subject: EDITOR })
-    .mutation(api.users.claimUsername, { username: "carol" });
-  await t
-    .withIdentity({ subject: PLAIN })
-    .mutation(api.users.claimUsername, { username: "dave" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.roles.appoint, { username: "carol", role: "editor" });
-}
-
-async function userIdOf(
-  t: ReturnType<typeof convexTest>,
-  username: string,
-): Promise<Id<"users">> {
+async function userIdOf(t: TestT, username: string): Promise<Id<"users">> {
   const user = await t.run(async (ctx) =>
     (await ctx.db.query("users").collect()).find((u) => u.username === username),
   );
@@ -61,74 +22,36 @@ async function userIdOf(
 }
 
 /**
- * Two Series that are catalog duplicates plus a bystander: the survivor
- * "Alpha" (vol 1, edition, release), the loser "Alpha (dupe)" (vol 1,
- * edition, release, a linked Source Observation, relationship edges to both
- * the survivor and the bystander "Gamma"), and user tracking on both sides —
+ * The Data Team (alice, bob the Moderator, carol the Editor, dave) and two
+ * Series that are catalog duplicates plus a bystander: the survivor "Alpha"
+ * (vol 1, edition, release), the loser "Alpha (dupe)" (vol 1, edition,
+ * release, a linked Source Observation, relationship edges to both the
+ * survivor and the bystander "Gamma"), and user tracking on both sides —
  * dave tracks both duplicates (dedup case), carol tracks only the loser
  * (transfer case).
  */
-async function seedMergeFixture(t: ReturnType<typeof convexTest>) {
+async function seedMergeFixture(t: TestT) {
+  await seedTeam(t, [alice, bob, carol, dave]);
   const daveId = await userIdOf(t, "dave");
   const carolId = await userIdOf(t, "carol");
   return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas",
-      slug: "seven-seas",
-    });
-    const makeSeries = async (publicId: number, title: string) =>
-      await ctx.db.insert("series", {
-        status: "active",
-        publicId,
-        title,
-        altTitles: [],
-        searchText: title,
-      });
-    const survivor = await makeSeries(1, "Alpha");
-    const loser = await makeSeries(2, "Alpha (dupe)");
-    const bystander = await makeSeries(3, "Gamma");
+    const publisherId = await insertPublisher(ctx, { name: "Seven Seas" });
+    const survivor = await insertSeries(ctx, { publicId: 1, title: "Alpha" });
+    const loser = await insertSeries(ctx, { publicId: 2, title: "Alpha (dupe)" });
+    const bystander = await insertSeries(ctx, { publicId: 3, title: "Gamma" });
 
-    const makeBook = async (
-      seriesId: Id<"series">,
-      volumePublicId: number,
-      editionPublicId: number,
-      isbn13: string,
-    ) => {
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: volumePublicId,
+    const makeBook = async (seriesId: Id<"series">, volumePublicId: number, isbn13: string) => {
+      const volumeId = await insertVolume(ctx, { publicId: volumePublicId, seriesId });
+      const book = await insertBook(ctx, {
+        publisherId,
         seriesId,
-        position: 1,
-        label: "1",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: editionPublicId,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
         volumeId,
-        order: 1,
-        extent: "complete",
+        release: { binding: "paperback", isbn13, pubDate: { year: 2026, month: 3, day: 10, sort: 20260310 } },
       });
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        binding: "paperback",
-        language: "en",
-        isbn13,
-        pubDate: { year: 2026, month: 3, day: 10, sort: 20260310 },
-        publisherId,
-        seriesIds: [seriesId],
-      });
-      return { volumeId, editionId, releaseId };
+      return { volumeId, ...book };
     };
-    const survivorBook = await makeBook(survivor, 11, 21, "9781999000103");
-    const loserBook = await makeBook(loser, 12, 22, "9781999000318");
-
+    const survivorBook = await makeBook(survivor, 11, "9781999000103");
+    const loserBook = await makeBook(loser, 12, "9781999000318");
     // Provenance on the loser.
     const observationId = await ctx.db.insert("sourceObservations", {
       sourceKey: "sevenSeas",
@@ -141,12 +64,12 @@ async function seedMergeFixture(t: ReturnType<typeof convexTest>) {
 
     // Relationship edges: loser→survivor becomes a self-edge (dropped);
     // loser→bystander repoints to survivor→bystander.
-    const selfEdge = await ctx.db.insert("seriesRelationships", {
+    await ctx.db.insert("seriesRelationships", {
       fromSeriesId: loser,
       toSeriesId: survivor,
       type: "sideStory",
     });
-    const keptEdge = await ctx.db.insert("seriesRelationships", {
+    await ctx.db.insert("seriesRelationships", {
       fromSeriesId: loser,
       toSeriesId: bystander,
       type: "spinoff",
@@ -189,20 +112,17 @@ async function seedMergeFixture(t: ReturnType<typeof convexTest>) {
       survivorBook,
       loserBook,
       observationId,
-      selfEdge,
-      keptEdge,
       daveId,
       carolId,
     };
   });
 }
 
-const asMod = (t: ReturnType<typeof convexTest>) => t.withIdentity({ subject: MOD });
+const asMod = (t: TestT) => signedIn(t, bob);
 
 describe("sensitiveOps — authorization, reason, and confirmation", () => {
   it("demands the Moderator role, a reason, and explicit confirmation", async () => {
     const t = makeT();
-    await setup(t);
     const { survivor } = await seedMergeFixture(t);
     const ref = { type: "series" as const, id: survivor };
 
@@ -218,11 +138,7 @@ describe("sensitiveOps — authorization, reason, and confirmation", () => {
     }
     // A reason is required.
     await expect(
-      asMod(t).mutation(api.sensitiveOps.hideRecord, {
-        ref,
-        reason: "   ",
-        confirmImpact: true,
-      }),
+      moderate(t, "hideRecord", ref, "   "),
     ).rejects.toMatchObject({ data: { code: "reasonRequired" } });
     // The impact preview must be explicitly confirmed.
     await expect(
@@ -236,7 +152,6 @@ describe("sensitiveOps — authorization, reason, and confirmation", () => {
 
   it("manageForm serves the impact preview to Moderators only", async () => {
     const t = makeT();
-    await setup(t);
     await seedMergeFixture(t);
 
     await expect(
@@ -264,7 +179,6 @@ describe("sensitiveOps — authorization, reason, and confirmation", () => {
 describe("sensitiveOps — hide and restore", () => {
   it("round-trips a record without losing history or tracking references", async () => {
     const t = makeT();
-    await setup(t);
     const { survivor, daveId } = await seedMergeFixture(t);
     const ref = { type: "series" as const, id: survivor };
 
@@ -275,11 +189,7 @@ describe("sensitiveOps — hide and restore", () => {
       comment: "Punctuation per the cover.",
     });
 
-    const hidden = await asMod(t).mutation(api.sensitiveOps.hideRecord, {
-      ref,
-      reason: "Publisher takedown request.",
-      confirmImpact: true,
-    });
+    const hidden = await moderate(t, "hideRecord", ref, "Publisher takedown request.");
     expect(hidden.revisionIds).toHaveLength(1);
 
     // Gone from public discovery…
@@ -304,11 +214,7 @@ describe("sensitiveOps — hide and restore", () => {
       }),
     ).rejects.toMatchObject({ data: { code: "locked" } });
 
-    const restored = await asMod(t).mutation(api.sensitiveOps.restoreRecord, {
-      ref,
-      reason: "Request withdrawn.",
-      confirmImpact: true,
-    });
+    const restored = await moderate(t, "restoreRecord", ref, "Request withdrawn.");
     expect(restored.revisionIds).toHaveLength(1);
     const page = await t.query(api.catalog.seriesPage, { publicId: 1 });
     expect(page?.series.title).toBe("Alpha!");
@@ -327,29 +233,16 @@ describe("sensitiveOps — hide and restore", () => {
 
   it("hide requires an active record; restore requires a hidden one", async () => {
     const t = makeT();
-    await setup(t);
     const { survivor } = await seedMergeFixture(t);
     const ref = { type: "series" as const, id: survivor };
 
     await expect(
-      asMod(t).mutation(api.sensitiveOps.restoreRecord, {
-        ref,
-        reason: "Not hidden.",
-        confirmImpact: true,
-      }),
+      moderate(t, "restoreRecord", ref, "Not hidden."),
     ).rejects.toMatchObject({ data: { code: "badState" } });
 
-    await asMod(t).mutation(api.sensitiveOps.hideRecord, {
-      ref,
-      reason: "Hide once.",
-      confirmImpact: true,
-    });
+    await moderate(t, "hideRecord", ref, "Hide once.");
     await expect(
-      asMod(t).mutation(api.sensitiveOps.hideRecord, {
-        ref,
-        reason: "Hide twice.",
-        confirmImpact: true,
-      }),
+      moderate(t, "hideRecord", ref, "Hide twice."),
     ).rejects.toMatchObject({ data: { code: "badState" } });
   });
 });
@@ -357,15 +250,10 @@ describe("sensitiveOps — hide and restore", () => {
 describe("sensitiveOps — temporary locks", () => {
   it("locks an active record against ordinary edits until unlocked", async () => {
     const t = makeT();
-    await setup(t);
     const { survivor } = await seedMergeFixture(t);
     const ref = { type: "series" as const, id: survivor };
 
-    await asMod(t).mutation(api.sensitiveOps.lockRecord, {
-      ref,
-      reason: "Disputed rename — freezing while we check the source.",
-      confirmImpact: true,
-    });
+    await moderate(t, "lockRecord", ref, "Disputed rename — freezing while we check the source.");
 
     // Direct edits and Editor proposal drafts both refuse a locked record.
     await expect(
@@ -387,17 +275,9 @@ describe("sensitiveOps — temporary locks", () => {
 
     // Locking twice is refused; unlock lifts the freeze.
     await expect(
-      asMod(t).mutation(api.sensitiveOps.lockRecord, {
-        ref,
-        reason: "Again.",
-        confirmImpact: true,
-      }),
+      moderate(t, "lockRecord", ref, "Again."),
     ).rejects.toMatchObject({ data: { code: "badState" } });
-    await asMod(t).mutation(api.sensitiveOps.unlockRecord, {
-      ref,
-      reason: "Dispute resolved.",
-      confirmImpact: true,
-    });
+    await moderate(t, "unlockRecord", ref, "Dispute resolved.");
     const edit = await asMod(t).mutation(api.moderation.submitDirectEdit, {
       ref,
       baseRevisionId: await t.run(async (ctx) => {
@@ -409,23 +289,19 @@ describe("sensitiveOps — temporary locks", () => {
       changes: [{ field: "title", value: "Beta" }],
       comment: "Resolved rename.",
     });
-    expect(edit.seq).toBeGreaterThan(0);
+    // The edit lands after the lock's and the unlock's Revisions.
+    expect(edit.seq).toBe(3);
+    expect((await t.run((ctx) => ctx.db.get(survivor)))?.title).toBe("Beta");
   });
 });
 
 describe("sensitiveOps — merge", () => {
   it("transfers observations, relationships, and tracking; the losing ID resolves to the survivor", async () => {
     const t = makeT();
-    await setup(t);
     const fixture = await seedMergeFixture(t);
     const { survivor, loser, bystander, observationId } = fixture;
 
-    await asMod(t).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "series", id: survivor },
-      loser: { type: "series", id: loser },
-      reason: "Duplicate created by the import sweep.",
-      confirmImpact: true,
-    });
+    await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser });
 
     // The loser keeps its identity and points at the winner.
     const loserDoc = await t.run((ctx) => ctx.db.get(loser));
@@ -501,46 +377,29 @@ describe("sensitiveOps — merge", () => {
     ).rejects.toMatchObject({ data: { code: "locked" } });
     // …and further sensitive ops that need an active record.
     await expect(
-      asMod(t).mutation(api.sensitiveOps.hideRecord, {
-        ref: { type: "series", id: loser },
-        reason: "Nope.",
-        confirmImpact: true,
-      }),
+      moderate(t, "hideRecord", { type: "series", id: loser }, "Nope."),
     ).rejects.toMatchObject({ data: { code: "badState" } });
   });
 
   it("refuses self-merges, cross-type merges, and non-active participants", async () => {
     const t = makeT();
-    await setup(t);
-    const { survivor, loser } = await seedMergeFixture(t);
+    const { survivor, loser, loserBook } = await seedMergeFixture(t);
 
     await expect(
-      asMod(t).mutation(api.sensitiveOps.mergeRecords, {
-        survivor: { type: "series", id: survivor },
-        loser: { type: "series", id: survivor },
-        reason: "Self.",
-        confirmImpact: true,
-      }),
+      mergeAs(t, { type: "series", id: survivor }, { type: "series", id: survivor }, "Self."),
+    ).rejects.toMatchObject({ data: { code: "badMerge" } });
+    await expect(
+      mergeAs(t, { type: "series", id: survivor }, { type: "volume", id: loserBook.volumeId }, "Cross-type."),
     ).rejects.toMatchObject({ data: { code: "badMerge" } });
 
-    await asMod(t).mutation(api.sensitiveOps.hideRecord, {
-      ref: { type: "series", id: loser },
-      reason: "Hidden first.",
-      confirmImpact: true,
-    });
+    await moderate(t, "hideRecord", { type: "series", id: loser }, "Hidden first.");
     await expect(
-      asMod(t).mutation(api.sensitiveOps.mergeRecords, {
-        survivor: { type: "series", id: survivor },
-        loser: { type: "series", id: loser },
-        reason: "Loser hidden.",
-        confirmImpact: true,
-      }),
+      mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser }, "Loser hidden."),
     ).rejects.toMatchObject({ data: { code: "badState" } });
   });
 
   it("deduplicates release-level tracking on a release merge", async () => {
     const t = makeT();
-    await setup(t);
     const fixture = await seedMergeFixture(t);
     const survivorRelease = fixture.survivorBook.releaseId;
     const loserRelease = fixture.loserBook.releaseId;
@@ -570,12 +429,12 @@ describe("sensitiveOps — merge", () => {
       });
     });
 
-    await asMod(t).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "release", id: survivorRelease },
-      loser: { type: "release", id: loserRelease },
-      reason: "Same ISBN listed twice.",
-      confirmImpact: true,
-    });
+    await mergeAs(
+      t,
+      { type: "release", id: survivorRelease },
+      { type: "release", id: loserRelease },
+      "Same ISBN listed twice.",
+    );
 
     const entries = await t.run((ctx) => ctx.db.query("collectionEntries").collect());
     expect(entries.filter((e) => e.releaseId === loserRelease)).toHaveLength(0);
@@ -592,29 +451,16 @@ describe("sensitiveOps — merge", () => {
 describe("sensitiveOps — split", () => {
   it("reverses a merge exactly; Restore cannot", async () => {
     const t = makeT();
-    await setup(t);
     const fixture = await seedMergeFixture(t);
     const { survivor, loser, bystander } = fixture;
 
-    const before = {
-      states: await t.run((ctx) => ctx.db.query("userSeriesStates").collect()),
-      edges: await t.run((ctx) => ctx.db.query("seriesRelationships").collect()),
-    };
+    const before = await t.run((ctx) => ctx.db.query("userSeriesStates").collect());
 
-    await asMod(t).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "series", id: survivor },
-      loser: { type: "series", id: loser },
-      reason: "Mistaken duplicate.",
-      confirmImpact: true,
-    });
+    await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser }, "Mistaken duplicate.");
 
     // Restore is not the reversal of a merge.
     await expect(
-      asMod(t).mutation(api.sensitiveOps.restoreRecord, {
-        ref: { type: "series", id: loser },
-        reason: "Wrong tool.",
-        confirmImpact: true,
-      }),
+      moderate(t, "restoreRecord", { type: "series", id: loser }, "Wrong tool."),
     ).rejects.toMatchObject({ data: { code: "badState" } });
 
     // The manage panel offers Split for the merged loser.
@@ -626,11 +472,7 @@ describe("sensitiveOps — split", () => {
     expect(form?.splitAvailable).toBe(true);
     expect(form?.mergedInto?.title).toBe("Alpha");
 
-    await asMod(t).mutation(api.sensitiveOps.splitRecord, {
-      ref: { type: "series", id: loser },
-      reason: "The two series are actually different works.",
-      confirmImpact: true,
-    });
+    await splitAs(t, { type: "series", id: loser }, "The two series are actually different works.");
 
     // The loser is active again and no longer points at the survivor.
     const loserDoc = await t.run((ctx) => ctx.db.get(loser));
@@ -662,7 +504,7 @@ describe("sensitiveOps — split", () => {
         .sort((a, b) =>
           `${a.userId}${a.seriesId}`.localeCompare(`${b.userId}${b.seriesId}`),
         );
-    expect(shape(states)).toEqual(shape(before.states));
+    expect(shape(states)).toEqual(shape(before));
 
     // Both relationship edges exist again with their original endpoints.
     const edges = await t.run((ctx) => ctx.db.query("seriesRelationships").collect());
@@ -673,15 +515,10 @@ describe("sensitiveOps — split", () => {
     expect(
       edges.some((e) => e.fromSeriesId === loser && e.toSeriesId === bystander),
     ).toBe(true);
-    void before.edges;
 
     // The manifest is consumed: a second split has nothing to reverse.
     await expect(
-      asMod(t).mutation(api.sensitiveOps.splitRecord, {
-        ref: { type: "series", id: loser },
-        reason: "Again.",
-        confirmImpact: true,
-      }),
+      splitAs(t, { type: "series", id: loser }, "Again."),
     ).rejects.toMatchObject({ data: { code: "badState" } });
     const manifests = await t.run((ctx) => ctx.db.query("mergeManifests").collect());
     expect(manifests).toHaveLength(1);
@@ -690,22 +527,16 @@ describe("sensitiveOps — split", () => {
 
   it("replays every manifest of a chunked merge, not just the last", async () => {
     const t = makeT();
-    await setup(t);
     const fixture = await seedMergeFixture(t);
     const { survivor, loser } = fixture;
-    await asMod(t).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "series", id: survivor },
-      loser: { type: "series", id: loser },
-      reason: "Merge in two chunks.",
-      confirmImpact: true,
-    });
+    await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser }, "Merge in two chunks.");
     // A second chunk of the same merge (same Proposal) moved an Edition from
     // one publisher to another, as the data repair's chunked merge does.
     const { editionId, from } = await t.run(async (ctx) => {
       const [first] = await ctx.db.query("mergeManifests").collect();
-      const from = await ctx.db.insert("publishers", { status: "active", name: "Old", slug: "old" });
-      const to = await ctx.db.insert("publishers", { status: "active", name: "New", slug: "new" });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 900, publisherId: to });
+      const from = await insertPublisher(ctx, { name: "Old" });
+      const to = await insertPublisher(ctx, { name: "New" });
+      const editionId = await insertEdition(ctx, { publisherId: to });
       await ctx.db.insert("mergeManifests", {
         loserRef: first!.loserRef,
         survivorRef: first!.survivorRef,
@@ -717,11 +548,7 @@ describe("sensitiveOps — split", () => {
       return { editionId, from };
     });
 
-    await asMod(t).mutation(api.sensitiveOps.splitRecord, {
-      ref: { type: "series", id: loser },
-      reason: "Different works after all.",
-      confirmImpact: true,
-    });
+    await splitAs(t, { type: "series", id: loser }, "Different works after all.");
 
     expect((await t.run((ctx) => ctx.db.get(editionId)))?.publisherId).toBe(from);
     expect((await t.run((ctx) => ctx.db.get(loser)))?.status).toBe("active");
@@ -731,27 +558,17 @@ describe("sensitiveOps — split", () => {
 
   it("leaves references alone that the world re-aimed after the merge", async () => {
     const t = makeT();
-    await setup(t);
     const fixture = await seedMergeFixture(t);
     const { survivor, loser, bystander } = fixture;
 
-    await asMod(t).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "series", id: survivor },
-      loser: { type: "series", id: loser },
-      reason: "Merge first.",
-      confirmImpact: true,
-    });
+    await mergeAs(t, { type: "series", id: survivor }, { type: "series", id: loser }, "Merge first.");
     // Someone re-links the observation to the bystander before the split.
     await t.run((ctx) =>
       ctx.db.patch(fixture.observationId, {
         recordRef: { type: "series", id: bystander },
       }),
     );
-    await asMod(t).mutation(api.sensitiveOps.splitRecord, {
-      ref: { type: "series", id: loser },
-      reason: "Undo the merge.",
-      confirmImpact: true,
-    });
+    await splitAs(t, { type: "series", id: loser }, "Undo the merge.");
     const observation = await t.run((ctx) => ctx.db.get(fixture.observationId));
     expect(observation?.recordRef).toEqual({ type: "series", id: bystander });
   });
@@ -760,9 +577,7 @@ describe("sensitiveOps — split", () => {
 describe("sensitiveOps — the review-queue path", () => {
   it("approveProposal applies sensitive ops through the same engine", async () => {
     const t = makeT();
-    await setup(t);
-    const { survivor, loser } = await seedMergeFixture(t);
-    const carolId = await userIdOf(t, "carol");
+    const { survivor, loser, carolId } = await seedMergeFixture(t);
 
     // A merge proposal landed In Review (author: an Editor).
     const proposalId = await t.run(async (ctx) => {

@@ -19,7 +19,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { COMMENT_POLICY } from "../../convex/comments";
 import { track } from "~/lib/analytics";
-import { useIsModerator } from "~/lib/moderation";
+import { useIsModerator, useReadyViewer } from "~/lib/viewer";
 import { writeErrorMessage } from "~/lib/ratings";
 import { convexClient } from "~/providers";
 
@@ -399,12 +399,12 @@ function CommentActions({
   isReply: boolean;
   onReply: () => void;
 }) {
-  const viewer = useQuery(api.users.viewer, {});
+  const viewer = useReadyViewer();
   const isModerator = useIsModerator();
   const [panel, setPanel] = useState<Panel>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const close = () => setPanel(null);
-  if (!viewer || viewer.needsUsername || item.state === "removed" || item.state === "withheld") return null;
+  if (!viewer || item.state === "removed" || item.state === "withheld") return null;
 
   const editable = item.own && (item.state === "approved" || item.state === "pending");
   const buttons = [

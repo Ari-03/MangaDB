@@ -3,6 +3,14 @@ import { parseBookTitle } from "./bookTitle";
 import { coverageFromLine, coverageFromText, inferCoverage } from "./coverage";
 import { cleanBlurb } from "./text";
 
+// The packagings most cases read against: a 3-in-1 line at positions 1 and 2
+// (sizes 1–3 and 4–6), a 2-in-1 line, and a Deluxe line, which declares no size.
+const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
+const second = { ...threeIn1, linePosition: "2" };
+const twoIn1 = { lineName: "2-in-1 Edition", linePosition: "1", coverRange: null };
+const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
+const ONE_TO_THREE = { from: "1", to: "3" };
+
 describe("coverageFromText — publisher blurbs that state the collected volumes", () => {
   it("reads PRH flap copy and keynotes (live Berserk Deluxe text, 2026-09-27)", () => {
     expect(
@@ -72,26 +80,24 @@ describe("inferCoverage — precedence", () => {
   it("prefers the title, then the blurbs in order, then the line size", () => {
     const stated = { lineName: "Omnibus", linePosition: "2", coverRange: { from: "4", to: "6" } };
     expect(inferCoverage(stated, ["collects volumes 1-3"])).toEqual({ from: "4", to: "6" });
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "14", coverRange: null };
-    expect(inferCoverage(deluxe, [undefined, "Collects Berserk Volumes 40, 41."])).toEqual({
+    const deluxe14 = { ...deluxe, linePosition: "14" };
+    expect(inferCoverage(deluxe14, [undefined, "Collects Berserk Volumes 40, 41."])).toEqual({
       from: "40",
       to: "41",
     });
-    expect(inferCoverage(deluxe, [undefined])).toBeNull();
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "3", coverRange: null };
-    expect(inferCoverage(threeIn1, [])).toEqual({ from: "7", to: "9" });
+    expect(inferCoverage(deluxe14, [undefined])).toBeNull();
+    expect(inferCoverage({ ...threeIn1, linePosition: "3" }, [])).toEqual({ from: "7", to: "9" });
   });
 
   // R12: a statement no range can hold is evidence, not silence.
   it("never lets the line size override a gapped or impossible statement", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
     expect(inferCoverage({ ...threeIn1, coverageGapped: true }, [])).toBeNull();
     expect(inferCoverage({ ...threeIn1, coverageGapped: true }, ["Collects volumes 1-3."])).toBeNull();
     expect(inferCoverage(threeIn1, ["Collects volumes 1 and 3."])).toBeNull();
     expect(inferCoverage(threeIn1, [undefined, "A giant edition.", "Collects volumes 1 & 3."])).toBeNull();
     expect(inferCoverage(threeIn1, ["collects volumes 9-3"])).toBeNull();
+    expect(inferCoverage(threeIn1, ["Collects volumes 3-1."])).toBeNull();
     // The first blurb that states a usable range still decides.
-    const second = { ...threeIn1, linePosition: "2" };
     expect(inferCoverage(second, ["Collects volumes 4-6.", "Collects volumes 1 and 3."])).toEqual({
       from: "4",
       to: "6",
@@ -118,10 +124,31 @@ describe("inferCoverage — precedence", () => {
     expect(inferCoverage(agreeing, ["Collects volumes 4-6."])).toEqual({ from: "1", to: "3" });
   });
 
+  // N01/N04: a title's own statement is read whole and places the book; a
+  // gap or a disagreement in it leaves the book Unmapped under its line.
+  it("places a packaged title by its own statement, or leaves it Unmapped under its line", () => {
+    const ONE_TO_NINE = { from: "1", to: "9" };
+    for (const [title, expected] of [
+      ["Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 4-6 and 7-9 in one book)", ONE_TO_NINE],
+      ["Alpha 3-in-1 Edition 1 (Collecting Vols. 1-3 plus 4-6 and 7-9 in one book)", ONE_TO_NINE],
+      ["Alpha Deluxe Edition 1 (Collecting Vols. 1-3 plus 4-6 and 8-9 in one book)", null],
+      ["Alpha 3-in-1 Edition 1 (Collecting Vols. 1-3 plus 4-6 and 8-9 in one book)", null],
+      ["Alpha 3-in-1 Edition Vol. 1-3 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)", null],
+      ["Alpha Deluxe Edition Vol. 1 & 3 (Collects Vols. 1-3)", null],
+      ["Alpha 3-in-1 Edition 1: Includes Vols. 1-3", ONE_TO_THREE],
+    ] as const) {
+      const packaging = parseBookTitle(title).packaging;
+      expect(packaging?.lineName, title).toBeTruthy();
+      expect(inferCoverage(packaging!, []), title).toEqual(expected);
+    }
+    // A thousands-separated number in the Series name states nothing: the blurb places the book.
+    const saving = parseBookTitle("Saving 80,000 Gold in Another World for My Retirement Deluxe Edition 1");
+    expect(inferCoverage(saving.packaging!, ["Collects volumes 1-3."])).toEqual(ONE_TO_THREE);
+  });
+
   // R12: a gapped list needs no collect-verb to count. Without one it was
   // read as silence and the 3-in-1 size invented Volume 2.
   it("reads a bare, numbered-word, or ranged gapped list as a gap", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
     for (const blurb of [
       "Volumes 1 and 3 in one book!",
       "Features volumes 1 and 3.",
@@ -133,6 +160,7 @@ describe("inferCoverage — precedence", () => {
     ]) {
       expect(inferCoverage(threeIn1, [blurb]), blurb).toBeNull();
     }
+    expect(inferCoverage(deluxe, ["Collects volumes one and three."])).toBeNull();
     // Contiguous lists, in words or with "#", still state a range.
     expect(coverageFromText("Collects volumes one through three.")).toEqual({ from: "1", to: "3" });
     expect(coverageFromText("Collects volumes #4, #5 and #6.")).toEqual({ from: "4", to: "6" });
@@ -158,8 +186,6 @@ describe("inferCoverage — precedence", () => {
   // reads two ways, with it and without it. Only the line size at the
   // book's position settles them.
   it("reads a count after the list two ways, settled only by the line size", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     for (const blurb of [
       "Collects volumes 1–3 and 4 bonus stories.",
       "Collects volumes 1-3 and 4 all-new bonus stories.",
@@ -172,6 +198,9 @@ describe("inferCoverage — precedence", () => {
       "Collects volumes 1-3 and volume 4's bonus chapter.",
       "Collects volumes 1-3 and volume 4&#8217;s bonus chapter.",
       "Collects volumes 1-3 and 4 of the author's short stories.",
+      "Collects volumes 1-3 and 4 as-yet-unpublished stories.",
+      "Collects volumes 1-3 and 4 for the first time.",
+      "Collects volumes 1-3 and 4 on-model sketches.",
       "Volumes 1-3 and 4 all-new stories in one book.",
     ]) {
       expect(coverageFromText(blurb), blurb).toBeNull();
@@ -185,6 +214,7 @@ describe("inferCoverage — precedence", () => {
     expect(inferCoverage(threeIn1, ["Includes volume one and two bonus stories."])).toBeNull();
     // A gapped list stays gapped whatever follows it.
     expect(inferCoverage(threeIn1, ["Collects volumes 1 and 3 remastered."])).toBeNull();
+    expect(inferCoverage(threeIn1, [cleanBlurb("<p>Collects volumes 1 and 3</p><p>Remastered</p>")])).toBeNull();
     // A statement end keeps every item: punctuation or the end of the text.
     expect(coverageFromText("Collects volumes 1, 2, and 3—the complete arc.")).toEqual({ from: "1", to: "3" });
     expect(coverageFromText("Collects volumes 1, 2, and 3, the complete arc.")).toEqual({ from: "1", to: "3" });
@@ -195,6 +225,16 @@ describe("inferCoverage — precedence", () => {
       to: "3",
     });
     expect(coverageFromText("Collects volumes 1, 2, and 3 of the hit.")).toEqual({ from: "1", to: "3" });
+    // The 3-in-1 size agrees with the whole list, so it places the book.
+    for (const raw of [
+      "<ul><li>Collects volumes 1, 2, and 3</li><li>Hardcover</li></ul>",
+      "Collects volumes 1, 2, and 3.",
+      "Collects volumes 1, 2, and 3 featuring new cover art.",
+      "Collects volumes 1, 2, and 3 remastered.",
+    ]) {
+      expect(inferCoverage(threeIn1, [cleanBlurb(raw)]), raw).toEqual(ONE_TO_THREE);
+    }
+    expect(inferCoverage(deluxe, ["Collects volumes 1, 2, and 3 featuring new cover art."])).toEqual(ONE_TO_THREE);
     // A number is read whole: "4.5" is never Volume 4, and no range holds it.
     expect(inferCoverage(threeIn1, ["Collects volumes 1-3 and 4.5."])).toBeNull();
     expect(inferCoverage(threeIn1, ["Collects volume 4.5."])).toBeNull();
@@ -202,7 +242,6 @@ describe("inferCoverage — precedence", () => {
 
   // R12: a list the reader cannot finish is never cut short to what it read.
   it("never shortens a list it cannot finish", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
     for (const blurb of [
       "Collects volumes 1 as well as 3.",
       "Collects volumes 1 along with 3.",
@@ -210,13 +249,13 @@ describe("inferCoverage — precedence", () => {
       "Collects volumes 1/3.",
       "Collects volumes 1-2; 4.",
       "Collects vols 1and 3",
+      "Collects vols. 1and 3.",
       "Volumes 1 as well as 3 in one book!",
       "Collects volume 1 as well as volume 3.",
     ]) {
       expect(inferCoverage(threeIn1, [blurb]), blurb).toBeNull();
     }
     // "as well as" and "along with" join a list like "and": 1–3 and 5 is a gap.
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     expect(inferCoverage(deluxe, ["Collects volumes 1-3 as well as 5."])).toBeNull();
     expect(inferCoverage(threeIn1, ["Collects volumes 1-3 as well as 5."])).toBeNull();
     expect(coverageFromText("Collects volumes 1-3 as well as 4.")).toEqual({ from: "1", to: "4" });
@@ -245,7 +284,6 @@ describe("inferCoverage — precedence", () => {
   // something else ("chapters 1–27", "Mob Psycho 100"). The one stated range
   // still places a book whose line declares no size.
   it("reads one stated range whole, whatever numbers follow it", () => {
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     for (const blurb of [
       "Collects volumes 1–3 (chapters 1–27).",
       "Collects volumes 1-3 (chapters 1-27).",
@@ -266,6 +304,7 @@ describe("inferCoverage — precedence", () => {
       // Every dash spelling reads as a range.
       "Collects volumes 1‑3 (non-breaking hyphen).",
       "Collects volumes 1−3 (minus sign).",
+      "Collects volumes 1−3.",
     ]) {
       expect(coverageFromText(blurb), blurb).toEqual({ from: "1", to: "3" });
       expect(inferCoverage(deluxe, [blurb]), blurb).toEqual({ from: "1", to: "3" });
@@ -278,8 +317,6 @@ describe("inferCoverage — precedence", () => {
   // (A list that opens its sentence states the coverage on a line with no
   // size: see below.)
   it("never places a book by a list no verb governs", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     for (const blurb of [
       "The story continues in volumes 4 and 5.",
       "Catch up before volumes 4 and 5, coming soon.",
@@ -299,6 +336,8 @@ describe("inferCoverage — precedence", () => {
       from: "1",
       to: "3",
     });
+    // A sized line past the mentioned Volumes keeps its own.
+    expect(inferCoverage(second, ["Catch up with volumes 1-3 first!"])).toEqual({ from: "4", to: "6" });
     // A gap still blocks, even in a singular list that reads two ways.
     expect(inferCoverage(threeIn1, ["Volume 1 and 3 in one book!"])).toBeNull();
     expect(inferCoverage(threeIn1, ["The saga continues in volumes 4 and 5. Volumes 1 and 3 in one book!"])).toBeNull();
@@ -309,8 +348,6 @@ describe("inferCoverage — precedence", () => {
   // nothing. cleanBlurb turns every tag into a space, so a block boundary
   // reaches coverage as one.
   it("reads a list after an article, a preposition, or a sentence end as a mention", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     for (const raw of [
       "<p>Collects bonus art</p><p>The story continues in volumes 4 and 5</p>",
       "Includes a preview of volumes 4 and 5.",
@@ -332,8 +369,6 @@ describe("inferCoverage — precedence", () => {
   // list. A size the statement contradicts still blocks; a line with no size
   // takes the Volumes the statement names.
   it("reads a list across a lost block boundary as the verb's statement", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     const range = cleanBlurb("<h3>Collects the hit series</h3><p>Volumes 4-6 on sale now.</p>");
     expect(inferCoverage(threeIn1, [range])).toBeNull();
     expect(inferCoverage(deluxe, [range])).toEqual({ from: "4", to: "6" });
@@ -344,7 +379,6 @@ describe("inferCoverage — precedence", () => {
   });
 
   it("places a book by a list whose verb governs it through a name", () => {
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     for (const raw of [
       "Collects <i>Berserk</i> Volumes 1, 2, and 3.",
       "Collects Attack on Titan volumes 1-3.",
@@ -362,9 +396,6 @@ describe("inferCoverage — precedence", () => {
   // capitals throughout) leave the verb governing it. The size never
   // overrides the statement: one it contradicts blocks.
   it("governs through any lead-in that opens no phrase of its own", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
-    const second = { ...threeIn1, linePosition: "2" };
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     for (const blurb of [
       "Collects the hit series volumes 1-3.",
       "Collects all volumes 1-3.",
@@ -392,9 +423,6 @@ describe("inferCoverage — precedence", () => {
   // books. The list reads with and without what follows the joiner, and only
   // the line size settles it.
   it("reads an item joined by a slash or semicolon two ways", () => {
-    const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
-    const second = { ...threeIn1, linePosition: "2" };
-    const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
     for (const blurb of ["Collects volumes 1-3 / 4-6.", "Collects volumes 1-3; 4-6."]) {
       expect(inferCoverage(threeIn1, [blurb]), blurb).toEqual({ from: "1", to: "3" });
       expect(inferCoverage(second, [blurb]), blurb).toBeNull();
@@ -409,11 +437,6 @@ describe("inferCoverage — precedence", () => {
 });
 
 describe("coverage — the nearest collect-verb, the size, and ambiguity (R12)", () => {
-  const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
-  const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
-  const second = { ...threeIn1, linePosition: "2" };
-  const ONE_TO_THREE = { from: "1", to: "3" };
-
   it("judges the collect-verb nearest the list", () => {
     for (const blurb of [
       "This collected edition includes volumes 1-3.",
@@ -451,12 +474,13 @@ describe("coverage — the nearest collect-verb, the size, and ambiguity (R12)",
     }
     // A last item that is a range is a Volume range too: 1–6, which the
     // 3-in-1 size contradicts.
-    expect(coverageFromText("Collects volumes 1-3 and 4-6 new stories.")).toEqual({ from: "1", to: "6" });
-    expect(inferCoverage(threeIn1, ["Collects volumes 1-3 and 4-6 new stories."])).toBeNull();
+    for (const blurb of ["Collects volumes 1-3 and 4-6 new stories.", "Collects volumes 1-3 and 4 to 6 new pages."]) {
+      expect(coverageFromText(blurb), blurb).toEqual({ from: "1", to: "6" });
+      expect(inferCoverage(threeIn1, [blurb]), blurb).toBeNull();
+    }
   });
 
   it("settles a bare last item followed by more copy only by the size", () => {
-    const twoIn1 = { lineName: "2-in-1 Edition", linePosition: "1", coverRange: null };
     for (const [blurb, size, expected] of [
       ["Collects volumes 1-3 and 4 bonus stories.", threeIn1, ONE_TO_THREE],
       ["Collects volumes 1-3 and 4 bonus stories.", second, null],
@@ -464,17 +488,27 @@ describe("coverage — the nearest collect-verb, the size, and ambiguity (R12)",
       ["Contains volumes 1 and 2 of Alpha!", twoIn1, { from: "1", to: "2" }],
       ["Contains volumes 1 and 2 of Alpha!", deluxe, null],
       ["Collects volumes 4 and 5 featuring new art.", deluxe, null],
+      ["Collects volumes 1 and 2 featuring new cover art.", deluxe, null],
+      ["Collects volumes 3 and 4 featuring new cover art.", { ...twoIn1, linePosition: "2" }, { from: "3", to: "4" }],
     ] as const) {
       expect(inferCoverage(size, [blurb]), `${blurb} on ${size.lineName}`).toEqual(expected);
     }
     // A serial list ("1, 2, and 3") names its last item a Volume.
     expect(coverageFromText("Contains volumes 1, 2 and 3 of Alpha!")).toEqual(ONE_TO_THREE);
+    const vizbig = { lineName: "VIZBIG Edition", linePosition: "1", coverRange: null };
+    expect(inferCoverage(vizbig, ["Contains volumes 1, 2 and 3 of Alpha!"])).toEqual(ONE_TO_THREE);
   });
 
   it("reads a sentence-initial list with no verb as a statement only on a line with no size", () => {
     expect(coverageFromText("Volumes 10–12 of the acclaimed series, in hardcover.")).toEqual({ from: "10", to: "12" });
     expect(coverageFromText("Volumes 1, 2, and 3 together at last.")).toEqual(ONE_TO_THREE);
-    expect(inferCoverage(deluxe, ["Volumes 1-3 in one book!"])).toEqual(ONE_TO_THREE);
+    for (const blurb of [
+      "Volumes 1-3 in one book!",
+      "Volumes 1–3 of the acclaimed series, in hardcover.",
+      "Volumes 1, 2, and 3 together at last.",
+    ]) {
+      expect(inferCoverage(deluxe, [blurb]), blurb).toEqual(ONE_TO_THREE);
+    }
     // On a sized line it is a mention: the size wins over it.
     expect(inferCoverage(second, ["Volumes 1-3 in one book!"])).toEqual({ from: "4", to: "6" });
     // An ambiguous last item still leaves an unsized book Unmapped.
@@ -487,14 +521,11 @@ describe("coverage — the nearest collect-verb, the size, and ambiguity (R12)",
     expect(coverageFromText("Collects volumes 1-2-3")).toBeNull();
     expect(inferCoverage(threeIn1, ["Collects volumes 1-2-3."])).toBeNull();
     expect(inferCoverage(deluxe, ["Collects volumes 1–2–3."])).toBeNull();
+    expect(inferCoverage(deluxe, ["Collects volumes 1-2-3."])).toBeNull();
   });
 });
 
 describe("coverage — marked items, joined ranges, and a Series title's own punctuation (wave 2)", () => {
-  const deluxe = { lineName: "Deluxe Edition", linePosition: "1", coverRange: null };
-  const threeIn1 = { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null };
-  const twoIn1 = { lineName: "2-in-1 Edition", linePosition: "1", coverRange: null };
-
   // W03: an item with its own marker ("volume 4", "Vol. 4", "#4") names a
   // Volume, whatever follows it: never a count. Four Volumes against a
   // three-Volume line leave the book Unmapped; no size shortens them.

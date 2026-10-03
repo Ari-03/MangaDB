@@ -1,24 +1,20 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { CommentsQueueLink, useIsDataTeam } from "~/lib/moderation";
+import { ModGate, ModTools, timestamp } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The Data Team imports dashboard (ticket #37, spec §6): every Approved
+ * The Data Team imports dashboard (spec §6): every Approved
  * Source with its cadence and health flag — an unhealthy source (three
  * consecutive failed runs) is flagged loudly — plus inspectable Import Run
  * history: source, timing, records seen/changed, and errors. Never indexed.
  */
 export const Route = createFileRoute("/mod/imports")({
-  head: () => ({
-    meta: [
-      { title: "Imports — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Imports — MangaDB" }] }),
   component: ImportsPage,
 });
 
@@ -33,41 +29,15 @@ function ImportsPage() {
       </main>
     );
   }
-  return <ImportsGate />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="The imports dashboard is visible to Editors, Moderators, and Administrators."
+    >
+      <Imports />
+    </ModGate>
+  );
 }
-
-function ImportsGate() {
-  const isDataTeam = useIsDataTeam();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          The imports dashboard is visible to Editors, Moderators, and
-          Administrators. {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <Imports />;
-}
-
-const timestamp = (ms: number) =>
-  new Date(ms).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 
 function duration(startedAt: number, finishedAt: number | null): string {
   if (finishedAt === null) return "running";
@@ -86,22 +56,14 @@ function Imports() {
 
   return (
     <main className="mod-page imports-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Imports</span>
-      </nav>
+      <Breadcrumbs trail={["Imports"]} />
       <h1>Imports</h1>
       <p className="section-hint">
         Every Approved Source runs unattended on its registry cadence; three
         consecutive failed runs flag it unhealthy here (and email the
         Administrator once per transition).
       </p>
-      <nav className="mod-tools" aria-label="Data team tools">
-        <Link to="/mod/queue">Review queue</Link>
-        <Link to="/mod/launch">Launch</Link>
-        <Link to="/mod/packaging">Catalog gaps</Link>
-        <CommentsQueueLink />
-      </nav>
+      <ModTools current="/mod/imports" />
 
       <h2>Sources</h2>
       {sources === undefined ? (

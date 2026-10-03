@@ -1,4 +1,4 @@
-// Role governance (ticket #31, spec §4/§5): the initial Administrator is
+// Role governance (spec §4/§5): the initial Administrator is
 // appointed by the operator; Administrators appoint Moderators; Moderators
 // appoint Editors. Every appointment, revocation, suspension, and
 // reinstatement writes a permanent roleAudit row — the audit trail is
@@ -8,9 +8,10 @@
 // untouched, because Revisions and Proposals record the author's role at
 // authorship (authorRef.roleAtAuthorship) and are immutable.
 
-import { ConvexError, v } from "convex/values";
-import type { Doc, Id } from "./_generated/dataModel";
+import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
+import { fail } from "./lib/errors";
 import {
   canGovern,
   countActiveAdministrators,
@@ -18,13 +19,9 @@ import {
   requireRole,
   type DataRole,
 } from "./lib/roles";
+import { usernameLookup } from "./lib/usernameLookup";
 import { normalizeUsername } from "./lib/usernames";
-
-const dataRoleArg = v.union(
-  v.literal("editor"),
-  v.literal("moderator"),
-  v.literal("administrator"),
-);
+import { dataRole } from "./schema";
 
 async function findUserByUsername(
   ctx: MutationCtx,
@@ -36,12 +33,7 @@ async function findUserByUsername(
       q.eq("usernameNormalized", normalizeUsername(username)),
     )
     .unique();
-  if (!user) {
-    throw new ConvexError({
-      code: "notFound",
-      message: `No user named "${username}".`,
-    });
-  }
+  if (!user) fail("notFound", `No user named "${username}".`);
   return user;
 }
 
@@ -52,15 +44,12 @@ async function findUserByUsername(
 async function guardLastAdministrator(ctx: MutationCtx, target: Doc<"users">) {
   if (target.role !== "administrator" || target.suspended) return;
   if ((await countActiveAdministrators(ctx)) <= 1) {
-    throw new ConvexError({
-      code: "lastAdministrator",
-      message: "Cannot remove the last active Administrator.",
-    });
+    fail("lastAdministrator", "Cannot remove the last active Administrator.");
   }
 }
 
 /**
- * Bootstrap the initial Administrator (spec §5, ticket #31). Operator-only —
+ * Bootstrap the initial Administrator (spec §5). Operator-only —
  * run once against the deployment, before any Administrator exists:
  *
  *   npx convex run roles:bootstrapAdministrator '{"username":"yourname"}'
@@ -75,11 +64,7 @@ export const bootstrapAdministrator = internalMutation({
       (u) => u.role === "administrator",
     );
     if (existingAdmins.length > 0) {
-      throw new ConvexError({
-        code: "alreadyBootstrapped",
-        message:
-          "An Administrator already exists; appoint further roles through them.",
-      });
+      fail("alreadyBootstrapped", "An Administrator already exists; appoint further roles through them.");
     }
     const user = await findUserByUsername(ctx, username);
     await ctx.db.patch(user._id, { role: "administrator" });
@@ -100,10 +85,7 @@ async function requireGovernanceOver(
 ): Promise<Doc<"users">> {
   const actor = await requireRole(ctx, ["moderator", "administrator"]);
   if (!canGovern(actor.role as DataRole, role)) {
-    throw new ConvexError({
-      code: "forbidden",
-      message: `A ${actor.role} cannot govern the ${role} role.`,
-    });
+    fail("forbidden", `A ${actor.role} cannot govern the ${role} role.`);
   }
   return actor;
 }
@@ -112,26 +94,18 @@ async function requireGovernanceOver(
 export const appoint = mutation({
   args: {
     username: v.string(),
-    role: dataRoleArg,
+    role: dataRole,
     reason: v.optional(v.string()),
   },
   handler: async (ctx, { username, role, reason }) => {
     const actor = await requireGovernanceOver(ctx, role);
     const target = await findUserByUsername(ctx, username);
-    if (target.role === role) {
-      throw new ConvexError({
-        code: "noChange",
-        message: `@${target.username} is already a ${role}.`,
-      });
-    }
+    if (target.role === role) fail("noChange", `@${target.username} is already a ${role}.`);
     if (target.role) {
       // A role change implies removing the current role too.
       const currentActor = actor.role as DataRole;
       if (!canGovern(currentActor, target.role)) {
-        throw new ConvexError({
-          code: "forbidden",
-          message: `A ${actor.role} cannot change a ${target.role}'s role.`,
-        });
+        fail("forbidden", `A ${actor.role} cannot change a ${target.role}'s role.`);
       }
       await guardLastAdministrator(ctx, target);
       await ctx.db.insert("roleAudit", {
@@ -162,12 +136,7 @@ export const revoke = mutation({
   args: { username: v.string(), reason: v.optional(v.string()) },
   handler: async (ctx, { username, reason }) => {
     const target = await findUserByUsername(ctx, username);
-    if (!target.role) {
-      throw new ConvexError({
-        code: "noChange",
-        message: `@${target.username} holds no role.`,
-      });
-    }
+    if (!target.role) fail("noChange", `@${target.username} holds no role.`);
     const actor = await requireGovernanceOver(ctx, target.role);
     await guardLastAdministrator(ctx, target);
     await ctx.db.patch(target._id, { role: undefined });
@@ -192,18 +161,8 @@ export const suspend = mutation({
     const target = await findUserByUsername(ctx, username);
     const governedRole: DataRole = target.role ?? "editor";
     const actor = await requireGovernanceOver(ctx, governedRole);
-    if (target._id === actor._id) {
-      throw new ConvexError({
-        code: "forbidden",
-        message: "You cannot suspend yourself.",
-      });
-    }
-    if (target.suspended) {
-      throw new ConvexError({
-        code: "noChange",
-        message: `@${target.username} is already suspended.`,
-      });
-    }
+    if (target._id === actor._id) fail("forbidden", "You cannot suspend yourself.");
+    if (target.suspended) fail("noChange", `@${target.username} is already suspended.`);
     await guardLastAdministrator(ctx, target);
     await ctx.db.patch(target._id, { suspended: true });
     await ctx.db.insert("roleAudit", {
@@ -224,12 +183,7 @@ export const reinstate = mutation({
     const target = await findUserByUsername(ctx, username);
     const governedRole: DataRole = target.role ?? "editor";
     const actor = await requireGovernanceOver(ctx, governedRole);
-    if (!target.suspended) {
-      throw new ConvexError({
-        code: "noChange",
-        message: `@${target.username} is not suspended.`,
-      });
-    }
+    if (!target.suspended) fail("noChange", `@${target.username} is not suspended.`);
     await ctx.db.patch(target._id, { suspended: undefined });
     await ctx.db.insert("roleAudit", {
       userId: target._id,
@@ -271,14 +225,7 @@ export const auditLog = query({
   handler: async (ctx) => {
     await requireModerator(ctx);
     const rows = await ctx.db.query("roleAudit").order("desc").take(AUDIT_LOG_LIMIT);
-    const usernameCache = new Map<Id<"users">, string | null>();
-    const usernameOf = async (userId: Id<"users">) => {
-      if (!usernameCache.has(userId)) {
-        const doc = await ctx.db.get(userId);
-        usernameCache.set(userId, doc?.username ?? null);
-      }
-      return usernameCache.get(userId) ?? null;
-    };
+    const usernameOf = usernameLookup(ctx);
     const entries = [];
     for (const row of rows) {
       entries.push({

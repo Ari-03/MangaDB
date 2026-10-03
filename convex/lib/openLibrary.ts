@@ -1,4 +1,4 @@
-// OpenLibrary dump parsing (ticket #36, spec §6/§7): pure functions from
+// OpenLibrary dump parsing (spec §6/§7): pure functions from
 // the monthly editions bulk-dump format to normalized snapshots. Dump lines
 // are five tab-separated columns — type, key, revision, last_modified, and
 // the edition JSON (https://openlibrary.org/developers/dumps); the raw dump
@@ -15,6 +15,9 @@
 
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
+import { parsedTitleFields } from "./catalogTitle";
+import { calendarDay, datePartsValidator, monthFromAbbreviation, type DateParts } from "./dates";
+import { isbn10To13, isbn13CheckOk, toIsbn13 } from "./isbn";
 import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
@@ -44,13 +47,7 @@ export const olEditionValidator = v.object({
   bareRoman: v.optional(v.boolean()),
   bareSplit: v.optional(v.object({ seriesTitle: v.string(), volumeLabel: v.string() })),
   publishers: v.array(v.string()),
-  publishDate: v.optional(
-    v.object({
-      year: v.number(),
-      month: v.optional(v.number()),
-      day: v.optional(v.number()),
-    }),
-  ),
+  publishDate: v.optional(datePartsValidator),
   isbn13: v.optional(v.string()),
   isbn10: v.optional(v.string()),
   format: v.union(v.literal("physical"), v.literal("digital")),
@@ -63,28 +60,10 @@ export type OlEditionSnapshot = Infer<typeof olEditionValidator>;
 
 // ---------- dates ----------
 
-const MONTHS: Record<string, number> = {
-  jan: 1,
-  feb: 2,
-  mar: 3,
-  apr: 4,
-  may: 5,
-  jun: 6,
-  jul: 7,
-  aug: 8,
-  sep: 9,
-  oct: 10,
-  nov: 11,
-  dec: 12,
-};
-
-function calendarDate(year: number, month: number, day?: number) {
+/** The most precise date the parts name: an impossible day keeps the month. */
+function calendarDate(year: number, month: number, day?: number): DateParts {
   if (month < 1 || month > 12) return { year };
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  return day !== undefined && day >= 1 && day <= days[month - 1]!
-    ? { year, month, day }
-    : { year, month };
+  return (day !== undefined ? calendarDay(year, month, day) : undefined) ?? { year, month };
 }
 
 /**
@@ -92,9 +71,7 @@ function calendarDate(year: number, month: number, day?: number) {
  * 2026", "October 2026", "2026-10-13", "2026". Precision is preserved —
  * a year-only date stays year-only (the refinement rule needs it).
  */
-export function parseOlDate(
-  raw: string,
-): { year: number; month?: number; day?: number } | undefined {
+export function parseOlDate(raw: string): DateParts | undefined {
   const text = raw.trim();
   let m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(text);
   if (m) {
@@ -105,7 +82,7 @@ export function parseOlDate(
   }
   m = /^([A-Za-z]+)\.?\s+(?:(\d{1,2})(?:st|nd|rd|th)?,?\s+)?(\d{4})$/.exec(text);
   if (m) {
-    const month = MONTHS[m[1]!.slice(0, 3).toLowerCase()];
+    const month = monthFromAbbreviation(m[1]!);
     const year = Number(m[3]);
     if (month === undefined) return { year };
     const day = m[2] !== undefined ? Number(m[2]) : undefined;
@@ -132,35 +109,6 @@ function isbn10s(raw: unknown): string[] {
     .filter((value): value is string => typeof value === "string")
     .map((value) => value.replace(/[\s-]/g, "").toUpperCase())
     .filter((chars) => /^\d{9}[\dX]$/.test(chars) && toIsbn13(chars) !== undefined);
-}
-
-function isbn13CheckOk(isbn13: string): boolean {
-  const sum = [...isbn13].reduce((acc, d, i) => acc + Number(d) * (i % 2 === 0 ? 1 : 3), 0);
-  return sum % 10 === 0;
-}
-
-/** ISBN-10 → its ISBN-13 (978 prefix, recomputed check digit). */
-export function isbn10To13(isbn10: string): string {
-  const core = `978${isbn10.slice(0, 9)}`;
-  const sum = [...core].reduce((acc, d, i) => acc + Number(d) * (i % 2 === 0 ? 1 : 3), 0);
-  return `${core}${(10 - (sum % 10)) % 10}`;
-}
-
-/**
- * Any ISBN spelling → a checksum-valid ISBN-13: a 13-digit form as is, a
- * 10-character form converted. Hyphens and spaces are ignored; anything
- * else (an SKU, a UPC, a bad check digit) is undefined. Shared by every
- * adapter that reads bare ISBN strings (ANN, Yen Press).
- */
-export function toIsbn13(raw: string | undefined): string | undefined {
-  if (raw === undefined) return undefined;
-  const chars = raw.replace(/[\s-]/g, "").toUpperCase();
-  if (/^(?:978|979)\d{10}$/.test(chars)) return isbn13CheckOk(chars) ? chars : undefined;
-  if (/^\d{9}[\dX]$/.test(chars)) {
-    const sum = [...chars].reduce((acc, c, i) => acc + (c === "X" ? 10 : Number(c)) * (10 - i), 0);
-    return sum % 11 === 0 ? isbn10To13(chars) : undefined;
-  }
-  return undefined;
 }
 
 /**
@@ -296,7 +244,6 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
       bookTitle = joinedTitle;
     }
   }
-  const coverRange = parsed.packaging?.coverRange ?? null;
   const publishers = Array.isArray(edition.publishers)
     ? edition.publishers.filter((p): p is string => typeof p === "string")
     : [];
@@ -306,13 +253,7 @@ export function parseEditionJson(raw: unknown): OlEditionSnapshot | null {
     key,
     url: `https://openlibrary.org${key}`,
     title: bookTitle,
-    seriesTitle: parsed.seriesTitle,
-    volumeLabel: parsed.volumeLabel ?? undefined,
-    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
-    packaging: parsed.packaging ?? undefined,
-    bareNumber: parsed.bareNumber || undefined,
-    bareRoman: parsed.bareRoman || undefined,
-    bareSplit: parsed.bareSplit ?? undefined,
+    ...parsedTitleFields(parsed),
     publishers,
     publishDate:
       typeof edition.publish_date === "string" ? parseOlDate(edition.publish_date) : undefined,

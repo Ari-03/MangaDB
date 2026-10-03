@@ -5,7 +5,11 @@ import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
+import { mutationErrorMessage } from "~/lib/errors";
+import { plural } from "~/lib/format";
+import { ModTools } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
+import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
 /**
@@ -20,6 +24,7 @@ export const Route = createFileRoute("/mod/packaging")({
 function PackagingPage() {
   const viewer = useQuery(api.users.viewer, {});
   const isModerator = useIsModerator();
+  const isDataTeam = useIsDataTeam();
   if (viewer === undefined) {
     return (
       <main className="mod-page">
@@ -27,7 +32,6 @@ function PackagingPage() {
       </main>
     );
   }
-  const isDataTeam = Boolean(viewer && !viewer.needsUsername && viewer.role !== null);
   if (!isDataTeam) {
     return (
       <main className="mod-page">
@@ -46,9 +50,7 @@ function UnmappedQueue({ canAct }: { canAct: boolean }) {
   const queue = useQuery(api.packaging.unmappedQueue, {});
   return (
     <main className="mod-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span> <span>Catalog gaps</span>
-      </nav>
+      <Breadcrumbs trail={["Catalog gaps"]} />
       <h1>Catalog gaps</h1>
       <BooklessSeries />
       <h2>Unmapped packaging</h2>
@@ -58,12 +60,7 @@ function UnmappedQueue({ canAct }: { canAct: boolean }) {
         them lets reading progress and ownership follow the volumes inside. Check the
         publisher's page for the collected range, then map.
       </p>
-      <nav className="mod-tools" aria-label="Data team tools">
-        <Link to="/mod/queue">Review queue</Link>
-        <Link to="/mod/imports">Imports</Link>
-        <Link to="/mod/launch">Launch</Link>
-        <CommentsQueueLink />
-      </nav>
+      <ModTools current="/mod/packaging" />
       {queue === undefined ? (
         <p className="notice">Loading…</p>
       ) : queue.rows.length === 0 ? (
@@ -189,7 +186,7 @@ function BooklessSeries() {
                   {row.title}
                 </Link>{" "}
                 <em>
-                  {row.volumeCount} {row.volumeCount === 1 ? "volume" : "volumes"}
+                  {plural(row.volumeCount, "volume")}
                   {row.sources.map((source) =>
                     source.sourceKey === "ann" && source.recordId.startsWith("manga:") ? (
                       <>
@@ -219,9 +216,6 @@ function BooklessSeries() {
 }
 
 function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError) {
-    const data = err.data as { message?: string } | string;
-    return typeof data === "string" ? data : (data.message ?? "That did not work.");
-  }
+  if (err instanceof ConvexError) return mutationErrorMessage(err, "That did not work.");
   return err instanceof Error ? err.message : "That did not work.";
 }

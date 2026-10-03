@@ -6,6 +6,7 @@ import type {
 } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
+import { convexUrl } from "~/lib/convexUrl";
 import { showMature } from "~/lib/mature";
 import { timingNeedsToday, todaySortKey } from "~/lib/month";
 
@@ -30,9 +31,7 @@ export async function catalogQuery<Query extends FunctionReference<"query">>(
   args: FunctionArgs<Query>,
 ): Promise<FunctionReturnType<Query> | null> {
   if (client === undefined) {
-    const url =
-      import.meta.env.VITE_CONVEX_URL ??
-      (typeof process === "undefined" ? undefined : process.env.VITE_CONVEX_URL);
+    const url = convexUrl();
     client = url ? new ConvexHttpClient(url) : null;
   }
   return client ? await client.query(query, args) : null;
@@ -43,9 +42,14 @@ type Found<Query extends FunctionReference<"query">> = NonNullable<
   FunctionReturnType<Query>
 >;
 
-/** One month window of the Releases browser: Agenda and Month Grid (ticket #24). */
+/** One month window of the Releases browser: Agenda and Month Grid. */
 export type MonthReleasesData = Found<typeof api.releases.monthBrowse>;
 export type BrowseRelease = MonthReleasesData["releases"][number];
+
+/** A release's book title: crossovers ship under every Series they collect, so the titles join. */
+export function releaseTitle(release: BrowseRelease): string {
+  return release.series.map((series) => series.title).join(" × ");
+}
 
 /**
  * The Publishers board (`/publishers`, `/publishers/{yyyy-mm}`): one month's
@@ -55,7 +59,7 @@ export type BrowseRelease = MonthReleasesData["releases"][number];
 export type PublishersBoardData = Found<typeof api.publisher.monthBoard>;
 
 /**
- * The Publisher Spotlight page (ticket #25). The query returns
+ * The Publisher Spotlight page. The query returns
  * `{ redirectTo }` for a renamed or merged Publisher's old slug (the route
  * 301s), the page data otherwise.
  */
@@ -64,19 +68,19 @@ export type PublisherPageData = Exclude<
   { redirectTo: string }
 >;
 
-/** The Series page (ticket #22); a merged Series resolves to its survivor. */
+/** The Series page; a merged Series resolves to its survivor. */
 export type SeriesPageData = Found<typeof api.catalog.seriesPage>;
-/** Volume, Edition, and Bundle pages (ticket #23), resolved like the Series page. */
+/** Volume, Edition, and Bundle pages, resolved like the Series page. */
 export type VolumePageData = Found<typeof api.catalogPages.volumePage>;
 export type EditionPageData = Found<typeof api.catalogPages.editionPage>;
 export type BundlePageData = Found<typeof api.catalogPages.bundlePage>;
-/** /search (ticket #38): Series + Publisher matches and "Did you mean" near misses. */
+/** /search: Series + Publisher matches and "Did you mean" near misses. */
 export type SearchResults = Found<typeof api.catalog.search>;
 /** An author page: the author and every Series they're credited on (people.ts). */
 export type AuthorPageData = Found<typeof api.people.authorPage>;
 /** One author on the Authors tab. */
 export type AuthorCard = Found<typeof api.people.authors>["page"][number];
-/** A public profile (ticket #30), exactly what its owner's visibility allows. */
+/** A public profile, exactly what its owner's visibility allows. */
 export type PublicProfileData = Found<typeof api.sharing.publicProfile>;
 
 // contract: `api.seriesBrowse.browse` / `api.seriesBrowse.facets` are the

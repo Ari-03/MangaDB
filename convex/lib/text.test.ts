@@ -101,38 +101,33 @@ describe("cleanBlurb", () => {
   });
 });
 
-// ANN stores a few descriptions as UTF-8 read as Windows-1252 (3 of the
-// first 714 production fills, e.g. "Tsukasaâ€™s").
+// ANN stores a few descriptions as UTF-8 read as Windows-1252 ("Tsukasaâ€™s").
 describe("repairMojibake", () => {
-  it("re-decodes Windows-1252 runs of UTF-8 bytes", () => {
-    expect(repairMojibake("Tsukasaâ€™s secret")).toBe("Tsukasa’s secret");
-    expect(repairMojibake("â€œHello,â€\u009d she said â€” then waitedâ€¦")).toBe(
-      "“Hello,” she said — then waited…",
-    );
-    expect(repairMojibake("a cafÃ© in KyÅ\u008dto")).toBe("a café in Kyōto");
+  it.each([
+    ["Tsukasaâ€™s secret", "Tsukasa’s secret"],
+    ["â€œHello,â€\u009d she said â€” then waitedâ€¦", "“Hello,” she said — then waited…"],
+    ["a cafÃ© in KyÅ\u008dto", "a café in Kyōto"],
     // Mixed with clean typography: only the broken runs change.
-    expect(repairMojibake("It’s Tsukasaâ€™s")).toBe("It’s Tsukasa’s");
+    ["It’s Tsukasaâ€™s", "It’s Tsukasa’s"],
+  ])("re-decodes Windows-1252 runs of UTF-8 bytes: %j", (text, repaired) => {
+    expect(repairMojibake(text)).toBe(repaired);
   });
 
-  it("leaves clean text with a real â or Ã alone", () => {
-    for (const clean of ["pâté and crème brûlée", "Ã la carte", "naïve façade", "Â is a letter", "plain text"]) {
+  it.each(["pâté and crème brûlée", "Ã la carte", "naïve façade", "Â is a letter", "plain text"])(
+    "leaves clean text with a real â or Ã alone: %j",
+    (clean) => {
       expect(repairMojibake(clean)).toBe(clean);
-    }
-  });
+    },
+  );
 
-  it("leaves an accented letter before typographic punctuation alone", () => {
-    // Each is valid UTF-8 when read as bytes, decoding to CJK, NKo, IPA or
-    // Hebrew: real text, never mojibake.
-    for (const clean of [
-      "a quiet café…” she said",
-      "her fiancé”—she paused",
-      "Spaß“ in German",
-      "CLICHÉ”",
-      "3 ×\u00a04",
-    ]) {
+  // Each is valid UTF-8 when read as bytes, decoding to CJK, NKo, IPA or
+  // Hebrew: real text, never mojibake.
+  it.each(["a quiet café…” she said", "her fiancé”—she paused", "Spaß“ in German", "CLICHÉ”", "3 ×\u00a04"])(
+    "leaves an accented letter before typographic punctuation alone: %j",
+    (clean) => {
       expect(repairMojibake(clean)).toBe(clean);
-    }
-  });
+    },
+  );
 
   it("is not part of cleanBlurb, which every source shares", () => {
     expect(cleanBlurb("<p>a quiet café…” she said</p>")).toBe("a quiet café…” she said");
@@ -153,9 +148,9 @@ describe("decodeUtf8OrWindows1252", () => {
   const bytes = (...parts: Array<string | number[]>) =>
     new Uint8Array(parts.flatMap((p) => (typeof p === "string" ? [...new TextEncoder().encode(p)] : p)));
 
-  it("decodes well-formed UTF-8 exactly as before", () => {
+  it("decodes well-formed UTF-8 as UTF-8", () => {
     const text = "Berühren — Pokémon’s café …";
-    expect(decodeUtf8OrWindows1252(new TextEncoder().encode(text))).toBe(text);
+    expect(decodeUtf8OrWindows1252(bytes(text))).toBe(text);
   });
 
   it("reads a legacy byte inside a UTF-8 page as Windows-1252, not U+FFFD", () => {

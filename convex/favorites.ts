@@ -6,12 +6,13 @@
 // comments), so a Series merge can move every row of a Series through one
 // index.
 
-import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { editionCover, followMerges } from "./catalogPages";
+import { editionCover } from "./catalogPages";
+import { getActive } from "./lib/merges";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { coverUrl } from "./lib/covers";
+import { releasesOf } from "./lib/editionRows";
 import { capture } from "./lib/posthog";
 import {
   omnibusEdition,
@@ -22,6 +23,7 @@ import {
   type TargetId,
 } from "./lib/ratings";
 import { volumeTitle } from "./lib/titles";
+import { seriesStatsRow } from "./seriesBrowse";
 
 /**
  * Favorites the library view lists; older ones past this stay stored. Sized
@@ -65,8 +67,8 @@ async function favoriteRow(
 
 /**
  * Whether the viewer favorited a target, with the target's ID for `toggle`.
- * Null when signed out, username pending, or the target is unknown or
- * hidden, so the button renders nothing.
+ * Null without a viewer (viewerOrNull) or for an unknown or hidden target,
+ * so the button renders nothing.
  */
 export const isFavorite = query({
   args: { target: targetRefArg },
@@ -129,10 +131,7 @@ async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
   for (const row of covering) {
     const edition = await ctx.db.get(row.editionId);
     if (!edition || edition.status !== "active") continue;
-    const releases = await ctx.db
-      .query("releases")
-      .withIndex("by_edition", (q) => q.eq("editionId", row.editionId))
-      .collect();
+    const releases = await releasesOf(ctx, row.editionId);
     for (const release of releases) {
       if (release.status !== "active") continue;
       const url = await coverUrl(ctx, release.coverImage?.storageId);
@@ -149,7 +148,7 @@ async function volumeCover(ctx: QueryCtx, volumeId: Id<"volumes">) {
  * Volume or omnibus Edition with its ID for `toggle`, title, cover, and
  * whether it is Mature (the view conceals that art unless the viewer opted
  * in). Favorites of hidden records, and of Editions no longer rated as one
- * book, are left out while so. Null when signed out or username pending.
+ * book, are left out while so. Null without a viewer.
  */
 export const mine = query({
   args: {},
@@ -167,7 +166,7 @@ export const mine = query({
       if (row.editionId) {
         // Resolve merges first, so Favorites of Editions merged into one read
         // the survivor's coverage and cover once.
-        const edition = await followMerges(ctx, "editions", await ctx.db.get(row.editionId));
+        const edition = await getActive(ctx, "editions", row.editionId);
         if (!edition || seen.has(edition._id)) continue;
         seen.add(edition._id);
         const found = await omnibusEdition(ctx, edition);
@@ -183,7 +182,7 @@ export const mine = query({
           ...(await editionCover(ctx, found.edition._id)),
         });
       } else if (row.volumeId) {
-        const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
+        const volume = await getActive(ctx, "volumes", row.volumeId);
         const series = volume ? await ctx.db.get(volume.seriesId) : null;
         if (!volume || !series || series.status !== "active" || seen.has(volume._id)) continue;
         seen.add(volume._id);
@@ -198,13 +197,10 @@ export const mine = query({
           ...(await volumeCover(ctx, volume._id)),
         });
       } else {
-        const series = await followMerges(ctx, "series", await ctx.db.get(row.seriesId));
+        const series = await getActive(ctx, "series", row.seriesId);
         if (!series || seen.has(series._id)) continue;
         seen.add(series._id);
-        const stats = await ctx.db
-          .query("seriesStats")
-          .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-          .unique();
+        const stats = await seriesStatsRow(ctx, series._id);
         items.push({
           kind: "series" as const,
           target: { kind: "series" as const, id: series._id },

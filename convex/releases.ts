@@ -1,23 +1,23 @@
-// The public Releases browser (ticket #24, spec §10): one month-window query
+// The public Releases browser (spec §10): one month-window query
 // serving both the Release Agenda (`/releases`) and the Month Grid
 // (`/releases/{yyyy-mm}`) over the same Canonical Releases. The pages load a
-// month unfiltered and apply the Format and Publisher filters in memory, so
-// changing a filter never waits on the network; the filter arguments below
-// remain for other callers.
+// month and apply the Format and Publisher filters in memory, so changing a
+// filter never waits on the network.
 //
-// Recorded schema trade-off (spec §8): the scan is always a date-window over
-// an index — `by_publisher_date` when a Publisher filter is present, else
-// `by_date` — and every other refinement (status, Format) happens in memory
-// afterwards, because Convex can't index array containment and month windows
-// hold hundreds of rows.
+// Recorded schema trade-off (spec §8): the scan is a date window over
+// `by_date`, and every refinement (status here, Format and Publisher on the
+// page) happens in memory, because Convex can't index array containment and
+// month windows hold hundreds of rows.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query, type QueryCtx } from "./_generated/server";
 import { PUBLISHER_SCAN_CAP } from "./catalog";
-import { followMerges } from "./catalogPages";
+import { publisherLink } from "./catalogPages";
+import { followMerges } from "./lib/merges";
 import { editionTitle, releaseAnchor } from "./lib/titles";
 import { jacketCache, releaseCover } from "./lib/covers";
+import { coverageOf } from "./lib/editionRows";
 import { showMatureArg, visibleTo } from "./lib/mature";
 
 // A month window holds hundreds of releases across all publishers (spec §8);
@@ -25,11 +25,13 @@ import { showMatureArg, visibleTo } from "./lib/mature";
 export const WINDOW_CAP = 1000;
 
 /**
- * Follow a Publisher-filter slug to its publisher: current slug first, then
- * the rename-redirect table, then a merged row to its survivor, so shared
- * filter URLs survive publisher renames and duplicate-row merges.
+ * The Publisher a slug means: the current slug first, then the
+ * rename-redirect table (spec §11), then a merged row to its survivor, so
+ * shared links survive renames and duplicate-row merges. The surviving
+ * active Publisher, or null for an unknown or hidden one. Shared with the
+ * Publisher Spotlight (publisher.ts), whose route 301s when the slug differs.
  */
-async function resolvePublisher(
+export async function resolvePublisher(
   ctx: QueryCtx,
   slug: string,
 ): Promise<Doc<"publishers"> | null> {
@@ -75,12 +77,7 @@ export function memoize<A, V>(
  * the Publishers board), so each document is read once.
  */
 export function browseCache(ctx: QueryCtx) {
-  const coverage = memoize((editionId: Id<"editions">) =>
-    ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-      .collect(),
-  );
+  const coverage = memoize((editionId: Id<"editions">) => coverageOf(ctx, editionId));
   const edition = memoize((id: Id<"editions">) => ctx.db.get(id));
   // Edition jackets; an ISBN-less Edition's borrow shares these reads.
   const jackets = jacketCache(ctx, coverage, edition);
@@ -182,7 +179,7 @@ export async function joinBrowseRows(
       // The row's canonical target (spec §11: a Release is a row on its
       // Edition page): Edition public ID + composed title for the link, the
       // Release's anchor within it. Month pages build their ItemList JSON-LD
-      // from these (ticket #39).
+      // from these.
       edition: {
         publicId: edition.publicId,
         title: editionTitle({
@@ -204,9 +201,7 @@ export async function joinBrowseRows(
       lineName: line && line.status === "active" ? line.name : null,
       linePosition: edition.linePosition ?? null,
       publisher:
-        publisherDoc && publisherDoc.status === "active"
-          ? { name: publisherDoc.name, slug: publisherDoc.slug }
-          : null,
+        publisherLink(publisherDoc),
       // The row's art (lib/covers.ts `releaseCover`): `coverUrl` is its own
       // stored cover, else its Edition's, and `coverIsbns` the Edition's
       // ISBNs to fetch art by, physical first, the same for every row of one
@@ -235,15 +230,8 @@ export async function joinBrowseRows(
  * adult-only Publishers, are left out unless `showMature` (lib/mature.ts).
  */
 export const monthBrowse = query({
-  args: {
-    year: v.number(),
-    month: v.number(),
-    format: v.optional(v.union(v.literal("physical"), v.literal("digital"))),
-    // Publisher filter by slug — the URL-shareable form of the filter state.
-    publisher: v.optional(v.string()),
-    ...showMatureArg,
-  },
-  handler: async (ctx, { year, month, format, publisher, showMature }) => {
+  args: { year: v.number(), month: v.number(), ...showMatureArg },
+  handler: async (ctx, { year, month, showMature }) => {
     const publisherDocs = await ctx.db
       .query("publishers")
       .take(PUBLISHER_SCAN_CAP);
@@ -264,37 +252,13 @@ export const monthBrowse = query({
     const fromSort = year * 10000 + month * 100;
     const toSort = fromSort + 99;
 
-    // The index scan (spec §8): by_publisher_date when the Publisher filter
-    // narrows the window, else by_date across all publishers.
-    let windowDocs: Array<Doc<"releases">>;
-    if (publisher !== undefined) {
-      const filterPublisher = await resolvePublisher(ctx, publisher);
-      // An unknown publisher slug matches nothing rather than erroring, so a
-      // stale shared URL still renders the browser with an empty result.
-      if (!filterPublisher) return empty;
-      windowDocs = await ctx.db
-        .query("releases")
-        .withIndex("by_publisher_date", (q) =>
-          q
-            .eq("publisherId", filterPublisher._id)
-            .gte("pubDate.sort", fromSort)
-            .lte("pubDate.sort", toSort),
-        )
-        .take(WINDOW_CAP);
-    } else {
-      windowDocs = await ctx.db
-        .query("releases")
-        .withIndex("by_date", (q) =>
-          q.gte("pubDate.sort", fromSort).lte("pubDate.sort", toSort),
-        )
-        .take(WINDOW_CAP);
-    }
-
-    // In-memory refinement per the recorded trade-off: status and Format.
-    const refined = windowDocs.filter(
-      (doc) =>
-        doc.status === "active" && (format === undefined || doc.format === format),
-    );
+    const windowDocs = await ctx.db
+      .query("releases")
+      .withIndex("by_date", (q) =>
+        q.gte("pubDate.sort", fromSort).lte("pubDate.sort", toSort),
+      )
+      .take(WINDOW_CAP);
+    const refined = windowDocs.filter((doc) => doc.status === "active");
 
     return {
       releases: (await joinBrowseRows(ctx, refined)).filter((row) =>

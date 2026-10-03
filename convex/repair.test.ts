@@ -4,27 +4,25 @@
 // Edition Lines / Release Bundles with real coverage, and every write lands
 // in the moderation audit trail.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { RepairEntry } from "./lib/repair/entries";
 import { canonicalLabel, labelNumber, sameLabel } from "./lib/repair/audit";
 import { clusterKey } from "./lib/repair/metrics";
-import schema from "./schema";
-
-// Explicit module map: node_modules may be shared with another checkout,
-// whose convex/ directory convex-test would otherwise glob.
-const modules = import.meta.glob("./**/*.*s");
-
-function makeT() {
-  const t = convexTest(schema, modules);
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
-}
-type T = ReturnType<typeof makeT>;
+import {
+  insertCoverage,
+  insertEdition,
+  insertEditionLine,
+  insertObservation,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+} from "./test.factories";
+import { makeT, type TestT as T } from "./test.helpers";
+import { doubtSplit, insertBook, insertDoubt } from "./test.moderation";
 
 /** Admin actor + a publisher, a base series (vols 1-3, releases on 1-2) and a PRH shard series. */
 async function seed(t: T) {
@@ -38,26 +36,16 @@ async function seed(t: T) {
       ownershipVisibility: "private",
       readingVisibility: "private",
     });
-    const publisherId = await ctx.db.insert("publishers", { status: "active", name: "Kodansha", slug: "kodansha" });
-    let publicId = 100;
-    const series = async (title: string) =>
-      await ctx.db.insert("series", { status: "active", publicId: publicId++, title, altTitles: [], searchText: title });
-    const volume = async (seriesId: Id<"series">, label: string | undefined, position: number) =>
-      await ctx.db.insert("volumes", { status: "active", publicId: publicId++, seriesId, label, position });
-    const release = async (volumeId: Id<"volumes">, seriesId: Id<"series">, isbn13: string, format: "physical" | "digital" = "physical") => {
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: publicId++, publisherId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format,
-        language: "en",
-        isbn13,
-        publisherId,
-        seriesIds: [seriesId],
-      });
-      return { editionId, releaseId };
-    };
+    const publisherId = await insertPublisher(ctx, { name: "Kodansha" });
+    const series = (title: string) => insertSeries(ctx, { title });
+    const volume = (seriesId: Id<"series">, label: string | undefined, position: number) =>
+      insertVolume(ctx, { seriesId, label, position });
+    const release = (
+      volumeId: Id<"volumes">,
+      seriesId: Id<"series">,
+      isbn13: string,
+      format: "physical" | "digital" = "physical",
+    ) => insertBook(ctx, { publisherId, seriesId, volumeId, release: { format, isbn13 } });
     const base = await series("Noragami");
     const v1 = await volume(base, "1", 1);
     const v2 = await volume(base, "2", 2);
@@ -166,9 +154,9 @@ describe("series merge", () => {
     const t = makeT();
     const s = await seed(t);
     await t.run(async (ctx) => {
-      const vol = await ctx.db.insert("volumes", { status: "active", publicId: 999, seriesId: s.shard, label: "9", position: 9 });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 998, publisherId: s.publisherId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId: vol, order: 1, extent: "complete" });
+      const vol = await insertVolume(ctx, { seriesId: s.shard, position: 9 });
+      const editionId = await insertEdition(ctx, { publisherId: s.publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: vol });
     });
     const [out] = await run(t, [
       {
@@ -190,13 +178,11 @@ describe("series merge", () => {
     const t = makeT();
     const s = await seed(t);
     await t.run(async (ctx) => {
-      await ctx.db.insert("sourceObservations", {
+      await insertObservation(ctx, {
         sourceKey: "kodansha",
         sourceRecordId: "series:noragami-omnibus",
         recordRef: { type: "series", id: s.omnibus },
         snapshot: { kind: "series", title: "Noragami Omnibus" },
-        lastSeenAt: 0,
-        withdrawn: false,
       });
     });
     const merge: RepairEntry = {
@@ -355,12 +341,10 @@ describe("field repairs and scope", () => {
         currentVersionNo: 1,
         submittedAt: 1,
       });
-      const observationId = await ctx.db.insert("sourceObservations", {
+      const observationId = await insertObservation(ctx, {
         sourceKey: "prh",
         sourceRecordId: "9780000000066",
-        snapshot: {},
         lastSeenAt: 1,
-        withdrawn: false,
         queuedProposalId: proposalId,
       });
       return { proposalId, observationId };
@@ -377,14 +361,11 @@ describe("field repairs and scope", () => {
   it("hides a series with its cascade and unlinks an observation", async () => {
     const t = makeT();
     const s = await seed(t);
-    const observationId = await t.run(async (ctx) =>
-      await ctx.db.insert("sourceObservations", {
+    const observationId = await t.run((ctx) =>
+      insertObservation(ctx, {
         sourceKey: "openlibrary",
         sourceRecordId: "/books/OL1M",
         recordRef: { type: "release", id: s.r1.releaseId },
-        snapshot: {},
-        lastSeenAt: 0,
-        withdrawn: false,
       }),
     );
     const out = await run(t, [
@@ -420,7 +401,7 @@ describe("field repairs and scope", () => {
       await ctx.db.patch(s.v1, { label: "01", position: 2 });
       await ctx.db.patch(s.v2, { position: 3 });
       await ctx.db.patch(s.v3, { position: 4 });
-      await ctx.db.insert("volumes", { status: "active", publicId: 900, seriesId: s.base, label: "Side Story", position: 1 });
+      await insertVolume(ctx, { seriesId: s.base, label: "Side Story", position: 1 });
     });
     const [out] = await run(t, [
       { kind: "normalizeVolumes", key: "n", reason: "positions", seriesId: s.base, merges: [], relabels: [] },
@@ -532,76 +513,25 @@ describe("restore", () => {
 });
 
 describe("series split", () => {
-  /**
-   * "Doubt!!" holding two works: vol 1 is work A's, the vol "2" label is
-   * shared (work B's Yen Press book sits on it), and an unlabeled Volume is
-   * wholly work B's vol 1. Both works' ANN records link the Series.
-   */
+  /** The shared "Doubt!!" Series (test.moderation.ts), with both works' ANN records linking it. */
   async function seedSplit(t: T) {
     const s = await seed(t);
     const ids = await t.run(async (ctx) => {
-      const source = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 500,
-        title: "Doubt!!",
-        altTitles: ["Rabbit Doubt"],
-        searchText: "Doubt!! Rabbit Doubt",
-      });
-      const vol = async (label: string | undefined, position: number, publicId: number) =>
-        await ctx.db.insert("volumes", { status: "active", publicId, seriesId: source, label, position });
-      const edition = async (volumeId: Id<"volumes">, publicId: number, isbn13: string) => {
-        const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId: s.publisherId });
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-        const releaseId = await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
-          isbn13,
-          publisherId: s.publisherId,
-          seriesIds: [source],
-        });
-        return { editionId, releaseId };
-      };
-      const a1 = await vol("1", 1, 501);
-      const shared2 = await vol("2", 2, 502);
-      const unlabeled = await vol(undefined, 3, 503);
-      const a1Edition = await edition(a1, 511, "9781591169086");
-      const b2Edition = await edition(shared2, 512, "9780316335164");
-      const b1Edition = await edition(unlabeled, 513, "9780316335157");
-      const observation = async (sourceRecordId: string) =>
-        await ctx.db.insert("sourceObservations", {
+      const doubt = await insertDoubt(ctx, s.publisherId);
+      const observation = (sourceRecordId: string) =>
+        insertObservation(ctx, {
           sourceKey: "ann",
           sourceRecordId,
-          recordRef: { type: "series", id: source },
+          recordRef: { type: "series", id: doubt.source },
           snapshot: { kind: "annManga", title: "Doubt" },
-          lastSeenAt: 0,
-          withdrawn: false,
         });
-      const annA = await observation("manga:2849");
-      const annB = await observation("manga:9570");
-      return { source, a1, shared2, unlabeled, a1Edition, b2Edition, b1Edition, annA, annB };
+      return { ...doubt, annA: await observation("manga:2849"), annB: await observation("manga:9570") };
     });
-    const entry: RepairEntry = {
-      kind: "splitSeries",
-      key: "split:doubt",
-      reason: "two works",
-      sourceSeriesId: ids.source,
-      sourceTitle: "Doubt!!",
-      title: "Doubt",
+    const entry = doubtSplit(ids, {
       altTitles: ["Rabbit Doubt"],
-      volumes: [{ volumeId: ids.unlabeled, label: null, newLabel: "1", editionIds: [ids.b1Edition.editionId] }],
-      editions: [
-        {
-          editionId: ids.b2Edition.editionId,
-          fromVolumeIds: [ids.shared2],
-          labels: ["2"],
-          releaseIds: [ids.b2Edition.releaseId],
-        },
-      ],
       placeholderLabels: ["1", "3"],
       observationIds: [ids.annB],
-    };
+    });
     return { ...s, ...ids, entry };
   }
 
@@ -666,8 +596,8 @@ describe("series split", () => {
     // Re-runs find the split-off Series by its recorded key, even after an
     // importer attached a new Edition to a moved Volume.
     await t.run(async (ctx) => {
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 599, publisherId: s.publisherId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId: s.unlabeled, order: 1, extent: "complete" });
+      const editionId = await insertEdition(ctx, { publisherId: s.publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: s.unlabeled });
     });
     expect((await run(t, [s.entry]))[0]?.status).toBe("alreadyApplied");
     expect(await t.run(async (ctx) => (await ctx.db.query("series").collect()).filter((row) => row.title === "Doubt").length)).toBe(1);
@@ -677,8 +607,8 @@ describe("series split", () => {
     const t = makeT();
     const s = await seedSplit(t);
     const newEdition = await t.run(async (ctx) => {
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 598, publisherId: s.publisherId });
-      await ctx.db.insert("volumeCoverages", { editionId, volumeId: s.unlabeled, order: 1, extent: "complete" });
+      const editionId = await insertEdition(ctx, { publisherId: s.publisherId });
+      await insertCoverage(ctx, { editionId, volumeId: s.unlabeled });
       return editionId;
     });
     const [volumeDrift] = await run(t, [s.entry]);
@@ -691,11 +621,9 @@ describe("series split", () => {
       for (const row of await ctx.db.query("volumeCoverages").withIndex("by_edition", (q) => q.eq("editionId", newEdition)).collect()) {
         await ctx.db.delete(row._id);
       }
-      await ctx.db.insert("releases", {
-        status: "active",
+      await insertRelease(ctx, {
         editionId: s.b2Edition.editionId,
         format: "digital",
-        language: "en",
         publisherId: s.publisherId,
         seriesIds: [s.source],
       });
@@ -714,7 +642,7 @@ describe("series split", () => {
     const t = makeT();
     const s = await seedSplit(t);
     const lineId = await t.run(async (ctx) => {
-      const lineId = await ctx.db.insert("editionLines", { status: "active", seriesId: s.source, publisherId: s.publisherId, name: "Deluxe" });
+      const lineId = await insertEditionLine(ctx, { seriesId: s.source, publisherId: s.publisherId, name: "Deluxe" });
       await ctx.db.patch(s.b2Edition.editionId, { editionLineId: lineId, linePosition: "2" });
       await ctx.db.patch(s.a1Edition.editionId, { editionLineId: lineId, linePosition: "1" });
       return lineId;
@@ -734,7 +662,7 @@ describe("volume normalization", () => {
     const t = makeT();
     const s = await seed(t);
     const dup = await t.run(async (ctx) =>
-      ctx.db.insert("volumes", { status: "active", publicId: 901, seriesId: s.base, position: 4 }),
+      insertVolume(ctx, { seriesId: s.base, label: undefined, position: 4 }),
     );
     const entry = (label: string | null | undefined): RepairEntry => ({
       kind: "normalizeVolumes",
@@ -760,8 +688,8 @@ describe("lines, researched releases, cross-series books", () => {
     const t = makeT();
     const s = await seed(t);
     const { empty, used } = await t.run(async (ctx) => {
-      const empty = await ctx.db.insert("editionLines", { status: "active", seriesId: s.base, publisherId: s.publisherId, name: "Omnibus" });
-      const used = await ctx.db.insert("editionLines", { status: "active", seriesId: s.base, publisherId: s.publisherId, name: "Deluxe" });
+      const empty = await insertEditionLine(ctx, { seriesId: s.base, publisherId: s.publisherId, name: "Omnibus" });
+      const used = await insertEditionLine(ctx, { seriesId: s.base, publisherId: s.publisherId, name: "Deluxe" });
       await ctx.db.patch(s.r1.editionId, { editionLineId: used });
       return { empty, used };
     });

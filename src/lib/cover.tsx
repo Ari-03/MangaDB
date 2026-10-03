@@ -2,7 +2,7 @@
 // a jacketed cover when art is on file, otherwise an unjacketed book in
 // coloured cloth carrying the title — never a broken image, never fabricated
 // art. Collection state is worn on the cover itself as a badge, and the
-// followed-Series marker (#29) sits in the opposite corner.
+// followed-Series marker sits in the opposite corner.
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
@@ -22,7 +22,7 @@ const CLOTH = [
  * cover URL; the 404 for art nobody has is caught by <Cover>, which tries its
  * next candidate and ends at cloth.
  */
-export function coverPath(isbn13: string): string {
+function coverPath(isbn13: string): string {
   return `/covers/${isbn13}.jpg`;
 }
 
@@ -118,7 +118,7 @@ type CoverProps = {
   numbered?: { series: string; number: string };
   /** Collection badges, usually `<CoverBadge>`s. */
   badges?: ReactNode;
-  /** True when the viewer follows this Series (the ★ marker, #29). */
+  /** True when the viewer follows this Series (the ★ marker). */
   followed?: boolean;
   /** `false` for the first covers above the fold. Defaults to lazy. */
   lazy?: boolean;
@@ -177,12 +177,12 @@ export function Cover({
           onError={() => fail(art)}
         />
       ) : numbered ? (
-        <span className="cover-ph cover-ph--numbered" style={style} aria-label={`${title} (no cover on file)`}>
+        <span className="cover-ph cover-ph--numbered" style={style} role="img" aria-label={`${title} (no cover on file)`}>
           <span className="cover-ph-series">{numbered.series}</span>
           <span className="cover-ph-num">{numbered.number}</span>
         </span>
       ) : (
-        <span className="cover-ph" style={style} aria-label={`${title} (no cover on file)`}>
+        <span className="cover-ph" style={style} role="img" aria-label={`${title} (no cover on file)`}>
           <span className="cover-ph-title">{title}</span>
           <span className="cover-ph-mark" aria-hidden="true">{foot?.[0] ?? ""}</span>
           {foot ? (
@@ -200,7 +200,7 @@ export function Cover({
         </span>
       ) : null}
       {followed ? (
-        <span className="cover-flag" title="You follow this series" aria-label="You follow this series">
+        <span className="cover-flag" title="You follow this series" role="img" aria-label="You follow this series">
           ★
         </span>
       ) : null}

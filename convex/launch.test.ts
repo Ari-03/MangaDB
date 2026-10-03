@@ -4,38 +4,21 @@
 // duplicate sweep with durable resolutions, the correction-loop
 // attestation, and the computed launch-ready checklist.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
+import { insertEdition, insertPublisher, insertRelease, insertSeries } from "./test.factories";
+import { ADMIN, MOD, PLAIN, alice, bob, dave, makeT, seedRegistry, seedTeam, type TestT } from "./test.helpers";
 
-const ADMIN = "user_admin";
-const MOD = "user_mod";
-const PLAIN = "user_plain";
-
-async function setup(t: ReturnType<typeof convexTest>) {
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.users.claimUsername, { username: "alice" });
-  await t
-    .withIdentity({ subject: MOD })
-    .mutation(api.users.claimUsername, { username: "bob" });
-  await t
-    .withIdentity({ subject: PLAIN })
-    .mutation(api.users.claimUsername, { username: "dave" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
-  // Stage gating reads enabled flags off the registry, so seed it (idempotent).
-  await t.mutation(internal.importSources.seedRegistry, {});
+async function setup(t: TestT) {
+  await seedTeam(t, [alice, bob, dave]);
+  // Stage gating reads enabled flags off the registry, so seed it.
+  await seedRegistry(t);
 }
 
 /** Insert one finished Import Run so a stage/source counts as succeeded. */
 async function addRun(
-  t: ReturnType<typeof convexTest>,
+  t: TestT,
   sourceKey: string,
   status: "succeeded" | "failed" = "succeeded",
 ) {
@@ -51,39 +34,20 @@ async function addRun(
   });
 }
 
-/** A tiny active catalog: series with volumes/editions/releases per counts. */
+/** A tiny active catalog: Series, each with `releases` dated Releases (on their own Editions). */
 async function seedCatalog(
-  t: ReturnType<typeof convexTest>,
+  t: TestT,
   seriesSpecs: Array<{ title: string; altTitles?: string[]; releases?: number }>,
 ) {
   return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas",
-      slug: "seven-seas",
-    });
-    const ids: Id<"series">[] = [];
-    let publicId = 1;
-    for (const spec of seriesSpecs) {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: publicId++,
-        title: spec.title,
-        altTitles: spec.altTitles ?? [],
-        searchText: [spec.title, ...(spec.altTitles ?? [])].join(" "),
-      });
+    const publisherId = await insertPublisher(ctx, { name: "Seven Seas" });
+    const ids = [];
+    for (const { title, altTitles, releases = 0 } of seriesSpecs) {
+      const seriesId = await insertSeries(ctx, { title, altTitles });
       ids.push(seriesId);
-      for (let i = 0; i < (spec.releases ?? 0); i++) {
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: 100 * publicId + i,
-          publisherId,
-        });
-        await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
+      for (let i = 0; i < releases; i++) {
+        await insertRelease(ctx, {
+          editionId: await insertEdition(ctx, { publisherId }),
           pubDate: { year: 2027, month: 1, day: 5 + i, sort: 20270105 + i },
           publisherId,
           seriesIds: [seriesId],
@@ -96,16 +60,15 @@ async function seedCatalog(
 
 describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", () => {
   it("refuses to start any stage with Bootstrap Mode off", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    await t.mutation(internal.importSources.seedRegistry, {});
     await expect(
       t.withIdentity({ subject: ADMIN }).mutation(api.launch.startSeedStage, { stage: 1 }),
     ).rejects.toThrow(/Bootstrap Mode/);
   });
 
   it("refuses out-of-order stage starts", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await t.mutation(internal.importSources.setBootstrapModeInternal, { on: true });
     await expect(
@@ -114,7 +77,7 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
   });
 
   it("a disabled source does not hold its stage open", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await t.mutation(internal.importSources.setBootstrapModeInternal, { on: true });
     // Seven Seas disabled (e.g. its site blocks our egress): Kodansha's
@@ -131,7 +94,7 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
   });
 
   it("starts stage 1's two pilots, and stage 2 once stage 1 completed", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await t.mutation(internal.importSources.setBootstrapModeInternal, { on: true });
     const asAdmin = t.withIdentity({ subject: ADMIN });
@@ -151,7 +114,7 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
   });
 
   it("a failed run does not complete a stage; ordering tracks first successes", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const asAdmin = t.withIdentity({ subject: ADMIN });
     await addRun(t, "sevenseas", "failed");
@@ -169,18 +132,18 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
   });
 
   it("only Administrators start stages", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await t.mutation(internal.importSources.setBootstrapModeInternal, { on: true });
     await expect(
       t.withIdentity({ subject: MOD }).mutation(api.launch.startSeedStage, { stage: 1 }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ data: { code: "forbidden" } });
   });
 });
 
 describe("QA samples (gates ①/②: hand-verification rounds)", () => {
   it("draws a random sample of every active Series when under the cap", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await seedCatalog(t, [
       { title: "Witch Hat Atelier" },
@@ -196,7 +159,7 @@ describe("QA samples (gates ①/②: hand-verification rounds)", () => {
   });
 
   it("prominent = the Series with the most active Releases", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await seedCatalog(t, [
       { title: "Big", releases: 3 },
@@ -211,7 +174,7 @@ describe("QA samples (gates ①/②: hand-verification rounds)", () => {
   });
 
   it("verifying every row passes the gate; a failure needs a note and blocks it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await seedCatalog(t, [{ title: "A" }, { title: "B" }]);
     const asMod = t.withIdentity({ subject: MOD });
@@ -253,17 +216,17 @@ describe("QA samples (gates ①/②: hand-verification rounds)", () => {
   });
 
   it("sampling is Moderator-gated", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await expect(
       t.withIdentity({ subject: PLAIN }).action(api.launch.drawQaSample, { kind: "random" }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ data: { code: "forbidden" } });
   });
 });
 
 describe("duplicate sweep (gate ③)", () => {
   it("flags likely duplicates, and a 'distinct' resolution is durable across re-sweeps", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await seedCatalog(t, [
       { title: "Tokyo Ghoul" },
@@ -297,7 +260,7 @@ describe("duplicate sweep (gate ③)", () => {
   });
 
   it("auto-closes an open pair once a member is merged away", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const [aId, bId] = await seedCatalog(t, [
       { title: "Berserk" },
@@ -321,7 +284,7 @@ describe("duplicate sweep (gate ③)", () => {
 
 describe("correction-loop attestation (launch gate ④)", () => {
   it("accepts an approved, human-authored proposal that produced a Revision", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const [seriesId] = await seedCatalog(t, [{ title: "Witch Hat Atelier" }]);
     const asMod = t.withIdentity({ subject: MOD });
@@ -341,7 +304,7 @@ describe("correction-loop attestation (launch gate ④)", () => {
   });
 
   it("rejects import-authored or unapproved proposals", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     const importProposal = await t.run(async (ctx) =>
       ctx.db.insert("proposals", {
@@ -359,9 +322,8 @@ describe("correction-loop attestation (launch gate ④)", () => {
 
 describe("launchChecklist (spec §7: gates, and only the gates)", () => {
   it("computes every gate and flips ready when all pass", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
-    await t.mutation(internal.importSources.seedRegistry, {});
     const [seriesId] = await seedCatalog(t, [
       { title: "Witch Hat Atelier", releases: 2 },
     ]);
@@ -426,21 +388,19 @@ describe("launchChecklist (spec §7: gates, and only the gates)", () => {
   });
 
   it("is Data-Team-gated", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await setup(t);
     await expect(
       t.withIdentity({ subject: PLAIN }).query(api.launch.launchChecklist, {}),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ data: { code: "forbidden" } });
   });
 });
 
 describe("seedPublishers (the canonical publisher list)", () => {
   it("seeds one row per company and imprint, imprints naming their parent", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     // A pre-existing imprint row without a parent (as the PRH importer made them).
-    await t.run((ctx) =>
-      ctx.db.insert("publishers", { status: "active", name: "Ghost Ship", slug: "ghost-ship" }),
-    );
+    await t.run((ctx) => insertPublisher(ctx, { name: "Ghost Ship" }));
     const first = await t.mutation(internal.launch.seedPublishers, {});
     expect(first.created).not.toContain("ghost-ship");
     expect(first.parented).toEqual(["ghost-ship"]);

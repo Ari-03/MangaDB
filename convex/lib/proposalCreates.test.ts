@@ -4,86 +4,34 @@
 // Edition Line membership carried from a queued packaging guess through
 // approval (B16).
 
-import { convexTest } from "convex-test";
 import type { FunctionArgs } from "convex/server";
 import { describe, expect, it } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
-import { api, internal } from "../_generated/api";
+import { api } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import schema from "../schema";
+import {
+  insertEditionLine,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  seedCatalog,
+  type Overrides,
+} from "../test.factories";
+import { ADMIN, EDITOR, alice, carol, makeT, seedTeam } from "../test.helpers";
 import { upsertObservation } from "./observations";
 import { queueCreationProposal } from "./pipeline";
 import { applyCreatePlan, planCreateOps, type CreateOpInput } from "./proposalCreates";
 
-const ADMIN = "user_admin";
-const EDITOR = "user_editor";
+/** A Series "Noragami" with Volume "1", a Kodansha Edition on it, and one physical Release (`release` overrides it). */
+const catalog = (ctx: MutationCtx, release: Overrides<"releases"> = {}) =>
+  seedCatalog(ctx, { publisher: { name: "Kodansha" }, series: { publicId: 1, title: "Noragami" }, release });
 
-function makeT() {
-  const t = convexTest(schema);
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
-}
+type Catalog = Awaited<ReturnType<typeof catalog>>;
 
-async function setupRoles(t: ReturnType<typeof makeT>) {
-  await t.withIdentity({ subject: ADMIN }).mutation(api.users.claimUsername, { username: "alice" });
-  await t.withIdentity({ subject: EDITOR }).mutation(api.users.claimUsername, { username: "carol" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.roles.appoint, { username: "carol", role: "editor" });
-}
-
-/** A Series with Volume "1", a Kodansha Edition on it, and one Release. */
-async function catalog(ctx: MutationCtx, isbn13?: string) {
-  const publisherId = await ctx.db.insert("publishers", {
-    status: "active",
-    name: "Kodansha",
-    slug: "kodansha",
-  });
-  const seriesId = await ctx.db.insert("series", {
-    status: "active",
-    publicId: 1,
-    title: "Noragami",
-    altTitles: [],
-    searchText: "noragami",
-  });
-  const volumeId = await ctx.db.insert("volumes", {
-    status: "active",
-    publicId: 1,
-    seriesId,
-    position: 1,
-    label: "1",
-  });
-  const editionId = await ctx.db.insert("editions", {
-    status: "active",
-    publicId: 1,
-    publisherId,
-  });
-  await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
-  if (isbn13 !== undefined) await insertRelease(ctx, editionId, publisherId, seriesId, isbn13);
-  return { publisherId, seriesId, volumeId, editionId };
-}
-
-async function insertRelease(
-  ctx: MutationCtx,
-  editionId: Id<"editions">,
-  publisherId: Id<"publishers">,
-  seriesId: Id<"series">,
-  isbn13: string,
-  status: "active" | "hidden" = "active",
-) {
-  return await ctx.db.insert("releases", {
-    status,
-    editionId,
-    format: "physical",
-    language: "en",
-    isbn13,
-    publisherId,
-    seriesIds: [seriesId],
-  });
-}
+/** Another Release of the catalog's Edition holding `isbn13`. */
+const holder = (ctx: MutationCtx, c: Catalog, isbn13: string, status: "active" | "hidden" = "active") =>
+  insertRelease(ctx, { status, editionId: c.editionId, publisherId: c.publisherId, seriesIds: [c.seriesId], isbn13 });
 
 const releaseOp = (tempId: string, editionId: string, isbn13: string): CreateOpInput => ({
   kind: "create",
@@ -96,7 +44,7 @@ describe("planCreateOps — Release ISBN identity (B12)", () => {
   it("refuses an ISBN an active Release already holds", async () => {
     const t = makeT();
     await t.run(async (ctx) => {
-      const { editionId } = await catalog(ctx, "9781646519026");
+      const { editionId } = await catalog(ctx, { isbn13: "9781646519026" });
       await expect(
         planCreateOps(ctx, [releaseOp("release", editionId, "978-1-64651-902-6")]),
       ).rejects.toMatchObject({ data: { code: "invalidCreate" } });
@@ -119,17 +67,10 @@ describe("planCreateOps — Release ISBN identity (B12)", () => {
   it("checks ISBN-10 identity too, and ignores a Release no longer active", async () => {
     const t = makeT();
     await t.run(async (ctx) => {
-      const { editionId, publisherId, seriesId } = await catalog(ctx);
-      await insertRelease(ctx, editionId, publisherId, seriesId, "9781646519026", "hidden");
-      await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        isbn10: "1646519020",
-        publisherId,
-        seriesIds: [seriesId],
-      });
+      const c = await catalog(ctx);
+      const { editionId, publisherId, seriesId } = c;
+      await holder(ctx, c, "9781646519026", "hidden");
+      await insertRelease(ctx, { editionId, isbn10: "1646519020", publisherId, seriesIds: [seriesId] });
       await expect(
         planCreateOps(ctx, [
           {
@@ -147,8 +88,9 @@ describe("planCreateOps — Release ISBN identity (B12)", () => {
 
   it("approval re-checks inside its transaction: a collision that appeared after submission blocks it", async () => {
     const t = makeT();
-    await setupRoles(t);
-    const { editionId, publisherId, seriesId } = await t.run((ctx) => catalog(ctx));
+    await seedTeam(t, [alice, carol]);
+    const c = await t.run((ctx) => catalog(ctx));
+    const { editionId } = c;
     const asEditor = t.withIdentity({ subject: EDITOR });
     const { proposalId } = await asEditor.mutation(api.proposals.saveDraft, {
       ops: [releaseOp("release", editionId, "9781646519026")],
@@ -157,7 +99,7 @@ describe("planCreateOps — Release ISBN identity (B12)", () => {
     });
     await asEditor.mutation(api.proposals.submitProposal, { proposalId });
     // An import lands the same book while the proposal waits in review.
-    await t.run((ctx) => insertRelease(ctx, editionId, publisherId, seriesId, "9781646519026"));
+    await t.run((ctx) => holder(ctx, c, "9781646519026"));
 
     await expect(
       t.withIdentity({ subject: ADMIN }).mutation(api.proposals.approveProposal, { proposalId }),
@@ -181,21 +123,16 @@ describe("proposal ISBN identity across create and update ops (R11)", () => {
   /** Roles plus the Noragami catalog with one ISBN-less physical Release. */
   async function world() {
     const t = makeT();
-    await setupRoles(t);
-    const ids = await t.run(async (ctx) => {
-      const base = await catalog(ctx);
-      const physicalId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId: base.editionId,
-        format: "physical",
-        binding: "paperback",
-        language: "en",
-        publisherId: base.publisherId,
-        seriesIds: [base.seriesId],
-      });
-      return { ...base, physicalId };
-    });
-    return { t, ...ids, asEditor: t.withIdentity({ subject: EDITOR }), asAdmin: t.withIdentity({ subject: ADMIN }) };
+    await seedTeam(t, [alice, carol]);
+    const c = await t.run((ctx) => catalog(ctx, { binding: "paperback" }));
+    return {
+      t,
+      c,
+      ...c,
+      physicalId: c.releaseId,
+      asEditor: t.withIdentity({ subject: EDITOR }),
+      asAdmin: t.withIdentity({ subject: ADMIN }),
+    };
   }
 
   type World = Awaited<ReturnType<typeof world>>;
@@ -248,7 +185,7 @@ describe("proposal ISBN identity across create and update ops (R11)", () => {
 
   it("refuses an update taking an ISBN another active Release holds", async () => {
     const w = await world();
-    await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, X));
+    await w.t.run((ctx) => holder(ctx, w.c, X));
     await expect(
       w.asEditor.mutation(api.proposals.saveDraft, {
         ops: [setIsbn(w.physicalId, "978-1-64651-902-6")],
@@ -260,7 +197,7 @@ describe("proposal ISBN identity across create and update ops (R11)", () => {
 
   it("refuses two updates assigning one ISBN, including ISBN-10", async () => {
     const w = await world();
-    const otherId = await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, Y));
+    const otherId = await w.t.run((ctx) => holder(ctx, w.c, Y));
     await expect(
       w.asEditor.mutation(api.proposals.saveDraft, {
         ops: [setIsbn(w.physicalId, "1646519020", "isbn10"), setIsbn(otherId, "1646519020", "isbn10")],
@@ -277,7 +214,7 @@ describe("proposal ISBN identity across create and update ops (R11)", () => {
       evidence: EVIDENCE,
       comment: "Paperback ISBN.",
     });
-    await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, X));
+    await w.t.run((ctx) => holder(ctx, w.c, X));
     await expect(
       w.asEditor.mutation(api.proposals.submitProposal, { proposalId }),
     ).rejects.toMatchObject({ data: { code: "invalidField" } });
@@ -287,7 +224,7 @@ describe("proposal ISBN identity across create and update ops (R11)", () => {
     const w = await world();
     const proposalId = await submit(w, [setIsbn(w.physicalId, X)]);
     // An import lands the same book while the proposal waits in review.
-    await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, X));
+    await w.t.run((ctx) => holder(ctx, w.c, X));
     await expect(
       w.asAdmin.mutation(api.proposals.approveProposal, { proposalId }),
     ).rejects.toMatchObject({ data: { code: "invalidField" } });
@@ -298,7 +235,7 @@ describe("proposal ISBN identity across create and update ops (R11)", () => {
 
   it("allows moving an ISBN: the holder is corrected in the same proposal", async () => {
     const w = await world();
-    const holderId = await w.t.run((ctx) => insertRelease(ctx, w.editionId, w.publisherId, w.seriesId, X));
+    const holderId = await w.t.run((ctx) => holder(ctx, w.c, X));
     // The holder gets its real ISBN; the new digital Release takes X.
     const moved = await submit(w, [setIsbn(holderId, Y), releaseOp("digital", w.editionId, X)]);
     const result = await w.asAdmin.mutation(api.proposals.approveProposal, { proposalId: moved });
@@ -377,24 +314,9 @@ describe("Edition Line membership through proposals (B16)", () => {
     const t = makeT();
     await t.run(async (ctx) => {
       const { seriesId, publisherId, volumeId } = await catalog(ctx);
-      const other = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Vertical",
-        slug: "vertical",
-      });
-      const otherSeries = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 2,
-        title: "Other",
-        altTitles: [],
-        searchText: "other",
-      });
-      const lineId = await ctx.db.insert("editionLines", {
-        status: "active",
-        seriesId,
-        publisherId,
-        name: "Omnibus",
-      });
+      const other = await insertPublisher(ctx, { name: "Vertical" });
+      const otherSeries = await insertSeries(ctx, { publicId: 2, title: "Other" });
+      const lineId = await insertEditionLine(ctx, { seriesId, publisherId, name: "Omnibus" });
       const edition = (fields: Record<string, unknown>): CreateOpInput => ({
         kind: "create",
         table: "editions",
@@ -409,12 +331,7 @@ describe("Edition Line membership through proposals (B16)", () => {
         planCreateOps(ctx, [edition({ publisherId: other, editionLineId: lineId })]),
       ).rejects.toMatchObject({ data: { code: "invalidCreate" } });
       // A line of another Series than the covered Volumes.
-      const foreign = await ctx.db.insert("editionLines", {
-        status: "active",
-        seriesId: otherSeries,
-        publisherId,
-        name: "Deluxe",
-      });
+      const foreign = await insertEditionLine(ctx, { seriesId: otherSeries, publisherId, name: "Deluxe" });
       await expect(
         planCreateOps(ctx, [edition({ publisherId, editionLineId: foreign })]),
       ).rejects.toMatchObject({ data: { code: "invalidCreate" } });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Offline filter for the OpenLibrary editions bulk dump (spec §6: monthly
-// cadence; ticket #36). The raw dump (~10 GB gzipped, from
+// cadence). The raw dump (~10 GB gzipped, from
 // https://openlibrary.org/developers/dumps) is far too large for a Convex
 // action, so this script streams it once and keeps only lines whose edition
 // names a manga-relevant English publisher. Host the output somewhere the

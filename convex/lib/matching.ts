@@ -1,4 +1,4 @@
-// The matching ladder (ticket #35, spec §6), source-agnostic. Rung ① — the
+// The matching ladder (spec §6), source-agnostic. Rung ① — the
 // persisted source-id link on the observation — is the caller's fast path
 // (a rename at the source is then a field conflict, never a failed match);
 // this module resolves everything below it, strongest first:
@@ -20,6 +20,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { isNovelTitle } from "./bookTitle";
+import { coveringOf, releasesOf } from "./editionRows";
 import { factualOverrides } from "./moderationFields";
 import { decodeEntities } from "./text";
 
@@ -163,6 +164,21 @@ export async function survivorOf<T extends "series" | "volumes" | "releases">(
 }
 
 /**
+ * Every Release row carrying this ISBN-13, each merged one answered by its
+ * survivor (null where the merge chain dead-ends). Survivors can repeat.
+ */
+export async function isbnHolders(
+  ctx: QueryCtx | MutationCtx,
+  isbn13: string,
+): Promise<Array<Doc<"releases"> | null>> {
+  const rows = await ctx.db
+    .query("releases")
+    .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+    .collect();
+  return await Promise.all(rows.map((row) => survivorOf<"releases">(ctx, row)));
+}
+
+/**
  * Every Series whose title normalizes to the given one, merged rows
  * answered by their survivor, split by what they mean to an importer:
  * `active` (attach here) and `hidden` (an Editor removed this work — never
@@ -302,17 +318,11 @@ export async function workMatch(
   const seen = new Set<Id<"editions">>();
   for (const volume of volumes) {
     if (volume.status !== "active") continue;
-    const coverage = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverage = await coveringOf(ctx, volume._id);
     for (const row of coverage) {
       if (seen.has(row.editionId)) continue;
       seen.add(row.editionId);
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", row.editionId))
-        .collect();
+      const releases = await releasesOf(ctx, row.editionId);
       if (releases.some((r) => r.status === "active" && r.isbn13 && formats.has(r.format))) {
         return "different";
       }
@@ -365,16 +375,9 @@ export async function matchRelease(
   // for review — an ISBN pointing at a dissimilar title is exactly the
   // situation a human must untangle, never an importer.
   if (fact.isbn13 !== undefined) {
-    const withIsbn = await ctx.db
-      .query("releases")
-      .withIndex("by_isbn13", (q) => q.eq("isbn13", fact.isbn13))
-      .collect();
-    // A merged Release answers as its survivor; a hidden one is an Editor's
-    // decision about this very book — a human looks before anything is
-    // created for it again.
-    const resolved = await Promise.all(
-      withIsbn.map((release) => survivorOf<"releases">(ctx, release)),
-    );
+    // A hidden holder is an Editor's decision about this very book — a
+    // human looks before anything is created for it again.
+    const resolved = await isbnHolders(ctx, fact.isbn13);
     // Multiple historical rows can resolve to the same survivor. Distinct
     // active survivors sharing an ISBN are ambiguous, regardless of title.
     const active = new Map<Id<"releases">, Doc<"releases">>();
@@ -434,18 +437,12 @@ export async function matchRelease(
     for (const volume of volumes) {
       if (volume.status !== "active") continue;
       if (!labelsEqual(volume.label, fact.volumeLabel)) continue;
-      const coverages = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-        .collect();
+      const coverages = await coveringOf(ctx, volume._id);
       for (const coverage of coverages) {
         const edition = await ctx.db.get(coverage.editionId);
         if (!edition || edition.status !== "active") continue;
         const wholeVolume = await isWholeSingleVolume(ctx, edition);
-        const releases = await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect();
+        const releases = await releasesOf(ctx, edition._id);
         for (const release of releases) {
           if (release.status !== "active") continue;
           // A different ISBN-13 is a different Release by definition

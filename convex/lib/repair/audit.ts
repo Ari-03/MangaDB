@@ -8,8 +8,15 @@
 import { ConvexError, type Infer } from "convex/values";
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
-import { revisionsOf } from "../../moderation";
+import { activeVolumes } from "../../catalog";
+import {
+  insertApprovedProposal,
+  insertFirstVersion,
+  insertRevision,
+  revisionsOf,
+} from "../../moderation";
 import type { evidence, recordRef } from "../../schema";
+import { coverageOf, coveringOf, editionSeriesIds, releasesOf } from "../editionRows";
 import { allocatePublicId } from "../publicIds";
 import { collapseEditionTakes, type OpMeta } from "../sensitiveOps";
 import { sameValue } from "../values";
@@ -74,15 +81,7 @@ export function createAudit(
     /** The Proposal meta stock apply functions stamp on their Revisions. */
     async meta(): Promise<OpMeta> {
       if (meta) return meta;
-      const now = Date.now();
-      const proposalId = await ctx.db.insert("proposals", {
-        author,
-        state: "approved",
-        currentVersionNo: 1,
-        submittedAt: now,
-        decidedBy: actor.userId,
-        decidedAt: now,
-      });
+      const proposalId = await insertApprovedProposal(ctx, author, actor.userId);
       meta = { proposalId, author, approvedBy: actor.userId, comment };
       return meta;
     },
@@ -109,28 +108,13 @@ export function createAudit(
     /** Append the next Revision to one record's public history. */
     async revise(ref: Ref, changes: Change[]) {
       if (changes.length === 0) return;
-      const { proposalId } = await this.meta();
-      const latest = (await revisionsOf(ctx, ref))[0];
-      await ctx.db.insert("revisions", {
-        ref,
-        seq: (latest?.seq ?? 0) + 1,
-        proposalId,
-        author,
-        approvedBy: actor.userId,
-        changes,
-        comment,
-      });
+      const opMeta = await this.meta();
+      await insertRevision(ctx, ref, (await revisionsOf(ctx, ref))[0], changes, opMeta);
     },
     /** Freeze the Proposal's immutable version once the entry is done. */
     async finish() {
       if (!meta) return;
-      await ctx.db.insert("proposalVersions", {
-        proposalId: meta.proposalId,
-        versionNo: 1,
-        ops,
-        evidence: evidenceRows,
-        changeComment: comment,
-      });
+      await insertFirstVersion(ctx, meta.proposalId, { ops, evidence: evidenceRows, changeComment: comment });
     },
   };
 }
@@ -181,14 +165,8 @@ export function sameLabel(a: string | null | undefined, b: string | null | undef
   return ca === null || cb === null ? ca === cb : ca.toLowerCase() === cb.toLowerCase();
 }
 
-export async function activeVolumes(ctx: MutationCtx, seriesId: Id<"series">) {
-  return (
-    await ctx.db
-      .query("volumes")
-      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-      .collect()
-  ).filter((vol) => vol.status === "active");
-}
+// Re-exported for ./ops.ts, which reads it from here with the rest.
+export { activeVolumes };
 
 /**
  * Volume Position = volume number (owner decision, schema.ts): numbered
@@ -251,26 +229,12 @@ export async function ensureVolume(
 
 // ---------- editions, coverage, releases ----------
 
-export async function coverageOf(ctx: MutationCtx, editionId: Id<"editions">) {
-  return await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-}
-
-export async function releasesOf(ctx: MutationCtx, editionId: Id<"editions">) {
-  return await ctx.db
-    .query("releases")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-}
+// Re-exported for ./ops.ts, which reads them from here with the rest.
+export { coverageOf, coveringOf, releasesOf };
 
 /** Active Editions covering a Volume. */
 export async function activeEditionsCovering(ctx: MutationCtx, volumeId: Id<"volumes">) {
-  const rows = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
-    .collect();
+  const rows = await coveringOf(ctx, volumeId);
   const editions: Doc<"editions">[] = [];
   for (const row of rows) {
     const edition = await ctx.db.get(row.editionId);
@@ -286,16 +250,7 @@ export async function activeEditionsCovering(ctx: MutationCtx, volumeId: Id<"vol
 export async function refreshReleaseDenorms(ctx: MutationCtx, editionId: Id<"editions">) {
   const edition = await ctx.db.get(editionId);
   if (!edition) return;
-  const seriesIds: Id<"series">[] = [];
-  for (const row of await coverageOf(ctx, editionId)) {
-    const volume = await ctx.db.get(row.volumeId);
-    if (volume && !seriesIds.includes(volume.seriesId)) seriesIds.push(volume.seriesId);
-  }
-  // Unmapped Packaging covers nothing yet; its line still names the Series.
-  if (seriesIds.length === 0 && edition.editionLineId) {
-    const line = await ctx.db.get(edition.editionLineId);
-    if (line) seriesIds.push(line.seriesId);
-  }
+  const seriesIds = await editionSeriesIds(ctx, edition);
   for (const release of await releasesOf(ctx, editionId)) {
     if (sameValue(release.seriesIds, seriesIds) && release.publisherId === edition.publisherId) continue;
     await ctx.db.patch(release._id, { seriesIds, publisherId: edition.publisherId });

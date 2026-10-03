@@ -2,20 +2,16 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 
 import { api } from "../../convex/_generated/api";
-import { CommentsQueueLink, ProposalStateChip, useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink, ModGate, ProposalStateChip } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The viewer's own proposals (ticket #32): drafts to return to, In-Review
+ * The viewer's own proposals: drafts to return to, In-Review
  * submissions to watch, and decisions. Data-Team-only; never indexed.
  */
 export const Route = createFileRoute("/mod/proposals")({
-  head: () => ({
-    meta: [
-      { title: "My proposals — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "My proposals — MangaDB" }] }),
   component: MyProposalsPage,
 });
 
@@ -29,41 +25,21 @@ function MyProposalsPage() {
       </main>
     );
   }
-  return <Gate />;
-}
-
-function Gate() {
-  const isDataTeam = useIsDataTeam();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          Proposals are authored by Editors, Moderators, and Administrators.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <MyProposals />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="Proposals are authored by Editors, Moderators, and Administrators."
+    >
+      <MyProposals />
+    </ModGate>
+  );
 }
 
 function MyProposals() {
   const rows = useQuery(api.proposals.myProposals, {});
   return (
     <main className="mod-page mod-queue-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>My proposals</span>
-      </nav>
+      <Breadcrumbs trail={["My proposals"]} />
       <h1>My proposals</h1>
       <p className="section-hint">
         Drafts to return to, submissions waiting on a Moderator, and

@@ -1,10 +1,22 @@
 // Shared form plumbing for the record edit surfaces: the Moderator direct
-// edit (/mod/edit, ticket #31) and the Editor update proposal (/mod/propose,
-// ticket #32). Everything edits as strings keyed by field name; the submit
-// handlers shape typed values that the Convex mutations re-validate against
-// the same registry (convex/lib/moderationFields.ts).
+// edit (/mod/edit) and the Editor update proposal (/mod/propose).
+// Everything edits as strings keyed by field name; the submit handlers shape
+// typed values that the Convex mutations re-validate against the same
+// registry (convex/lib/moderationFields.ts).
 
-import type { FieldDescriptor } from "../../convex/lib/moderationFields";
+import {
+  EDITABLE_FIELDS,
+  type FieldDescriptor,
+  type RecordType,
+} from "../../convex/lib/moderationFields";
+
+/**
+ * Whether a `$type` route segment names an editable record type. Own keys
+ * only: `in` would also accept "constructor" and "toString".
+ */
+export function isRecordType(raw: string): raw is RecordType {
+  return Object.hasOwn(EDITABLE_FIELDS, raw);
+}
 
 export type FormState = Record<string, string>;
 
@@ -294,18 +306,4 @@ export function FieldInput({
         </label>
       );
   }
-}
-
-/** A readable error message out of any thrown mutation error. */
-export function mutationErrorMessage(err: unknown, fallback: string): string {
-  const data = (err as { data?: unknown })?.data;
-  if (typeof data === "object" && data !== null) {
-    const record = data as { message?: unknown; kind?: unknown };
-    if (record.kind === "RateLimited") {
-      return "Slow down — you have hit the per-user rate limit. Try again in a few minutes.";
-    }
-    if (typeof record.message === "string") return record.message;
-  }
-  if (typeof data === "string") return data;
-  return fallback;
 }

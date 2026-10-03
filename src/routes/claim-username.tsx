@@ -4,11 +4,12 @@ import {
   useNavigate,
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useMutation, useQuery } from "convex/react";
-import { ConvexError } from "convex/values";
+import { useMutation } from "convex/react";
 import { useState, type FormEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { mutationErrorMessage } from "~/lib/errors";
+import { useReadyViewer } from "~/lib/viewer";
 import { clerkEnabled, convexClient } from "~/providers";
 import { ssrAuth } from "~/server/auth";
 
@@ -19,7 +20,7 @@ const fetchSignedIn = createServerFn({ method: "GET" }).handler(
 );
 
 /**
- * The forced first-sign-in step (ticket #26) and the username-change screen.
+ * The forced first-sign-in step and the username-change screen.
  * Claiming atomically creates the Convex User just in time (convex/users.ts);
  * changing releases the old name immediately. All policy — format, reserved
  * list, case-insensitive uniqueness — is enforced in the mutation; this form
@@ -54,13 +55,13 @@ function ClaimUsernamePage() {
 
 function ClaimForm() {
   const navigate = useNavigate();
-  const viewer = useQuery(api.users.viewer);
+  const viewer = useReadyViewer();
   const claimUsername = useMutation(api.users.claimUsername);
   const [username, setUsername] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const changing = viewer != null && !viewer.needsUsername;
+  const changing = viewer !== null;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -70,11 +71,7 @@ function ClaimForm() {
       await claimUsername({ username });
       await navigate({ to: "/me" });
     } catch (err) {
-      setError(
-        err instanceof ConvexError && typeof err.data?.message === "string"
-          ? err.data.message
-          : "Could not claim that username. Try another.",
-      );
+      setError(mutationErrorMessage(err, "Could not claim that username. Try another."));
       setBusy(false);
     }
   };

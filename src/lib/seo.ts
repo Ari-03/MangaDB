@@ -1,4 +1,4 @@
-// The SEO layer (ticket #39, spec §11): formula-generated titles and meta
+// The SEO layer (spec §11): formula-generated titles and meta
 // descriptions per page type, cover-led OG/Twitter cards, canonical URLs, and
 // JSON-LD builders. All metadata is generated — no hand-written metadata in
 // v1 — so retitling under the branding item is a template edit here, never a
@@ -21,7 +21,7 @@ export function siteOrigin(): string {
 }
 
 /** Absolute canonical URL for a site path. */
-export function absoluteUrl(path: string): string {
+function absoluteUrl(path: string): string {
   return `${siteOrigin()}${path}`;
 }
 
@@ -37,7 +37,7 @@ export function truncateDescription(text: string, max = 160): string {
   return `${cut.slice(0, lastSpace > max / 2 ? lastSpace : max - 1).trimEnd()}…`;
 }
 
-// ---------- title templates (issue #19's formulas, verbatim) ----------
+// ---------- title templates ----------
 
 export function seriesTitleTag(title: string): string {
   return `${title} – English Manga Volumes & Release Dates | ${SITE_NAME}`;
@@ -107,12 +107,21 @@ export type PageHeadArgs = {
    * crawlers and link previews have not opted in to see the art.
    */
   mature?: boolean;
+  /**
+   * The BreadcrumbList JSON-LD trail after the home crumb, which is always
+   * first. The last crumb names the page itself and may omit `path`. The
+   * visible twin is <Breadcrumbs> (lib/pageScaffold.tsx).
+   */
+  breadcrumbs?: Array<{ name: string; path?: string }>;
+  /** Further JSON-LD for the page (BookSeries, Person, …), after the BreadcrumbList. */
+  jsonLd?: object[];
 };
 
 /**
  * The `meta` + `links` a route's `head()` returns for one page: title +
  * description templates, canonical link, robots policy, and the cover-led
  * OG/Twitter card. Cover present → large-image card; absent → plain summary.
+ * With `breadcrumbs` or `jsonLd`, also the `scripts` carrying the JSON-LD.
  */
 export function pageHead({
   title,
@@ -122,6 +131,8 @@ export function pageHead({
   robots,
   ogType = "website",
   mature = false,
+  breadcrumbs,
+  jsonLd = [],
 }: PageHeadArgs) {
   const url = absoluteUrl(path);
   const image = mature ? null : cover;
@@ -141,9 +152,16 @@ export function pageHead({
     { name: "twitter:description", content: description },
     ...(image ? [{ name: "twitter:image", content: image }] : []),
   ];
+  const structured = [
+    ...(breadcrumbs
+      ? [breadcrumbListJsonLd([{ name: SITE_NAME, path: "/" }, ...breadcrumbs])]
+      : []),
+    ...jsonLd,
+  ];
   return {
     meta,
     links: [{ rel: "canonical", href: url }],
+    ...(structured.length > 0 ? { scripts: structured.map(jsonLdScript) } : {}),
   };
 }
 

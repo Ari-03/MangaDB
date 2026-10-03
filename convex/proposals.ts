@@ -1,4 +1,4 @@
-// Editor Proposals and the review queue (ticket #32, spec §5). The full
+// Editor Proposals and the review queue (spec §5). The full
 // Proposal lifecycle: an Editor drafts a change (mutable working copy),
 // submits it (validation, required change comment, source evidence for
 // factual changes, warning acknowledgment) and it lands In Review in the
@@ -25,6 +25,7 @@ import {
   applyUpdate,
   displayInfo,
   getCanonical,
+  insertRevision,
   revisionsOf,
   validateChanges,
   type FieldChange,
@@ -39,18 +40,17 @@ import {
   type CreateOpInput,
   type IsbnUpdate,
 } from "./lib/proposalCreates";
+import { fail } from "./lib/errors";
 import { fieldDescriptor } from "./lib/moderationFields";
 import { captureModeration } from "./lib/posthog";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
-  applyHide,
-  applyLock,
   applyMerge,
-  applyRestore,
-  applySplit,
-  applyUnlock,
+  SINGLE_RECORD_OPS,
   type OpMeta,
+  type SingleRecordOp,
 } from "./lib/sensitiveOps";
+import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue, valueHash } from "./lib/values";
 
 // ---------- abuse controls (spec §5: rate limits + bulk caps) ----------
@@ -94,10 +94,6 @@ const opInput = v.union(
     changes: v.array(v.object({ field: v.string(), value: v.any() })),
   }),
 );
-
-const fail = (code: string, message: string): never => {
-  throw new ConvexError({ code, message });
-};
 
 function requireAuthor(proposal: Doc<"proposals">, user: Doc<"users">) {
   if (proposal.author.kind !== "user" || proposal.author.userId !== user._id) {
@@ -153,17 +149,17 @@ async function buildDraftOps(
     updatedRecords.add(ref.id as string);
     const doc = await getCanonical(ctx, ref);
     if (!doc) fail("notFound", "A record this proposal updates does not exist.");
-    if (doc!.status !== "active" || doc!.locked) {
+    if (doc.status !== "active" || doc.locked) {
       fail(
         "locked",
-        `A record this proposal updates is ${doc!.locked ? "locked" : doc!.status}.`,
+        `A record this proposal updates is ${doc.locked ? "locked" : doc.status}.`,
       );
     }
-    const changes = validateChanges(ref.type, doc!, op.changes);
+    const changes = validateChanges(ref.type, doc, op.changes);
     const latest = (await revisionsOf(ctx, ref))[0];
     ops.push({
       kind: "update",
-      ref: ref as never,
+      ref,
       baseRevisionId: latest?._id,
       changes,
     });
@@ -174,7 +170,7 @@ async function buildDraftOps(
 
 /**
  * Validate an op set's creates together with the Release ISBNs its updates
- * write, so the proposal's final ISBN assignments are checked as one (R11).
+ * write, so the proposal's final ISBN assignments are checked as one.
  * Save, submission, and approval all run this; approval inside its
  * transaction, before anything is written.
  */
@@ -247,7 +243,7 @@ function needsSourceEvidence(ops: StoredOp[]): boolean {
   for (const op of ops) {
     if (op.kind === "create") return true;
     if (op.kind !== "update") continue;
-    const type = (op.ref as RecordRef).type;
+    const type = op.ref.type;
     for (const change of op.changes) {
       if (!fieldDescriptor(type, change.field)?.editorial) return true;
     }
@@ -275,7 +271,7 @@ async function staleRecordsOf(
   const stale: StaleRecord[] = [];
   for (const op of ops) {
     if (op.kind !== "update") continue;
-    const ref = op.ref as RecordRef;
+    const ref = op.ref;
     const doc = await getCanonical(ctx, ref);
     if (!doc || doc.status !== "active" || doc.locked) {
       stale.push({ type: ref.type, id: ref.id as string, reason: "unavailable" });
@@ -324,8 +320,8 @@ export const saveDraft = mutation({
     if (args.proposalId) {
       const proposal = await ctx.db.get(args.proposalId);
       if (!proposal) fail("notFound", "No such proposal.");
-      requireAuthor(proposal!, user);
-      if (proposal!.state !== "draft") {
+      requireAuthor(proposal, user);
+      if (proposal.state !== "draft") {
         fail("badState", "Only Draft proposals can be edited.");
       }
       await ctx.db.patch(args.proposalId, { draft });
@@ -361,21 +357,21 @@ export const submitProposal = mutation({
     const user = await requireDataTeam(ctx);
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) fail("notFound", "No such proposal.");
-    requireAuthor(proposal!, user);
-    if (proposal!.state !== "draft") {
+    requireAuthor(proposal, user);
+    if (proposal.state !== "draft") {
       fail("badState", "Only Draft proposals can be submitted.");
     }
-    const draft = proposal!.draft;
+    const draft = proposal.draft;
     if (!draft || draft.ops.length === 0) {
       fail("noOps", "This draft has no operations to submit.");
     }
-    if (draft!.comment === "") {
+    if (draft.comment === "") {
       fail("commentRequired", "Every submission needs a change comment.");
     }
 
     // Submission runs validation (spec §5): bases must still be current,
     // references must still resolve, values must still be legal.
-    const stale = await staleRecordsOf(ctx, draft!.ops);
+    const stale = await staleRecordsOf(ctx, draft.ops);
     if (stale.length > 0) {
       throw new ConvexError({
         code: "stale",
@@ -384,10 +380,10 @@ export const submitProposal = mutation({
         stale,
       });
     }
-    await planOps(ctx, draft!.ops);
-    for (const op of draft!.ops) {
+    await planOps(ctx, draft.ops);
+    for (const op of draft.ops) {
       if (op.kind !== "update") continue;
-      const ref = op.ref as RecordRef;
+      const ref = op.ref;
       const doc = await getCanonical(ctx, ref);
       validateChanges(
         ref.type,
@@ -397,8 +393,8 @@ export const submitProposal = mutation({
     }
 
     if (
-      needsSourceEvidence(draft!.ops) &&
-      !draft!.evidence.some((row) => row.kind === "url" || row.kind === "observation")
+      needsSourceEvidence(draft.ops) &&
+      !draft.evidence.some((row) => row.kind === "url" || row.kind === "observation")
     ) {
       fail(
         "evidenceRequired",
@@ -406,7 +402,7 @@ export const submitProposal = mutation({
       );
     }
 
-    const warnings = computeWarnings(draft!.ops);
+    const warnings = computeWarnings(draft.ops);
     const acknowledged = new Set(args.acknowledgeWarnings ?? []);
     const unacknowledged = warnings.filter((w) => !acknowledged.has(w));
     if (unacknowledged.length > 0) {
@@ -419,13 +415,13 @@ export const submitProposal = mutation({
 
     await rateLimiter.limit(ctx, "proposalSubmit", { key: user._id, throws: true });
 
-    const versionNo = proposal!.currentVersionNo + 1;
+    const versionNo = proposal.currentVersionNo + 1;
     await ctx.db.insert("proposalVersions", {
       proposalId: args.proposalId,
       versionNo,
-      ops: draft!.ops,
-      evidence: draft!.evidence,
-      changeComment: draft!.comment,
+      ops: draft.ops,
+      evidence: draft.evidence,
+      changeComment: draft.comment,
       warningsAcknowledged: warnings,
     });
     await ctx.db.patch(args.proposalId, {
@@ -447,8 +443,8 @@ export const withdrawProposal = mutation({
     const user = await requireDataTeam(ctx);
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) fail("notFound", "No such proposal.");
-    requireAuthor(proposal!, user);
-    if (proposal!.state !== "draft" && proposal!.state !== "inReview") {
+    requireAuthor(proposal, user);
+    if (proposal.state !== "draft" && proposal.state !== "inReview") {
       fail("badState", "Only Draft or In-Review proposals can be withdrawn.");
     }
     await ctx.db.patch(args.proposalId, {
@@ -473,26 +469,26 @@ export const rebaseProposal = mutation({
     const user = await requireDataTeam(ctx);
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) fail("notFound", "No such proposal.");
-    requireAuthor(proposal!, user);
+    requireAuthor(proposal, user);
 
     let source: Draft;
-    if (proposal!.state === "draft") {
-      if (!proposal!.draft) fail("noOps", "This draft is empty.");
-      source = proposal!.draft!;
-    } else if (proposal!.state === "inReview") {
+    if (proposal.state === "draft") {
+      if (!proposal.draft) fail("noOps", "This draft is empty.");
+      source = proposal.draft;
+    } else if (proposal.state === "inReview") {
       const version = await ctx.db
         .query("proposalVersions")
         .withIndex("by_proposal", (q) =>
           q
             .eq("proposalId", args.proposalId)
-            .eq("versionNo", proposal!.currentVersionNo),
+            .eq("versionNo", proposal.currentVersionNo),
         )
         .unique();
       if (!version) fail("notFound", "The submitted version is missing.");
       source = {
-        ops: version!.ops,
-        evidence: version!.evidence,
-        comment: version!.changeComment,
+        ops: version.ops,
+        evidence: version.evidence,
+        comment: version.changeComment,
       };
     } else {
       return fail("badState", "Only Draft or In-Review proposals can be rebased.");
@@ -505,7 +501,7 @@ export const rebaseProposal = mutation({
         ops.push(op);
         continue;
       }
-      const ref = op.ref as RecordRef;
+      const ref = op.ref;
       const doc = await getCanonical(ctx, ref);
       if (!doc || doc.status !== "active" || doc.locked) {
         dropped.push(`${ref.type} is no longer editable`);
@@ -553,10 +549,10 @@ async function requireInReview(
 ): Promise<Doc<"proposals">> {
   const proposal = await ctx.db.get(proposalId);
   if (!proposal) fail("notFound", "No such proposal.");
-  if (proposal!.state !== "inReview") {
+  if (proposal.state !== "inReview") {
     fail("badState", "This proposal is not in review.");
   }
-  return proposal!;
+  return proposal;
 }
 
 async function currentVersionOf(
@@ -607,7 +603,7 @@ export const addNote = mutation({
     if (text === "") fail("noteRequired", "Notes cannot be empty.");
     await ctx.db.insert("proposalNotes", {
       proposalId: args.proposalId,
-      versionNo: proposal!.currentVersionNo,
+      versionNo: proposal.currentVersionNo,
       authorId: user._id,
       kind: "comment",
       text,
@@ -643,9 +639,9 @@ export const requestChanges = mutation({
       state: "draft",
       claimedBy: undefined,
       draft: {
-        ops: version!.ops,
-        evidence: version!.evidence,
-        comment: version!.changeComment,
+        ops: version.ops,
+        evidence: version.evidence,
+        comment: version.changeComment,
       },
     });
     await captureModeration(ctx, user, "request_changes", "proposal");
@@ -684,8 +680,8 @@ export const rejectProposal = mutation({
             .query("conflictSuppressions")
             .withIndex("by_key", (q) =>
               q
-                .eq("ref.type", (op.ref as RecordRef).type)
-                .eq("ref.id", (op.ref as RecordRef).id as never)
+                .eq("ref.type", op.ref.type)
+                .eq("ref.id", op.ref.id)
                 .eq("field", change.field)
                 .eq("sourceKey", sourceKey)
                 .eq("valueHash", hash),
@@ -748,6 +744,12 @@ export const approveProposal = mutation({
       publicId: number | null;
     }> = [];
     const revisionIds: Id<"revisions">[] = [];
+    const meta: OpMeta = {
+      proposalId: args.proposalId,
+      author: proposal.author,
+      approvedBy: user._id,
+      comment: version.changeComment,
+    };
     let planCursor = 0;
     for (const op of version.ops) {
       if (op.kind === "create") {
@@ -756,19 +758,10 @@ export const approveProposal = mutation({
         const record = await applyCreatePlan(ctx, plan, temp);
         // A joined existing record was not created: no creation Revision.
         if (record.existing) continue;
-        revisionIds.push(
-          await ctx.db.insert("revisions", {
-            ref: record.ref as never,
-            seq: 1,
-            proposalId: args.proposalId,
-            author: proposal.author,
-            approvedBy: user._id,
-            changes: Object.entries(record.revisionFields)
-              .filter(([, value]) => value !== undefined)
-              .map(([field, after]) => ({ field, after })),
-            comment: version.changeComment,
-          }),
-        );
+        const changes = Object.entries(record.revisionFields)
+          .filter(([, value]) => value !== undefined)
+          .map(([field, after]) => ({ field, after }));
+        revisionIds.push((await insertRevision(ctx, record.ref, null, changes, meta)).revisionId);
         created.push({
           tempId: record.tempId,
           type: record.ref.type,
@@ -776,7 +769,7 @@ export const approveProposal = mutation({
           publicId: record.publicId,
         });
       } else if (op.kind === "update") {
-        const ref = op.ref as RecordRef;
+        const ref = op.ref;
         const doc = await getCanonical(ctx, ref);
         // Re-validate the exact reviewed values against hard invariants.
         const changes = validateChanges(
@@ -796,44 +789,26 @@ export const approveProposal = mutation({
         });
         revisionIds.push(revisionId);
       } else if (op.kind === "clearOverride") {
-        // Override removal arrives with a later slice.
         return fail(
           "unsupportedOp",
           `"${op.kind}" operations are not approvable yet.`,
         );
       } else {
-        // Sensitive catalog operations (ticket #33): the same apply
+        // Sensitive catalog operations: the same apply
         // functions as the direct Moderator mutations (sensitiveOps.ts) —
         // each validates the record's current state and throws (rolling the
         // whole approval back) when the world moved.
-        const meta: OpMeta = {
-          proposalId: args.proposalId,
-          author: proposal.author,
-          approvedBy: user._id,
-          comment: version.changeComment,
-        };
         if (op.kind === "merge") {
           revisionIds.push(
             ...(await applyMerge(
               ctx,
-              op.survivor as RecordRef,
-              op.merged as RecordRef,
+              op.survivor,
+              op.merged,
               meta,
             )),
           );
         } else {
-          const ref = op.ref as RecordRef;
-          const apply =
-            op.kind === "hide"
-              ? applyHide
-              : op.kind === "restore"
-                ? applyRestore
-                : op.kind === "split"
-                  ? applySplit
-                  : op.kind === "lock"
-                    ? applyLock
-                    : applyUnlock;
-          revisionIds.push(...(await apply(ctx, ref, meta)));
+          revisionIds.push(...(await SINGLE_RECORD_OPS[op.kind](ctx, op.ref, meta)));
         }
       }
     }
@@ -852,30 +827,14 @@ export const approveProposal = mutation({
 
 // ---------- rendering helpers (queue + detail) ----------
 
-const usernameCache = () => new Map<Id<"users">, string | null>();
-
-async function usernameLookup(
-  ctx: QueryCtx | MutationCtx,
-  cache: Map<Id<"users">, string | null>,
-  userId: Id<"users"> | undefined,
-): Promise<string | null> {
-  if (!userId) return null;
-  if (!cache.has(userId)) {
-    const user = await ctx.db.get(userId);
-    cache.set(userId, user?.username ?? null);
-  }
-  return cache.get(userId) ?? null;
-}
-
 async function authorLabelOf(
-  ctx: QueryCtx | MutationCtx,
-  cache: Map<Id<"users">, string | null>,
+  usernameOf: ReturnType<typeof usernameLookup>,
   author: Doc<"proposals">["author"],
 ) {
   return author.kind === "user"
     ? {
         kind: "user" as const,
-        username: await usernameLookup(ctx, cache, author.userId),
+        username: await usernameOf(author.userId),
         role: author.roleAtAuthorship ?? null,
       }
     : { kind: "source" as const, sourceKey: author.sourceKey };
@@ -889,7 +848,7 @@ function recordTypesOf(ops: StoredOp[]): string[] {
       const type = CREATABLE_TABLES[op.table as keyof typeof CREATABLE_TABLES];
       types.add(type ?? op.table);
     } else if ("ref" in op) {
-      types.add((op.ref as RecordRef).type);
+      types.add(op.ref.type);
     }
   }
   return [...types].sort();
@@ -984,7 +943,7 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
         summary: await describeCreate(ctx, op, tempLabels),
       });
     } else if (op.kind === "update") {
-      const ref = op.ref as RecordRef;
+      const ref = op.ref;
       const doc = await getCanonical(ctx, ref);
       const title = doc
         ? (await displayInfo(ctx, ref.type, doc)).title
@@ -1009,29 +968,27 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
     } else if (op.kind === "merge") {
       rendered.push({
         kind: "merge" as const,
-        summary: `Merge ${await refLabel(ctx, op.merged as RecordRef)} into ${await refLabel(ctx, op.survivor as RecordRef)}`,
+        summary: `Merge ${await refLabel(ctx, op.merged)} into ${await refLabel(ctx, op.survivor)}`,
       });
     } else {
-      const verb =
-        op.kind === "hide"
-          ? "Hide"
-          : op.kind === "restore"
-            ? "Restore"
-            : op.kind === "split"
-              ? "Split out"
-              : op.kind === "lock"
-                ? "Lock"
-                : op.kind === "unlock"
-                  ? "Unlock"
-                  : "Clear an override on";
       rendered.push({
         kind: op.kind,
-        summary: `${verb} ${await refLabel(ctx, op.ref as RecordRef)}`,
+        summary: `${OP_VERBS[op.kind]} ${await refLabel(ctx, op.ref)}`,
       });
     }
   }
   return rendered;
 }
+
+/** How a summary line names each single-record op. */
+const OP_VERBS: Record<SingleRecordOp | "clearOverride", string> = {
+  hide: "Hide",
+  restore: "Restore",
+  split: "Split out",
+  lock: "Lock",
+  unlock: "Unlock",
+  clearOverride: "Clear an override on",
+};
 
 /** `type "title"` label for a sensitive-op summary line. */
 async function refLabel(
@@ -1091,7 +1048,7 @@ export const reviewQueue = query({
       .order("asc")
       .collect();
 
-    const cache = usernameCache();
+    const usernameOf = usernameLookup(ctx);
     const now = Date.now();
     const rows = [];
     for (const proposal of proposals) {
@@ -1106,10 +1063,10 @@ export const reviewQueue = query({
         opCount: version.ops.length,
         opKinds: opKindsOf(version.ops),
         recordTypes: recordTypesOf(version.ops),
-        author: await authorLabelOf(ctx, cache, proposal.author),
+        author: await authorLabelOf(usernameOf, proposal.author),
         warnings: version.warningsAcknowledged ?? [],
         stale,
-        claimedBy: await usernameLookup(ctx, cache, proposal.claimedBy),
+        claimedBy: await usernameOf(proposal.claimedBy),
         submittedAt: proposal.submittedAt ?? proposal._creationTime,
         ageMs: now - (proposal.submittedAt ?? proposal._creationTime),
       });
@@ -1155,7 +1112,7 @@ export const proposalDetail = query({
     const proposal = await ctx.db.get(args.proposalId);
     if (!proposal) return null;
 
-    const cache = usernameCache();
+    const usernameOf = usernameLookup(ctx);
     const versions = await ctx.db
       .query("proposalVersions")
       .withIndex("by_proposal", (q) => q.eq("proposalId", args.proposalId))
@@ -1185,7 +1142,7 @@ export const proposalDetail = query({
         kind: note.kind,
         text: note.text,
         versionNo: note.versionNo,
-        author: await usernameLookup(ctx, cache, note.authorId),
+        author: await usernameOf(note.authorId),
         at: note._creationTime,
       });
     }
@@ -1202,11 +1159,11 @@ export const proposalDetail = query({
       proposalId: proposal._id as string,
       state: proposal.state,
       stale,
-      author: await authorLabelOf(ctx, cache, proposal.author),
-      claimedBy: await usernameLookup(ctx, cache, proposal.claimedBy),
+      author: await authorLabelOf(usernameOf, proposal.author),
+      claimedBy: await usernameOf(proposal.claimedBy),
       submittedAt: proposal.submittedAt ?? null,
       decidedAt: proposal.decidedAt ?? null,
-      decidedBy: await usernameLookup(ctx, cache, proposal.decidedBy),
+      decidedBy: await usernameOf(proposal.decidedBy),
       currentVersionNo: proposal.currentVersionNo,
       versions: renderedVersions,
       draft: proposal.draft

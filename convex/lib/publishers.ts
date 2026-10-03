@@ -107,10 +107,9 @@ export const CANONICAL_PUBLISHERS: CanonicalPublisher[] = [
   { name: "Cross Infinite World", slug: "cross-infinite-world" },
   { name: "NBM Publishing", slug: "nbm-publishing" },
   { name: "Sol Press", slug: "sol-press" },
-  // Distributors ANN named on the first full staging import (2026-09-27)
-  // whose lines held with "resolves to no publisher row" (#48): the
-  // English-market publishers among them. Non-English ones (Kana, Panini,
-  // Bruno Gmünder) are skipped in ann.ts instead of seeded.
+  // Distributors ANN names that would otherwise resolve to no publisher
+  // row: the English-market publishers among them. Non-English ones (Kana,
+  // Panini, Bruno Gmünder) are skipped in ann.ts instead of seeded.
   { name: "Toyspress", slug: "toyspress", defunct: true },
   { name: "Mangamo", slug: "mangamo" },
   { name: "Yaoi Generation", slug: "yaoi-generation", defunct: true },
@@ -166,7 +165,7 @@ export const IMPRINT_PARENTS: Record<string, string> = Object.fromEntries(
  * "dark-horse-manga", "dark-horse-manhwa") into their company.
  */
 export const DUPLICATE_ALIASES: Record<string, string> = {
-  // ANN's distributor strings for imprints the list already knows (#48).
+  // ANN's distributor strings for imprints the list already knows.
   "dc comics": "cmx",
   "be beautiful manga": "central-park-media",
   "be beautiful": "central-park-media",

@@ -279,9 +279,8 @@ export function coverageFromText(text: string | undefined): CoverRange | null {
 }
 
 /**
- * Volumes per book when the line NAME guarantees it, per the 2026-09-27
- * publisher survey (docs/research): every book of these lines collects the
- * same count. Names whose size varies by series — "Deluxe" (1–3 across
+ * Volumes per book when the line NAME guarantees it, per the publishers'
+ * own descriptions: every book of these lines collects the same count. Names whose size varies by series — "Deluxe" (1–3 across
  * publishers), "Collector's Edition" (1.3–3), "Perfect Edition", plain
  * "Omnibus" (2 or 3), kanzenban recuts like "Fullmetal Edition" — return
  * null and wait for a blurb or a Moderator.

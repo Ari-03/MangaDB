@@ -1,4 +1,4 @@
-// Pure quality-gate helpers for the launch QA tooling (ticket #40, spec §7):
+// Pure quality-gate helpers for the launch QA tooling (spec §7):
 // the title-similarity duplicate sweep and the random-sample reservoir.
 // Pure so both are unit-testable without a backend; the paging/writes live
 // in convex/launch.ts.

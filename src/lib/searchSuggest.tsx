@@ -1,4 +1,4 @@
-// Search as you type (ticket #38 follow-up): the header search box as a
+// Search as you type: the header search box as a
 // combobox that offers live suggestions from `api.catalog.suggest` — Series
 // with their jackets, "Did you mean" near misses for typos, Publishers, and
 // a last row into the full /search page. Needs the reactive Convex client;
@@ -17,6 +17,7 @@ import {
 
 import { api } from "../../convex/_generated/api";
 import { Cover } from "~/lib/cover";
+import { plural } from "~/lib/format";
 import { normalizeIsbn } from "~/lib/isbn";
 import { useMature } from "~/lib/mature";
 import { authorPath, seriesPath } from "~/lib/slug";
@@ -120,7 +121,7 @@ export function authorMeta(author: { seriesCount: number; originalCount: number 
 function seriesMeta(card: SeriesCard): string {
   return [
     card.altMatch ? `“${card.altMatch}”` : null,
-    card.volumeCount ? `${card.volumeCount} ${card.volumeCount === 1 ? "vol" : "vols"}` : null,
+    card.volumeCount ? plural(card.volumeCount, "vol") : null,
     card.publisher,
   ]
     .filter(Boolean)

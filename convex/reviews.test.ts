@@ -3,88 +3,53 @@
 // author only; post-moderation by Moderators with an audit trail; upkeep
 // through purge and merge; and the public profile's lists.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it, vi } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { TargetId, TargetRef } from "./lib/ratings";
-import schema from "./schema";
 import { REVIEW_MAX_LENGTH, REVIEW_MIN_LENGTH, REVIEW_REASON_MAX } from "./reviews";
+import { insertCoverage, insertEdition, insertPublisher, insertVolume } from "./test.factories";
+import { ADMIN, MOD, alice, bob, makeT, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { edition, frierenTwins, merge, omnibusEditions, series, seriesWithVolume, volume } from "./test.tracking";
 
 // These tests cover Reviews as public content, so they run with the flag on;
 // features.test.ts covers the switched-off behaviour.
 vi.mock("./lib/features", () => ({ FEATURES: { publicReviews: true, comments: true } }));
 
-const ADMIN = "user_admin";
-const MOD = "user_mod";
 const AUTHOR = "user_author";
 const OTHER = "user_other";
 
-function makeT() {
-  const t = convexTest(schema);
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
-}
-type T = ReturnType<typeof makeT>;
-
-const series = (publicId: number) => ({ kind: "series" as const, publicId });
-const volume = (publicId: number) => ({ kind: "volume" as const, publicId });
 const TEXT = "A quiet, patient story about grief.\nThe art carries it.";
 
-async function seed(t: T) {
-  for (const [subject, username] of [
-    [ADMIN, "alice"],
-    [MOD, "bob"],
-    [AUTHOR, "carol"],
-    [OTHER, "dave"],
-  ] as const) {
-    await t.withIdentity({ subject }).mutation(api.users.claimUsername, { username });
-  }
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  await t.withIdentity({ subject: ADMIN }).mutation(api.roles.appoint, { username: "bob", role: "moderator" });
-  return await t.run(async (ctx) => {
-    const mk = async (publicId: number, title: string, mature?: true) => {
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId,
-        title,
-        altTitles: [],
-        searchText: title,
-        ...(mature ? { mature } : {}),
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: publicId * 10 + 1,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
-      return { seriesId, volumeId };
-    };
-    return {
-      one: await mk(1, "Frieren"),
-      two: await mk(2, "Frieren (duplicate)"),
-      adult: await mk(3, "Adult Title", true),
-    };
-  });
+/**
+ * Administrator alice, Moderator bob, the author carol and another reader
+ * dave; the Frieren pair (Series 1 and 2, Volumes 11 and 21) and a Mature
+ * Series 3, "Adult Title", with Volume 31.
+ */
+async function seed() {
+  const t = makeT();
+  await seedTeam(t, [alice, bob, { subject: AUTHOR, username: "carol" }, { subject: OTHER, username: "dave" }]);
+  const ids = await t.run(async (ctx) => ({
+    ...(await frierenTwins(ctx)),
+    adult: await seriesWithVolume(ctx, 3, "Adult Title", { mature: true }),
+  }));
+  return { t, ids };
 }
 
-type Ids = Awaited<ReturnType<typeof seed>>;
+type Ids = Awaited<ReturnType<typeof seed>>["ids"];
 
-async function write(t: T, subject: string, ids: Ids, body = TEXT, spoiler = false) {
+async function write(t: TestT, subject: string, ids: Ids, body = TEXT, spoiler = false) {
   return await t
     .withIdentity({ subject })
     .mutation(api.reviews.save, { target: { kind: "series", id: ids.one.seriesId }, body, spoiler });
 }
 
-const list = (t: T, target: TargetRef = series(1)) => t.query(api.reviews.list, { target });
+const list = (t: TestT, target: TargetRef = series(1)) => t.query(api.reviews.list, { target });
 
 describe("reviews.save", () => {
   it("posts a public Review with the author's username and Rating beside it", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     expect(await t.query(api.reviews.mine, { target: series(1) })).toBeNull();
 
     await t
@@ -109,8 +74,7 @@ describe("reviews.save", () => {
   });
 
   it("holds the body to 20-5,000 characters", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     await expect(write(t, AUTHOR, ids, "x".repeat(REVIEW_MIN_LENGTH - 1))).rejects.toMatchObject({
       data: { code: "reviewTooShort" },
     });
@@ -126,8 +90,7 @@ describe("reviews.save", () => {
   });
 
   it("keeps one Review per user per target; a second save edits it", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     const first = await write(t, AUTHOR, ids);
     const second = await write(t, AUTHOR, ids, "Rewritten after volume 4: even better.", true);
     expect(second.reviewId).toBe(first.reviewId);
@@ -149,8 +112,7 @@ describe("reviews.save", () => {
   });
 
   it("carries the spoiler flag, and mine returns the viewer's own Review", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     await write(t, AUTHOR, ids, TEXT, true);
     expect((await list(t))!.items[0]).toMatchObject({ spoiler: true });
     const mine = await t.withIdentity({ subject: AUTHOR }).query(api.reviews.mine, { target: series(1) });
@@ -163,8 +125,7 @@ describe("reviews.save", () => {
   });
 
   it("lists newest first, a page at a time", async () => {
-    const t = makeT();
-    await seed(t);
+    const { t } = await seed();
     const seriesId = (await t.run((ctx) => ctx.db.query("series").first()))!._id;
     const userId = (await t.run((ctx) => ctx.db.query("users").first()))!._id;
     await t.run(async (ctx) => {
@@ -189,8 +150,7 @@ describe("reviews.save", () => {
   });
 
   it("is rate limited per user", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     let limited = false;
     for (let i = 0; i < 12 && !limited; i++) {
       try {
@@ -206,8 +166,7 @@ describe("reviews.save", () => {
 
 describe("reviews.remove", () => {
   it("lets only the author delete", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     const { reviewId } = await write(t, AUTHOR, ids);
     await expect(
       t.withIdentity({ subject: OTHER }).mutation(api.reviews.remove, { reviewId }),
@@ -222,8 +181,7 @@ describe("reviews.remove", () => {
 
 describe("review moderation", () => {
   it("hides from everyone but Moderators and the author, with an audit row", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     const { reviewId } = await write(t, AUTHOR, ids);
 
     await expect(
@@ -263,8 +221,7 @@ describe("review moderation", () => {
 
 describe("review upkeep", () => {
   it("purging a user deletes their Reviews", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     await write(t, AUTHOR, ids);
     await write(t, OTHER, ids);
     await t.mutation(internal.users.purgeUser, { clerkSubject: AUTHOR });
@@ -274,8 +231,7 @@ describe("review upkeep", () => {
   });
 
   it("a merge repoints Reviews and keeps the survivor's on a clash", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     await write(t, AUTHOR, ids, "Survivor review, the one to keep.");
     const onLoser = (subject: string, body: string) =>
       t
@@ -284,12 +240,7 @@ describe("review upkeep", () => {
     await onLoser(AUTHOR, "Loser review, dropped by the merge.");
     await onLoser(OTHER, "Only on the loser, so it moves over.");
 
-    await t.withIdentity({ subject: MOD }).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "series", id: ids.one.seriesId },
-      loser: { type: "series", id: ids.two.seriesId },
-      reason: "Duplicate.",
-      confirmImpact: true,
-    });
+    await merge(signedIn(t, bob), { type: "series", id: ids.one.seriesId }, { type: "series", id: ids.two.seriesId });
     const bodies = (await list(t))!.items.map((i) => i.body).sort();
     expect(bodies).toEqual(["Only on the loser, so it moves over.", "Survivor review, the one to keep."]);
   });
@@ -297,8 +248,7 @@ describe("review upkeep", () => {
 
 describe("the public profile", () => {
   it("lists rated Series only where Reading is public, Reviews always, mature only when opted in", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     const author = t.withIdentity({ subject: AUTHOR });
     await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, score: 90 });
     await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.adult.seriesId }, score: 60 });
@@ -346,12 +296,11 @@ describe("the public profile", () => {
 });
 
 describe("reviews.save refusals and merged targets", () => {
-  const save = (t: T, target: TargetId) =>
+  const save = (t: TestT, target: TargetId) =>
     t.withIdentity({ subject: AUTHOR }).mutation(api.reviews.save, { target, body: TEXT, spoiler: false });
 
   it("refuses a hidden Series and a hidden Volume", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     await t.run((ctx) => ctx.db.patch(ids.two.volumeId, { status: "hidden" }));
     await expect(save(t, { kind: "volume", id: ids.two.volumeId })).rejects.toMatchObject({
       data: { code: "notFound" },
@@ -364,8 +313,7 @@ describe("reviews.save refusals and merged targets", () => {
   });
 
   it("follows a merged target to its survivor, and refuses one merged into a hidden record", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     await t.run(async (ctx) => {
       await ctx.db.patch(ids.two.seriesId, { status: "merged", mergedIntoId: ids.one.seriesId });
       await ctx.db.patch(ids.two.volumeId, { status: "merged", mergedIntoId: ids.one.volumeId });
@@ -389,8 +337,7 @@ describe("reviews.save refusals and merged targets", () => {
 
 describe("reviews.mine", () => {
   it("is null signed out and while the username is pending", async () => {
-    const t = makeT();
-    await seed(t);
+    const { t } = await seed();
     expect(await t.query(api.reviews.mine, { target: series(1) })).toBeNull();
     expect(
       await t.withIdentity({ subject: "user_unclaimed" }).query(api.reviews.mine, { target: series(1) }),
@@ -400,8 +347,7 @@ describe("reviews.mine", () => {
 
 describe("reviews.setHidden reason", () => {
   it("takes up to REVIEW_REASON_MAX characters and refuses more", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     const { reviewId } = await write(t, AUTHOR, ids);
     const mod = t.withIdentity({ subject: MOD });
     await expect(
@@ -421,8 +367,7 @@ describe("reviews.setHidden reason", () => {
 
 describe("the public profile's Reviews after catalog changes", () => {
   it("omits a Review whose Series went hidden and repoints one whose target merged", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     const author = t.withIdentity({ subject: AUTHOR });
     await author.mutation(api.ratings.set, { target: { kind: "series", id: ids.one.seriesId }, score: 80 });
     await author.mutation(api.reviews.save, {
@@ -450,45 +395,19 @@ describe("the public profile's Reviews after catalog changes", () => {
   });
 });
 
-/**
- * Books over Series 1 (which gains Vol 2, publicId 12): two omnibuses of
- * Vol 1-2 (901, 904) and a single-volume book of Vol 1 (902).
- */
-async function seedEditions(t: T, ids: Ids) {
-  return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
-    const vol2 = await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: 12,
-      seriesId: ids.one.seriesId,
-      position: 2,
-      label: "2",
-    });
-    const book = async (publicId: number, volumes: Array<Id<"volumes">>) => {
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
-      for (const [order, volumeId] of volumes.entries()) {
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order, extent: "complete" });
-      }
-      return editionId;
-    };
-    return {
-      omnibus: await book(901, [ids.one.volumeId, vol2]),
-      single: await book(902, [ids.one.volumeId]),
-      twin: await book(904, [ids.one.volumeId, vol2]),
-    };
-  });
+/** seed() plus the omnibus Editions over Series 1 (901-904; omnibusEditions). */
+async function seedBooks() {
+  const seeded = await seed();
+  const books = await seeded.t.run((ctx) => omnibusEditions(ctx, seeded.ids.one));
+  return { ...seeded, books };
 }
 
-const edition = (publicId: number) => ({ kind: "edition" as const, publicId });
-
 describe("Reviews of an omnibus Edition", () => {
-  const save = (t: T, target: TargetId) =>
+  const save = (t: TestT, target: TargetId) =>
     t.withIdentity({ subject: AUTHOR }).mutation(api.reviews.save, { target, body: TEXT, spoiler: false });
 
   it("reviews a multi-volume Edition as one book, with the author's Rating of it", async () => {
-    const t = makeT();
-    const ids = await seed(t);
-    const books = await seedEditions(t, ids);
+    const { t, ids, books } = await seedBooks();
     const target = { kind: "edition" as const, id: books.omnibus };
     const author = t.withIdentity({ subject: AUTHOR });
     await author.mutation(api.ratings.set, { target, score: 70 });
@@ -507,9 +426,7 @@ describe("Reviews of an omnibus Edition", () => {
   });
 
   it("refuses a single-volume Edition with rateVolume", async () => {
-    const t = makeT();
-    const ids = await seed(t);
-    const books = await seedEditions(t, ids);
+    const { t, ids, books } = await seedBooks();
     await expect(save(t, { kind: "edition", id: books.single })).rejects.toMatchObject({
       data: { code: "rateVolume" },
     });
@@ -517,9 +434,7 @@ describe("Reviews of an omnibus Edition", () => {
   });
 
   it("an Edition merge repoints Reviews, the survivor's winning a clash", async () => {
-    const t = makeT();
-    const ids = await seed(t);
-    const books = await seedEditions(t, ids);
+    const { t, ids, books } = await seedBooks();
     const on = (subject: string, editionId: Id<"editions">, body: string) =>
       t.withIdentity({ subject }).mutation(api.reviews.save, {
         target: { kind: "edition", id: editionId },
@@ -529,40 +444,26 @@ describe("Reviews of an omnibus Edition", () => {
     await on(AUTHOR, books.omnibus, "Survivor review, the one to keep.");
     await on(AUTHOR, books.twin, "Loser review, dropped by the merge.");
     await on(OTHER, books.twin, "Only on the loser, so it moves over.");
-    await t.withIdentity({ subject: ADMIN }).mutation(api.sensitiveOps.mergeRecords, {
-      survivor: { type: "edition", id: books.omnibus },
-      loser: { type: "edition", id: books.twin },
-      reason: "Same book.",
-      confirmImpact: true,
-    });
+    await merge(signedIn(t, alice), { type: "edition", id: books.omnibus }, { type: "edition", id: books.twin });
     const bodies = (await list(t, edition(901)))!.items.map((i) => i.body).sort();
     expect(bodies).toEqual(["Only on the loser, so it moves over.", "Survivor review, the one to keep."]);
   });
 
   it("purging a user deletes their Edition Reviews", async () => {
-    const t = makeT();
-    const ids = await seed(t);
-    const books = await seedEditions(t, ids);
+    const { t, ids, books } = await seedBooks();
     await save(t, { kind: "edition", id: books.omnibus });
     await t.mutation(internal.users.purgeUser, { clerkSubject: AUTHOR });
     expect(await t.run((ctx) => ctx.db.query("reviews").collect())).toEqual([]);
   });
 
   it("the profile leaves a Mature omnibus' rating out unless the viewer opted in", async () => {
-    const t = makeT();
-    const ids = await seed(t);
+    const { t, ids } = await seed();
     const adultOmnibus = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", { status: "active", name: "VIZ", slug: "viz" });
-      const vol2 = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 32,
-        seriesId: ids.adult.seriesId,
-        position: 2,
-        label: "2",
-      });
-      const editionId = await ctx.db.insert("editions", { status: "active", publicId: 905, publisherId });
+      const publisherId = await insertPublisher(ctx, { name: "VIZ", slug: "viz" });
+      const vol2 = await insertVolume(ctx, { seriesId: ids.adult.seriesId, publicId: 32, position: 2 });
+      const editionId = await insertEdition(ctx, { publicId: 905, publisherId });
       for (const [order, volumeId] of [ids.adult.volumeId, vol2].entries()) {
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order, extent: "complete" });
+        await insertCoverage(ctx, { editionId, volumeId, order });
       }
       return editionId;
     });
@@ -577,9 +478,7 @@ describe("Reviews of an omnibus Edition", () => {
   });
 
   it("the profile lists a rated omnibus under its Series' Reading visibility, and its Review", async () => {
-    const t = makeT();
-    const ids = await seed(t);
-    const books = await seedEditions(t, ids);
+    const { t, ids, books } = await seedBooks();
     const author = t.withIdentity({ subject: AUTHOR });
     const target = { kind: "edition" as const, id: books.omnibus };
     await author.mutation(api.ratings.set, { target, score: 80 });

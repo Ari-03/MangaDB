@@ -11,12 +11,13 @@
 
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ConvexError } from "convex/values";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { CoverBadge } from "~/lib/cover";
+import { mutationErrorMessage } from "~/lib/errors";
+import { plural } from "~/lib/format";
 import { FollowPrompt, type FollowSuggestion } from "~/lib/follows";
 import { CompletedPrompt, type SeriesSuggestion } from "~/lib/reading";
 
@@ -78,7 +79,7 @@ export function useSeriesOverlay(seriesPublicId: number): SeriesOverlay | null {
 /** The Series-page book shape the overlay is read against. */
 export type OverlayBook = {
   publicId: number;
-  releases: ReadonlyArray<{ id: string; format: "physical" | "digital" }>;
+  releases: ReadonlyArray<{ id: Id<"releases">; format: "physical" | "digital" }>;
   coverage: ReadonlyArray<{ volumePublicId: number; extent: "complete" | "partial" }>;
 };
 
@@ -89,15 +90,13 @@ export type OverlayBook = {
  * first — so a quick click lands where the Edition page's controls would.
  */
 export function quickBookFor(book: OverlayBook, overlay: SeriesOverlay): QuickBook {
-  const ids = book.releases.map((release) => release.id as Id<"releases">);
+  const ids = book.releases.map((release) => release.id);
   const entry = overlay.entries.find((row) => ids.includes(row.releaseId)) ?? null;
   const preferred =
     overlay.formatPreference === "both" ? "physical" : overlay.formatPreference;
   const target =
     entry?.releaseId ??
-    (book.releases.find((release) => release.format === preferred)?.id as
-      | Id<"releases">
-      | undefined) ??
+    book.releases.find((release) => release.format === preferred)?.id ??
     ids[0] ??
     null;
   const complete = book.coverage.filter((cov) => cov.extent === "complete");
@@ -356,14 +355,6 @@ export function BookQuickActions({
  */
 export const RUN_BATCH = 200;
 
-function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    const message = (err.data as { message?: string }).message;
-    if (message) return message;
-  }
-  return "That didn't go through. Try again.";
-}
-
 /**
  * Whole-run marking above a shelf: Want / Order / Own every book here, or
  * mark every book read, in one click — collection.setManyReleaseEntries and
@@ -429,7 +420,7 @@ export function RunActions({
       }
     } catch (err) {
       setFailure(
-        `Marked ${done} of ${items.length} ${items.length === 1 ? "book" : "books"}, then stopped: ${errorMessage(err)}`,
+        `Marked ${done} of ${plural(items.length, "book")}, then stopped: ${mutationErrorMessage(err)}`,
       );
     } finally {
       setRunClaims(owner, claimFor(action, items), false);

@@ -1,9 +1,6 @@
-// Comments (CONTEXT.md: Comment, Comment Report, Shadowed User): short
-// public plain-text posts on a Series or Volume page, with one level of
-// replies. Post-moderated: a Comment is published on insert unless a hold
-// rule sends it to the Data Team's queue (/mod/comments) first, and three
-// distinct reports hide a published one until a Moderator decides. Every
-// Moderator decision lands in commentAudit.
+// Comments (CONTEXT.md: Comment, Comment Report, Shadowed User): posting
+// and replies, the hold rules, reports, the Data Team's queue
+// (/mod/comments), and commentAudit, where every Moderator decision lands.
 //
 // Visibility, per viewer:
 // - approved: everyone;
@@ -28,11 +25,12 @@
 
 import { HOUR, RateLimiter } from "@convex-dev/rate-limiter";
 import type { WithoutSystemFields } from "convex/server";
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import { components } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { requireUser, viewerOrNull } from "./lib/auth";
+import { fail } from "./lib/errors";
 import { FEATURES } from "./lib/features";
 import { captureModeration } from "./lib/posthog";
 import {
@@ -91,13 +89,7 @@ type Comment = Doc<"comments">;
 type Status = Comment["status"];
 type User = Doc<"users">;
 
-const isModerator = (user: User | null) =>
-  Boolean(user && !user.suspended && (user.role === "moderator" || user.role === "administrator"));
 const isDataTeam = (user: User | null) => Boolean(user && !user.suspended && user.role);
-
-const fail = (code: string, message: string): never => {
-  throw new ConvexError({ code, message });
-};
 
 /** Refuse a Comment write while FEATURES.comments is off. */
 function requireCommentsOn() {

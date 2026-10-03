@@ -1,26 +1,22 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { ConvexError } from "convex/values";
+import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import { CommentsQueueLink, useIsModerator } from "~/lib/moderation";
+import { mutationErrorMessage } from "~/lib/errors";
+import { ModGate, ModTools } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * Role governance (ticket #31, spec §4/§5): the data-team roster, the
+ * Role governance (spec §4/§5): the data-team roster, the
  * appoint/revoke/suspend/reinstate actions, and the permanent audit trail.
  * Administrators appoint Moderators; Moderators appoint Editors; every
  * change lands in the append-only roleAudit table. The initial Administrator
- * is appointed by the operator (see the README). Never indexed.
+ * is appointed by the operator (docs/moderation.md). Never indexed.
  */
 export const Route = createFileRoute("/mod/roles")({
-  head: () => ({
-    meta: [
-      { title: "Roles — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Roles — MangaDB" }] }),
   component: ModRolesPage,
 });
 
@@ -34,31 +30,14 @@ function ModRolesPage() {
       </main>
     );
   }
-  return <ModRolesGate />;
-}
-
-function ModRolesGate() {
-  const isModerator = useIsModerator();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isModerator) {
-    return (
-      <main className="mod-page">
-        <h1>Moderators only</h1>
-        <p className="notice">
-          Role governance is for Moderators and Administrators.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <ModRolesContent />;
+  return (
+    <ModGate
+      role="moderator"
+      refusal="Role governance is for Moderators and Administrators."
+    >
+      <ModRolesContent />
+    </ModGate>
+  );
 }
 
 const ROLE_LABELS = {
@@ -73,13 +52,6 @@ const ACTION_LABELS = {
   suspended: "suspended",
   reinstated: "reinstated",
 } as const;
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    return String((err.data as { message?: string }).message ?? "Action failed.");
-  }
-  return "Action failed.";
-}
 
 function ModRolesContent() {
   const roster = useQuery(api.roles.roster, {});
@@ -101,7 +73,7 @@ function ModRolesContent() {
     try {
       await action();
     } catch (err) {
-      setError(errorMessage(err));
+      setError(mutationErrorMessage(err, "Action failed."));
     } finally {
       setBusy(false);
     }
@@ -109,23 +81,14 @@ function ModRolesContent() {
 
   return (
     <main className="mod-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Roles</span>
-      </nav>
+      <Breadcrumbs trail={["Roles"]} />
       <h1>Data-team roles</h1>
       <p className="section-hint">
         Administrators appoint Moderators; Moderators appoint Editors. Every
         change is audited permanently, and revoking a role never rewrites past
         attribution.
       </p>
-      <nav className="mod-tools" aria-label="Data team tools">
-        <Link to="/mod/queue">Review queue</Link>
-        <Link to="/mod/imports">Imports</Link>
-        <Link to="/mod/launch">Launch</Link>
-        <Link to="/mod/packaging">Catalog gaps</Link>
-        <CommentsQueueLink />
-      </nav>
+      <ModTools />
 
       <section className="mod-panel">
         <h2>Appoint</h2>

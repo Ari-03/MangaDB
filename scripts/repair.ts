@@ -187,5 +187,7 @@ switch (command) {
     console.log(convexRun("seriesBrowse:rebuild", {}).trim());
     break;
   default:
-    console.log("usage: node scripts/repair.ts metrics [label] | run --stage N [--step ID] [--apply] | rebuild");
+    // Fail, so a scripted caller cannot mistake a typo for a finished command.
+    console.error("usage: node scripts/repair.ts metrics [label] | run --stage N [--step ID] [--apply] | rebuild");
+    process.exitCode = 1;
 }

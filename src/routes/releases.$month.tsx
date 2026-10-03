@@ -12,9 +12,7 @@ import {
   type BrowseFilters,
 } from "~/lib/releasesBrowser";
 import {
-  breadcrumbListJsonLd,
   itemListJsonLd,
-  jsonLdScript,
   monthTitleTag,
   pageHead,
 } from "~/lib/seo";
@@ -22,7 +20,7 @@ import { editionPath } from "~/lib/slug";
 
 /**
  * `/releases/{yyyy-mm}` — the Month Grid sibling of the Release Agenda
- * (ticket #24, spec §10): the same month window of Canonical Releases
+ * (spec §10): the same month window of Canonical Releases
  * rendered month-at-a-glance, each release on its publication date.
  *
  * `?view=agenda` renders the Agenda for this month instead, so past and
@@ -53,49 +51,35 @@ export const Route = createFileRoute("/releases/$month")({
   // noindex/follow. The canonical always points at the bare month URL, so no
   // query-string variant — including a stray `?page=N` — is ever indexed.
   // JSON-LD: BreadcrumbList + an ItemList of the month's Releases, each
-  // linking its Edition page anchored at the Release row (ticket #39).
+  // linking its Edition page anchored at the Release row.
   head: ({ loaderData, match }) => {
     if (!loaderData) return {};
     const { anchor, data } = loaderData;
     const filtered = isFiltered(match.search) || match.search.view !== undefined;
     const path = `/releases/${monthParam(anchor)}`;
-    return {
-      ...pageHead({
-        title: monthTitleTag(monthTitle(anchor)),
-        description: `Every English manga release of ${monthTitle(anchor)} at a glance: volumes, formats, and publishers on a month calendar.`,
-        path,
-        robots: filtered ? "noindex, follow" : undefined,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: "Releases", path: "/releases" },
-            { name: monthTitle(anchor) },
-          ]),
-        ),
-        // The ItemList describes the canonical month page, so it is built
-        // only from the unfiltered window.
-        ...(!filtered && data && data.releases.length > 0
+    return pageHead({
+      title: monthTitleTag(monthTitle(anchor)),
+      description: `Every English manga release of ${monthTitle(anchor)} at a glance: volumes, formats, and publishers on a month calendar.`,
+      path,
+      robots: filtered ? "noindex, follow" : undefined,
+      breadcrumbs: [{ name: "Releases", path: "/releases" }, { name: monthTitle(anchor) }],
+      // The ItemList describes the canonical month page, so it is built
+      // only from the unfiltered window.
+      jsonLd:
+        !filtered && data && data.releases.length > 0
           ? [
-              jsonLdScript(
-                itemListJsonLd(
-                  data.releases.map((release) => ({
-                    name: [release.series[0]?.title, release.volumeLabel]
-                      .filter(Boolean)
-                      .join(" "),
-                    path: editionPath(
-                      release.edition.publicId,
-                      release.edition.title,
-                    ),
-                    anchor: release.anchor,
-                  })),
-                ),
+              itemListJsonLd(
+                data.releases.map((release) => ({
+                  name: [release.series[0]?.title, release.volumeLabel]
+                    .filter(Boolean)
+                    .join(" "),
+                  path: editionPath(release.edition.publicId, release.edition.title),
+                  anchor: release.anchor,
+                })),
               ),
             ]
-          : []),
-      ],
-    };
+          : [],
+    });
   },
   component: MonthPage,
   notFoundComponent: MonthNotFound,

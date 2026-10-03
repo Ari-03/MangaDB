@@ -13,78 +13,46 @@ describe("volumeTitle", () => {
 });
 
 describe("editionTitle", () => {
-  it("titles an Edition Line member by line + Edition Line Position", () => {
-    expect(
-      editionTitle({
+  type Input = Parameters<typeof editionTitle>[0];
+  const vol = (label: string | null, position: number) => ({ label, position });
+  // [case, the Edition (no line unless given), expected title]
+  const cases: Array<[string, Partial<Input> & Pick<Input, "covered">, string]> = [
+    [
+      // Line numbering wins over the covered Volumes' canonical numbers.
+      "titles an Edition Line member by line + Edition Line Position",
+      {
         seriesTitle: "Tokyo Ghoul",
         lineName: "Monster Edition",
         linePosition: "1",
-        // Line numbering wins over the covered Volumes' canonical numbers.
-        covered: [
-          { label: "1", position: 1 },
-          { label: "2", position: 2 },
-          { label: "3", position: 3 },
-        ],
-      }),
-    ).toBe("Tokyo Ghoul Monster Edition 1");
-  });
+        covered: [vol("1", 1), vol("2", 2), vol("3", 3)],
+      },
+      "Tokyo Ghoul Monster Edition 1",
+    ],
+    [
+      "omits the position when the line has none",
+      { seriesTitle: "S", lineName: "Deluxe", covered: [vol("1", 1)] },
+      "S Deluxe",
+    ],
+    [
+      "titles a lineless single-volume Edition by the Volume Label",
+      { seriesTitle: "Tokyo Ghoul", covered: [vol("3.5", 4)] },
+      "Tokyo Ghoul Vol 3.5",
+    ],
+    [
+      "is just the series title for an unlabeled lone Volume (oneshot)",
+      { seriesTitle: "One Rainy Evening", covered: [vol(null, 1)] },
+      "One Rainy Evening",
+    ],
+    [
+      "ranges a lineless multi-volume Edition, positions as label fallback",
+      { seriesTitle: "S", covered: [vol("1", 1), vol(null, 3)] },
+      "S Vol 1–3",
+    ],
+    ["falls back gracefully with no coverage and no series", { covered: [] }, "Edition"],
+  ];
 
-  it("omits the position when the line has none", () => {
-    expect(
-      editionTitle({
-        seriesTitle: "S",
-        lineName: "Deluxe",
-        linePosition: null,
-        covered: [{ label: "1", position: 1 }],
-      }),
-    ).toBe("S Deluxe");
-  });
-
-  it("titles a lineless single-volume Edition by the Volume Label", () => {
-    expect(
-      editionTitle({
-        seriesTitle: "Tokyo Ghoul",
-        lineName: null,
-        linePosition: null,
-        covered: [{ label: "3.5", position: 4 }],
-      }),
-    ).toBe("Tokyo Ghoul Vol 3.5");
-  });
-
-  it("is just the series title for an unlabeled lone Volume (oneshot)", () => {
-    expect(
-      editionTitle({
-        seriesTitle: "One Rainy Evening",
-        lineName: null,
-        linePosition: null,
-        covered: [{ label: null, position: 1 }],
-      }),
-    ).toBe("One Rainy Evening");
-  });
-
-  it("ranges a lineless multi-volume Edition, positions as label fallback", () => {
-    expect(
-      editionTitle({
-        seriesTitle: "S",
-        lineName: null,
-        linePosition: null,
-        covered: [
-          { label: "1", position: 1 },
-          { label: null, position: 3 },
-        ],
-      }),
-    ).toBe("S Vol 1–3");
-  });
-
-  it("falls back gracefully with no coverage and no series", () => {
-    expect(
-      editionTitle({
-        seriesTitle: null,
-        lineName: null,
-        linePosition: null,
-        covered: [],
-      }),
-    ).toBe("Edition");
+  it.each(cases)("%s", (_, edition, expected) => {
+    expect(editionTitle({ seriesTitle: null, lineName: null, linePosition: null, ...edition })).toBe(expected);
   });
 });
 

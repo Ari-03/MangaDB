@@ -1,4 +1,4 @@
-// Seven Seas parsing & normalization (ticket #34, spec §6/§7): pure
+// Seven Seas parsing & normalization (spec §6/§7): pure
 // functions from the source's wire formats to the normalized snapshot the
 // import pipeline stores on Source Observations. Two formats feed one book:
 //
@@ -15,6 +15,7 @@
 
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
+import { calendarDay, fullDateValidator, monthFromName, type FullDate } from "./dates";
 
 // ---------- the normalized snapshot ----------
 
@@ -39,7 +40,7 @@ export const bookSnapshotValidator = v.object({
   /** Seven Seas' own category line ("Manga", "Light Novel", …). */
   category: v.optional(v.string()),
   binding: v.optional(v.string()),
-  releaseDate: v.optional(v.object({ year: v.number(), month: v.number(), day: v.number() })),
+  releaseDate: v.optional(fullDateValidator),
   priceCents: v.optional(v.number()),
   currency: v.optional(v.string()),
   isbn13: v.optional(v.string()),
@@ -114,7 +115,7 @@ export type BookPageDetails = {
   seriesSlug?: string;
   seriesUrl?: string;
   creators: string[];
-  releaseDate?: { year: number; month: number; day: number };
+  releaseDate?: FullDate;
   priceCents?: number;
   currency?: string;
   category?: string;
@@ -132,40 +133,15 @@ export function isMatureRating(ageRating: string | undefined): boolean {
   return ageRating === "mature";
 }
 
-const MONTHS: Record<string, number> = {
-  january: 1,
-  february: 2,
-  march: 3,
-  april: 4,
-  may: 5,
-  june: 6,
-  july: 7,
-  august: 8,
-  september: 9,
-  october: 10,
-  november: 11,
-  december: 12,
-};
-
-/** "April 13, 2027" → a full-precision date, or undefined. */
-export function parseUsDate(
-  text: string,
-): { year: number; month: number; day: number } | undefined {
+/** "April 13, 2027" (full month name) → a full-precision date, or undefined. */
+export function parseUsDate(text: string): FullDate | undefined {
   const m = /([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/.exec(text);
   if (!m) return undefined;
-  const month = MONTHS[m[1]!.toLowerCase()];
-  const day = Number(m[2]);
+  const month = monthFromName(m[1]!);
   const year = Number(m[3]);
-  if (!month || day < 1 || day > 31) return undefined;
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return undefined;
-  }
-  return { year, month, day };
+  // A year below 100 is a typo, never a release date.
+  if (month === undefined || year < 100) return undefined;
+  return calendarDay(year, month, Number(m[2]));
 }
 
 /** A `<b>Label:</b> value` line out of the volume-meta block. */

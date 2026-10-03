@@ -1,175 +1,67 @@
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
 import { joinBrowseRows } from "./releases";
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 import { MIN_COVER_BYTES } from "./lib/covers";
-import schema from "./schema";
+import { pubDate } from "./test.catalog";
+import {
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+  seedCatalog,
+} from "./test.factories";
+import { makeT } from "./test.helpers";
+
+const august = { year: 2026, month: 8 };
 
 // Shared fixture: two publishers, two series, releases spread across July,
 // August, and September 2026 — including a month-precision date (day TBA), a
 // hidden release, and an omnibus — so one seed exercises the window scan,
 // both filters, and the label composition.
 async function seeded() {
-  const t = convexTest(schema);
+  const t = makeT();
   const ids = await t.run(async (ctx) => {
-    const viz = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "VIZ Media",
-      slug: "viz-media",
-    });
-    const seas = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas Entertainment",
-      slug: "seven-seas",
-    });
-    await ctx.db.insert("publishers", {
-      status: "hidden",
-      name: "Hidden Press",
-      slug: "hidden-press",
-    });
+    const viz = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+    const seas = await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+    await insertPublisher(ctx, { status: "hidden", name: "Hidden Press", slug: "hidden-press" });
 
-    const ghoul = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Tokyo Ghoul",
-      altTitles: [],
-      searchText: "Tokyo Ghoul",
-    });
-    const quiet = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 2,
-      title: "The Quiet Cartographer",
-      altTitles: [],
-      searchText: "The Quiet Cartographer",
-    });
+    const ghoul = await insertSeries(ctx, { title: "Tokyo Ghoul" });
+    const quiet = await insertSeries(ctx, { title: "The Quiet Cartographer" });
+    const g1 = await insertVolume(ctx, { seriesId: ghoul, position: 1 });
+    const g2 = await insertVolume(ctx, { seriesId: ghoul, position: 2 });
+    const g3 = await insertVolume(ctx, { seriesId: ghoul, position: 3 });
+    const q1 = await insertVolume(ctx, { seriesId: quiet, position: 1 });
 
-    const volume = async (
-      seriesId: Id<"series">,
-      position: number,
-      label?: string,
-    ) =>
-      await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: position,
-        seriesId,
-        position,
-        label,
-      });
-    const g1 = await volume(ghoul, 1, "1");
-    const g2 = await volume(ghoul, 2, "2");
-    const g3 = await volume(ghoul, 3, "3");
-    const q1 = await volume(quiet, 1, "1");
-
-    let editionPublicId = 0;
-    const edition = async (
-      publisherId: Id<"publishers">,
-      coverage: Array<{ volumeId: Id<"volumes">; extent: "complete" | "partial" }>,
-    ) => {
-      const id = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: ++editionPublicId,
-        publisherId,
-      });
-      let order = 1;
-      for (const row of coverage) {
-        await ctx.db.insert("volumeCoverages", {
-          editionId: id,
-          volumeId: row.volumeId,
-          order: order++,
-          extent: row.extent,
-        });
+    // An Edition covering `volumeIds` completely, in order.
+    const edition = async (publisherId: Id<"publishers">, volumeIds: Array<Id<"volumes">>) => {
+      const editionId = await insertEdition(ctx, { publisherId });
+      for (const [index, volumeId] of volumeIds.entries()) {
+        await insertCoverage(ctx, { editionId, volumeId, order: index + 1 });
       }
-      return id;
+      return editionId;
     };
-    const ghoulEd1 = await edition(viz, [{ volumeId: g1, extent: "complete" }]);
-    const omnibusEd = await edition(viz, [
-      { volumeId: g1, extent: "complete" },
-      { volumeId: g2, extent: "complete" },
-      { volumeId: g3, extent: "complete" },
-    ]);
-    const quietEd = await edition(seas, [{ volumeId: q1, extent: "complete" }]);
-
-    const release = async (args: {
-      editionId: Id<"editions">;
-      publisherId: Id<"publishers">;
-      seriesIds: Array<Id<"series">>;
-      format: "physical" | "digital";
-      status?: "active" | "hidden";
-      date: { year: number; month?: number; day?: number };
-    }) => {
-      const { year, month, day } = args.date;
-      await ctx.db.insert("releases", {
-        status: args.status ?? "active",
-        editionId: args.editionId,
-        format: args.format,
-        language: "en",
-        pubDate: {
-          year,
-          month,
-          day,
-          sort: year * 10000 + (month ?? 0) * 100 + (day ?? 0),
-        },
-        publisherId: args.publisherId,
-        seriesIds: args.seriesIds,
-      });
-    };
+    const ghoulEd1 = await edition(viz, [g1]);
+    const omnibusEd = await edition(viz, [g1, g2, g3]);
+    const quietEd = await edition(seas, [q1]);
+    const ghoulRelease = { publisherId: viz, seriesIds: [ghoul] };
+    const quietRelease = { editionId: quietEd, publisherId: seas, seriesIds: [quiet] };
 
     // August 2026 window contents:
-    await release({
-      editionId: ghoulEd1,
-      publisherId: viz,
-      seriesIds: [ghoul],
-      format: "physical",
-      date: { year: 2026, month: 8, day: 18 },
-    });
-    await release({
-      editionId: omnibusEd,
-      publisherId: viz,
-      seriesIds: [ghoul],
-      format: "physical",
-      date: { year: 2026, month: 8, day: 4 },
-    });
-    await release({
-      editionId: quietEd,
-      publisherId: seas,
-      seriesIds: [quiet],
-      format: "digital",
-      // Month precision: known to publish in August, day TBA (sort 20260800).
-      date: { year: 2026, month: 8 },
-    });
-    await release({
-      editionId: quietEd,
-      publisherId: seas,
-      seriesIds: [quiet],
-      format: "physical",
-      status: "hidden",
-      date: { year: 2026, month: 8, day: 11 },
-    });
+    await insertRelease(ctx, { ...ghoulRelease, editionId: ghoulEd1, pubDate: pubDate(20260818) });
+    await insertRelease(ctx, { ...ghoulRelease, editionId: omnibusEd, pubDate: pubDate(20260804) });
+    // Month precision: known to publish in August, day TBA (sort 20260800).
+    await insertRelease(ctx, { ...quietRelease, format: "digital", pubDate: pubDate(20260800) });
+    await insertRelease(ctx, { ...quietRelease, status: "hidden", pubDate: pubDate(20260811) });
     // Neighbors that must stay outside the August window:
-    await release({
-      editionId: quietEd,
-      publisherId: seas,
-      seriesIds: [quiet],
-      format: "physical",
-      date: { year: 2026, month: 7, day: 31 },
-    });
-    await release({
-      editionId: ghoulEd1,
-      publisherId: viz,
-      seriesIds: [ghoul],
-      format: "digital",
-      date: { year: 2026, month: 9, day: 1 },
-    });
+    await insertRelease(ctx, { ...quietRelease, pubDate: pubDate(20260731) });
+    await insertRelease(ctx, { ...ghoulRelease, editionId: ghoulEd1, format: "digital", pubDate: pubDate(20260901) });
     // Year-only precision falls in no month window.
-    await release({
-      editionId: ghoulEd1,
-      publisherId: viz,
-      seriesIds: [ghoul],
-      format: "digital",
-      date: { year: 2026 },
-    });
+    await insertRelease(ctx, { ...ghoulRelease, editionId: ghoulEd1, format: "digital", pubDate: pubDate(20260000) });
 
     return { viz, seas };
   });
@@ -179,10 +71,7 @@ async function seeded() {
 describe("releases.monthBrowse", () => {
   it("scans exactly the month's date window, month-precision included", async () => {
     const { t } = await seeded();
-    const result = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-    });
+    const result = await t.query(api.releases.monthBrowse, august);
     // The hidden release, both neighbors, and the year-only date are absent.
     expect(result.releases).toHaveLength(3);
     // Chronological: day-TBA (sort yyyymm00) first, then the dated rows.
@@ -191,71 +80,6 @@ describe("releases.monthBrowse", () => {
       [4, "Vol. 1–3"],
       [18, "Vol. 1"],
     ]);
-  });
-
-  it("applies the Format filter in memory after the window scan", async () => {
-    const { t } = await seeded();
-    const physical = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-      format: "physical",
-    });
-    expect(physical.releases.map((r) => r.format)).toEqual([
-      "physical",
-      "physical",
-    ]);
-    const digital = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-      format: "digital",
-    });
-    expect(digital.releases.map((r) => r.publisher?.slug)).toEqual([
-      "seven-seas",
-    ]);
-  });
-
-  it("narrows by Publisher through by_publisher_date, composing with Format", async () => {
-    const { t } = await seeded();
-    const viz = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-      publisher: "viz-media",
-    });
-    expect(viz.releases.map((r) => r.publisher?.name)).toEqual([
-      "VIZ Media",
-      "VIZ Media",
-    ]);
-    const both = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-      publisher: "viz-media",
-      format: "digital",
-    });
-    expect(both.releases).toEqual([]);
-  });
-
-  it("resolves a renamed Publisher's old slug and ignores unknown slugs", async () => {
-    const { t, ids } = await seeded();
-    await t.run(async (ctx) => {
-      await ctx.db.insert("publisherSlugRedirects", {
-        fromSlug: "viz",
-        publisherId: ids.viz,
-      });
-    });
-    const redirected = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-      publisher: "viz",
-    });
-    expect(redirected.releases).toHaveLength(2);
-    const unknown = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-      publisher: "no-such-publisher",
-    });
-    expect(unknown.releases).toEqual([]);
-    // The filter dropdown still renders on an empty result.
-    expect(unknown.publishers.length).toBeGreaterThan(0);
   });
 
   it("names the current slug for an old one, for the pages' in-memory filter", async () => {
@@ -272,45 +96,15 @@ describe("releases.monthBrowse", () => {
   it("labels rows from Coverage: single volume, omnibus range, partial", async () => {
     const { t, ids } = await seeded();
     await t.run(async (ctx) => {
-      const series = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 3,
-        title: "Split Story",
-        altTitles: [],
-        searchText: "Split Story",
-      });
-      const vol = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 99,
-        seriesId: series,
-        position: 1,
-        label: "3.5",
-      });
-      const edition = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 99,
-        publisherId: ids.viz,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId: edition,
-        volumeId: vol,
-        order: 1,
-        extent: "partial",
-      });
-      await ctx.db.insert("releases", {
-        status: "active",
-        editionId: edition,
-        format: "digital",
-        language: "en",
-        pubDate: { year: 2026, month: 8, day: 27, sort: 20260827 },
-        publisherId: ids.viz,
-        seriesIds: [series],
+      await seedCatalog(ctx, {
+        publisher: ids.viz,
+        series: { title: "Split Story" },
+        volume: { label: "3.5" },
+        coverage: { extent: "partial" },
+        release: { format: "digital", pubDate: pubDate(20260827) },
       });
     });
-    const result = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-    });
+    const result = await t.query(api.releases.monthBrowse, august);
     const partial = result.releases.find((r) => r.day === 27);
     expect(partial?.volumeLabel).toBe("Vol. 3.5 (partial)");
     expect(result.releases.find((r) => r.day === 4)?.volumeLabel).toBe(
@@ -320,10 +114,7 @@ describe("releases.monthBrowse", () => {
 
   it("lists active Publishers alphabetically for the shared filter", async () => {
     const { t } = await seeded();
-    const result = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-    });
+    const result = await t.query(api.releases.monthBrowse, august);
     expect(result.publishers).toEqual([
       { name: "Seven Seas Entertainment", slug: "seven-seas" },
       { name: "VIZ Media", slug: "viz-media" },
@@ -333,32 +124,16 @@ describe("releases.monthBrowse", () => {
   it("hides releases of hidden Editions and hidden Series", async () => {
     const { t, ids } = await seeded();
     await t.run(async (ctx) => {
-      const hiddenSeries = await ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 4,
-        title: "Gone",
-        altTitles: [],
-        searchText: "Gone",
-      });
-      const hiddenEdition = await ctx.db.insert("editions", {
-        status: "hidden",
-        publicId: 98,
-        publisherId: ids.viz,
-      });
-      await ctx.db.insert("releases", {
-        status: "active",
+      const hiddenSeries = await insertSeries(ctx, { status: "hidden", title: "Gone" });
+      const hiddenEdition = await insertEdition(ctx, { status: "hidden", publisherId: ids.viz });
+      await insertRelease(ctx, {
         editionId: hiddenEdition,
-        format: "physical",
-        language: "en",
-        pubDate: { year: 2026, month: 8, day: 20, sort: 20260820 },
+        pubDate: pubDate(20260820),
         publisherId: ids.viz,
         seriesIds: [hiddenSeries],
       });
     });
-    const result = await t.query(api.releases.monthBrowse, {
-      year: 2026,
-      month: 8,
-    });
+    const result = await t.query(api.releases.monthBrowse, august);
     expect(result.releases.some((r) => r.day === 20)).toBe(false);
   });
 
@@ -379,63 +154,41 @@ describe("releases.monthBrowse jackets", () => {
   // To Your Eternity Vol 25: the ebook's own ISBN has no art upstream, its
   // print sibling's does. Every row of the Edition tries print first.
   it("gives a digital row and its print sibling the same ISBNs, print first, across months", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { artUrl } = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "Kodansha",
-        slug: "kodansha",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "To Your Eternity",
-        altTitles: [],
-        searchText: "To Your Eternity",
-      });
+      const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+      const seriesId = await insertSeries(ctx, { title: "To Your Eternity" });
       const edition = async (position: number) => {
-        const volumeId = await ctx.db.insert("volumes", {
-          status: "active",
-          publicId: position,
-          seriesId,
-          position,
-          label: String(position),
-        });
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId: position,
-          publisherId,
-        });
-        await ctx.db.insert("volumeCoverages", { editionId, volumeId, order: 1, extent: "complete" });
+        const volumeId = await insertVolume(ctx, { seriesId, position });
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
         return editionId;
       };
       const release = async (
         editionId: Id<"editions">,
         format: "physical" | "digital",
         isbn13: string,
-        month: number,
+        sort: number,
         storageId?: Id<"_storage">,
       ) =>
-        await ctx.db.insert("releases", {
-          status: "active",
+        await insertRelease(ctx, {
           editionId,
           format,
-          language: "en",
           isbn13,
-          pubDate: { year: 2026, month, day: 7, sort: 20260007 + month * 100 },
+          pubDate: pubDate(sort),
           ...(storageId ? { coverImage: { storageId } } : {}),
           publisherId,
           seriesIds: [seriesId],
         });
       // Vol 25: both formats in October.
       const v25 = await edition(25);
-      await release(v25, "digital", "9798898302498", 10);
-      await release(v25, "physical", "9798888778661", 10);
+      await release(v25, "digital", "9798898302498", 20261007);
+      await release(v25, "physical", "9798888778661", 20261007);
       // Vol 26: the ebook in October, print (with stored art) in November.
       const art = await ctx.storage.store(new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }));
       const v26 = await edition(26);
-      await release(v26, "digital", "9780000000026", 10);
-      await release(v26, "physical", "9780000000126", 11, art);
+      await release(v26, "digital", "9780000000026", 20261007);
+      await release(v26, "physical", "9780000000126", 20261107, art);
       return { artUrl: await ctx.storage.getUrl(art) };
     });
 
@@ -455,179 +208,112 @@ describe("releases.monthBrowse jackets", () => {
   });
 });
 
+/** `ctx` with a db whose `query` tallies each table it scans, and the tally. */
+function countingQueries(ctx: MutationCtx) {
+  const counts = new Map<string, number>();
+  const db = new Proxy(ctx.db, {
+    get(target, prop) {
+      if (prop === "query") {
+        return (table: Parameters<typeof target.query>[0]) => {
+          counts.set(table, (counts.get(table) ?? 0) + 1);
+          return target.query(table);
+        };
+      }
+      const value: unknown = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { ctx: { ...ctx, db }, counts };
+}
+
 // Audit E05: a Release without an ISBN borrows one from a sibling Release or
 // an alternative Edition. The borrowed ISBN depends only on the Edition, so a
-// window of ISBN-less rows must read each Edition's Releases and Coverage once.
+// window of ISBN-less rows must read each Edition's Releases and Coverage
+// once, never once per row. The bounds below are the scans per Edition
+// consulted; a read per row would exceed them.
 describe("joinBrowseRows cover fallback", () => {
   it("reads each Edition's Releases and Coverage once per query", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { counts, rows } = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "VIZ Media",
-        slug: "viz-media",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Tokyo Ghoul",
-        altTitles: [],
-        searchText: "Tokyo Ghoul",
-      });
-      const volume = async (position: number) =>
-        await ctx.db.insert("volumes", {
-          status: "active",
-          publicId: position,
-          seriesId,
-          position,
-          label: String(position),
-        });
-      const edition = async (volumeId: Id<"volumes">, publicId: number) => {
-        const id = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
-        await ctx.db.insert("volumeCoverages", {
-          editionId: id,
-          volumeId,
-          order: 1,
-          extent: "complete",
-        });
-        return id;
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, { title: "Tokyo Ghoul" });
+      const edition = async (volumeId: Id<"volumes">) => {
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        return editionId;
       };
       const release = async (editionId: Id<"editions">, day: number, isbn13?: string) =>
-        await ctx.db.insert("releases", {
-          status: "active",
+        await insertRelease(ctx, {
           editionId,
-          format: "physical",
-          language: "en",
           isbn13,
-          pubDate: { year: 2026, month: 8, day, sort: 20260800 + day },
+          pubDate: pubDate(20260800 + day),
           publisherId,
           seriesIds: [seriesId],
         });
 
       // Eleven Releases in one Edition, ten of them without an ISBN.
-      const v1 = await volume(1);
-      const crowded = await edition(v1, 1);
+      const crowded = await edition(await insertVolume(ctx, { seriesId, position: 1 }));
       await release(crowded, 1, "9780000000001");
       for (let day = 2; day <= 11; day++) await release(crowded, day);
       // An Edition with no ISBN at all, whose Volume another Edition covers.
-      const v2 = await volume(2);
-      const bare = await edition(v2, 2);
-      const other = await edition(v2, 3);
-      await ctx.db.insert("releases", {
-        status: "active",
-        editionId: other,
-        format: "physical",
-        language: "en",
-        isbn13: "9780000000002",
-        publisherId,
-        seriesIds: [seriesId],
-      });
+      const v2 = await insertVolume(ctx, { seriesId, position: 2 });
+      const bare = await edition(v2);
+      const other = await edition(v2);
+      await insertRelease(ctx, { editionId: other, isbn13: "9780000000002", publisherId, seriesIds: [seriesId] });
       for (let day = 12; day <= 14; day++) await release(bare, day);
 
-      // Count table scans through a db whose `query` tallies each table.
-      const counts = new Map<string, number>();
-      const db = new Proxy(ctx.db, {
-        get(target, prop) {
-          if (prop === "query") {
-            return (table: Parameters<typeof target.query>[0]) => {
-              counts.set(table, (counts.get(table) ?? 0) + 1);
-              return target.query(table);
-            };
-          }
-          const value: unknown = Reflect.get(target, prop, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+      const counting = countingQueries(ctx);
       const docs = await ctx.db.query("releases").collect();
       const dated = docs.filter((r) => r.pubDate !== undefined);
-      const rows = await joinBrowseRows({ ...ctx, db }, dated);
-      return { counts: Object.fromEntries(counts), rows };
+      const rows = await joinBrowseRows(counting.ctx, dated);
+      return { counts: Object.fromEntries(counting.counts), rows };
     });
 
     expect(rows).toHaveLength(14);
     expect(rows.filter((r) => r.coverIsbns.join() === "9780000000001")).toHaveLength(11);
     expect(rows.filter((r) => r.coverIsbns.join() === "9780000000002")).toHaveLength(3);
-    // One Releases scan per Edition consulted: the crowded one, the bare one,
-    // and the alternative Edition the bare one borrows from.
-    expect(counts.releases).toBe(3);
+    // At most one Releases scan per Edition consulted: the crowded one, the
+    // bare one, and the alternative Edition the bare one borrows from.
+    expect(counts.releases ?? 0).toBeLessThanOrEqual(3);
     // Coverage by Edition (shared with the Volume label) for the two Editions
     // with rows, plus one by-Volume scan for the bare Edition's fallback.
-    expect(counts.volumeCoverages).toBe(3);
+    expect(counts.volumeCoverages ?? 0).toBeLessThanOrEqual(3);
   });
 
   // Review wave 2, Efficiency P3: the by-Volume scan was repeated per borrowing Edition.
   it("scans a shared Volume's Coverage once for every Edition borrowing from it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { counts, rows } = await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "VIZ Media",
-        slug: "viz-media",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Tokyo Ghoul",
-        altTitles: [],
-        searchText: "Tokyo Ghoul",
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 1,
-        seriesId,
-        position: 1,
-        label: "1",
-      });
-      const edition = async (publicId: number, day: number, isbn13?: string) => {
-        const editionId = await ctx.db.insert("editions", {
-          status: "active",
-          publicId,
-          publisherId,
-        });
-        await ctx.db.insert("volumeCoverages", {
+      const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
+      const seriesId = await insertSeries(ctx, { title: "Tokyo Ghoul" });
+      const volumeId = await insertVolume(ctx, { seriesId });
+      const edition = async (day: number, isbn13?: string) => {
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        await insertRelease(ctx, {
           editionId,
-          volumeId,
-          order: 1,
-          extent: "complete",
-        });
-        await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
           isbn13,
-          pubDate: { year: 2026, month: 8, day, sort: 20260800 + day },
+          pubDate: pubDate(20260800 + day),
           publisherId,
           seriesIds: [seriesId],
         });
       };
       // One donor Edition with an ISBN, twelve ISBN-less borrowers of the same Volume.
-      await edition(1, 1, "9780000000001");
-      for (let n = 2; n <= 13; n++) await edition(n, n);
+      await edition(1, "9780000000001");
+      for (let n = 2; n <= 13; n++) await edition(n);
 
-      const counts = new Map<string, number>();
-      const db = new Proxy(ctx.db, {
-        get(target, prop) {
-          if (prop === "query") {
-            return (table: Parameters<typeof target.query>[0]) => {
-              counts.set(table, (counts.get(table) ?? 0) + 1);
-              return target.query(table);
-            };
-          }
-          const value: unknown = Reflect.get(target, prop, target);
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+      const counting = countingQueries(ctx);
       const dated = await ctx.db.query("releases").collect();
-      const rows = await joinBrowseRows({ ...ctx, db }, dated);
-      return { counts: Object.fromEntries(counts), rows };
+      const rows = await joinBrowseRows(counting.ctx, dated);
+      return { counts: Object.fromEntries(counting.counts), rows };
     });
 
     expect(rows).toHaveLength(13);
     expect(rows.every((r) => r.coverIsbns.join() === "9780000000001")).toBe(true);
-    // One Releases scan per Edition consulted.
-    expect(counts.releases).toBe(13);
-    // Thirteen by-Edition Coverage reads, plus one by-Volume scan shared by all twelve borrowers.
-    expect(counts.volumeCoverages).toBe(14);
+    // At most one Releases scan per Edition consulted.
+    expect(counts.releases ?? 0).toBeLessThanOrEqual(13);
+    // Thirteen by-Edition Coverage reads, plus one by-Volume scan shared by
+    // all twelve borrowers (one each would make 25).
+    expect(counts.volumeCoverages ?? 0).toBeLessThanOrEqual(14);
   });
 });

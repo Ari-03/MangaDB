@@ -3,14 +3,23 @@
 // the packaging creation paths — Edition Line members covering real
 // Volumes and box sets as Release Bundles.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import schema from "../schema";
+import {
+  insertBundleMember,
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+} from "../test.factories";
+import { makeT } from "../test.helpers";
 import { upsertObservation } from "./observations";
 import {
+  type CreationArgs,
   createCanonicalRecords,
   createReleaseBundle,
   ensurePublisher,
@@ -21,12 +30,24 @@ import {
 } from "./pipeline";
 import { applyCreatePlan, planCreateOps } from "./proposalCreates";
 
-const makeT = () => convexTest(schema);
-
 const CITATION = {
   sourceName: "Test Source",
   url: "https://example.org/record",
 };
+
+/** The fields every creation case shares: PRH as the source, the test citation, untagged, at time 1. */
+type Shared = "sourceKey" | "citation" | "importComment" | "tagBootstrapUnreviewed" | "now";
+
+/** createCanonicalRecords with the shared fields defaulted; a case overrides the source or the tag. */
+const create = (ctx: MutationCtx, args: Omit<CreationArgs, Shared> & Partial<Pick<CreationArgs, Shared>>) =>
+  createCanonicalRecords(ctx, {
+    sourceKey: "prh",
+    citation: CITATION,
+    importComment: "test",
+    tagBootstrapUnreviewed: false,
+    now: 1,
+    ...args,
+  });
 
 async function observation(ctx: MutationCtx, sourceRecordId: string) {
   const { observation } = await upsertObservation(ctx, {
@@ -42,33 +63,15 @@ async function publisher(
   ctx: MutationCtx,
   name: string,
   slug: string,
-  extra: { status?: "active" | "merged"; mergedIntoId?: Id<"publishers"> } = {},
+  extra: Pick<Partial<Doc<"publishers">>, "status" | "mergedIntoId"> = {},
 ) {
-  return await ctx.db.insert("publishers", {
-    status: "active",
-    name,
-    slug,
-    ...extra,
-  });
+  return await insertPublisher(ctx, { name, slug, ...extra });
 }
 
+/** An active Series with Volumes at the given (numeric) labels. */
 async function series(ctx: MutationCtx, title: string, labels: string[]) {
-  const seriesId = await ctx.db.insert("series", {
-    status: "active",
-    publicId: 1,
-    title,
-    altTitles: [],
-    searchText: title,
-  });
-  for (const [i, label] of labels.entries()) {
-    await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: i + 1,
-      seriesId,
-      position: Number(label),
-      label,
-    });
-  }
+  const seriesId = await insertSeries(ctx, { title });
+  for (const label of labels) await insertVolume(ctx, { seriesId, position: Number(label) });
   return seriesId;
 }
 
@@ -93,16 +96,11 @@ describe("createCanonicalRecords — Volumes", () => {
     const t = makeT();
     await t.run(async (ctx) => {
       const obs = await observation(ctx, "a");
-      const result = await createCanonicalRecords(ctx, {
-        sourceKey: "prh",
+      const result = await create(ctx, {
         observation: obs,
-        citation: CITATION,
-        importComment: "test",
         seriesId: null,
         seriesTitle: "Otherside Picnic",
         labels: ["05", "0", "5", "7.5"],
-        tagBootstrapUnreviewed: false,
-        now: 1,
       });
       const volumes = await ctx.db
         .query("volumes")
@@ -121,17 +119,14 @@ describe("createCanonicalRecords — Volumes", () => {
   it("creates a Series with no placeholder Volume when asked for the Series only", async () => {
     const t = makeT();
     await t.run(async (ctx) => {
-      const result = await createCanonicalRecords(ctx, {
+      const result = await create(ctx, {
         sourceKey: "ann",
         observation: await observation(ctx, "omnibus-only"),
-        citation: CITATION,
-        importComment: "test",
         seriesId: null,
         seriesTitle: "Homunculus",
         labels: [],
         seriesOnly: true,
         tagBootstrapUnreviewed: true,
-        now: 1,
       });
       expect(result.volumeIds).toEqual([]);
       expect(await ctx.db.query("volumes").collect()).toHaveLength(0);
@@ -145,11 +140,11 @@ describe("queueCreationProposal", () => {
     await t.run(async (ctx) => {
       const seriesId = await series(ctx, "One shot", ["1"]);
       const survivor = (await ctx.db.query("volumes").collect())[0]!;
-      await ctx.db.insert("volumes", {
+      await insertVolume(ctx, {
         status: "merged",
-        publicId: 2,
         seriesId,
         position: 0.5,
+        label: undefined,
         mergedIntoId: survivor._id,
       });
       const proposalId = await queueCreationProposal(ctx, {
@@ -299,11 +294,8 @@ describe("createCanonicalRecords — Edition Lines", () => {
     await t.run(async (ctx) => {
       await publisher(ctx, "Kodansha", "kodansha");
       const seriesId = await series(ctx, "Noragami", ["19", "20"]);
-      const physical = await createCanonicalRecords(ctx, {
-        sourceKey: "prh",
+      const physical = await create(ctx, {
         observation: await observation(ctx, "9781646519026"),
-        citation: CITATION,
-        importComment: "test",
         seriesId,
         seriesTitle: "Noragami",
         labels: ["19", "20", "21"],
@@ -314,14 +306,10 @@ describe("createCanonicalRecords — Edition Lines", () => {
           publisher: { name: "Kodansha", slug: "kodansha" },
         },
         tagBootstrapUnreviewed: true,
-        now: 1,
       });
       // The digital release of the same omnibus joins its Edition.
-      const digital = await createCanonicalRecords(ctx, {
-        sourceKey: "prh",
+      const digital = await create(ctx, {
         observation: await observation(ctx, "9781646519033"),
-        citation: CITATION,
-        importComment: "test",
         seriesId,
         seriesTitle: "Noragami",
         labels: ["19", "20", "21"],
@@ -332,7 +320,6 @@ describe("createCanonicalRecords — Edition Lines", () => {
           publisher: { name: "Kodansha", slug: "kodansha" },
         },
         tagBootstrapUnreviewed: true,
-        now: 1,
       });
       const lines = await ctx.db.query("editionLines").collect();
       expect(lines).toMatchObject([{ seriesId, name: "Omnibus" }]);
@@ -369,22 +356,14 @@ describe("createCanonicalRecords — Edition Lines", () => {
         isbn13,
         publisher: { name: "Kodansha", slug: "kodansha" },
       });
-      const base = {
-        sourceKey: "prh",
-        citation: CITATION,
-        importComment: "test",
-        seriesId,
-        seriesTitle: "Ichi the Killer",
-        tagBootstrapUnreviewed: false,
-        now: 1,
-      };
-      await createCanonicalRecords(ctx, {
+      const base = { seriesId, seriesTitle: "Ichi the Killer" };
+      await create(ctx, {
         ...base,
         observation: await observation(ctx, "single"),
         labels: ["1"],
         release: release("9780000000002"),
       });
-      await createCanonicalRecords(ctx, {
+      await create(ctx, {
         ...base,
         observation: await observation(ctx, "omnibus"),
         labels: ["1", "2"],
@@ -399,22 +378,53 @@ describe("createCanonicalRecords — Edition Lines", () => {
     const t = makeT();
     await expect(
       t.run(async (ctx) => {
-        await createCanonicalRecords(ctx, {
-          sourceKey: "prh",
+        await create(ctx, {
           observation: await observation(ctx, "negima-omnibus-4"),
-          citation: CITATION,
-          importComment: "test",
           seriesId: null,
           seriesTitle: "Negima!",
           labels: [],
           editionLine: { name: "Omnibus", position: "4" },
           tagBootstrapUnreviewed: true,
-          now: 1,
         });
       }),
     ).rejects.toThrow(/packaging never becomes a Volume/);
   });
 });
+
+/** A creator of single-Volume Kodansha Releases in one Series; returns the Release. */
+function volumeCreator(ctx: MutationCtx, seriesId: Id<"series">) {
+  return async (label: string, isbn13: string, format: "physical" | "digital" = "physical") =>
+    (
+      await create(ctx, {
+        observation: await observation(ctx, `vol-${isbn13}`),
+        seriesId,
+        seriesTitle: "Fire Force",
+        labels: [label],
+        release: { format, isbn13, publisher: { name: "Kodansha", slug: "kodansha" } },
+      })
+    ).releaseId!;
+}
+
+/** A Kodansha physical box of these Volume labels, as PRH lists it in Bootstrap Mode. */
+const fireForceBox = (seriesId: Id<"series">, labels: string[]) => ({
+  sourceKey: "prh",
+  citation: CITATION,
+  importComment: "test",
+  seriesId,
+  name: `Fire Force Box Set 1 (Vol. ${labels[0]}-${labels.at(-1)})`,
+  labels,
+  publisher: { name: "Kodansha", slug: "kodansha" },
+  release: { format: "physical" as const, isbn13: "9798888772584" },
+  tagBootstrapUnreviewed: true,
+  now: 1,
+});
+
+/** A bundle's memberships in page order (by order, then creation). */
+const membershipsOf = (ctx: MutationCtx, bundleId: Id<"releaseBundles">) =>
+  ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+    .collect();
 
 describe("createReleaseBundle", () => {
   it("bundles the existing member Releases and is idempotent by ISBN", async () => {
@@ -423,11 +433,8 @@ describe("createReleaseBundle", () => {
       const kodansha = await publisher(ctx, "Kodansha", "kodansha");
       const seriesId = await series(ctx, "Fire Force", []);
       for (const label of ["1", "2"]) {
-        await createCanonicalRecords(ctx, {
-          sourceKey: "prh",
+        await create(ctx, {
           observation: await observation(ctx, `vol-${label}`),
-          citation: CITATION,
-          importComment: "test",
           seriesId,
           seriesTitle: "Fire Force",
           labels: [label],
@@ -436,22 +443,9 @@ describe("createReleaseBundle", () => {
             isbn13: `97800000000${label === "1" ? "02" : "19"}`,
             publisher: { name: "Kodansha", slug: "kodansha" },
           },
-          tagBootstrapUnreviewed: false,
-          now: 1,
         });
       }
-      const box = {
-        sourceKey: "prh",
-        citation: CITATION,
-        importComment: "test",
-        seriesId,
-        name: "Fire Force Manga Box Set 1 (Vol. 1-6)",
-        labels: ["1", "2", "3", "4", "5", "6"],
-        publisher: { name: "Kodansha", slug: "kodansha" },
-        release: { format: "physical" as const, isbn13: "9798888772584" },
-        tagBootstrapUnreviewed: true,
-        now: 1,
-      };
+      const box = fireForceBox(seriesId, ["1", "2", "3", "4", "5", "6"]);
       const first = await createReleaseBundle(ctx, {
         ...box,
         observation: await observation(ctx, "9798888772584"),
@@ -477,64 +471,13 @@ describe("createReleaseBundle", () => {
   });
 });
 
-/** A creator of single-Volume Kodansha Releases in one Series; returns the Release. */
-function volumeCreator(ctx: MutationCtx, seriesId: Id<"series">) {
-  return async (label: string, isbn13: string, format: "physical" | "digital" = "physical") =>
-    (
-      await createCanonicalRecords(ctx, {
-        sourceKey: "prh",
-        observation: await observation(ctx, `vol-${isbn13}`),
-        citation: CITATION,
-        importComment: "test",
-        seriesId,
-        seriesTitle: "Fire Force",
-        labels: [label],
-        release: { format, isbn13, publisher: { name: "Kodansha", slug: "kodansha" } },
-        tagBootstrapUnreviewed: false,
-        now: 1,
-      })
-    ).releaseId!;
-}
-
-/** A Kodansha physical box of these Volume labels. */
-const fireForceBox = (seriesId: Id<"series">, labels: string[]) => ({
-  sourceKey: "prh",
-  citation: CITATION,
-  importComment: "test",
-  seriesId,
-  name: `Fire Force Box Set 1 (Vol. ${labels[0]}-${labels.at(-1)})`,
-  labels,
-  publisher: { name: "Kodansha", slug: "kodansha" },
-  release: { format: "physical" as const, isbn13: "9798888772584" },
-  tagBootstrapUnreviewed: true,
-  now: 1,
-});
-
-/** A bundle's memberships in page order (by order, then creation). */
-const membershipsOf = (ctx: MutationCtx, bundleId: Id<"releaseBundles">) =>
-  ctx.db
-    .query("bundleMemberships")
-    .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
-    .collect();
-
 describe("createReleaseBundle — members that arrive later (B15)", () => {
   it("a box imported before its books picks them up when retried", async () => {
     const t = makeT();
     await t.run(async (ctx) => {
       await publisher(ctx, "Kodansha", "kodansha");
       const seriesId = await series(ctx, "Fire Force", []);
-      const box = {
-        sourceKey: "prh",
-        citation: CITATION,
-        importComment: "test",
-        seriesId,
-        name: "Fire Force Manga Box Set 1 (Vol. 1-3)",
-        labels: ["1", "2", "3"],
-        publisher: { name: "Kodansha", slug: "kodansha" },
-        release: { format: "physical" as const, isbn13: "9798888772584" },
-        tagBootstrapUnreviewed: true,
-        now: 1,
-      };
+      const box = fireForceBox(seriesId, ["1", "2", "3"]);
       const early = await createReleaseBundle(ctx, {
         ...box,
         observation: await observation(ctx, "box"),
@@ -547,11 +490,8 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
         ["3", "9780000000033"],
         ["2", "9780000000026"],
       ] as const) {
-        const result = await createCanonicalRecords(ctx, {
-          sourceKey: "prh",
+        const result = await create(ctx, {
           observation: await observation(ctx, `vol-${label}`),
-          citation: CITATION,
-          importComment: "test",
           seriesId,
           seriesTitle: "Fire Force",
           labels: [label],
@@ -560,8 +500,6 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
             isbn13,
             publisher: { name: "Kodansha", slug: "kodansha" },
           },
-          tagBootstrapUnreviewed: false,
-          now: 1,
         });
         releaseIds[label] = result.releaseId!;
       }
@@ -611,27 +549,13 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
     await t.run(async (ctx) => {
       await publisher(ctx, "Kodansha", "kodansha");
       const seriesId = await series(ctx, "Fire Force", []);
-      const box = {
-        sourceKey: "prh",
-        citation: CITATION,
-        importComment: "test",
-        seriesId,
-        name: "Fire Force Box",
-        labels: ["1"],
-        publisher: { name: "Kodansha", slug: "kodansha" },
-        release: { format: "physical" as const, isbn13: "9798888772584" },
-        tagBootstrapUnreviewed: true,
-        now: 1,
-      };
+      const box = fireForceBox(seriesId, ["1"]);
       const early = await createReleaseBundle(ctx, {
         ...box,
         observation: await observation(ctx, "box"),
       });
-      await createCanonicalRecords(ctx, {
-        sourceKey: "prh",
+      await create(ctx, {
         observation: await observation(ctx, "vol-1"),
-        citation: CITATION,
-        importComment: "test",
         seriesId,
         seriesTitle: "Fire Force",
         labels: ["1"],
@@ -640,8 +564,6 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
           isbn13: "9780000000019",
           publisher: { name: "Kodansha", slug: "kodansha" },
         },
-        tagBootstrapUnreviewed: false,
-        now: 1,
       });
       for (const patch of [{ status: "hidden" as const }, { status: "active" as const, locked: true }]) {
         await ctx.db.patch(early.bundleId, patch);
@@ -751,21 +673,14 @@ describe("createReleaseBundle — members that arrive later (B15)", () => {
         observation: await observation(ctx, "box"),
       });
       // An Editor added a bonus book (outside the box's Volumes) first.
-      const bonus = await ctx.db.insert("releases", {
-        status: "active",
+      const bonus = await insertRelease(ctx, {
         editionId: (await ctx.db.get(two))!.editionId,
-        format: "physical",
-        language: "en",
         publisherId: kodansha,
         seriesIds: [seriesId],
       });
       const [member] = await membershipsOf(ctx, early.bundleId);
       await ctx.db.patch(member!._id, { order: 2 });
-      await ctx.db.insert("bundleMemberships", {
-        bundleId: early.bundleId,
-        releaseId: bonus,
-        order: 1,
-      });
+      await insertBundleMember(ctx, { bundleId: early.bundleId, releaseId: bonus, order: 1 });
 
       const one = await vol("1", "9780000000019");
       await createReleaseBundle(ctx, { ...box, observation: await observation(ctx, "box") });
@@ -834,25 +749,13 @@ describe("createCanonicalRecords — repairs stand", () => {
   async function publishedSeries(ctx: MutationCtx, title: string, publisherId: Id<"publishers">) {
     const seriesId = await series(ctx, title, ["1"]);
     const volume = (await ctx.db.query("volumes").collect()).find((v) => v.seriesId === seriesId)!;
-    const editionId = await ctx.db.insert("editions", {
-      status: "hidden",
-      publicId: 3,
-      publisherId,
-    });
-    await ctx.db.insert("volumeCoverages", {
-      editionId,
-      volumeId: volume._id,
-      order: 1,
-      extent: "complete",
-    });
+    const editionId = await insertEdition(ctx, { status: "hidden", publisherId });
+    await insertCoverage(ctx, { editionId, volumeId: volume._id });
     return seriesId;
   }
 
   const bookArgs = (obs: Awaited<ReturnType<typeof observation>>, slug: string) => ({
-    sourceKey: "prh",
     observation: obs,
-    citation: CITATION,
-    importComment: "test",
     seriesId: null,
     seriesTitle: "Cells at Work! Picture Book",
     labels: ["5"],
@@ -862,7 +765,6 @@ describe("createCanonicalRecords — repairs stand", () => {
       publisher: { name: slug, slug },
     },
     tagBootstrapUnreviewed: true,
-    now: 1,
   });
 
   it("never recreates a Series an Editor hid; the record stays on its observation", async () => {
@@ -873,7 +775,7 @@ describe("createCanonicalRecords — repairs stand", () => {
       await ctx.db.patch(hidden, { status: "hidden" });
       const obs = await observation(ctx, "9798888778449");
 
-      const result = await createCanonicalRecords(ctx, bookArgs(obs, "kodansha"));
+      const result = await create(ctx, bookArgs(obs, "kodansha"));
       expect(result).toMatchObject({ seriesId: hidden, changed: false });
       expect(result.releaseId).toBeUndefined();
       expect(result.blocked).toContain("an Editor hid");
@@ -894,10 +796,7 @@ describe("createCanonicalRecords — repairs stand", () => {
       const hidden = await publishedSeries(ctx, "Cells at Work! Picture Book", vertical);
       await ctx.db.patch(hidden, { status: "hidden" });
 
-      const result = await createCanonicalRecords(
-        ctx,
-        bookArgs(await observation(ctx, "9798888778449"), "kodansha"),
-      );
+      const result = await create(ctx, bookArgs(await observation(ctx, "9798888778449"), "kodansha"));
       expect(result.blocked).toBeUndefined();
       expect(result.seriesId).not.toBe(hidden);
       expect(result.releaseId).toBeDefined();
@@ -937,11 +836,9 @@ describe("createCanonicalRecords — repairs stand", () => {
       await ctx.db.patch(link._id, {
         recordRef: { type: "series", id: loser },
       });
-      const result = await createCanonicalRecords(ctx, {
+      const result = await create(ctx, {
         sourceKey: "kodansha",
         observation: await observation(ctx, "9798888431900"),
-        citation: CITATION,
-        importComment: "test",
         seriesId: null,
         seriesTitle: "Summer Ghost",
         seriesKey: "summer-ghost",
@@ -951,8 +848,6 @@ describe("createCanonicalRecords — repairs stand", () => {
           isbn13: "9798888431900",
           publisher: { name: "Kodansha", slug: "kodansha" },
         },
-        tagBootstrapUnreviewed: false,
-        now: 1,
       });
       expect(result.seriesId).toBe(survivor);
       expect(await ctx.db.query("series").collect()).toHaveLength(2);
@@ -969,20 +864,17 @@ describe("createCanonicalRecords — repairs stand", () => {
       const two = volumes.find((v) => v.label === "2")!;
       // Stage 8: the unlabeled placeholder was merged into Volume 1; a
       // stray Volume 2 was hidden.
-      await ctx.db.insert("volumes", {
+      await insertVolume(ctx, {
         status: "merged",
         mergedIntoId: one._id,
-        publicId: 9,
         seriesId,
         position: 0.5,
+        label: undefined,
       });
       await ctx.db.patch(two._id, { status: "hidden" });
 
-      const book = await createCanonicalRecords(ctx, {
-        sourceKey: "prh",
+      const book = await create(ctx, {
         observation: await observation(ctx, "9781638585619"),
-        citation: CITATION,
-        importComment: "test",
         seriesId,
         seriesTitle: "Qualia the Purple",
         labels: [],
@@ -991,21 +883,15 @@ describe("createCanonicalRecords — repairs stand", () => {
           isbn13: "9781638585619",
           publisher: { name: "Kodansha", slug: "kodansha" },
         },
-        tagBootstrapUnreviewed: false,
-        now: 1,
       });
       expect(book.volumeIds).toEqual([one._id]);
 
-      const backbone = await createCanonicalRecords(ctx, {
+      const backbone = await create(ctx, {
         sourceKey: "ann",
         observation: await observation(ctx, "manga:25348"),
-        citation: CITATION,
-        importComment: "test",
         seriesId,
         seriesTitle: "Qualia the Purple",
         labels: ["2", "3"],
-        tagBootstrapUnreviewed: false,
-        now: 1,
       });
       const after = await ctx.db
         .query("volumes")

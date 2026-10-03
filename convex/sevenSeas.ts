@@ -1,30 +1,13 @@
-// The Seven Seas adapter (ticket #34, spec §6/§7) — the import pipeline
-// proven end to end on one source. The sync action pages through the WP
+// The Seven Seas adapter (spec §6/§7). The sync action pages through the WP
 // REST catalog (`wp/v2/books`) using `modified_gmt` as the change signal,
 // fetches the book page for new/changed records, normalizes it
-// (lib/sevenSeas.ts), and hands each snapshot to `applyBook`:
-//
-//   observation upsert (latest snapshot + append-only history)
-//     → the full matching ladder (lib/matching.ts): ① stored link ·
-//       ② ISBN-13 + title sanity · ③ publisher+title+label+format with
-//       exactly one candidate · ④ title-only always reviews · ⑤ create.
-//       Ambiguity always queues flagged; the importer never merges.
-//     → linked records reconcile field-by-field under the authority rules
-//       (lib/reconcile.ts): auto-update, queue a conflict Proposal, or
-//       record on the observation only. Human Overrides stay sticky.
-//     → the creation path emits a system-authored, immediately approved
-//       Proposal creating Series/Volume/Edition/Release with public
-//       importer-authored Revisions citing the source name + record URL.
-//     → in steady state, a brand-new Series, multi-Volume Coverage, or an
-//       Edition-Line-shaped release queues an In-Review Proposal carrying
-//       its Edition Line instead; in Bootstrap Mode those records are
-//       created directly and tagged bootstrap-unreviewed (spec §7).
-//     → a box set is a Release Bundle; once linked, it picks up members
-//       whose books arrived after it, on every listing that notes it.
-//     → packaging an older planner left unplaced is replayed once from its
-//       stored snapshot, without its page, paced by the detail budget.
-//     → a relisted book retires the cancellation review its withdrawal
-//       queued (lib/observations.ts markSeen).
+// (lib/sevenSeas.ts), and hands each snapshot to `applyBook`, which runs
+// the shared matching ladder and creation path (lib/matching.ts,
+// lib/pipeline.ts). Seven Seas specifics: series links are keyed by the
+// site's series slug, a box set becomes a Release Bundle that picks up
+// members whose books arrived after it on every listing that notes it, and
+// packaging an older planner left unplaced is replayed once from its
+// stored snapshot, without its page, paced by the detail budget.
 //
 // Covers land in Convex file storage as {storageId, sourceUrl, attribution}
 // through the shared attach path (lib/covers.ts `storeCover`), and are
@@ -41,11 +24,12 @@ import { getBootstrapMode, getSourceByKey } from "./importSources";
 import {
   coverKey,
   coverRequest,
-  storeCover,
   type CoverRequest,
   type StoredCovers,
 } from "./lib/covers";
+import type { ApplyResult } from "./lib/catalogTitle";
 import { errorMessage, politeFetch } from "./lib/http";
+import { closeRun, registryRow, storeRunCover } from "./lib/importRuns";
 import { applyRetrying } from "./lib/occ";
 import { parseBookTitle, rangeLabels } from "./lib/bookTitle";
 import { inferCoverage } from "./lib/coverage";
@@ -64,6 +48,7 @@ import {
   reconcileLinkedBundle,
   reconcileLinkedSeries,
   recordUnplaced,
+  removedSeriesFor,
   toPartialDate,
   linkSeriesObservation,
   type BundleReconcile,
@@ -121,16 +106,7 @@ export const sync = internalAction({
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("sevenSeas.sync", ctx, async () => {
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: SOURCE_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"sevenseas\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
+      const source = await registryRow(ctx, SOURCE_KEY);
       if (!source.enabled) return { skipped: "disabled" as const };
 
       const runId: Id<"importRuns"> = await ctx.runMutation(internal.imports.startRun, {
@@ -209,16 +185,16 @@ export const sync = internalAction({
               // after its apply committed): retry just the art, paced by its
               // own budget so it never starves book-page fetches.
               if (note.cover && (covers.has(coverKey(note.cover)) || coverBudget-- > 0)) {
-                try {
-                  const notice = await storeCover(ctx, covers, {
+                await storeRunCover(
+                  ctx,
+                  covers,
+                  {
                     ...note.cover,
                     attribution: source.attribution ?? PUBLISHER.name,
                     delayMs: delay,
-                  });
-                  if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
-                } catch (e) {
-                  errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
-                }
+                  },
+                  { label: listing.slug, errors },
+                );
               }
               continue;
             }
@@ -256,16 +232,16 @@ export const sync = internalAction({
               }
 
               if (result.cover) {
-                try {
-                  const notice = await storeCover(ctx, covers, {
+                await storeRunCover(
+                  ctx,
+                  covers,
+                  {
                     ...result.cover,
                     attribution: source.attribution ?? PUBLISHER.name,
                     delayMs: delay,
-                  });
-                  if (notice) errors.push(`cover ${listing.slug}: ${notice}`);
-                } catch (e) {
-                  errors.push(`cover ${listing.slug}: ${errorMessage(e)}`);
-                }
+                  },
+                  { label: listing.slug, errors },
+                );
               }
             } catch (e) {
               // A removed page (404) is a notice, not a failure: the book stays
@@ -290,37 +266,13 @@ export const sync = internalAction({
           });
         }
 
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: failures > 0 ? "failed" : "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
-        return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
-          completeSweep,
-          errorCount: errors.length,
-          ...(failures > 0 ? { failed: true } : {}),
-        };
+        const status = failures > 0 ? "failed" : "succeeded";
+        return { ...(await closeRun(ctx, runId, status, { seen, changed, errors })), completeSweep };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
           completeSweep: false,
-          errorCount: errors.length,
-          failed: true,
         };
       }
     }),
@@ -377,10 +329,10 @@ export const noteListing = internalMutation({
         ? { needsDetail: false }
         : { needsDetail: false, review: conflict };
     }
-    // Packaging an older planner left unplaced (B19) is replayed from its
+    // Packaging an older planner left unplaced is replayed from its
     // stored snapshot: the page is unchanged, only the verdict is stale. The
     // title's shape comes from today's parser, as normalizeBook reads it, so
-    // a snapshot stored before the parser marked a gapped list (R12) never
+    // a snapshot stored before the parser marked a gapped list never
     // replays its stale packaging. The action paces replays with the detail
     // budget.
     if (obs.recordRef === undefined && obs.queuedProposalId === undefined && staleVerdict(obs)) {
@@ -424,23 +376,6 @@ export const noteListing = internalMutation({
 
 // ---------- applying one book ----------
 
-type ApplyResult = {
-  status:
-    | "unchanged"
-    | "created"
-    | "updated"
-    | "linked"
-    | "queued"
-    | "alreadyQueued"
-    | "needsReview"
-    | "recordOnly";
-  changed: boolean;
-  releaseId?: Id<"releases">;
-  /** Art the action should store on the Release (lib/covers.ts `storeCover`). */
-  cover?: CoverRequest;
-  reason?: string;
-};
-
 /** The fields this source offers on a linked Release, in canonical form. */
 function offeredReleaseFields(snapshot: BookSnapshot): Record<string, unknown> {
   const offered: Record<string, unknown> = {};
@@ -474,7 +409,7 @@ function reconcileSeries(
 
 /**
  * Whether an unplaced observation carries a verdict a planner older than the
- * blurb, the line's size and Unmapped Packaging recorded (B19). Only those
+ * blurb, the line's size and Unmapped Packaging recorded. Only those
  * texts replay: a replay links, queues, or overwrites them with a verdict of
  * today's planner (unplacedVerdict, a hidden Series' note), none of which
  * replays again, so each observation replays at most once. No verdict at
@@ -819,6 +754,22 @@ export const applyBook = internalMutation({
     if (gates.length > 0 && !bootstrap) {
       if (await alreadyHandled(ctx, observation)) {
         return { status: "alreadyQueued", changed: false };
+      }
+      if (seriesId === null) {
+        // A brand-new Series for a work an Editor hid would undo the repair:
+        // the book stays on its observation instead of the queue, as in
+        // Kodansha and applyCatalogTitle (the creation path checks itself).
+        const removed = await removedSeriesFor(ctx, {
+          sourceKey: SOURCE_KEY,
+          observation,
+          seriesKey: snapshot.seriesSlug,
+          seriesTitle: snapshot.seriesTitle,
+          publisherId: publisher?._id ?? null,
+        });
+        if (removed?.kind === "hidden") {
+          await recordUnplaced(ctx, observation, removed.reason, now);
+          return { status: "recordOnly", changed: false, reason: "hidden series" };
+        }
       }
       await queueCreationProposal(ctx, {
         sourceKey: SOURCE_KEY,

@@ -22,7 +22,7 @@
 import { ConvexError, v, type Infer, type ObjectType } from "convex/values";
 
 import { internal } from "./_generated/api";
-import { recountCatalog } from "./catalog";
+import { activeVolumes, recountCatalog, seriesEditions } from "./catalog";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   internalAction,
@@ -33,6 +33,7 @@ import {
 } from "./_generated/server";
 import { coverUrl, seriesCoverIsbns, type SeriesCoverCandidate } from "./lib/covers";
 import { timingNeedsToday, todaySortKey } from "./lib/dates";
+import { releasesOf } from "./lib/editionRows";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
 import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
@@ -197,6 +198,17 @@ export const sweepStale = internalMutation({
 });
 
 /**
+ * A Series' library row, or null before the rebuild has written one (or
+ * while it is bookless). The rebuild keeps one row per Series.
+ */
+export async function seriesStatsRow(ctx: QueryCtx, seriesId: Id<"series">) {
+  return await ctx.db
+    .query("seriesStats")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .unique();
+}
+
+/**
  * Carry a Series' new `mature` flag into its library row and pack entry at
  * once, so a Data Team rating edit (moderation.applyUpdate) shows in the
  * filtered library and its facets without waiting for the next rebuild.
@@ -205,21 +217,9 @@ export const sweepStale = internalMutation({
  */
 export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
   const flag = mature ? { mature: true as const } : { mature: undefined };
-  const row = await ctx.db
-    .query("seriesStats")
-    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-    .unique();
+  const row = await seriesStatsRow(ctx, series._id);
   if (row && (row.mature === true) !== mature) await ctx.db.patch(row._id, flag);
-  const pack = await ctx.db
-    .query("seriesStatsPacks")
-    .withIndex("by_block", (q) => q.eq("block", Math.floor(series.publicId / PACK_SPAN)))
-    .unique();
-  const at = pack?.entries.findIndex((entry) => entry.publicId === series.publicId) ?? -1;
-  if (!pack || at < 0 || (pack.entries[at]!.mature === true) === mature) return;
-  const entries = pack.entries.map((entry, i) =>
-    i === at ? { ...entry, mature: mature ? (true as const) : undefined } : entry,
-  );
-  await ctx.db.patch(pack._id, { entries });
+  await patchPackEntry(ctx, series.publicId, (entry) => (entry.mature === true) === mature, flag);
 }
 
 /**
@@ -238,10 +238,7 @@ export async function syncRatingProjection(
   seriesId: Id<"series">,
   summary: RatingSummary,
 ) {
-  const row = await ctx.db
-    .query("seriesStats")
-    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-    .unique();
+  const row = await seriesStatsRow(ctx, seriesId);
   if (!row) return;
   const ratingRank = ratingRankOf(summary);
   await ctx.db.patch(row._id, {
@@ -249,13 +246,29 @@ export async function syncRatingProjection(
     ratingCount: summary.count,
     ratingRank,
   });
+  await patchPackEntry(ctx, row.publicId, (entry) => (entry.ratingRank ?? 0) === ratingRank, {
+    ratingRank,
+  });
+}
+
+/**
+ * Rewrite one Series' entry in its pack with `change`, unless the pack or
+ * the entry is missing or `holds` says the entry already has it: a pack is
+ * a large document many Series share.
+ */
+async function patchPackEntry(
+  ctx: MutationCtx,
+  publicId: number,
+  holds: (entry: Entry) => boolean,
+  change: Partial<Entry>,
+) {
   const pack = await ctx.db
     .query("seriesStatsPacks")
-    .withIndex("by_block", (q) => q.eq("block", Math.floor(row.publicId / PACK_SPAN)))
+    .withIndex("by_block", (q) => q.eq("block", Math.floor(publicId / PACK_SPAN)))
     .unique();
-  const at = pack?.entries.findIndex((entry) => entry.publicId === row.publicId) ?? -1;
-  if (!pack || at < 0 || (pack.entries[at]!.ratingRank ?? 0) === ratingRank) return;
-  const entries = pack.entries.map((entry, i) => (i === at ? { ...entry, ratingRank } : entry));
+  const at = pack?.entries.findIndex((entry) => entry.publicId === publicId) ?? -1;
+  if (!pack || at < 0 || holds(pack.entries[at]!)) return;
+  const entries = pack.entries.map((entry, i) => (i === at ? { ...entry, ...change } : entry));
   await ctx.db.patch(pack._id, { entries });
 }
 
@@ -313,47 +326,12 @@ export const repackBlock = internalMutation({
  * the Series' `bookless` and `mature` flags on the way.
  */
 async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: number) {
-  const volumes = (
-    await ctx.db
-      .query("volumes")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .collect()
-  ).filter((v) => v.status === "active");
+  const volumes = await activeVolumes(ctx, series._id);
 
-  const editionIds = new Set<Id<"editions">>();
-  // Each Edition's first covered Volume, for the cover pick.
-  const firstPosition = new Map<Id<"editions">, number>();
-  for (const volume of volumes) {
-    const rows = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
-    for (const row of rows) {
-      // Only an active Edition is a book; a hidden one must not clear `bookless`.
-      const edition = await ctx.db.get(row.editionId);
-      if (!edition || edition.status !== "active") continue;
-      editionIds.add(row.editionId);
-      if (!firstPosition.has(row.editionId)) firstPosition.set(row.editionId, volume.position);
-    }
-  }
-  // Edition Line members whose Volumes are not mapped yet (Unmapped
-  // Packaging) still count as the Series' books — same walk as the series
-  // page (catalog.ts seriesPage).
-  const lines = await ctx.db
-    .query("editionLines")
-    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-    .collect();
-  for (const line of lines) {
-    if (line.status !== "active") continue;
-    const members = await ctx.db
-      .query("editions")
-      .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
-      .collect();
-    // Only an active member is a book; a hidden one must not clear `bookless`.
-    for (const member of members) {
-      if (member.status === "active") editionIds.add(member._id);
-    }
-  }
+  // The Series' books, Unmapped Packaging included; only an active Edition
+  // is a book, so a hidden one must not clear `bookless`. `firstPosition`
+  // (each Edition's first covered Volume) feeds the cover pick.
+  const { editions, firstPosition } = await seriesEditions(ctx, series._id, volumes);
 
   // Mature Series evidence (lib/mature.ts), gathered below only while the
   // Data Team has made no call and nothing has decided it yet.
@@ -373,13 +351,10 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   // A Bookless Series (no Edition at all) leaves the library: its stats row
   // goes and the Series carries the derived flag until a book lands. Derived
   // data, no Revision — like the release denorms.
-  if (editionIds.size === 0) {
+  if (editions.size === 0) {
     await settleMature();
     if (series.bookless !== true) await ctx.db.patch(series._id, { bookless: true });
-    const stale = await ctx.db
-      .query("seriesStats")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .unique();
+    const stale = await seriesStatsRow(ctx, series._id);
     if (stale) await ctx.db.delete(stale._id);
     return;
   }
@@ -398,20 +373,13 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
   const collectors = new Set<string>();
   const today = todaySortKey();
 
-  for (const editionId of editionIds) {
-    const edition = await ctx.db.get(editionId);
-    if (!edition || edition.status !== "active") continue;
+  for (const [editionId, edition] of editions) {
     const publisher = await ctx.db.get(edition.publisherId);
     if (publisher && publisher.status === "active") {
       publishers.set(publisher.slug, { name: publisher.name, slug: publisher.slug });
     }
     if (wantEvidence() && publisher?.contentRating === "mature") evidence = true;
-    const releases = (
-      await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-        .collect()
-    ).filter((r) => r.status === "active");
+    const releases = (await releasesOf(ctx, editionId)).filter((r) => r.status === "active");
     for (const release of releases) {
       releaseCount++;
       if (release.format === "physical") hasPhysical = true;
@@ -484,10 +452,7 @@ async function upsertStats(ctx: MutationCtx, series: Doc<"series">, rebuiltAt: n
     ...(mature ? { mature: true as const } : {}),
     rebuiltAt,
   };
-  const existing = await ctx.db
-    .query("seriesStats")
-    .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-    .unique();
+  const existing = await seriesStatsRow(ctx, series._id);
   if (existing) {
     // Never move the stamp backwards: an overlapping older run must not
     // make a fresher row look stale to the newer run's sweep.

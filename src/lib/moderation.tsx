@@ -1,17 +1,19 @@
-// Moderation affordances on catalog pages (ticket #31, spec §5): the public
-// per-record revision history — final diff, author, approver, timestamp,
-// change comment, citation — and the moderator/administrator edit link.
-// Both fetch client-side through the reactive Convex client: history is
-// public data; the edit link is cosmetic gating on the viewer's role (the
-// moderation functions re-check authorization on every call).
+// Moderation affordances (spec §5). On catalog pages: the public per-record
+// revision history — final diff, author, approver, timestamp, change
+// comment, citation — and the moderator/administrator edit links. On the
+// /mod pages: the access gate and the tool links. All of it fetches
+// client-side through the reactive Convex client; role checks here are
+// cosmetic (the moderation functions re-check authorization on every call).
 
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
+import type { ReactNode } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
 import { convexClient } from "~/providers";
 import { formatPartialDate, formatPrice } from "~/lib/format";
+import { useIsDataTeam, useIsModerator } from "~/lib/viewer";
 
 export type HistoryTargetType = "series" | "volume" | "edition" | "releaseBundle";
 
@@ -165,25 +167,77 @@ function RecordHistoryInner({
   );
 }
 
-/** True when the viewer holds the Moderator or Administrator role. */
-export function useIsModerator(): boolean {
+/** A date and time in the viewer's locale, as the mod dashboards show them. */
+export const timestamp = (ms: number) =>
+  new Date(ms).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+/**
+ * The access gate in front of a mod page: "Checking your access…" while the
+ * viewer loads, then the page for a viewer holding `role`, else a refusal
+ * that says who the page is for (`refusal`) and links sign-in when signed
+ * out. `children` only mounts once the viewer is let in. Only under the
+ * Convex provider: each page answers the unconfigured mode itself first.
+ * The Convex functions re-check the role on every call.
+ */
+export function ModGate({
+  role,
+  refusal,
+  children,
+}: {
+  role: "dataTeam" | "moderator";
+  refusal: string;
+  children: ReactNode;
+}) {
   const viewer = useQuery(api.users.viewer, {});
-  return Boolean(
-    viewer &&
-      !viewer.needsUsername &&
-      (viewer.role === "moderator" || viewer.role === "administrator"),
-  );
+  const isDataTeam = useIsDataTeam();
+  const isModerator = useIsModerator();
+  if (viewer === undefined) {
+    return (
+      <main className="mod-page">
+        <p className="notice">Checking your access…</p>
+      </main>
+    );
+  }
+  if (!(role === "moderator" ? isModerator : isDataTeam)) {
+    return (
+      <main className="mod-page">
+        <h1>{role === "moderator" ? "Moderators only" : "Data team only"}</h1>
+        <p className="notice">
+          {refusal} {viewer === null ? <a href="/sign-in">Sign in</a> : null}
+        </p>
+      </main>
+    );
+  }
+  return children;
 }
 
-/** True when the viewer holds any data-team role (Editor and up). */
-export function useIsDataTeam(): boolean {
-  const viewer = useQuery(api.users.viewer, {});
-  return Boolean(
-    viewer &&
-      !viewer.needsUsername &&
-      (viewer.role === "editor" ||
-        viewer.role === "moderator" ||
-        viewer.role === "administrator"),
+const MOD_TOOLS = [
+  { to: "/mod/queue", label: "Review queue" },
+  { to: "/mod/imports", label: "Imports" },
+  { to: "/mod/launch", label: "Launch" },
+  { to: "/mod/packaging", label: "Catalog gaps" },
+] as const;
+
+/**
+ * The data team's tool links under a dashboard's heading, leaving out the
+ * page they sit on, then the Comments queue.
+ */
+export function ModTools({ current }: { current?: (typeof MOD_TOOLS)[number]["to"] }) {
+  return (
+    <nav className="mod-tools" aria-label="Data team tools">
+      {MOD_TOOLS.filter((tool) => tool.to !== current).map((tool) => (
+        <Link key={tool.to} to={tool.to}>
+          {tool.label}
+        </Link>
+      ))}
+      <CommentsQueueLink />
+    </nav>
   );
 }
 
@@ -204,7 +258,7 @@ function CommentsQueueLinkInner() {
     <Link to="/mod/comments">
       Comments
       {pending > 0 ? (
-        <span className="mod-badge" aria-label={`${pending} awaiting review`}>
+        <span className="mod-badge" role="img" aria-label={`${pending} awaiting review`}>
           {pending >= 100 ? "100+" : pending}
         </span>
       ) : null}
@@ -215,7 +269,7 @@ function CommentsQueueLinkInner() {
 /**
  * The maintenance entry point on a record page: Moderators and
  * Administrators get the direct edit (`/mod/edit`); Editors get the update
- * proposal (`/mod/propose`, ticket #32) whose submission lands In Review.
+ * proposal (`/mod/propose`) whose submission lands In Review.
  */
 export function ModEditLink(props: { type: string; editKey: string }) {
   if (!convexClient) return null;
@@ -231,7 +285,7 @@ function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) 
         <Link to="/mod/edit/$type/$key" params={{ type, key: editKey }}>
           Edit this record
         </Link>
-        {/* The sensitive-operations panel (ticket #33): hide/restore,
+        {/* The sensitive-operations panel: hide/restore,
             merge/split, temporary locks. */}
         <Link to="/mod/manage/$type/$key" params={{ type, key: editKey }}>
           Manage (hide / merge / lock)
@@ -252,9 +306,9 @@ function ModEditLinkInner({ type, editKey }: { type: string; editKey: string }) 
 }
 
 /**
- * The atomic multi-record proposal entry point on a Series page (ticket
- * #32): any data-team member can propose a new Volume + Edition + Release
- * in one temp-ID Proposal.
+ * The atomic multi-record proposal entry point on a Series page: any
+ * data-team member can propose a new Volume + Edition + Release in one
+ * temp-ID Proposal.
  */
 export function ProposeNewRecordsLink(props: { seriesPublicId: number }) {
   if (!convexClient) return null;

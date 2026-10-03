@@ -1,5 +1,9 @@
-// Display formatting shared by the catalog pages (Series from #22; Volume,
-// Edition, and Bundle from #23).
+// Display formatting shared across pages.
+
+/** "1 book", "3 books": a count with its noun, plural unless the count is 1. */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",

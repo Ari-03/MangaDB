@@ -5,15 +5,15 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import type { FunctionReturnType } from "convex/server";
-import {
-  EDITABLE_FIELDS,
-  type RecordType,
-} from "../../convex/lib/moderationFields";
-import { useIsModerator } from "~/lib/moderation";
+import type { RecordType } from "../../convex/lib/moderationFields";
+import { isRecordType } from "~/lib/editForm";
+import { mutationErrorMessage } from "~/lib/errors";
+import { ModGate } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The sensitive-operations panel (ticket #33, spec §5): Hide, Restore,
+ * The sensitive-operations panel (spec §5): Hide, Restore,
  * Merge, Split, and temporary Locks for one record. Every operation shows
  * the impact preview, demands a written reason, and requires an explicit
  * confirmation checkbox before its button enables — the mutations enforce
@@ -21,18 +21,9 @@ import { convexClient } from "~/providers";
  * indexed.
  */
 export const Route = createFileRoute("/mod/manage/$type/$key")({
-  head: () => ({
-    meta: [
-      { title: "Manage record — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Manage record — MangaDB" }] }),
   component: ModManagePage,
 });
-
-function isRecordType(raw: string): raw is RecordType {
-  return raw in EDITABLE_FIELDS;
-}
 
 function ModManagePage() {
   const { type, key } = Route.useParams();
@@ -56,49 +47,22 @@ function ModManagePage() {
       </main>
     );
   }
-  return <ModManageGate type={type} manageKey={key} />;
-}
-
-function ModManageGate({
-  type,
-  manageKey,
-}: {
-  type: RecordType;
-  manageKey: string;
-}) {
-  const isModerator = useIsModerator();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isModerator) {
-    return (
-      <main className="mod-page">
-        <h1>Moderators only</h1>
-        <p className="notice">
-          Sensitive catalog operations are for Moderators and Administrators.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <ModManagePanel type={type} manageKey={manageKey} />;
+  return (
+    <ModGate
+      role="moderator"
+      refusal="Sensitive catalog operations are for Moderators and Administrators."
+    >
+      <ModManagePanel type={type} manageKey={key} />
+    </ModGate>
+  );
 }
 
 type ManageForm = NonNullable<FunctionReturnType<typeof api.sensitiveOps.manageForm>>;
 
 function errorMessage(err: unknown): string {
-  return err instanceof ConvexError &&
-    typeof err.data === "object" &&
-    err.data !== null
-    ? String((err.data as { message?: string }).message ?? "The operation failed.")
-    : err instanceof ConvexError
-      ? String(err.data)
-      : "The operation failed. Nothing was changed — try again.";
+  return err instanceof ConvexError
+    ? mutationErrorMessage(err, "The operation failed.")
+    : "The operation failed. Nothing was changed — try again.";
 }
 
 /** The impact preview every operation must show before confirmation. */
@@ -318,10 +282,7 @@ function ModManagePanel({
 
   return (
     <main className="mod-page mod-manage-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Manage</span>
-      </nav>
+      <Breadcrumbs trail={["Manage"]} />
       <h1>Manage: {form.title}</h1>
       <p className="section-hint">
         Sensitive catalog operations (hide, restore, merge, split, locks).

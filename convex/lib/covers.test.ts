@@ -1,9 +1,17 @@
-import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import schema from "../schema";
+import {
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVolume,
+  type Overrides,
+} from "../test.factories";
+import { makeT } from "../test.helpers";
 import {
   jacketCache,
   MIN_COVER_BYTES,
@@ -83,66 +91,38 @@ describe("seriesCoverIsbns", () => {
   });
 });
 
+/**
+ * One Series with one Volume, and builders for its Editions (each covering
+ * the Volume unless `covers` is false) and their Releases (returned as docs).
+ */
+async function oneVolume(ctx: MutationCtx) {
+  const publisherId = await insertPublisher(ctx);
+  const seriesId = await insertSeries(ctx);
+  const volumeId = await insertVolume(ctx, { seriesId });
+  const edition = async ({ status = "active", covers = true }: { status?: "active" | "hidden"; covers?: boolean } = {}) => {
+    const editionId = await insertEdition(ctx, { status, publisherId });
+    if (covers) await insertCoverage(ctx, { editionId, volumeId });
+    return editionId;
+  };
+  const release = async (editionId: Id<"editions">, format: "physical" | "digital", over: Overrides<"releases"> = {}) => {
+    const id = await insertRelease(ctx, { editionId, format, publisherId, seriesIds: [seriesId], ...over });
+    return (await ctx.db.get(id))!;
+  };
+  return { edition, release };
+}
+
 describe("releaseCover", () => {
   test("every Release of an Edition shares its ISBNs (physical first); an ISBN-less Edition borrows another's of its Volume", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "VIZ Media",
-        slug: "viz-media",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Tokyo Ghoul",
-        altTitles: [],
-        searchText: "Tokyo Ghoul",
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 1,
-        seriesId,
-        position: 1,
-      });
-      const edition = async (publicId: number, covers = true) => {
-        const id = await ctx.db.insert("editions", { status: "active", publicId, publisherId });
-        if (covers) {
-          await ctx.db.insert("volumeCoverages", {
-            editionId: id,
-            volumeId,
-            order: 1,
-            extent: "complete",
-          });
-        }
-        return id;
-      };
-      const release = async (
-        editionId: Id<"editions">,
-        format: "physical" | "digital",
-        isbn13?: string,
-        status: "active" | "hidden" = "active",
-      ) => {
-        const id = await ctx.db.insert("releases", {
-          status,
-          editionId,
-          format,
-          language: "en",
-          isbn13,
-          publisherId,
-          seriesIds: [seriesId],
-        });
-        return (await ctx.db.get(id))!;
-      };
-
-      const standard = await edition(1);
-      const ebook = await release(standard, "digital", "9780000000001");
-      await release(standard, "physical", "9780000000009", "hidden");
-      const print = await release(standard, "physical", "9780000000002");
+      const { edition, release } = await oneVolume(ctx);
+      const standard = await edition();
+      const ebook = await release(standard, "digital", { isbn13: "9780000000001" });
+      await release(standard, "physical", { isbn13: "9780000000009", status: "hidden" });
+      const print = await release(standard, "physical", { isbn13: "9780000000002" });
       const bare = await release(standard, "physical");
-      const other = await edition(2);
-      const otherBare = await release(other, "digital");
-      const lonely = await release(await edition(3, false), "physical");
+      const otherBare = await release(await edition(), "digital");
+      const lonely = await release(await edition({ covers: false }), "physical");
 
       const cache = jacketCache(ctx);
       const isbns = async (r: Doc<"releases">, c = cache) => (await releaseCover(ctx, r, c)).coverIsbns;
@@ -156,50 +136,15 @@ describe("releaseCover", () => {
   });
 
   test("never borrows from a hidden Edition, even one whose Release is active", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await t.run(async (ctx) => {
-      const publisherId = await ctx.db.insert("publishers", {
-        status: "active",
-        name: "VIZ Media",
-        slug: "viz-media",
-      });
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: 1,
-        title: "Tokyo Ghoul",
-        altTitles: [],
-        searchText: "Tokyo Ghoul",
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 1,
-        seriesId,
-        position: 1,
-      });
-      const edition = async (publicId: number, status: "active" | "hidden") => {
-        const id = await ctx.db.insert("editions", { status, publicId, publisherId });
-        await ctx.db.insert("volumeCoverages", { editionId: id, volumeId, order: 1, extent: "complete" });
-        return id;
-      };
-      const release = async (editionId: Id<"editions">, isbn13?: string) => {
-        const id = await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          language: "en",
-          isbn13,
-          publisherId,
-          seriesIds: [seriesId],
-        });
-        return (await ctx.db.get(id))!;
-      };
-
-      const bare = await release(await edition(1, "active"));
-      await release(await edition(2, "hidden"), "9780000000005");
+      const { edition, release } = await oneVolume(ctx);
+      const bare = await release(await edition(), "physical");
+      await release(await edition({ status: "hidden" }), "physical", { isbn13: "9780000000005" });
       expect((await releaseCover(ctx, bare)).coverIsbns).toEqual([]);
 
       // An active Edition of the same Volume still lends, past the hidden one.
-      await release(await edition(3, "active"), "9780000000006");
+      await release(await edition(), "physical", { isbn13: "9780000000006" });
       expect((await releaseCover(ctx, bare)).coverIsbns).toEqual(["9780000000006"]);
     });
   });
@@ -207,42 +152,19 @@ describe("releaseCover", () => {
 
 /** One active Edition with no Coverage, and a way to add Releases to it. */
 async function oneEdition(ctx: MutationCtx) {
-  const publisherId = await ctx.db.insert("publishers", {
-    status: "active",
-    name: "Kodansha",
-    slug: "kodansha",
-  });
-  const seriesId = await ctx.db.insert("series", {
-    status: "active",
-    publicId: 1,
-    title: "To Your Eternity",
-    altTitles: [],
-    searchText: "To Your Eternity",
-  });
-  const editionId = await ctx.db.insert("editions", { status: "active", publicId: 1, publisherId });
-  const release = async (
-    format: "physical" | "digital",
-    over: Partial<Pick<Doc<"releases">, "isbn13" | "pubDate" | "coverImage" | "status">> = {},
-  ) => {
-    const id = await ctx.db.insert("releases", {
-      status: "active",
-      editionId,
-      format,
-      language: "en",
-      publisherId,
-      seriesIds: [seriesId],
-      ...over,
-    });
-    return (await ctx.db.get(id))!;
+  const { edition, release } = await oneVolume(ctx);
+  const editionId = await edition({ covers: false });
+  return {
+    editionId,
+    release: (format: "physical" | "digital", over: Overrides<"releases"> = {}) => release(editionId, format, over),
   };
-  return { editionId, release };
 }
 
 const dated = (sort: number) => ({ year: Math.floor(sort / 10000), sort });
 
 describe("jacketCache", () => {
   test("a digital Release and its print sibling look art up by the same ISBNs, print first", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await t.run(async (ctx) => {
       const { editionId, release } = await oneEdition(ctx);
       const digital = await release("digital", { isbn13: "9798898302498", pubDate: dated(20261007) });
@@ -256,7 +178,7 @@ describe("jacketCache", () => {
   });
 
   test("date order within a format, each ISBN once, at most three, hidden Releases left out", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await t.run(async (ctx) => {
       const { editionId, release } = await oneEdition(ctx);
       await release("physical", { isbn13: "9780000000003", pubDate: dated(20260301) });
@@ -274,7 +196,7 @@ describe("jacketCache", () => {
   });
 
   test("a Release without art wears its Edition's first stored cover; one with its own keeps it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await t.run(async (ctx) => {
       const { editionId, release } = await oneEdition(ctx);
       const store = (bytes: number, type = "image/jpeg") =>
@@ -303,7 +225,7 @@ describe("jacketCache", () => {
   });
 
   test("an Edition holding only placeholders has no stored cover", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await t.run(async (ctx) => {
       const { editionId, release } = await oneEdition(ctx);
       const tiny = await ctx.storage.store(new Blob([new Uint8Array(16)], { type: "image/jpeg" }));

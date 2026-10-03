@@ -8,7 +8,10 @@ import {
   type ActionCtx,
   type QueryCtx,
 } from "./_generated/server";
+import { publisherLink } from "./catalogPages";
+import { followMerges } from "./lib/merges";
 import { coverUrl, seriesCover } from "./lib/covers";
+import { coverageOf, coveringOf, releasesOf } from "./lib/editionRows";
 import { groupEditions } from "./lib/editionGroups";
 import { listed, showMatureArg, visibleTo } from "./lib/mature";
 import { canonicalPublisherFor } from "./lib/publishers";
@@ -107,23 +110,6 @@ export async function recountCatalog(ctx: ActionCtx): Promise<Record<CountedTabl
 }
 
 /**
- * Active Series in public-ID order, for the home page's browse list. Capped;
- * the real browse surface is the Releases browser (a later ticket).
- */
-export const listSeries = query({
-  args: showMatureArg,
-  handler: async (ctx, { showMature }) => {
-    const docs = await ctx.db
-      .query("series")
-      .withIndex("by_publicId")
-      .take(COUNT_CAP);
-    return docs
-      .filter((doc) => listed(doc, showMature))
-      .map((doc) => ({ publicId: doc.publicId, title: doc.title }));
-  },
-});
-
-/**
  * The newest Series in the catalog (highest public IDs) the viewer may
  * see (`listed`), each with a jacket for the home page's "recently added"
  * shelf. Small and bounded: the shelf
@@ -165,7 +151,7 @@ export const recentSeries = query({
   },
 });
 
-// ---------- Search (ticket #38) ----------
+// ---------- Search ----------
 
 export const SEARCH_LIMIT = 20;
 // The publisher list is deliberately small (spec §8: "publishers via the
@@ -455,34 +441,133 @@ export const suggest = query({
   },
 });
 
-// ---------- Series page (ticket #22) ----------
+// ---------- Series page ----------
 
 /**
- * Follow a merged Series to its surviving record (spec §4/§8): merged docs
- * keep their public ID and point at the winner, so the losing ID's URL 301s
- * without a redirects table. Cycle-guarded; hidden records read as absent.
- * Exported for reading.ts (personal tracking resolves Series the same way).
+ * The active Series a public ID names, merges followed (lib/merges.ts): a
+ * merged Series keeps its public ID, so the losing ID's URL 301s without a
+ * redirects table. Hidden records read as absent.
  */
 export async function resolveActiveSeries(
   ctx: QueryCtx,
   publicId: number,
 ): Promise<Doc<"series"> | null> {
-  let doc = await ctx.db
+  const stored = await ctx.db
     .query("series")
     .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
     .unique();
-  const visited = new Set<string>();
-  while (doc && doc.status === "merged" && doc.mergedIntoId) {
-    if (visited.has(doc._id)) return null;
-    visited.add(doc._id);
-    doc = await ctx.db.get(doc.mergedIntoId);
+  return await followMerges(ctx, "series", stored);
+}
+
+/**
+ * A Series' active Volumes in reading order: the by_series index is
+ * (seriesId, position). Labels never sort anything.
+ */
+export async function activeVolumes(ctx: QueryCtx, seriesId: Id<"series">) {
+  const volumes = await ctx.db
+    .query("volumes")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
+  return volumes.filter((volume) => volume.status === "active");
+}
+
+/**
+ * Every active Edition of a Series, in the order first met: those covering
+ * its active `volumes` (with the Position of the first Volume each covers),
+ * then Edition Line members whose volume range is not mapped yet (an
+ * omnibus of unknown extent still belongs to its line's reading path).
+ * Shared by the Series page and the Series library rebuild (seriesBrowse.ts),
+ * so both count the same books.
+ */
+export async function seriesEditions(
+  ctx: QueryCtx,
+  seriesId: Id<"series">,
+  volumes: Array<Doc<"volumes">>,
+) {
+  const editions = new Map<Id<"editions">, Doc<"editions">>();
+  const firstPosition = new Map<Id<"editions">, number>();
+  const seen = new Set<Id<"editions">>();
+  for (const volume of volumes) {
+    const rows = await coveringOf(ctx, volume._id);
+    for (const row of rows) {
+      if (seen.has(row.editionId)) continue;
+      seen.add(row.editionId);
+      const edition = await ctx.db.get(row.editionId);
+      if (!edition || edition.status !== "active") continue;
+      editions.set(edition._id, edition);
+      firstPosition.set(edition._id, volume.position);
+    }
   }
-  return doc && doc.status === "active" ? doc : null;
+  const lines = await ctx.db
+    .query("editionLines")
+    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+    .collect();
+  for (const line of lines) {
+    if (line.status !== "active") continue;
+    const members = await ctx.db
+      .query("editions")
+      .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
+      .collect();
+    for (const member of members) {
+      if (member.status === "active" && !editions.has(member._id)) editions.set(member._id, member);
+    }
+  }
+  return { editions, firstPosition };
+}
+
+/**
+ * A Series' Family as its page shows it: only when >= 2 active member
+ * Series exist (spec §2), so a lone Series displays no family concept at
+ * all. Null otherwise.
+ */
+async function seriesFamily(ctx: QueryCtx, series: Doc<"series">) {
+  if (!series.familyId) return null;
+  const familyDoc = await ctx.db.get(series.familyId);
+  if (!familyDoc || familyDoc.status !== "active") return null;
+  const members = (
+    await ctx.db
+      .query("series")
+      .withIndex("by_family", (q) => q.eq("familyId", familyDoc._id))
+      .collect()
+  ).filter((doc) => doc.status === "active");
+  if (members.length < 2) return null;
+  const memberById = new Map(members.map((m) => [m._id, m]));
+  // Edges are stored once as "from is a {type} of to" (spec §2); the page
+  // renders the sentence whichever end this Series is.
+  const edges = [
+    ...(await ctx.db
+      .query("seriesRelationships")
+      .withIndex("by_from", (q) => q.eq("fromSeriesId", series._id))
+      .collect()),
+    ...(await ctx.db
+      .query("seriesRelationships")
+      .withIndex("by_to", (q) => q.eq("toSeriesId", series._id))
+      .collect()),
+  ];
+  const relationships = [];
+  for (const edge of edges) {
+    const from = memberById.get(edge.fromSeriesId);
+    const to = memberById.get(edge.toSeriesId);
+    if (!from || !to) continue;
+    relationships.push({
+      type: edge.type,
+      note: edge.note ?? null,
+      from: { publicId: from.publicId, title: from.title },
+      to: { publicId: to.publicId, title: to.title },
+    });
+  }
+  return {
+    name: familyDoc.name,
+    members: members
+      .sort((a, b) => a.publicId - b.publicId)
+      .map((m) => ({ publicId: m.publicId, title: m.title })),
+    relationships,
+  };
 }
 
 /**
  * Everything the Series page renders, shaped as the Reading Path hierarchy
- * validated in prototype #16 (spec §10): the canonical Volume sequence leads
+ * (spec §10): the canonical Volume sequence leads
  * (ordered by Volume Position — the Label is display-only); each
  * Volume carries every covering Edition with its full ordered Coverage,
  * Edition Line membership, Releases, Variants, and Bundle cross-links.
@@ -497,112 +582,21 @@ export const seriesPage = query({
     const series = await resolveActiveSeries(ctx, publicId);
     if (!series) return null;
 
-    // Series Family: shown only when >= 2 active member Series exist (spec
-    // §2); a lone Series displays no family concept at all.
-    let family: {
-      name: string;
-      members: Array<{ publicId: number; title: string }>;
-      relationships: Array<{
-        type: Doc<"seriesRelationships">["type"];
-        note: string | null;
-        from: { publicId: number; title: string };
-        to: { publicId: number; title: string };
-      }>;
-    } | null = null;
-    if (series.familyId) {
-      const familyDoc = await ctx.db.get(series.familyId);
-      if (familyDoc && familyDoc.status === "active") {
-        const members = (
-          await ctx.db
-            .query("series")
-            .withIndex("by_family", (q) => q.eq("familyId", familyDoc._id))
-            .collect()
-        ).filter((doc) => doc.status === "active");
-        if (members.length >= 2) {
-          const memberById = new Map(members.map((m) => [m._id, m]));
-          // Edges are stored once as "from is a {type} of to" (spec §2); the
-          // page renders the sentence whichever end this Series is.
-          const edges = [
-            ...(await ctx.db
-              .query("seriesRelationships")
-              .withIndex("by_from", (q) => q.eq("fromSeriesId", series._id))
-              .collect()),
-            ...(await ctx.db
-              .query("seriesRelationships")
-              .withIndex("by_to", (q) => q.eq("toSeriesId", series._id))
-              .collect()),
-          ];
-          const relationships = [];
-          for (const edge of edges) {
-            const from = memberById.get(edge.fromSeriesId);
-            const to = memberById.get(edge.toSeriesId);
-            if (!from || !to) continue;
-            relationships.push({
-              type: edge.type,
-              note: edge.note ?? null,
-              from: { publicId: from.publicId, title: from.title },
-              to: { publicId: to.publicId, title: to.title },
-            });
-          }
-          family = {
-            name: familyDoc.name,
-            members: members
-              .sort((a, b) => a.publicId - b.publicId)
-              .map((m) => ({ publicId: m.publicId, title: m.title })),
-            relationships,
-          };
-        }
-      }
-    }
+    const family = await seriesFamily(ctx, series);
 
-    // Canonical Volume sequence: the by_series index is (seriesId, position),
-    // so this arrives in reading order. Labels never sort anything.
-    const volumeDocs = (
-      await ctx.db
-        .query("volumes")
-        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-        .collect()
-    ).filter((doc) => doc.status === "active");
+    // The canonical Volume sequence, in reading order.
+    const volumeDocs = await activeVolumes(ctx, series._id);
     const volumeById = new Map(volumeDocs.map((doc) => [doc._id, doc]));
 
-    // Every Edition of the Series: those covering its Volumes, plus Edition
-    // Line members whose volume range is not mapped yet (an omnibus of
-    // unknown extent still belongs to its line's reading path).
-    const editionIds = new Set<Id<"editions">>();
-    for (const volume of volumeDocs) {
-      const rows = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-        .collect();
-      for (const row of rows) editionIds.add(row.editionId);
-    }
-    const lines = await ctx.db
-      .query("editionLines")
-      .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-      .collect();
-    for (const line of lines) {
-      if (line.status !== "active") continue;
-      const members = await ctx.db
-        .query("editions")
-        .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
-        .collect();
-      for (const member of members) editionIds.add(member._id);
-    }
-
     const editions = [];
-    for (const editionId of editionIds) {
-      const edition = await ctx.db.get(editionId);
-      if (!edition || edition.status !== "active") continue;
+    for (const edition of (await seriesEditions(ctx, series._id, volumeDocs)).editions.values()) {
       const publisher = await ctx.db.get(edition.publisherId);
       const line = edition.editionLineId
         ? await ctx.db.get(edition.editionLineId)
         : null;
 
       // The Edition's ordered Coverage within this Series.
-      const coverageRows = await ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
+      const coverageRows = await coverageOf(ctx, edition._id);
       const coverage = [];
       for (const cov of coverageRows) {
         const covered = volumeById.get(cov.volumeId);
@@ -615,12 +609,7 @@ export const seriesPage = query({
         });
       }
 
-      const releaseDocs = (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect()
-      ).filter((doc) => doc.status === "active");
+      const releaseDocs = (await releasesOf(ctx, edition._id)).filter((doc) => doc.status === "active");
       // A book's jacket: the first stored cover among its Releases; the page
       // falls back to ISBN-derived art (lib/cover.tsx) when there is none.
       let editionCover: string | null = null;
@@ -645,9 +634,7 @@ export const seriesPage = query({
       editions.push({
         publicId: edition.publicId,
         publisher:
-          publisher && publisher.status === "active"
-            ? { name: publisher.name, slug: publisher.slug }
-            : null,
+          publisherLink(publisher),
         lineName: line && line.status === "active" ? line.name : null,
         linePosition: edition.linePosition ?? null,
         coverage,

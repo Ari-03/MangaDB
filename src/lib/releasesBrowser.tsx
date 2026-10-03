@@ -1,4 +1,4 @@
-// Shared UI for the Releases browser (ticket #24, spec §10): the Agenda
+// Shared UI for the Releases browser (spec §10): the Agenda
 // (`/releases`) and the Month Grid (`/releases/{yyyy-mm}`) are sibling views
 // over the same month window of Canonical Releases, sharing the Format,
 // Publisher, and followed-Series filters. View + filter state is entirely in
@@ -8,7 +8,7 @@
 // The routes load a month once, unfiltered, and every filter applies in
 // memory here, so switching filters or views never waits on the network.
 //
-// Followed Series (ticket #29) are a subtle marker + a filter, never a
+// Followed Series are a subtle marker + a filter, never a
 // separate section. Follows are personal, so the marker and filter are a
 // signed-in client-side overlay: the SSR month window stays public and
 // identical for everyone, and `?followed=true` views are noindex (spec §11).
@@ -20,11 +20,13 @@ import { useMemo } from "react";
 import { api } from "../../convex/_generated/api";
 import {
   catalogQuery,
+  releaseTitle,
   type BrowseRelease,
   type MonthReleasesData,
 } from "~/lib/catalogData";
 import { convexClient } from "~/providers";
 import { Cover } from "~/lib/cover";
+import { plural } from "~/lib/format";
 import {
   addMonths,
   daysInMonth,
@@ -33,16 +35,17 @@ import {
   MONTH_NAMES,
   monthTitle,
   sameMonth,
+  weekdayFullName,
   weekdayName,
   type YearMonth,
 } from "~/lib/month";
 import { slugParams } from "~/lib/slug";
 
-export type ReleaseFormat = "physical" | "digital";
+type ReleaseFormat = "physical" | "digital";
 export type BrowseFilters = {
   format?: ReleaseFormat;
   publisher?: string;
-  /** Only releases from followed Series (#29); a personal, noindex view. */
+  /** Only releases from followed Series; a personal, noindex view. */
   followed?: true;
 };
 
@@ -255,9 +258,9 @@ function ResultCount({ releases }: { releases: Array<BrowseRelease> }) {
   ).size;
   return (
     <p className="result-count">
-      {releases.length} {releases.length === 1 ? "release" : "releases"}
+      {plural(releases.length, "release")}
       {days > 0
-        ? ` · ${days} publication ${days === 1 ? "day" : "days"}`
+        ? ` · ${plural(days, "publication day")}`
         : null}
     </p>
   );
@@ -506,42 +509,17 @@ function groupByDay(releases: Array<BrowseRelease>) {
   );
 }
 
-/** "3 releases" — every count in the browser reads the same way. */
-function releaseCount(n: number): string {
-  return `${n} ${n === 1 ? "release" : "releases"}`;
-}
-
-/** The row's book title: the Series (or crossover Series) it publishes. */
-function releaseTitle(release: BrowseRelease): string {
-  return release.series.map((series) => series.title).join(" × ");
-}
-
 /**
- * The Agenda's per-day anchor, so the Month Grid can link a day straight to
- * its section. Month-qualified because the Publisher page stacks several
- * months of AgendaView on one document.
+ * The Agenda's per-day anchor, month-qualified, so the Month Grid can link a
+ * day straight to its section.
  */
 function dayAnchorId(anchor: YearMonth, day: number | null): string {
   return `day-${monthParam(anchor)}-${day === null ? "tba" : String(day).padStart(2, "0")}`;
 }
 
-const LONG_WEEKDAYS: Record<string, string> = {
-  Sun: "Sunday",
-  Mon: "Monday",
-  Tue: "Tuesday",
-  Wed: "Wednesday",
-  Thu: "Thursday",
-  Fri: "Friday",
-  Sat: "Saturday",
-};
-
 // ---------- Agenda (spec §10: cover-led chronological default) ----------
 
-/**
- * The cover-led day-grouped release list. Exported for the Publisher
- * Spotlight's upcoming lane (ticket #25), which renders the same rows
- * month by month (without the followed overlay).
- */
+/** The cover-led day-grouped release list, followed Series marked. */
 function AgendaView({
   anchor,
   releases,
@@ -554,7 +532,6 @@ function AgendaView({
   return (
     <div className="agenda">
       {groupByDay(releases).map(([day, dayReleases]) => {
-        const short = day === null ? null : weekdayName(anchor, day);
         return (
           <section key={day ?? "tba"} className="day" id={dayAnchorId(anchor, day)}>
             <div className="day-marker">
@@ -563,14 +540,12 @@ function AgendaView({
                   <span className="day-tba">Day to be announced</span>
                 ) : (
                   <>
-                    <span className="day-dow">
-                      {short === null ? "" : (LONG_WEEKDAYS[short] ?? short)}
-                    </span>
+                    <span className="day-dow">{weekdayFullName(anchor, day)}</span>
                     <span className="day-num">{day}</span>
                   </>
                 )}
               </h2>
-              <p className="day-count">{releaseCount(dayReleases.length)}</p>
+              <p className="day-count">{plural(dayReleases.length, "release")}</p>
             </div>
             <ol className="day-list">
               {dayReleases.map((release) => (
@@ -599,12 +574,13 @@ function isFollowed(
   );
 }
 
-/** The subtle followed-Series marker (#29) — never a separate section. */
+/** The subtle followed-Series marker — never a separate section. */
 function FollowedMarker() {
   return (
     <span
       className="star"
       title="You follow this series"
+      role="img"
       aria-label="You follow this series"
     >
       ★
@@ -682,7 +658,7 @@ function ReleaseRow({
         </p>
         <div className="rel-meta">
           {release.publisher ? (
-            // The Publisher Spotlight page (ticket #25, spec §11).
+            // The Publisher Spotlight page (spec §11).
             <Link to="/publisher/$slug" params={{ slug: release.publisher.slug }}>
               {release.publisher.name}
             </Link>
@@ -755,7 +731,7 @@ function GridView({
           <div className="week-gutter">
             <span className="wk-kicker">This month</span>
             <span className="wk-date">Day to be announced</span>
-            <span className="wk-total">{releaseCount(tba.length)}</span>
+            <span className="wk-total">{plural(tba.length, "release")}</span>
           </div>
           <div className="week-body">
             <CoverStrip
@@ -790,7 +766,7 @@ function GridView({
               <span className="wk-date">{dayLabel(anchor, start)}</span>
               <span className="wk-range">to {dayLabel(anchor, start + 6)}</span>
               {total > 0 ? (
-                <span className="wk-total">{releaseCount(total)}</span>
+                <span className="wk-total">{plural(total, "release")}</span>
               ) : null}
             </div>
             <div className="week-body">
@@ -802,7 +778,7 @@ function GridView({
                       {day} {MONTH_NAMES[anchor.month - 1]}
                     </h2>
                     <span className="rd-count">
-                      {releaseCount(byDay.get(day)?.length ?? 0)}
+                      {plural(byDay.get(day)?.length ?? 0, "release")}
                     </span>
                     <Link
                       className="rd-link"

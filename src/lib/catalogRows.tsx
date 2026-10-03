@@ -1,4 +1,4 @@
-// Shared render pieces for the Volume and Edition pages (ticket #23): the
+// Shared render pieces for the Volume and Edition pages: the
 // Release row (publication facts, ISBNs, Variants beneath, Bundle
 // cross-links; the page shows one description above, not one per row), the
 // coverage chip listing, and the note naming the Series a borrowed synopsis
@@ -20,14 +20,11 @@ import { slugParams } from "~/lib/slug";
 /** The releaseRow shape from convex/catalogPages.ts (Edition and Volume pages share it). */
 export type ReleaseRowData = EditionPageData["releases"][number];
 
-export type CoverageChipData = {
-  volumePublicId: number;
-  position: number;
-  label: string | null;
-  volumeTitle: string;
-  extent: "complete" | "partial";
-  note: string | null;
-};
+/** One covered Volume, as the Edition page lists it (the Volume page's Editions carry the same fields). */
+export type CoverageChipData = Pick<
+  EditionPageData["coverage"][number],
+  "volumePublicId" | "position" | "label" | "volumeTitle" | "extent" | "note"
+>;
 
 /** Format chip: the one fact that separates two Releases of an Edition. */
 function FormatChip({ format }: { format: ReleaseRowData["format"] }) {
@@ -99,9 +96,9 @@ export function ReleaseRow({ release }: { release: ReleaseRowData }) {
         ) : null}
       </div>
       <div className="release-side">
-        {/* Collection Entry controls (#27); render nothing signed out. */}
+        {/* Collection Entry controls; render nothing signed out. */}
         <ReleaseCollectionControls releaseId={release.id} />
-        {/* Release Progress pass controls (#28); render nothing signed out. */}
+        {/* Release Progress pass controls; render nothing signed out. */}
         <ReleasePassControls releaseId={release.id} />
       </div>
     </li>

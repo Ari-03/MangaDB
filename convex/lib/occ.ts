@@ -5,8 +5,7 @@
 // bump the same public-ID counter rows (publicIds.ts), so under load Convex's
 // own optimistic-concurrency retries can be exhausted and the mutation fails
 // with "Documents read from or written to ... changed while this mutation was
-// being run". Without this wrapper that record is skipped for the run (2026-09
-// first staging import: 135 records across six sources).
+// being run". Without this wrapper that record is skipped for the run.
 //
 // Actions may retry freely, so we space a few more attempts out with jittered
 // backoff. Anything that is not a write conflict is rethrown at once.

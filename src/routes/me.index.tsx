@@ -144,18 +144,18 @@ function MePage() {
           {/* Keyed by shelf so a switch re-enters with the fade; the query
               behind it is already warm, so the new shelf is there at once. */}
           <div key={shelf} className="lib-view">
-            {/* Personal collection (#27), shelved by Series and reading path. */}
+            {/* Personal collection, shelved by Series and reading path. */}
             <LibraryCollection shelf={shelf} />
           </div>
         </section>
       ) : tab === "reading" ? (
         <section className="lib-panel lib-view" aria-label="Reading">
-          {/* Reading tracking (#28): statuses, progress and active passes. */}
+          {/* Reading tracking: statuses, progress and active passes. */}
           <LibraryReading />
         </section>
       ) : tab === "upcoming" ? (
         <section className="lib-panel lib-view" aria-label="Upcoming">
-          {/* Series Follows + My Upcoming Releases (#29). */}
+          {/* Series Follows + My Upcoming Releases. */}
           <LibraryUpcoming />
         </section>
       ) : tab === "favorites" ? (
@@ -167,7 +167,7 @@ function MePage() {
         <section className="lib-panel lib-settings lib-view" aria-label="Settings">
           <div className="acct-panel">
             <h2 className="lib-group-title">Sharing</h2>
-            {/* Tracking visibility (#30): separate Ownership/Reading defaults,
+            {/* Tracking visibility: separate Ownership/Reading defaults,
                 private until explicitly opened, plus the public-profile link. */}
             <SharingSettings />
           </div>
@@ -245,14 +245,17 @@ function ShelfCountInner({ shelf }: { shelf: EntryState }) {
  * Clerk identity and every MangaDB record, then the local session is dropped.
  */
 function DeleteAccount() {
+  if (!convexClient) return null;
+  return <DeleteAccountInner />;
+}
+
+function DeleteAccountInner() {
   const clerk = useClerk();
   const navigate = useNavigate();
   const deleteAccount = useAction(api.users.deleteAccount);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  if (!convexClient) return null;
 
   const run = async () => {
     setBusy(true);

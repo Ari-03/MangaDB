@@ -20,7 +20,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { FEATURES } from "../../convex/lib/features";
-import { useIsModerator } from "~/lib/moderation";
+import { useIsModerator } from "~/lib/viewer";
 import { RatingControl, ScoreText, writeErrorMessage, type RatingTarget } from "~/lib/ratings";
 import { convexClient } from "~/providers";
 
@@ -233,7 +233,7 @@ function ReviewPrompt({ noun }: { noun: string }) {
  * unfolded). Renders nothing signed out or before a username is claimed, so
  * the panel can hide itself.
  */
-export function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
+function OwnReview({ target, noun }: { target: RatingTarget; noun: string }) {
   if (!convexClient) return null;
   return <OwnReviewInner target={target} noun={noun} />;
 }

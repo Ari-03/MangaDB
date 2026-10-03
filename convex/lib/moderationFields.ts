@@ -1,4 +1,4 @@
-// The direct-edit field registry (ticket #31, spec §5): which fields of each
+// The direct-edit field registry (spec §5): which fields of each
 // canonical record type the proposal write path accepts, how each is edited,
 // and how a submitted value is validated and normalized. Plain data + pure
 // functions so the edit-form route renders inputs from the same descriptors
@@ -7,22 +7,17 @@
 // Deliberately absent:
 // - identity/structure (seriesId, editionId, position, coverage, format):
 //   per CONTEXT.md a change to Release identity characteristics is a
-//   different Release, and structural moves are their own proposal ops in a
-//   later slice. Format stays fixed for the same reason (and because Binding
+//   different Release, and structural moves are their own operations, not
+//   field edits. Format stays fixed for the same reason (and because Binding
 //   only applies to physical Releases).
 // - the canonical envelope (status, locked, overriddenFields): maintained by
 //   the machinery itself, never edited as a field.
 
-export type RecordType =
-  | "publisher"
-  | "seriesFamily"
-  | "series"
-  | "volume"
-  | "editionLine"
-  | "edition"
-  | "release"
-  | "releaseVariant"
-  | "releaseBundle";
+import type { Infer } from "convex/values";
+import type { recordType } from "../schema";
+import { partialDateSort, type DateParts } from "./dates";
+
+export type RecordType = Infer<typeof recordType>;
 
 export type FieldKind =
   | "text"
@@ -168,14 +163,6 @@ export type Normalized =
 
 const invalid = (message: string): Normalized => ({ ok: false, message });
 
-/** Partial-precision date as submitted by the form (sort key added here). */
-export type PartialDateInput = { year: number; month?: number; day?: number };
-
-/** The yyyymmdd sort key with zeroed unknown parts (spec §8). */
-export function partialDateSort(date: PartialDateInput): number {
-  return date.year * 10000 + (date.month ?? 0) * 100 + (date.day ?? 0);
-}
-
 function normalizeString(
   descriptor: FieldDescriptor,
   raw: unknown,
@@ -227,7 +214,7 @@ function normalizePartialDate(raw: unknown): Normalized {
       return invalid("Day must be 1–31.");
     }
   }
-  const date: PartialDateInput = {
+  const date: DateParts = {
     year,
     ...(month !== undefined ? { month: month as number } : {}),
     ...(day !== undefined ? { day: day as number } : {}),

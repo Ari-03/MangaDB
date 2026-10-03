@@ -25,14 +25,14 @@
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { getSourceByKey } from "./importSources";
 import { applyCatalogTitle, reconcileCatalogBox, type ApplyResult } from "./lib/catalogTitle";
 import type { BundleReconcile } from "./lib/pipeline";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
-import { runToContinue } from "./lib/importRuns";
+import { closeRun, MAX_CARRIED_ERRORS, registryRow, runToContinue } from "./lib/importRuns";
 import { getObservation, upsertObservation } from "./lib/observations";
 import {
   skipsWithoutFetch,
@@ -54,8 +54,6 @@ const YEN_DELAY_MS = 1100;
 const DEFAULT_MAX_FETCHES = 300;
 /** ISBNs whose freshness one planning query checks. */
 const PLAN_CHUNK = 100;
-/** Errors carried across continuation links. */
-const MAX_CARRIED_ERRORS = 50;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Upcoming or recent books: dates still move, so re-check weekly. */
@@ -178,16 +176,7 @@ export const sync = internalAction({
   },
   handler: async (ctx, args): Promise<SyncResult> =>
     withExceptionCapture("yenPress.sync", ctx, async () => {
-      // Explicit annotations break the type cycle with imports.ts's adapter map.
-      const source: Doc<"approvedSources"> | null = await ctx.runQuery(
-        internal.importSources.getByKey,
-        { key: SOURCE_KEY },
-      );
-      if (!source) {
-        throw new Error(
-          "The approved-source registry has no \"yenpress\" row. Run: npx convex run importSources:seedRegistry '{}'",
-        );
-      }
+      const source = await registryRow(ctx, SOURCE_KEY);
       const runId = await runToContinue(ctx, source, args);
       if (runId === null) return { skipped: "disabled" as const };
       const delay = args.politeDelayMs ?? YEN_DELAY_MS;
@@ -302,39 +291,18 @@ export const sync = internalAction({
           };
         }
 
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: pageFailed ? "failed" : "succeeded",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
+        const status = pageFailed ? "failed" : "succeeded";
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, status, { seen, changed, errors })),
           fetched: fetchedTotal,
           continued: false,
-          failed: pageFailed || undefined,
-          errorCount: errors.length,
         };
       } catch (e) {
         errors.push(errorMessage(e));
-        await ctx.runMutation(internal.imports.finishRun, {
-          runId,
-          status: "failed",
-          recordsSeen: seen,
-          recordsChanged: changed,
-          errors,
-        });
         return {
-          runId,
-          recordsSeen: seen,
-          recordsChanged: changed,
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
           fetched: fetchedTotal,
           continued: false,
-          errorCount: errors.length,
-          failed: true,
         };
       }
     }),

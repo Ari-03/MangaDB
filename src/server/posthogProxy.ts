@@ -1,4 +1,4 @@
-// Same-origin reverse proxy for PostHog (README "Analytics (PostHog)"),
+// Same-origin reverse proxy for PostHog (docs/configuration.md "Analytics (PostHog)"),
 // after PostHog's Cloudflare Workers proxy guide. The browser SDK uses
 // `/_s` as its api_host, so analytics requests are first-party and ad
 // blockers that match *.posthog.com leave them alone.
@@ -44,7 +44,7 @@ export async function posthogProxyResponse(request: Request): Promise<Response |
 }
 
 async function retrieveAsset(request: Request, path: string): Promise<Response> {
-  const cache = (caches as unknown as { default: Cache }).default;
+  const cache = caches.default;
   const cached = await cache.match(request);
   if (cached) return cached;
   const response = await fetch(`${ASSET_ORIGIN}${path}`);

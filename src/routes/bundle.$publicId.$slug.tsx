@@ -9,21 +9,20 @@ import { api } from "../../convex/_generated/api";
 import { catalogQuery, type BundlePageData } from "~/lib/catalogData";
 import { BundleCollectionControls } from "~/lib/collection";
 import { Cover } from "~/lib/cover";
-import { formatPartialDate, formatPrice } from "~/lib/format";
+import { formatPartialDate, formatPrice, plural } from "~/lib/format";
 import { ConcealArt } from "~/lib/mature";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import {
-  breadcrumbListJsonLd,
   bundleTitleTag,
   isoPartialDate,
-  jsonLdScript,
   pageHead,
   truncateDescription,
 } from "~/lib/seo";
+import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { bundlePath, editionPath, parsePublicId } from "~/lib/slug";
 
 /**
- * The Bundle page (ticket #23, spec §2/§11): `/bundle/{id}/{slug}`,
+ * The Bundle page (spec §2/§11): `/bundle/{id}/{slug}`,
  * server-rendered from Convex. A Release Bundle is a purchasable box set
  * with its own publication facts (box-set ISBN, date, price); its member
  * Releases keep their individual identities, so each member links back to
@@ -47,7 +46,7 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
     return page;
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // BreadcrumbList JSON-LD (spec §11, ticket #39). Facts lead; the Bundle's
+  // BreadcrumbList JSON-LD (spec §11). Facts lead; the Bundle's
   // publisher blurb is the fallback.
   head: ({ loaderData }) => {
     if (!loaderData) return {};
@@ -59,43 +58,23 @@ export const Route = createFileRoute("/bundle/$publicId/$slug")({
       bundle.pubDate ? `released ${isoPartialDate(bundle.pubDate)}` : null,
       bundle.isbn13 ? `box set ISBN ${bundle.isbn13}` : null,
     ].filter((fact) => fact !== null);
-    return {
-      ...pageHead({
-        title: bundleTitleTag(bundle.name, bundle.publisher?.name ?? null),
-        description: `${bundle.name} ${facts.join(", ")}.${
-          bundle.description
-            ? ` ${truncateDescription(bundle.description, 80)}`
-            : ""
-        }`,
-        path,
-        image: bundle.coverUrl,
-        ogType: "book",
-        mature,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: bundle.name },
-          ]),
-        ),
-      ],
-    };
+    return pageHead({
+      title: bundleTitleTag(bundle.name, bundle.publisher?.name ?? null),
+      description: `${bundle.name} ${facts.join(", ")}.${
+        bundle.description
+          ? ` ${truncateDescription(bundle.description, 80)}`
+          : ""
+      }`,
+      path,
+      image: bundle.coverUrl,
+      ogType: "book",
+      mature,
+      breadcrumbs: [{ name: bundle.name }],
+    });
   },
   component: ConcealedBundlePage,
-  notFoundComponent: BundleNotFound,
+  notFoundComponent: () => <NotFound noun="Bundle" />,
 });
-
-function BundleNotFound() {
-  return (
-    <main>
-      <h1>Bundle not found</h1>
-      <p className="notice">
-        No bundle lives at this address. <Link to="/">Browse the catalog</Link>.
-      </p>
-    </main>
-  );
-}
 
 /** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
 function ConcealedBundlePage() {
@@ -113,10 +92,7 @@ function BundlePage() {
 
   return (
     <main className="bundle-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Bundle</span>
-      </nav>
+      <Breadcrumbs trail={["Bundle"]} />
 
       <section className="detail-hero">
         <div className="detail-cover">
@@ -126,13 +102,13 @@ function BundlePage() {
               isbn13={bundle.isbn13}
               title={bundle.name}
               foot={[
-                members.length === 1 ? "1 book" : `${members.length} books`,
+                plural(members.length, "book"),
                 bundle.publisher?.name,
               ]}
               lazy={false}
             />
           </div>
-          {/* Collection Entry controls (#27); render nothing signed out.
+          {/* Collection Entry controls; render nothing signed out.
               Owning the box set confers Derived Ownership on every member. */}
           <BundleCollectionControls bundleId={bundle.id} />
         </div>
@@ -233,7 +209,7 @@ function BundlePage() {
         </>
       ) : null}
 
-      {/* Public revision history + the moderator edit entry point (#31). */}
+      {/* Public revision history + the moderator edit entry point. */}
       <RecordHistory type="releaseBundle" publicId={bundle.publicId} />
       <ModEditLink type="releaseBundle" editKey={String(bundle.publicId)} />
     </main>

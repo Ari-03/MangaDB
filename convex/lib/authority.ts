@@ -1,4 +1,4 @@
-// Authority conflict rules (ticket #35, spec §6): pure decisions about what
+// Authority conflict rules (spec §6): pure decisions about what
 // an import may do when a source's observed value disagrees with the
 // canonical one. The registry's per-field authority map is the input —
 // rules stay data-driven, so a registry edit ("rules change") re-routes the
@@ -34,6 +34,7 @@
 //   its own text is the own-fact rule above and still updates; every other
 //   equal-authority disagreement still queues.
 
+import type { DateParts } from "./dates";
 import { sameValue } from "./values";
 
 export type AuthorityLevel = "authoritative" | "standard" | "weak";
@@ -83,23 +84,16 @@ export function authorityRank(
 
 // ---------- partial-date precision (spec §6 refinement rule) ----------
 
-export type PartialDateValue = {
-  year: number;
-  month?: number;
-  day?: number;
-  sort?: number;
-};
-
-function isPartialDate(value: unknown): value is PartialDateValue {
+function isPartialDate(value: unknown): value is DateParts {
   return (
     typeof value === "object" &&
     value !== null &&
-    typeof (value as PartialDateValue).year === "number"
+    typeof (value as DateParts).year === "number"
   );
 }
 
 /** 1 = year only, 2 = year+month, 3 = full date. */
-export function datePrecision(date: PartialDateValue): number {
+export function datePrecision(date: DateParts): number {
   if (date.day !== undefined) return 3;
   if (date.month !== undefined) return 2;
   return 1;
@@ -107,8 +101,8 @@ export function datePrecision(date: PartialDateValue): number {
 
 /** Do two partial dates agree on every part they both specify? */
 export function datesConsistent(
-  a: PartialDateValue,
-  b: PartialDateValue,
+  a: DateParts,
+  b: DateParts,
 ): boolean {
   if (a.year !== b.year) return false;
   if (a.month !== undefined && b.month !== undefined && a.month !== b.month) {

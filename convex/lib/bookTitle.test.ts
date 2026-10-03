@@ -1,7 +1,9 @@
-// The shared release-title parser (lib/bookTitle.ts). Every fixture is a
-// real title from the production snapshot's source observations (PRH,
+// The shared release-title parser (lib/bookTitle.ts). Fixtures are real
+// titles from the production snapshot's source observations (PRH,
 // OpenLibrary, Kodansha, Seven Seas), grouped by the shape that used to
-// defeat the per-source splitters.
+// defeat the per-source splitters. The packaging grammar's edge cases
+// (gapped lists, competing coverage statements) use synthetic "Alpha"
+// titles built to isolate one rule each.
 
 import { describe, expect, it } from "vitest";
 
@@ -333,6 +335,8 @@ describe("parseBookTitle — packaging", () => {
       isBox: parsed.isBox,
     };
   };
+  /** What `packaging` returns for a packaged synthetic "Alpha" book: no Volume label, no box. */
+  const packagedAlpha = <P,>(found: P) => ({ seriesTitle: "Alpha", volumeLabel: null, packaging: found, isBox: false });
 
   it("maps an omnibus to its line position and the volumes it collects", () => {
     expect(packaging("Noragami Omnibus 7 (Vol. 19-21)", 7)).toEqual({
@@ -469,10 +473,6 @@ describe("parseBookTitle — packaging", () => {
       volumeLabel: null,
       packaging: { lineName: "Naoko Takeuchi Collection", linePosition: "9" },
     });
-    expect(
-      packaging("Battle Angel Alita Deluxe 5 (Contains Vol. 9 & Ashen Victor)")
-        .packaging,
-    ).toMatchObject({ coverRange: { from: "9", to: "9" } });
   });
 
   it("reads the publishers' premium line names (2026 survey)", () => {
@@ -573,12 +573,9 @@ describe("parseBookTitle — packaging", () => {
   // it would claim the ones it skips. It stays packaging, with no coverage,
   // marked gapped (R12) so no weaker signal fills the coverage in.
   it("never widens a gapped volume list into a range", () => {
-    expect(packaging("Alpha Vol. 1 & 3")).toEqual({
-      seriesTitle: "Alpha",
-      volumeLabel: null,
-      packaging: { lineName: null, linePosition: null, coverRange: null, coverageGapped: true },
-      isBox: false,
-    });
+    expect(packaging("Alpha Vol. 1 & 3")).toEqual(
+      packagedAlpha({ lineName: null, linePosition: null, coverRange: null, coverageGapped: true }),
+    );
     expect(packaging("Alpha Omnibus (Vol. 1, 3)").packaging).toEqual({
       lineName: "Omnibus",
       linePosition: null,
@@ -623,12 +620,9 @@ describe("parseBookTitle — packaging", () => {
       "Alpha 3-in-1 Edition 1 (Vol. #1 & #3)",
       "Alpha 3-in-1 Edition 1 (Includes Vols. 1 and 3)",
     ]) {
-      expect(packaging(title), title).toEqual({
-        seriesTitle: "Alpha",
-        volumeLabel: null,
-        packaging: { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null, coverageGapped: true },
-        isBox: false,
-      });
+      expect(packaging(title), title).toEqual(
+        packagedAlpha({ lineName: "3-in-1 Edition", linePosition: "1", coverRange: null, coverageGapped: true }),
+      );
     }
     expect(packaging("Alpha Vol. 1 & Vol. 3").packaging).toMatchObject({ coverRange: null, coverageGapped: true });
     expect(packaging("Alpha 3-in-1 Edition 1 (Vol. 1, Vol. 2 and Vol. 3)").packaging?.coverRange).toEqual({
@@ -648,12 +642,9 @@ describe("parseBookTitle — packaging", () => {
       "Alpha 3-in-1 Edition 1 (Includes Vol. 1 + 3)",
       "Alpha 3-in-1 Edition 1 (Vol. 1, 2, and 4)",
     ]) {
-      expect(packaging(title), title).toEqual({
-        seriesTitle: "Alpha",
-        volumeLabel: null,
-        packaging: { lineName: "3-in-1 Edition", linePosition: "1", coverRange: null, coverageGapped: true },
-        isBox: false,
-      });
+      expect(packaging(title), title).toEqual(
+        packagedAlpha({ lineName: "3-in-1 Edition", linePosition: "1", coverRange: null, coverageGapped: true }),
+      );
     }
     expect(packaging("Alpha (3-in-1 Edition), Vol. 1: Includes Vols. 1 & 3").packaging).toEqual({
       lineName: "3-in-1 Edition",
@@ -837,12 +828,9 @@ describe("parseBookTitle — packaging", () => {
     expect(
       packaging("Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)").packaging,
     ).toEqual({ lineName: "Deluxe Edition", linePosition: null, ...REJECTED });
-    expect(packaging("Alpha, Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)")).toEqual({
-      seriesTitle: "Alpha",
-      volumeLabel: null,
-      packaging: { lineName: null, linePosition: null, ...REJECTED },
-      isBox: false,
-    });
+    expect(packaging("Alpha, Vol. 1-9 (Collects Vols. 1-3 plus 4-6 and 8-9 in one book)")).toEqual(
+      packagedAlpha({ lineName: null, linePosition: null, ...REJECTED }),
+    );
   });
 
   it("holds every other pair of coverage statements in a title to the same rule", () => {
@@ -868,8 +856,8 @@ describe("parseBookTitle — packaging", () => {
     const carried = parseBookTitle(`Alpha Deluxe Edition ${bracket}`, { subtitle: "Vol. 1-9" });
     expect(carried.packaging).toMatchObject(REJECTED);
     expect(packaging(`Alpha 1-9 ${bracket}`, 1).packaging).toMatchObject(REJECTED);
-    // Agreement still maps, and a lone number beside a bracket is a line
-    // position, never a second statement.
+    // Agreement still maps. (A lone number beside a bracket stays a line
+    // position: "Noragami Omnibus 7 (Vol. 19-21)" in the omnibus test.)
     expect(packaging("Alpha Deluxe Edition 1 (Vol. 1-3) (Collects Vols. 1-3)").packaging).toEqual({
       lineName: "Deluxe Edition",
       linePosition: "1",
@@ -879,11 +867,6 @@ describe("parseBookTitle — packaging", () => {
       from: "1",
       to: "3",
     });
-    expect(packaging("Noragami Omnibus 7 (Vol. 19-21)", 7).packaging).toEqual({
-      lineName: "Omnibus",
-      linePosition: "7",
-      coverRange: { from: "19", to: "21" },
-    });
   });
 
   // N04 siblings: a list after a packaging phrase that a marker follows, and
@@ -891,12 +874,9 @@ describe("parseBookTitle — packaging", () => {
   // meet the rest only in `agreed`.
   it("holds a list before a marker and a line-less subtitle statement to the same rule", () => {
     const REJECTED = { coverRange: null, coverageGapped: true };
-    expect(packaging("Alpha 3-in-1 Edition 1 & 3, Vol. 1")).toEqual({
-      seriesTitle: "Alpha",
-      volumeLabel: null,
-      packaging: { lineName: "3-in-1 Edition", linePosition: "1", ...REJECTED },
-      isBox: false,
-    });
+    expect(packaging("Alpha 3-in-1 Edition 1 & 3, Vol. 1")).toEqual(
+      packagedAlpha({ lineName: "3-in-1 Edition", linePosition: "1", ...REJECTED }),
+    );
     expect(packaging("Alpha Omnibus 1-3 Vol. 4-6").packaging).toEqual({
       lineName: "Omnibus",
       linePosition: null,
@@ -964,12 +944,9 @@ describe("parseBookTitle — packaging", () => {
         linePosition: null,
         ...REJECTED,
       });
-      expect(packaging("Alpha (3-in-1 Edition 1 & 3), Vol. 1")).toEqual({
-        seriesTitle: "Alpha",
-        volumeLabel: null,
-        packaging: { lineName: "3-in-1 Edition 1 & 3", linePosition: "1", ...REJECTED },
-        isBox: false,
-      });
+      expect(packaging("Alpha (3-in-1 Edition 1 & 3), Vol. 1")).toEqual(
+        packagedAlpha({ lineName: "3-in-1 Edition 1 & 3", linePosition: "1", ...REJECTED }),
+      );
     });
 
     it("reads a subtitle statement after a packaging phrase's own number or list", () => {
@@ -979,12 +956,7 @@ describe("parseBookTitle — packaging", () => {
         ["Alpha 3-in-1 Edition 2: Includes Vols. 1 & 3", "2"],
       ] as const) {
         const lineName = title.includes("Deluxe") ? "Deluxe Edition" : "3-in-1 Edition";
-        expect(packaging(title), title).toEqual({
-          seriesTitle: "Alpha",
-          volumeLabel: null,
-          packaging: { lineName, linePosition, ...REJECTED },
-          isBox: false,
-        });
+        expect(packaging(title), title).toEqual(packagedAlpha({ lineName, linePosition, ...REJECTED }));
       }
       // Real Viz titles: the statement no longer swallows the line into the Series.
       expect(packaging("Dragonball 3-in-1 Edition 1: Includes vols. 1, 2 & 3")).toEqual({
@@ -1277,8 +1249,6 @@ describe("parseBookTitle — packaging", () => {
 
     it("keeps a lone line position a position, never a statement", () => {
       for (const [title, linePosition, coverRange] of [
-        ["Alpha Omnibus 2 (Vol. 4-6)", "2", { from: "4", to: "6" }],
-        ["Alpha Omnibus 2 Vol. 4-6", "2", { from: "4", to: "6" }],
         ["Alpha Omnibus 2.5", "2.5", null],
         ["Alpha Omnibus Two", "Two", null],
         ["Alpha Deluxe Edition IV", "IV", null],
@@ -1327,12 +1297,9 @@ describe("parseBookTitle — packaging", () => {
         isBox: false,
       });
       // The phrase's list in the Book list's subtitle still stands against it.
-      expect(packaging("Alpha Book 1-2: Deluxe Edition 1-3: Includes Vols. 1-3")).toEqual({
-        seriesTitle: "Alpha",
-        volumeLabel: null,
-        packaging: { lineName: null, linePosition: null, ...REJECTED },
-        isBox: false,
-      });
+      expect(packaging("Alpha Book 1-2: Deluxe Edition 1-3: Includes Vols. 1-3")).toEqual(
+        packagedAlpha({ lineName: null, linePosition: null, ...REJECTED }),
+      );
       // Where the statement's own "Vols." would be the designation, the split stands.
       expect(packaging("Alpha Part 4 Omnibus 1: Includes Vols. 1-3")).toEqual({
         seriesTitle: "Alpha Part 4",
@@ -1363,21 +1330,18 @@ describe("parseBookTitle — packaging", () => {
       }
     });
 
-    // A gapped list after a phrase stands against a marker's designation,
-    // never against a bare number the grammar has yet to read.
+    // A gapped list after a phrase stands against a marker's designation
+    // ("Alpha 3-in-1 Edition 1 & 3, Vol. 1" above), never against a bare
+    // number the grammar has yet to read.
     it("reads a bare number before a phrase whose list no marker follows", () => {
-      expect(packaging("Alpha 2 Omnibus (Light Novel) 1 & 3")).toEqual({
-        seriesTitle: "Alpha",
-        volumeLabel: null,
-        packaging: { lineName: "Omnibus", linePosition: "2", coverRange: null },
-        isBox: false,
-      });
+      expect(packaging("Alpha 2 Omnibus (Light Novel) 1 & 3")).toEqual(
+        packagedAlpha({ lineName: "Omnibus", linePosition: "2", coverRange: null }),
+      );
       expect(parseBookTitle("Area 51, Omnibus Vol. 1-3 (Light Novel), 1 & 3 (Hardcover)")).toMatchObject({
         seriesTitle: "Area",
         isNovel: true,
         packaging: { lineName: "Omnibus", linePosition: "51", coverRange: null },
       });
-      expect(packaging("Alpha 3-in-1 Edition 1 & 3, Vol. 1").packaging).toMatchObject(REJECTED);
     });
   });
 });

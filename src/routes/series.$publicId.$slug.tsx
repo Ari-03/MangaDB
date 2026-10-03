@@ -20,25 +20,24 @@ import { SeriesReportAffordance } from "~/lib/report";
 import { ReviewsSection, TakePanel } from "~/lib/reviews";
 import {
   bookSeriesJsonLd,
-  breadcrumbListJsonLd,
-  jsonLdScript,
   pageHead,
   seriesTitleTag,
 } from "~/lib/seo";
+import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import {
   bookLabel,
   bookTitle,
   dateSpan,
   PathShelf,
-  plural,
   MissingVolume,
   type EditionGroup,
 } from "~/lib/seriesShelf";
+import { plural } from "~/lib/format";
 import { SeriesVisibilityControls } from "~/lib/sharing";
-import { parsePublicId, seriesPath } from "~/lib/slug";
+import { parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 
 /**
- * The Series page (ticket #22): `/series/{id}/{slug}`, server-rendered from
+ * The Series page: `/series/{id}/{slug}`, server-rendered from
  * Convex. The Series' Editions are grouped into reading paths — the standard
  * run per publisher, then each Edition Line (Omnibus, Deluxe, …); the picker
  * shows each path's first book and `?edition=` opens that path as a shelf of
@@ -81,52 +80,25 @@ export const Route = createFileRoute("/series/$publicId/$slug")({
     return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // BreadcrumbList + BookSeries JSON-LD (spec §11, ticket #39).
+  // BreadcrumbList + BookSeries JSON-LD (spec §11).
   head: ({ loaderData }) => {
     if (!loaderData) return {};
     const { series, volumes, coverUrl } = loaderData;
     const path = seriesPath(series.publicId, series.title);
-    const volumeCount =
-      volumes.length === 1 ? "1 volume" : `${volumes.length} volumes`;
-    return {
-      ...pageHead({
-        title: seriesTitleTag(series.title),
-        description: `English releases of ${series.title}: ${volumeCount} in the canonical reading order, with every edition, format, and release date.`,
-        path,
-        image: coverUrl,
-        mature: series.mature,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: series.title },
-          ]),
-        ),
-        jsonLdScript(
-          bookSeriesJsonLd({
-            title: series.title,
-            altTitles: series.altTitles,
-            path,
-          }),
-        ),
-      ],
-    };
+    const volumeCount = plural(volumes.length, "volume");
+    return pageHead({
+      title: seriesTitleTag(series.title),
+      description: `English releases of ${series.title}: ${volumeCount} in the canonical reading order, with every edition, format, and release date.`,
+      path,
+      image: coverUrl,
+      mature: series.mature,
+      breadcrumbs: [{ name: series.title }],
+      jsonLd: [bookSeriesJsonLd({ title: series.title, altTitles: series.altTitles, path })],
+    });
   },
   component: ConcealedSeriesPage,
-  notFoundComponent: SeriesNotFound,
+  notFoundComponent: () => <NotFound noun="Series" kind="series" />,
 });
-
-function SeriesNotFound() {
-  return (
-    <main className="series-page">
-      <h1 className="series-title">Series not found</h1>
-      <p className="notice">
-        No series lives at this address. <Link to="/">Browse the catalog</Link>.
-      </p>
-    </main>
-  );
-}
 
 const SOURCE_STATUS_LABELS = {
   ongoing: "Ongoing",
@@ -160,12 +132,6 @@ function packagingFacts(groups: ReadonlyArray<EditionGroup>) {
     publishers: [...publishers].map(([slug, name]) => ({ slug, name })),
     dateSpan: dateSpan(books),
   };
-}
-
-function seriesLinkParams(publicId: number, title: string) {
-  const canonical = seriesPath(publicId, title);
-  const slug = canonical.split("/").pop() ?? "";
-  return { publicId: String(publicId), slug };
 }
 
 /** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
@@ -202,10 +168,7 @@ function SeriesPage() {
 
   return (
     <main className="series-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <Link to="/series">Series</Link>
-      </nav>
+      <Breadcrumbs trail={[<Link to="/series">Series</Link>]} />
 
       <section className="series-hero">
         <div className="series-hero-aside">
@@ -222,7 +185,7 @@ function SeriesPage() {
         {/* The viewer's take, under the cover: their private Rating (the
             chip in the body shows the public average it feeds), their own
             Review, then Follow (the explicit toggle for future-release
-            interest, #29) beside the private Favorite. A grid item of its
+            interest) beside the private Favorite. A grid item of its
             own, so opening the review form can give it the full width. */}
         <TakePanel target={ratingTarget} noun="series">
           <SeriesFollowControls seriesPublicId={series.publicId} />
@@ -319,7 +282,7 @@ function SeriesPage() {
                           {i > 0 ? ", " : ""}
                           <Link
                             to="/series/$publicId/$slug"
-                            params={seriesLinkParams(
+                            params={slugParams(
                               member.publicId,
                               member.title,
                             )}
@@ -346,8 +309,8 @@ function SeriesPage() {
               hides the bar then, so the public page keeps the hero clean. */}
           <div className="owner-bar">
             <div className="track-group track-group--reading">
-              {/* Series Reading Status is set only here, by explicit choice
-                  (#28); the tracking prompts never change it without
+              {/* Series Reading Status is set only here, by explicit choice;
+                  the tracking prompts never change it without
                   confirmation. Progress counts read Volumes, not entries. */}
               <SeriesReadingControls seriesPublicId={series.publicId} />
               <SeriesReadingProgress
@@ -356,7 +319,7 @@ function SeriesPage() {
               />
             </div>
             <div className="track-group track-group--sharing">
-              {/* Per-Series visibility overrides for the public profile (#30),
+              {/* Per-Series visibility overrides for the public profile,
                   in a popover so the bar never reflows. */}
               <SeriesVisibilityControls seriesPublicId={series.publicId} />
             </div>
@@ -440,10 +403,10 @@ function SeriesPage() {
       ) : null}
 
       {/* Partially imported Series show as-is; every Series page carries the
-          report affordance feeding the proposal queue (#40, spec §7). */}
+          report affordance feeding the proposal queue (spec §7). */}
       <SeriesReportAffordance seriesPublicId={series.publicId} />
 
-      {/* Public revision history + the data-team entry points (#31/#32). */}
+      {/* Public revision history + the data-team entry points. */}
       <RecordHistory type="series" publicId={series.publicId} />
       <ModEditLink type="series" editKey={String(series.publicId)} />
       <ProposeNewRecordsLink seriesPublicId={series.publicId} />
@@ -476,7 +439,7 @@ function EditionPicker({
             key={group.key}
             className={isSelected ? "edition-card is-selected" : "edition-card"}
             to="/series/$publicId/$slug"
-            params={seriesLinkParams(series.publicId, series.title)}
+            params={slugParams(series.publicId, series.title)}
             search={{ edition: group.key }}
             // Switching editions keeps the reader where they are.
             resetScroll={false}
@@ -542,7 +505,7 @@ function FamilySection({
                   <Link
                     className="cover-link"
                     to="/series/$publicId/$slug"
-                    params={seriesLinkParams(member.publicId, member.title)}
+                    params={slugParams(member.publicId, member.title)}
                     aria-label={member.title}
                   >
                     <Cover title={member.title} />
@@ -558,7 +521,7 @@ function FamilySection({
                   <Link
                     className="caption-title"
                     to="/series/$publicId/$slug"
-                    params={seriesLinkParams(member.publicId, member.title)}
+                    params={slugParams(member.publicId, member.title)}
                   >
                     {member.title}
                   </Link>

@@ -1,73 +1,48 @@
 // Backend analytics (lib/posthog.ts) through PostHog's Convex component,
 // registered here from @posthog/convex/test: the no-op without
 // POSTHOG_PROJECT_TOKEN, the distinct-id rules, mutations scheduling the
-// component's send with the event, what reaches PostHog's /batch/, and
+// component's send with the event, what the component delivers, and
 // $exception capture around unattended actions.
 
-import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
-import posthogTest from "@posthog/convex/test";
 
 import { api, internal } from "./_generated/api";
 import { lengthBucket } from "./reviews";
-import schema from "./schema";
+import { insertSeries } from "./test.factories";
+import { ADMIN, READER, alice, makeT, reader, seedTeam, type TestT } from "./test.helpers";
 
 const TOKEN = "phc_test_token";
-const ADMIN = "user_admin";
-const READER = "user_reader";
 
 type WireEvent = { event: string; distinct_id: string; properties: Record<string, unknown> };
 
 /**
- * Stub fetch with a PostHog that accepts everything. Returns the events
- * posted to /batch/ (the component's client gzips each body).
+ * Stub fetch with a PostHog that accepts everything. Returns each POST's
+ * batch of events (the component's client gzips each body).
  */
-function stubPostHog(): { url: string; events: Promise<WireEvent[]> }[] {
-  const posted: { url: string; events: Promise<WireEvent[]> }[] = [];
-  vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+function stubPostHog(): Promise<WireEvent[]>[] {
+  const posted: Promise<WireEvent[]>[] = [];
+  vi.stubGlobal("fetch", async (_url: string | URL | Request, init?: RequestInit) => {
     const body = new Response(init?.body).body!.pipeThrough(new DecompressionStream("gzip"));
-    posted.push({
-      url: String(url),
-      events: new Response(body).json().then((b: { batch: WireEvent[] }) => b.batch),
-    });
+    posted.push(new Response(body).json().then((b: { batch: WireEvent[] }) => b.batch));
     return new Response("{}", { status: 200 });
   });
   return posted;
 }
 
-const wireEvents = async (posted: ReturnType<typeof stubPostHog>) =>
-  (await Promise.all(posted.map((p) => p.events))).flat();
-
-function makeT() {
-  const t = convexTest(schema);
-  rateLimiterTest.register(t, "rateLimiter");
-  posthogTest.register(t, "posthog");
-  return t;
-}
+const wireEvents = async (posted: ReturnType<typeof stubPostHog>) => (await Promise.all(posted)).flat();
 
 /** An administrator, a reader, and one active Series (publicId 7). */
 async function seed() {
   const t = makeT();
-  await t.withIdentity({ subject: ADMIN }).mutation(api.users.claimUsername, { username: "alice" });
-  await t.withIdentity({ subject: READER }).mutation(api.users.claimUsername, { username: "carol" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  const seriesId = await t.run((ctx) =>
-    ctx.db.insert("series", {
-      status: "active",
-      publicId: 7,
-      title: "Witch Hat Atelier",
-      altTitles: [],
-      searchText: "Witch Hat Atelier",
-    }),
-  );
+  await seedTeam(t, [alice, reader]);
+  const seriesId = await t.run((ctx) => insertSeries(ctx, { publicId: 7, title: "Witch Hat Atelier" }));
   return { t, target: { kind: "series" as const, id: seriesId } };
 }
 
 type Scheduled = { name: string; args: Record<string, unknown> };
 
 /** The component sends the app scheduled, with properties JSON-encoded. */
-async function scheduled(t: ReturnType<typeof makeT>): Promise<Scheduled[]> {
+async function scheduled(t: TestT): Promise<Scheduled[]> {
   const jobs = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
   return jobs.map((job) => {
     const args = job.args[0] as Record<string, unknown>;
@@ -128,18 +103,18 @@ describe("capture", () => {
     // The mutation's time, not the send's.
     expect(jobs.every((job) => typeof job.args.timestamp === "number")).toBe(true);
 
-    // The component's actions deliver them to /batch/, branded as its own
-    // library; user events keep their person profile. Each send is its own
-    // action and POST and they run concurrently, so arrival order is not
-    // the scheduling order and is not asserted.
+    // The component's actions deliver every event as scheduled; user events
+    // keep their person profile. (Its endpoint and library branding are
+    // PostHog's, not asserted.) Each send is its own action and POST and
+    // they run concurrently, so arrival order is not the scheduling order
+    // and is not asserted.
     await t.finishAllScheduledFunctions(vi.runAllTimers);
-    expect(posted.every((p) => p.url === "https://us.i.posthog.com/batch/")).toBe(true);
     const events = await wireEvents(posted);
     const delivered = (event: string, properties: Record<string, unknown>) =>
       expect.objectContaining({
         event,
         distinct_id: READER,
-        properties: expect.objectContaining({ ...properties, $lib: "posthog-convex", $is_server: true }),
+        properties: expect.objectContaining(properties),
       });
     expect(events).toHaveLength(jobs.length);
     expect(events).toEqual(
@@ -205,7 +180,7 @@ describe("capture", () => {
     const events = await wireEvents(posted);
     expect(events.find((e) => e.event === "source_unhealthy")).toMatchObject({
       distinct_id: "server",
-      properties: { $process_person_profile: false, $lib: "posthog-convex" },
+      properties: { source_key: "ann", consecutive_failures: 3, $process_person_profile: false },
     });
   });
 });
@@ -244,8 +219,17 @@ describe("withExceptionCapture", () => {
   it("passes results through and schedules nothing when the body succeeds", async () => {
     enableCapture();
     const t = makeT();
+    // An empty catalog: a rebuild that credits nothing, finished in one go.
     const result = await t.action(internal.people.rebuild, {});
-    expect(result).toBeDefined();
+    expect(result).toEqual({
+      credits: 0,
+      publisherCredits: 0,
+      swept: 0,
+      pruned: 0,
+      people: 0,
+      continued: false,
+      ms: expect.any(Number),
+    });
     expect(await scheduled(t)).toEqual([]);
   });
 

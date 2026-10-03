@@ -1,8 +1,28 @@
 # MangaDB v1 Specification
 
+> **Frozen v1 decision record.** This file records what was decided before
+> the site was built (August 2026). Code comments cite it as "spec §N", so
+> its section numbers never change. The code and the docs in this folder
+> describe the site as it is now. Where the two disagree, trust the code.
+> Known drift:
+>
+> - §6 says marketing descriptions are not imported. Publisher blurbs now
+>   import as Release Descriptions and Series synopses, and pages show one
+>   description per book ([imports](imports.md#descriptions)).
+> - §6 lists five v1 sources. The registry now seeds seven rows: Yen Press
+>   and the Kodansha backlist crawl joined later.
+> - §8 says covers live per Release in file storage. Only Kodansha and
+>   Seven Seas art is stored; everything else comes from `/covers/{isbn13}.jpg`
+>   ([product](product.md#cover-art)).
+> - §10 rules out a cross-publisher overview. The Publishers board at
+>   `/publishers` is one. Series pages now open on an edition picker rather
+>   than one reading path.
+> - Ratings, reviews, favorites, comments, author pages and the mature-title
+>   filter came after v1 and are not in this file ([product](product.md)).
+
 A public website for tracking English manga **volume** releases: what volumes exist, when each edition comes out, and which ones you own, want, or have read. Browse/calendar plus personal tracking with accounts, public from day one.
 
-This document assembles every decision resolved on [Map: MangaDB v1 spec](https://github.com/Ari-03/MangaDB/issues/1) (wayfinder effort, 2026-08-12 → 2026-08-18). Each section links the ticket that holds its full rationale; the authoritative decision record is the `## Resolution` comment on each closed ticket. The ubiquitous language lives in repo-root [`CONTEXT.md`](../../CONTEXT.md); the runnable schema draft in [`convex/schema.ts`](../../convex/schema.ts).
+This document assembles every decision resolved on [Map: MangaDB v1 spec](https://github.com/Ari-03/MangaDB/issues/1) (wayfinder effort, 2026-08-12 → 2026-08-18). Each section links the ticket that holds its full rationale; the authoritative decision record is the `## Resolution` comment on each closed ticket. The ubiquitous language lives in repo-root [`CONTEXT.md`](../CONTEXT.md); the runnable schema draft in [`convex/schema.ts`](../convex/schema.ts).
 
 **Stack (user-fixed):** TanStack Start (SSR) + Convex. **Auth:** Clerk. **Hosting:** Cloudflare Workers Paid at `mangadb.org`.
 
@@ -24,7 +44,7 @@ From the charting session and [catalog scope](https://github.com/Ari-03/MangaDB/
 
 ## 2. Domain model
 
-Full definitions in [`CONTEXT.md`](../../CONTEXT.md). Decided in [edition modeling](https://github.com/Ari-03/MangaDB/issues/6), refined by [routes & SEO](https://github.com/Ari-03/MangaDB/issues/19) (the Edition entity) and [the schema](https://github.com/Ari-03/MangaDB/issues/11); modeling instincts borrowed from [RanobeDB research](https://github.com/Ari-03/MangaDB/issues/4).
+Full definitions in [`CONTEXT.md`](../CONTEXT.md). Decided in [edition modeling](https://github.com/Ari-03/MangaDB/issues/6), refined by [routes & SEO](https://github.com/Ari-03/MangaDB/issues/19) (the Edition entity) and [the schema](https://github.com/Ari-03/MangaDB/issues/11); modeling instincts borrowed from [RanobeDB research](https://github.com/Ari-03/MangaDB/issues/4).
 
 Source-content identity is stable; publisher packaging is modeled separately:
 
@@ -121,7 +141,7 @@ Decided in [initial catalog scope and seeding rollout](https://github.com/Ari-03
 
 ## 8. Convex schema
 
-Decided in [the Convex schema](https://github.com/Ari-03/MangaDB/issues/11); runnable draft at [`convex/schema.ts`](../../convex/schema.ts) (commit [3daac74](https://github.com/Ari-03/MangaDB/blob/3daac74/convex/schema.ts)). Highlights:
+Decided in [the Convex schema](https://github.com/Ari-03/MangaDB/issues/11); runnable draft at [`convex/schema.ts`](../convex/schema.ts) (commit [3daac74](https://github.com/Ari-03/MangaDB/blob/3daac74/convex/schema.ts)). Highlights:
 
 - **Catalog:** `publishers`, `seriesFamilies`, `series`, `seriesRelationships`, `volumes`, `editionLines`, `editions`, `volumeCoverages`, `releases`, `releaseVariants`, `releaseBundles`, `bundleMemberships`. Release identity = edition + Format + Binding + language + ISBNs.
 - **Provenance/moderation:** `approvedSources`, `sourceObservations` + `observationSnapshots`, `proposals` + immutable `proposalVersions` (typed op union: create/update/merge/split/hide/restore/clearOverride/lock, each op carrying its base Revision), `revisions`, `conflictSuppressions`, `importRuns`, `roleAudit`.

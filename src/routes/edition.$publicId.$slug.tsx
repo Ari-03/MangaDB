@@ -21,17 +21,16 @@ import { RatingAggregate } from "~/lib/ratings";
 import { TakePanel } from "~/lib/reviews";
 import {
   bookJsonLd,
-  breadcrumbListJsonLd,
   editionTitleTag,
   isoPartialDate,
-  jsonLdScript,
   pageHead,
   truncateDescription,
 } from "~/lib/seo";
+import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
 import { editionPath, parsePublicId, seriesPath, slugParams } from "~/lib/slug";
 
 /**
- * The Edition page — the book detail page (ticket #23, spec §2/§10/§11):
+ * The Edition page — the book detail page (spec §2/§10/§11):
  * `/edition/{id}/{slug}`, server-rendered from Convex. The header carries
  * the book's one Edition Description (CONTEXT.md), labelled when it is only
  * the Series synopsis. Release rows differ only in Format/Binding, each
@@ -96,7 +95,7 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
     return { ...page, rating };
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // JSON-LD (spec §11, ticket #39): BreadcrumbList plus one Book per Release
+  // JSON-LD (spec §11): BreadcrumbList plus one Book per Release
   // row — Releases have no page of their own, so each Book's URL is this
   // Edition page anchored at its row. The description leads with facts
   // (publisher, date, ISBN), falling back to the Edition Description when it
@@ -118,75 +117,51 @@ export const Route = createFileRoute("/edition/$publicId/$slug")({
     const blurb = description && description.source !== "series" ? description.text : null;
     // Repeated on every Book, so cut short: the full text is on the page.
     const bookDescription = blurb ? truncateDescription(blurb, 500) : null;
-    return {
-      ...pageHead({
-        title: editionTitleTag(edition.title, edition.publisher?.name ?? null),
-        description:
-          facts.length > 0
-            ? `${edition.title} ${facts.join(", ")} — every release with format, binding, ISBN, and release date.`
-            : blurb
-              ? truncateDescription(blurb)
-              : `${edition.title}: every release with format, binding, ISBN, and release date.`,
-        path,
-        image: coverUrl,
-        ogType: "book",
-        mature,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            ...(primarySeries
-              ? [
-                  {
-                    name: primarySeries.title,
-                    path: seriesPath(
-                      primarySeries.publicId,
-                      primarySeries.title,
-                    ),
-                  },
-                ]
-              : []),
-            { name: edition.title },
-          ]),
-        ),
-        ...releases.map((release) =>
-          jsonLdScript(
-            bookJsonLd({
-              name: edition.title,
-              editionPath: path,
-              anchor: release.anchor,
-              format: release.format,
-              binding: release.binding,
-              isbn13: release.isbn13,
-              isbn10: release.isbn10,
-              pubDate: release.pubDate,
-              language: release.language,
-              publisherName: edition.publisher?.name ?? null,
-              description: bookDescription,
-              // No art for crawlers on a Mature Series' page (lib/mature.tsx).
-              coverUrl: mature ? null : release.coverUrl,
-            }),
-          ),
-        ),
+    return pageHead({
+      title: editionTitleTag(edition.title, edition.publisher?.name ?? null),
+      description:
+        facts.length > 0
+          ? `${edition.title} ${facts.join(", ")} — every release with format, binding, ISBN, and release date.`
+          : blurb
+            ? truncateDescription(blurb)
+            : `${edition.title}: every release with format, binding, ISBN, and release date.`,
+      path,
+      image: coverUrl,
+      ogType: "book",
+      mature,
+      breadcrumbs: [
+        ...(primarySeries
+          ? [
+              {
+                name: primarySeries.title,
+                path: seriesPath(primarySeries.publicId, primarySeries.title),
+              },
+            ]
+          : []),
+        { name: edition.title },
       ],
-    };
+      jsonLd: releases.map((release) =>
+        bookJsonLd({
+          name: edition.title,
+          editionPath: path,
+          anchor: release.anchor,
+          format: release.format,
+          binding: release.binding,
+          isbn13: release.isbn13,
+          isbn10: release.isbn10,
+          pubDate: release.pubDate,
+          language: release.language,
+          publisherName: edition.publisher?.name ?? null,
+          description: bookDescription,
+          // No art for crawlers on a Mature Series' page (lib/mature.tsx).
+          coverUrl: mature ? null : release.coverUrl,
+        }),
+      ),
+    });
   },
   component: ConcealedEditionPage,
-  notFoundComponent: EditionNotFound,
+  notFoundComponent: () => <NotFound noun="Edition" />,
 });
-
-function EditionNotFound() {
-  return (
-    <main>
-      <h1>Edition not found</h1>
-      <p className="notice">
-        No edition lives at this address. <Link to="/">Browse the catalog</Link>
-        .
-      </p>
-    </main>
-  );
-}
 
 /** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
 function ConcealedEditionPage() {
@@ -222,21 +197,21 @@ function EditionPage() {
 
   return (
     <main className="edition-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        {primarySeries ? (
-          <>
-            <Link
-              to="/series/$publicId/$slug"
-              params={slugParams(primarySeries.publicId, primarySeries.title)}
-            >
-              {primarySeries.title}
-            </Link>{" "}
-            <span aria-hidden="true">/</span>{" "}
-          </>
-        ) : null}
-        <span>Edition</span>
-      </nav>
+      <Breadcrumbs
+        trail={[
+          ...(primarySeries
+            ? [
+                <Link
+                  to="/series/$publicId/$slug"
+                  params={slugParams(primarySeries.publicId, primarySeries.title)}
+                >
+                  {primarySeries.title}
+                </Link>,
+              ]
+            : []),
+          "Edition",
+        ]}
+      />
 
       <section className="detail-hero">
         <div className="detail-cover">
@@ -410,7 +385,7 @@ function EditionPage() {
         </section>
       ) : null}
 
-      {/* Public revision history + the moderator edit entry point (#31). */}
+      {/* Public revision history + the moderator edit entry point. */}
       <RecordHistory type="edition" publicId={edition.publicId} />
       <ModEditLink type="edition" editKey={String(edition.publicId)} />
       <ModReleaseEditLinks

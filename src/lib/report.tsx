@@ -1,24 +1,16 @@
 // The per-Series "see something missing/wrong? → report" affordance
-// (ticket #40, spec §7). Renders on every Series page — partially imported
+// (spec §7). Renders on every Series page — partially imported
 // Series show publicly as-is, and this is their correction on-ramp into the
 // proposal queue. The closed state is static (SSR renders it identically
 // for everyone); opening it reveals the report form signed in, or a sign-in
 // pointer signed out.
 
-import { ConvexError } from "convex/values";
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { mutationErrorMessage, TRY_AGAIN } from "~/lib/errors";
 import { convexClient } from "~/providers";
-
-function errorMessage(err: unknown): string {
-  if (err instanceof ConvexError && typeof err.data === "object" && err.data !== null) {
-    const message = (err.data as { message?: string }).message;
-    if (message) return message;
-  }
-  return "That didn't go through. Try again.";
-}
 
 export function SeriesReportAffordance({
   seriesPublicId,
@@ -100,7 +92,7 @@ function ReportForm({
         setError(null);
         submit({ seriesPublicId, message })
           .then(() => setSent(true))
-          .catch((err: unknown) => setError(errorMessage(err)));
+          .catch((err: unknown) => setError(mutationErrorMessage(err, TRY_AGAIN, TRY_AGAIN)));
       }}
     >
       <label className="report-field">

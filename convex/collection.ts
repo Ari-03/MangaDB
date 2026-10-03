@@ -1,31 +1,22 @@
-// Personal collection (ticket #27, spec §3): Wanted / Ordered / Owned
-// Collection Entries on Releases and Bundles, variant pinning, computed
-// Derived Ownership, the per-Series overlay behind the shelf quick actions,
-// batch marking, and the library shelf on /me.
-//
-// The invariants, straight from the glossary (CONTEXT.md):
-// - A Collection Entry targets a Release or a Bundle, in exactly one of three
-//   states: Wanted | Ordered | Owned (Ordered includes preorders). Every
-//   transition is user-controlled — nothing here changes state as a side
-//   effect of anything.
-// - A Release entry may optionally identify a Release Variant (the alternate
-//   cover the user owns or wants).
-// - Owning a Bundle yields Derived Ownership of its member Releases —
-//   computed at read time, never stored — which coexists with direct entries.
-//   Removing the Bundle entry therefore never erases a direct entry.
-// - There is no stored Volume-ownership state: a Volume reads as owned
-//   through the owned Releases covering it (volumeOwnership below).
+// Personal collection (CONTEXT.md: Collection Entry, Derived Ownership):
+// entry writes on Releases and Bundles, the per-Release, per-Bundle and
+// per-Series overlays, Volume ownership, batch marking, and the library
+// shelf on /me. Every state change is the user's own; Derived Ownership is
+// computed at read time, and no Volume-ownership state is ever stored.
 
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { resolveActiveSeries } from "./catalog";
-import { editionCoverage, followMerges } from "./catalogPages";
+import { activeVolumes, resolveActiveSeries } from "./catalog";
+import { editionCoverage, publisherLink } from "./catalogPages";
+import { followMerges, getActive, requireActive } from "./lib/merges";
+import { seriesStateRow } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover } from "./lib/covers";
+import { coveringOf, releasesOf } from "./lib/editionRows";
 import { editionPathKey } from "./lib/editionGroups";
 import { releaseAnchor } from "./lib/titles";
-import { requireActiveRelease } from "./reading";
+import { completelyCoveredVolumes, volumeProgressRow } from "./reading";
 
 /** Batch marking (the library's "Own all") stops here; nobody shelves more in one click. */
 export const MANY_ENTRIES_CAP = 200;
@@ -38,22 +29,6 @@ const stateValidator = v.union(
 );
 
 // ---------- shared lookups ----------
-
-/** The Bundle resolved through merges; throws when unknown or hidden. */
-async function requireActiveBundle(
-  ctx: QueryCtx,
-  bundleId: Id<"releaseBundles">,
-): Promise<Doc<"releaseBundles">> {
-  const bundle = await followMerges(
-    ctx,
-    "releaseBundles",
-    await ctx.db.get(bundleId),
-  );
-  if (!bundle) {
-    throw new ConvexError({ code: "notFound", message: "Bundle not found." });
-  }
-  return bundle;
-}
 
 /** The one direct entry for (user, release) — at most one by invariant. */
 async function releaseEntryRow(
@@ -94,40 +69,46 @@ async function entrySeries(
   seriesCache = new Map<Id<"series">, Doc<"series"> | null>(),
 ): Promise<Map<Id<"series">, Doc<"series">>> {
   const covered = new Map<Id<"series">, Doc<"series">>();
-  const addRelease = async (releaseId: Id<"releases">) => {
-    const release = await followMerges(ctx, "releases", await ctx.db.get(releaseId));
-    if (!release) return;
+  const addRelease = async (release: Doc<"releases">) => {
     for (const seriesId of release.seriesIds) {
       let series = seriesCache.get(seriesId);
       if (series === undefined) {
-        series = await followMerges(ctx, "series", await ctx.db.get(seriesId));
+        series = await getActive(ctx, "series", seriesId);
         seriesCache.set(seriesId, series);
       }
       if (series) covered.set(series._id, series);
     }
   };
   if (entry.releaseId) {
-    await addRelease(entry.releaseId);
+    const release = await getActive(ctx, "releases", entry.releaseId);
+    if (release) await addRelease(release);
   } else if (entry.bundleId) {
-    const bundle = await followMerges(
-      ctx,
-      "releaseBundles",
-      await ctx.db.get(entry.bundleId),
-    );
+    const bundle = await getActive(ctx, "releaseBundles", entry.bundleId);
     if (!bundle) return covered;
-    const memberships = await ctx.db
-      .query("bundleMemberships")
-      .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-      .collect();
-    for (const membership of memberships) {
-      await addRelease(membership.releaseId);
-    }
+    for (const release of await bundleReleases(ctx, bundle._id)) await addRelease(release);
   }
   return covered;
 }
 
 /**
- * The one non-blocking follow prompt per Series (ticket #29, spec §3),
+ * A Bundle's member Releases in membership-index order (not `order`), merges
+ * followed; hidden and deleted members drop out. Exported for follows.ts.
+ */
+export async function bundleReleases(ctx: QueryCtx, bundleId: Id<"releaseBundles">) {
+  const memberships = await ctx.db
+    .query("bundleMemberships")
+    .withIndex("by_bundle", (q) => q.eq("bundleId", bundleId))
+    .collect();
+  const releases = [];
+  for (const membership of memberships) {
+    const release = await getActive(ctx, "releases", membership.releaseId);
+    if (release) releases.push(release);
+  }
+  return releases;
+}
+
+/**
+ * The one non-blocking follow prompt per Series (spec §3),
  * computed once after *new* entries were inserted (one click, or a whole
  * batch): for each Series the new entries' targets cover, suggest a Series
  * Follow exactly when no older entry of the user covers it (so this is their
@@ -170,12 +151,7 @@ async function followSuggestions(
   const suggestions = [];
   for (const [seriesId, series] of target) {
     if (alreadyCovered.has(seriesId)) continue;
-    const state = await ctx.db
-      .query("userSeriesStates")
-      .withIndex("by_user_series", (q) =>
-        q.eq("userId", userId).eq("seriesId", seriesId),
-      )
-      .unique();
+    const state = await seriesStateRow(ctx, userId, seriesId);
     if (state?.following || state?.followPromptDismissed) continue;
     suggestions.push({ seriesId, title: series.title });
   }
@@ -210,11 +186,7 @@ async function derivedOwnership(
   const derived = [];
   const seen = new Set<Id<"releaseBundles">>();
   for (const membership of memberships) {
-    const bundle = await followMerges(
-      ctx,
-      "releaseBundles",
-      await ctx.db.get(membership.bundleId),
-    );
+    const bundle = await getActive(ctx, "releaseBundles", membership.bundleId);
     if (!bundle || seen.has(bundle._id)) continue;
     seen.add(bundle._id);
     const entry = await bundleEntryRow(ctx, userId, bundle._id);
@@ -230,11 +202,7 @@ async function derivedOwnership(
 
 /** Enough joined Edition context to link a Release from personal views. */
 export async function releaseLink(ctx: QueryCtx, release: Doc<"releases">) {
-  const edition = await followMerges(
-    ctx,
-    "editions",
-    await ctx.db.get(release.editionId),
-  );
+  const edition = await getActive(ctx, "editions", release.editionId);
   if (!edition) return null;
   const { title } = await editionCoverage(ctx, edition);
   return {
@@ -251,16 +219,15 @@ export async function releaseLink(ctx: QueryCtx, release: Doc<"releases">) {
 /**
  * The viewer's collection state for one Release row: the direct entry (state
  * + pinned Variant), the Release's active Variants for the picker, and any
- * Derived Ownership from Owned Bundles. Null when signed out, username
- * pending, or the Release is unknown — the public row renders identically,
- * just without the controls.
+ * Derived Ownership from Owned Bundles. Null without a viewer (viewerOrNull)
+ * or for an unknown Release.
  */
 export const entryForRelease = query({
   args: { releaseId: v.id("releases") },
   handler: async (ctx, { releaseId }) => {
     const user = await viewerOrNull(ctx);
     if (!user) return null;
-    const release = await followMerges(ctx, "releases", await ctx.db.get(releaseId));
+    const release = await getActive(ctx, "releases", releaseId);
     if (!release) return null;
 
     const entry = await releaseEntryRow(ctx, user._id, release._id);
@@ -285,19 +252,15 @@ export const entryForRelease = query({
 });
 
 /**
- * The viewer's collection state for one Bundle page. Null when signed out or
- * the Bundle is unknown; otherwise `entry` is the entry or null.
+ * The viewer's collection state for one Bundle page. Null without a viewer
+ * or for an unknown Bundle; otherwise `entry` is the entry or null.
  */
 export const entryForBundle = query({
   args: { bundleId: v.id("releaseBundles") },
   handler: async (ctx, { bundleId }) => {
     const user = await viewerOrNull(ctx);
     if (!user) return null;
-    const bundle = await followMerges(
-      ctx,
-      "releaseBundles",
-      await ctx.db.get(bundleId),
-    );
+    const bundle = await getActive(ctx, "releaseBundles", bundleId);
     if (!bundle) return null;
     const entry = await bundleEntryRow(ctx, user._id, bundle._id);
     return { bundleId: bundle._id, entry: entry ? { state: entry.state } : null };
@@ -309,8 +272,8 @@ export const entryForBundle = query({
  * covering it, direct or derived, since no Volume-ownership state is ever
  * stored (spec §3). Each item names its route: `via` is null for a direct
  * Owned entry and the owning Bundle for Derived Ownership; the same Release
- * appears once per route because the two coexist. Null when signed out or
- * the Volume is unknown.
+ * appears once per route because the two coexist. Null without a viewer or
+ * for an unknown Volume.
  */
 export const volumeOwnership = query({
   args: { volumePublicId: v.number() },
@@ -324,24 +287,12 @@ export const volumeOwnership = query({
     const volume = await followMerges(ctx, "volumes", stored);
     if (!volume) return null;
 
-    const coverages = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const coverages = await coveringOf(ctx, volume._id);
     const owned = [];
     for (const coverage of coverages) {
-      const edition = await followMerges(
-        ctx,
-        "editions",
-        await ctx.db.get(coverage.editionId),
-      );
+      const edition = await getActive(ctx, "editions", coverage.editionId);
       if (!edition) continue;
-      const releases = (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-          .collect()
-      ).filter((doc) => doc.status === "active");
+      const releases = (await releasesOf(ctx, edition._id)).filter((doc) => doc.status === "active");
       for (const release of releases) {
         const link = await releaseLink(ctx, release);
         if (!link) continue;
@@ -374,8 +325,7 @@ export const volumeOwnership = query({
  * Release of the Series (state + pinned Variant) and every Release owned
  * through an Owned Bundle (Derived Ownership, computed here as always), plus
  * the format preference the quick actions use to pick a Release when a book
- * has several. Null when signed out, username pending, or the Series is
- * unknown — the public shelf renders without badges or actions.
+ * has several. Null without a viewer or for an unknown Series.
  */
 export const seriesEntries = query({
   args: { seriesPublicId: v.number() },
@@ -388,7 +338,7 @@ export const seriesEntries = query({
     const inSeries = async (release: Doc<"releases">) => {
       for (const rawId of release.seriesIds) {
         if (rawId === series._id) return true;
-        const resolved = await followMerges(ctx, "series", await ctx.db.get(rawId));
+        const resolved = await getActive(ctx, "series", rawId);
         if (resolved && resolved._id === series._id) return true;
       }
       return false;
@@ -402,7 +352,7 @@ export const seriesEntries = query({
     const derivedOwned = new Set<Id<"releases">>();
     for (const row of rows) {
       if (row.releaseId) {
-        const release = await followMerges(ctx, "releases", await ctx.db.get(row.releaseId));
+        const release = await getActive(ctx, "releases", row.releaseId);
         if (!release || !(await inSeries(release))) continue;
         entries.push({
           releaseId: release._id,
@@ -410,23 +360,10 @@ export const seriesEntries = query({
           variantId: row.variantId ?? null,
         });
       } else if (row.bundleId && row.state === "owned") {
-        const bundle = await followMerges(
-          ctx,
-          "releaseBundles",
-          await ctx.db.get(row.bundleId),
-        );
+        const bundle = await getActive(ctx, "releaseBundles", row.bundleId);
         if (!bundle) continue;
-        const memberships = await ctx.db
-          .query("bundleMemberships")
-          .withIndex("by_bundle", (q) => q.eq("bundleId", bundle._id))
-          .collect();
-        for (const membership of memberships) {
-          const release = await followMerges(
-            ctx,
-            "releases",
-            await ctx.db.get(membership.releaseId),
-          );
-          if (release && (await inSeries(release))) derivedOwned.add(release._id);
+        for (const release of await bundleReleases(ctx, bundle._id)) {
+          if (await inSeries(release)) derivedOwned.add(release._id);
         }
       }
     }
@@ -445,27 +382,15 @@ async function editionRead(
   userId: Id<"users">,
   editionId: Id<"editions">,
 ): Promise<boolean | null> {
-  const rows = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-    .collect();
-  let complete = 0;
-  for (const row of rows) {
-    if (row.extent !== "complete") continue;
-    const volume = await followMerges(ctx, "volumes", await ctx.db.get(row.volumeId));
-    if (!volume) continue;
-    complete += 1;
-    const progress = await ctx.db
-      .query("volumeProgress")
-      .withIndex("by_user_volume", (q) =>
-        q.eq("userId", userId).eq("volumeId", volume._id),
-      )
-      .unique();
-    if (!progress || progress.readCount < 1) return false;
-  }
+  const volumes = await completelyCoveredVolumes(ctx, editionId);
   // A book covering nothing completely (a split, or coverage not yet mapped)
   // has no read state to show.
-  return complete === 0 ? null : true;
+  if (volumes.length === 0) return null;
+  for (const volume of volumes) {
+    const progress = await volumeProgressRow(ctx, userId, volume._id);
+    if (!progress || progress.readCount < 1) return false;
+  }
+  return true;
 }
 
 /**
@@ -478,15 +403,11 @@ async function libraryBook(
   userId: Id<"users">,
   release: Doc<"releases">,
 ) {
-  const edition = await followMerges(ctx, "editions", await ctx.db.get(release.editionId));
+  const edition = await getActive(ctx, "editions", release.editionId);
   if (!edition) return null;
   const { title, lineName, coverage, series } = await editionCoverage(ctx, edition);
   if (!series) return null; // nothing to shelve it under (no coverage and no line)
-  const publisherDoc = await ctx.db.get(edition.publisherId);
-  const publisher =
-    publisherDoc && publisherDoc.status === "active"
-      ? { name: publisherDoc.name, slug: publisherDoc.slug }
-      : null;
+  const publisher = publisherLink(await ctx.db.get(edition.publisherId));
   return {
     series,
     pathKey: editionPathKey({ publisher, lineName }),
@@ -610,15 +531,11 @@ export const myLibrary = query({
 
     for (const row of rows) {
       if (row.releaseId) {
-        const release = await followMerges(ctx, "releases", await ctx.db.get(row.releaseId));
+        const release = await getActive(ctx, "releases", row.releaseId);
         if (!release) continue;
         await shelve(release, row.state, row.variantId, null);
       } else if (row.bundleId) {
-        const bundle = await followMerges(
-          ctx,
-          "releaseBundles",
-          await ctx.db.get(row.bundleId),
-        );
+        const bundle = await getActive(ctx, "releaseBundles", row.bundleId);
         if (!bundle) continue;
         const memberships = await ctx.db
           .query("bundleMemberships")
@@ -629,11 +546,7 @@ export const myLibrary = query({
         // Only an Owned box set confers Derived Ownership on its members.
         if (row.state === "owned") {
           for (const membership of memberships) {
-            const release = await followMerges(
-              ctx,
-              "releases",
-              await ctx.db.get(membership.releaseId),
-            );
+            const release = await getActive(ctx, "releases", membership.releaseId);
             if (!release) continue;
             await shelve(release, "owned", membership.variantId, via);
           }
@@ -669,13 +582,7 @@ export const myLibrary = query({
         } else {
           if (volumeCount === null) {
             const seriesDoc = await resolveActiveSeries(ctx, shelf.seriesPublicId);
-            if (seriesDoc) {
-              const volumes = await ctx.db
-                .query("volumes")
-                .withIndex("by_series", (q) => q.eq("seriesId", seriesDoc._id))
-                .collect();
-              volumeCount = volumes.filter((doc) => doc.status === "active").length;
-            }
+            if (seriesDoc) volumeCount = (await activeVolumes(ctx, seriesDoc._id)).length;
           }
           bookCount = volumeCount;
         }
@@ -726,7 +633,7 @@ export const myLibrary = query({
  * hidden since, so a state change never fails on it. Removal deletes only
  * the direct entry; Derived Ownership is computed, so it is untouchable from
  * here. Returns the inserted entry's id when this was a new entry, for the
- * caller to compute follow suggestions (ticket #29) once.
+ * caller to compute follow suggestions once.
  */
 async function writeReleaseEntry(
   ctx: MutationCtx,
@@ -735,7 +642,7 @@ async function writeReleaseEntry(
   state: Doc<"collectionEntries">["state"] | undefined,
   variant: Id<"releaseVariants"> | undefined | "keep",
 ) {
-  const release = await requireActiveRelease(ctx, releaseId);
+  const release = await requireActive(ctx, "releases", releaseId, "Release");
   const existing = await releaseEntryRow(ctx, user._id, release._id);
   if (!state) {
     if (existing) await ctx.db.delete(existing._id);
@@ -776,7 +683,7 @@ async function writeReleaseEntry(
  * The one write path for a Release's Collection Entry (see
  * writeReleaseEntry): set the exact state with an optional pinned Variant, or
  * omit `state` to remove the entry. A first entry in a Series returns
- * `suggestFollow` (ticket #29) — a suggestion only.
+ * `suggestFollow` — a suggestion only.
  */
 export const setReleaseEntry = mutation({
   args: {
@@ -842,7 +749,7 @@ export const setManyReleaseEntries = mutation({
  * Release entry.
  *
  * Inserting a first Collection Entry in a Series (through the Bundle's
- * member Releases) returns `suggestFollow` (ticket #29) — a suggestion only.
+ * member Releases) returns `suggestFollow` — a suggestion only.
  */
 export const setBundleEntry = mutation({
   args: {
@@ -851,7 +758,7 @@ export const setBundleEntry = mutation({
   },
   handler: async (ctx, { bundleId, state }) => {
     const user = await requireUser(ctx);
-    const bundle = await requireActiveBundle(ctx, bundleId);
+    const bundle = await requireActive(ctx, "releaseBundles", bundleId, "Bundle");
 
     const existing = await bundleEntryRow(ctx, user._id, bundle._id);
     if (!state) {

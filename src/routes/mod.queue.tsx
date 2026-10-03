@@ -4,22 +4,18 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { PROPOSAL_WARNINGS } from "../../convex/proposals";
-import { CommentsQueueLink, useIsDataTeam } from "~/lib/moderation";
+import { CommentsQueueLink, ModGate } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The shared review queue (ticket #32, spec §5): every In-Review Proposal,
+ * The shared review queue (spec §5): every In-Review Proposal,
  * oldest first, Data-Team-visible only. Filterable by operation, record
  * type, author/source, age, warnings, and staleness; claims are shown so
  * reviewers coordinate without exclusive authority. Never indexed.
  */
 export const Route = createFileRoute("/mod/queue")({
-  head: () => ({
-    meta: [
-      { title: "Review queue — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Review queue — MangaDB" }] }),
   component: QueuePage,
 });
 
@@ -46,31 +42,14 @@ function QueuePage() {
       </main>
     );
   }
-  return <QueueGate />;
-}
-
-function QueueGate() {
-  const isDataTeam = useIsDataTeam();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          The review queue is visible to Editors, Moderators, and
-          Administrators. {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <Queue />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="The review queue is visible to Editors, Moderators, and Administrators."
+    >
+      <Queue />
+    </ModGate>
+  );
 }
 
 function formatAge(ageMs: number): string {
@@ -107,10 +86,7 @@ function Queue() {
 
   return (
     <main className="mod-page mod-queue-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Review queue</span>
-      </nav>
+      <Breadcrumbs trail={["Review queue"]} />
       <h1>Review queue</h1>
       <p className="section-hint">
         In-Review proposals, oldest first. Claiming signals who is looking; it

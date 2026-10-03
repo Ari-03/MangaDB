@@ -1,4 +1,4 @@
-// Sitemap data (ticket #39, spec §11): per-entity pages of exactly the
+// Sitemap data (spec §11): per-entity pages of exactly the
 // indexable canonical records — Series, Volumes, Editions, Publishers, and
 // Bundles — plus the month range for the month-view sitemap. The server
 // route (src/server/sitemaps.ts) composes the canonical URLs from the titles
@@ -19,8 +19,6 @@ import { query, type QueryCtx } from "./_generated/server";
 import { bundleMembers, editionCoverage } from "./catalogPages";
 import { listed } from "./lib/mature";
 import { volumeTitle } from "./lib/titles";
-
-export type SitemapEntity = "series" | "volume" | "edition" | "publisher" | "bundle";
 
 /** yyyymmdd-keyed months only: a year-only date (yyyy0000) has month 0. */
 const monthOf = (sort: number) => ({

@@ -89,7 +89,7 @@ describe("Reservoir", () => {
     expect(r.count).toBe(1000);
   });
 
-  it("is uniform-ish: with random()≈1 the reservoir never replaces", () => {
+  it("never replaces a kept item when random() returns just under 1", () => {
     const r = new Reservoir<number>(2, () => 0.999999);
     for (let i = 0; i < 100; i++) r.add(i);
     expect(r.sample()).toEqual([0, 1]);

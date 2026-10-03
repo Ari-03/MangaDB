@@ -8,7 +8,7 @@
 
 import type { Doc, Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
-import { followMerges } from "../../catalogPages";
+import { followMerges } from "../merges";
 import { allocatePublicId } from "../publicIds";
 import {
   DUPLICATE_SLUGS,
@@ -36,6 +36,7 @@ import {
   activeVolumes,
   canonicalLabel,
   coverageOf,
+  coveringOf,
   createEdition,
   ensureVolume,
   labelNumber,
@@ -638,10 +639,7 @@ async function placeVolume(
   }
   const label = canonicalLabel(placement.label);
   const maxPosition = survivorVolumes.reduce((max, v) => Math.max(max, v.position), 0);
-  const coverage = await ctx.db
-    .query("volumeCoverages")
-    .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-    .collect();
+  const coverage = await coveringOf(ctx, volume._id);
   const editionIds = new Set(coverage.map((row) => row.editionId));
   await carryingTracking(ctx, audit, moves, { volumeIds: [volume._id], editionIds }, async () => {
     await updateRecord(ctx, audit, { type: "volume", id: volume._id }, volume, {
@@ -1523,7 +1521,7 @@ async function followVolume(
  * (reading.ts passSeriesId). The profile shows a pass only where its own
  * Series is public too, so re-filing one carries its reader's Reading
  * visibility from the Series it was filed under. Only stale rows move, so a
- * re-run heals any earlier move without carrying again (R16). A sweep
+ * re-run heals any earlier move without carrying again. A sweep
  * (bounded legs).
  */
 async function followRelease(

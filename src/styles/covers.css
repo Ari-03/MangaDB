@@ -401,15 +401,6 @@
   box-shadow: var(--ledge-shadow);
   opacity: 0.75;
 }
-.ghost-star {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: 2rem;
-  color: var(--text-dim);
-  z-index: 2;
-}
 .empty-note {
   display: flex;
   align-items: center;

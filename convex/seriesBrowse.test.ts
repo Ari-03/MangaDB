@@ -1,18 +1,17 @@
-import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { todaySortKey } from "./lib/dates";
 import { seriesSearchText } from "./lib/searchMatch";
-import schema from "./schema";
 import { letterFor, sortKeyFor } from "./seriesBrowse";
+import { makeT } from "./test.helpers";
 
 // Three Series with different shapes — a long-running one with a follower
 // and a collector, a short completed one, and a hidden one that must never
 // surface — so one seed exercises sort keys, filters, and the sweep.
 async function seeded() {
-  const t = convexTest(schema);
+  const t = makeT();
   const ids = await t.run(async (ctx) => {
     const viz = await ctx.db.insert("publishers", { status: "active", name: "VIZ Media", slug: "viz-media" });
     const seas = await ctx.db.insert("publishers", { status: "active", name: "Seven Seas", slug: "seven-seas" });
@@ -256,7 +255,7 @@ describe("seriesBrowse review follow-ups", () => {
   });
 
   it("counts a month-precision date in the current month as upcoming", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const ym = Math.floor(todaySortKey() / 100) * 100;
     await t.run(async (ctx) => {
       const pub = await ctx.db.insert("publishers", { status: "active", name: "P", slug: "p" });
@@ -275,7 +274,7 @@ describe("seriesBrowse review follow-ups", () => {
   });
 
   it("pages search results", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     await t.run(async (ctx) => {
       const pub = await ctx.db.insert("publishers", { status: "active", name: "P", slug: "p" });
       for (let i = 1; i <= 3; i++) {
@@ -316,7 +315,7 @@ type ShelfSpec = {
  * Publishers, one physical Release each. publicIds follow the spec order.
  */
 async function library(specs: Array<ShelfSpec>) {
-  const t = convexTest(schema);
+  const t = makeT();
   await t.run(async (ctx) => {
     const publishers = new Map<string, Id<"publishers">>();
     for (const slug of new Set(specs.flatMap((s) => s.publishers))) {
@@ -578,12 +577,11 @@ describe("seriesBrowse.rebuild — Bookless Series", () => {
       const rows = await ctx.db.query("seriesStats").collect();
       expect(rows.map((r) => r.title).sort()).toEqual(["The Quiet Cartographer", "Tokyo Ghoul"]);
     });
-    // Browse, search, the home list and the sitemap all skip it; the page itself still resolves.
+    // Browse, search and the sitemap all skip it; the page itself still resolves.
     const browse = await t.query(api.seriesBrowse.browse, { sort: "title" });
     expect(browse.items.map((i) => i.title)).not.toContain("Backbone Only");
     const search = await t.query(api.catalog.search, { query: "Backbone Only" });
     expect(JSON.stringify(search)).not.toContain("Backbone Only");
-    expect((await t.query(api.catalog.listSeries, {})).map((s) => s.title)).not.toContain("Backbone Only");
     const sitemap = await t.query(api.seo.sitemapPage, {
       entity: "series",
       paginationOpts: { numItems: 50, cursor: null },

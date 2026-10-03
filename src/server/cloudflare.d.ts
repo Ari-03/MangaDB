@@ -1,6 +1,7 @@
-// Minimal typing for the Cloudflare runtime module the Worker entry uses.
-// Kept structural and local so the type check does not depend on the
-// generated worker-configuration.d.ts (gitignored, `npm run cf-typegen`).
+// Minimal typing for the Cloudflare runtime the Worker uses: the
+// `cloudflare:workers` module and the edge cache global. Kept structural and
+// local so the type check does not depend on the generated
+// worker-configuration.d.ts (gitignored, `npm run cf-typegen`).
 declare module "cloudflare:workers" {
   interface R2ObjectBody {
     arrayBuffer(): Promise<ArrayBuffer>;
@@ -25,4 +26,10 @@ declare module "cloudflare:workers" {
     /** The cover-art bucket (wrangler.jsonc `r2_buckets`). */
     COVERS?: R2Bucket;
   };
+}
+
+// Workers expose the zone's edge cache as `caches.default`, which the DOM
+// lib's CacheStorage does not declare.
+interface CacheStorage {
+  readonly default: Cache;
 }

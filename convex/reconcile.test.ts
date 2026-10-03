@@ -6,118 +6,25 @@
 // Edition-Line steady-state creation gate, and suppression lift on
 // withdrawal.
 
-import { convexTest } from "convex-test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import schema from "./schema";
-
-const BASE = "https://sevenseasentertainment.com";
-
-type FixtureBook = {
-  id: number;
-  slug: string;
-  title: string;
-  modified?: string;
-  seriesSlug?: string;
-  seriesTitle?: string;
-  date?: string;
-  price?: string;
-  isbn?: string;
-  /** The listing's `content.rendered` blurb HTML. */
-  blurb?: string;
-};
-
-function bookPageHtml(b: FixtureBook): string {
-  const series = b.seriesSlug
-    ? `<b>Series: </b><span> <a href="${BASE}/series/${b.seriesSlug}/">${b.seriesTitle ?? b.title}</a></span>`
-    : "";
-  return `<html><body><div id="volume-module"><img src="${BASE}/wp-content/uploads/covers/${b.slug}.jpg" alt="${b.title}"></div><div id="volume-meta"> ${series}<p><b>Story & Art by:</b> <span class="creator"><a href="${BASE}/creator/someone/">Someone</a></span></p>${
-    b.date ? `<p><b>Release Date:</b> ${b.date}</p>` : ""
-  }${b.price ? `<p><b>Price:</b> ${b.price}</p>` : ""}<p><b>Format:</b> Manga</p>${
-    b.isbn ? `<p><b>ISBN:</b> ${b.isbn}</p>` : ""
-  }</div></body></html>`;
-}
-
-function stubSite(books: FixtureBook[]) {
-  const listing = books.map((b) => ({
-    id: b.id,
-    status: "publish",
-    slug: b.slug,
-    link: `${BASE}/books/${b.slug}/`,
-    title: { rendered: b.title },
-    modified_gmt: b.modified ?? "2026-08-01T00:00:00",
-    content: { rendered: b.blurb ?? "" },
-  }));
-  const pages = new Map(books.map((b) => [`${BASE}/books/${b.slug}/`, bookPageHtml(b)]));
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL): Promise<Response> => {
-    const url = typeof input === "object" && "url" in input ? input.url : String(input);
-    if (url.startsWith(`${BASE}/wp-json/wp/v2/books`)) {
-      return new Response(JSON.stringify(listing), {
-        headers: {
-          "x-wp-totalpages": books.length === 0 ? "0" : "1",
-          "content-type": "application/json",
-        },
-      });
-    }
-    const page = pages.get(url);
-    if (page !== undefined) {
-      return new Response(page, { headers: { "content-type": "text/html" } });
-    }
-    if (url.includes("/wp-content/uploads/")) {
-      return new Response(new Blob([new Uint8Array([0xff, 0xd8, 0xff])]), {
-        headers: { "content-type": "image/jpeg" },
-      });
-    }
-    return new Response("not found", { status: 404 });
-  });
-}
+import { insertSourceRevision, seedCatalog } from "./test.factories";
+import { alice, bob, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
+import { ALPHA_1 as LISTED_ALPHA_1, type FixtureBook, SEVEN_SEAS as BASE, stubSite } from "./test.imports";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const ALPHA_1: FixtureBook = {
-  id: 101,
-  slug: "alpha-manga-vol-1",
-  title: "Alpha Adventures (Manga) Vol. 1",
-  modified: "2026-08-01T00:00:00",
-  seriesSlug: "alpha-manga",
-  seriesTitle: "Alpha Adventures (Manga)",
-  date: "January 6, 2026",
-  price: "$14.99",
-  isbn: "978-1-9990001-0-3",
-};
+/** Volume 1 without its listing blurb: the description tests start from a blank field. */
+const ALPHA_1: FixtureBook = { ...LISTED_ALPHA_1, blurb: undefined };
 
-const ADMIN = "user_admin";
-const MOD = "user_mod";
-
-function makeT() {
-  const t = convexTest(schema);
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
-}
-type TestT = ReturnType<typeof makeT>;
-
-async function seedRegistry(t: TestT, bootstrap: boolean) {
-  await t.mutation(internal.importSources.seedRegistry, {});
-  await t.mutation(internal.importSources.setBootstrapModeInternal, {
-    on: bootstrap,
-  });
-}
-
+/** The Moderator (bob) who reviews queued conflicts; alice is the Administrator who appointed him. */
 async function setupModerator(t: TestT) {
-  await t.withIdentity({ subject: ADMIN }).mutation(api.users.claimUsername, { username: "alice" });
-  await t.withIdentity({ subject: MOD }).mutation(api.users.claimUsername, { username: "bob" });
-  await t.mutation(internal.roles.bootstrapAdministrator, {
-    username: "alice",
-  });
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
-  return t.withIdentity({ subject: MOD });
+  await seedTeam(t, [alice, bob]);
+  return signedIn(t, bob);
 }
 
 const sync = (t: TestT, args: object = {}) =>
@@ -138,7 +45,7 @@ const versionOf = async (t: TestT, proposal: Doc<"proposals">) =>
     ),
   );
 
-/** Fabricate provenance: the release's field was last set by `sourceKey`. */
+/** Fabricate provenance: the release's field was last set by `sourceKey`, from the value it holds now. */
 async function fabricateRevision(
   t: TestT,
   sourceKey: string,
@@ -148,27 +55,12 @@ async function fabricateRevision(
 ) {
   await t.run(async (ctx) => {
     const release = (await ctx.db.query("releases").collect())[0]!;
-    const history = await ctx.db
-      .query("revisions")
-      .withIndex("by_record", (q) =>
-        q.eq("ref.type", "release").eq("ref.id", release._id as never),
-      )
-      .collect();
-    const proposalId = await ctx.db.insert("proposals", {
-      author: { kind: "source", sourceKey },
-      state: "approved",
-      currentVersionNo: 1,
-    });
     const [field, after] = Object.entries(patch)[0]!;
-    await ctx.db.insert("revisions", {
-      ref: { type: "release", id: release._id } as never,
-      seq: history.length + 1,
-      proposalId,
-      author: { kind: "source", sourceKey },
-      changes: [
-        { field, before: "pubDate" in patch ? release.pubDate : release.description, after },
-      ],
-      comment: `Imported from ${sourceKey}.`,
+    const before = "pubDate" in patch ? release.pubDate : release.description;
+    await insertSourceRevision(ctx, {
+      ref: { type: "release", id: release._id },
+      sourceKey,
+      changes: [{ field, before, after }],
     });
     await ctx.db.patch(release._id, patch);
   });
@@ -479,53 +371,15 @@ describe("publisher blurbs — the Release Description", () => {
 
 describe("matching ladder rungs ③/④ in the apply path", () => {
   // A human-built catalog entry with no ISBN and no source link.
+  // A second call with the same slug reuses the publisher (seedCatalog).
   async function prebuildCatalog(t: TestT, publisherSlug = "seven-seas") {
-    return await t.run(async (ctx) => {
-      const existing = await ctx.db
-        .query("publishers")
-        .withIndex("by_slug", (q) => q.eq("slug", publisherSlug))
-        .unique();
-      const publisherId =
-        existing?._id ??
-        (await ctx.db.insert("publishers", {
-          status: "active",
-          name: publisherSlug,
-          slug: publisherSlug,
-        }));
-      const seriesId = await ctx.db.insert("series", {
-        status: "active",
-        publicId: Math.floor(Math.random() * 1e9),
-        title: "Alpha Adventures",
-        altTitles: [],
-        searchText: "Alpha Adventures",
-      });
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: Math.floor(Math.random() * 1e9),
-        seriesId,
-        position: 1,
-        label: "1",
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: Math.floor(Math.random() * 1e9),
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId,
-        order: 1,
-        extent: "complete",
-      });
-      return await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        language: "en",
-        publisherId,
-        seriesIds: [seriesId],
-      });
-    });
+    const { releaseId } = await t.run((ctx) =>
+      seedCatalog(ctx, {
+        publisher: { name: publisherSlug, slug: publisherSlug },
+        series: { title: "Alpha Adventures" },
+      }),
+    );
+    return releaseId;
   }
 
   it("rung ③: links the one publisher+title+label+format candidate and fills its fields", async () => {

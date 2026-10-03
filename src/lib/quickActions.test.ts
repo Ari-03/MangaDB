@@ -1,74 +1,41 @@
 // Cover quick actions and whole-run controls, driven end to end against
 // convex-test: the components run as plain functions with convex/react's
-// hooks wired straight to the test backend, so a click writes through the
-// real mutations and the assertions read the resulting rows.
+// hooks wired straight to the test backend (test.react.ts), so a click
+// writes through the real mutations and the assertions read the resulting
+// rows.
 
-import { convexTest } from "convex-test";
-import type { FunctionReference } from "convex/server";
-import { getFunctionName } from "convex/server";
-import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { MANY_ENTRIES_CAP } from "../../convex/collection";
 import { MANY_EDITIONS_CAP } from "../../convex/reading";
-import schema from "../../convex/schema";
+import {
+  insertCoverage,
+  insertEdition,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+  insertVariant,
+  insertVolume,
+} from "../../convex/test.factories";
+import { makeT, withUser, type Accessor, type TestT } from "../../convex/test.helpers";
+import {
+  click,
+  harness,
+  hold,
+  mount,
+  mountAside,
+  press,
+  resetHarness,
+  setQuery,
+  settle,
+  settleBesides,
+  text,
+  type Host,
+} from "./test.react";
 
-type Backend = ReturnType<ReturnType<typeof convexTest>["withIdentity"]>;
-
-// State shared with the hoisted mocks: the signed-in backend, the query
-// snapshot useQuery answers from, an optional wrapper around every mutation
-// call (see hold), the in-flight mutation promises, and the hook slots of
-// the component being rendered.
-const harness = vi.hoisted(() => ({
-  backend: null as Backend | null,
-  intercept: null as ((name: string, run: () => Promise<unknown>) => Promise<unknown>) | null,
-  snapshot: new Map<string, unknown>(),
-  inflight: [] as Array<Promise<unknown>>,
-  slots: [] as unknown[],
-  cursor: 0,
-}));
-
-vi.mock("convex/react", async () => {
-  const { getFunctionName: name } = await import("convex/server");
-  return {
-    useQuery: (ref: FunctionReference<"query">) => harness.snapshot.get(name(ref)),
-    useMutation:
-      (ref: FunctionReference<"mutation">) => (args: Record<string, unknown>) => {
-        const run = () => harness.backend!.mutation(ref, args);
-        const call = harness.intercept ? harness.intercept(name(ref), run) : run();
-        harness.inflight.push(call);
-        return call;
-      },
-  };
-});
-
-// useState backed by slots that survive re-renders of the same component
-// (a setter keeps writing the slots it was rendered with, so a component
-// mounted aside keeps its own); an external store is read straight from
-// its current snapshot.
-vi.mock("react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react")>();
-  function useState<S>(initial: S | (() => S)) {
-    const slots = harness.slots;
-    const index = harness.cursor++;
-    if (!(index in slots)) {
-      slots[index] =
-        typeof initial === "function" ? (initial as () => S)() : initial;
-    }
-    const set = (next: S | ((prev: S) => S)) => {
-      slots[index] =
-        typeof next === "function"
-          ? (next as (prev: S) => S)(slots[index] as S)
-          : next;
-    };
-    return [slots[index] as S, set] as const;
-  }
-  const useSyncExternalStore = <T,>(_subscribe: unknown, snapshot: () => T) => snapshot();
-  return { ...actual, useState, useSyncExternalStore };
-});
-
+vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
 vi.mock("~/providers", () => ({ convexClient: {} }));
 vi.mock("~/lib/analytics", () => ({ track: () => undefined }));
 vi.mock("~/lib/mature", () => ({ useArtConcealed: () => false }));
@@ -80,154 +47,24 @@ const { ReleasePassControls, VolumeReadCount } = await import("./reading");
 type OverlayBook = import("./quickActions").OverlayBook;
 type SeriesOverlay = import("./quickActions").SeriesOverlay;
 
-type Host = { type: string; props: { children?: ReactNode } & Record<string, unknown> };
-
-/** Expand function components into the host elements they render. */
-function render(node: ReactNode): Host[] {
-  if (Array.isArray(node)) return node.flatMap(render);
-  if (!isValidElement(node)) return [];
-  const { type, props } = node as ReactElement<Host["props"]>;
-  if (typeof type === "function") {
-    return render((type as (props: Host["props"]) => ReactNode)(props));
-  }
-  if (typeof type === "string") return [{ type, props }, ...render(props.children)];
-  return render(props.children);
-}
-
-/** Render a root component with a fresh hook cursor (slots persist). */
-function mount(component: () => ReactNode): Host[] {
-  harness.cursor = 0;
-  return render(component());
-}
-
-function text(node: ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(text).join("");
-  if (isValidElement<{ children?: ReactNode }>(node)) return text(node.props.children);
-  return "";
-}
-
-function click(tree: Host[], label: string) {
-  const button = tree.find((host) => host.type === "button" && text(host.props.children) === label);
-  if (!button) throw new Error(`No button "${label}"`);
-  (button.props.onClick as () => void)();
-}
-
 /**
- * Render a root component on its own hook slots (another control on the
- * page), leaving the current ones in place.
+ * A Series (public id 1) of `count` single-Volume books, one physical
+ * Release each: book i is Edition 5000 + i covering Volume 1000 + i, at
+ * position i + 1.
  */
-function mountAside(slots: unknown[], component: () => ReactNode): Host[] {
-  const current = harness.slots;
-  harness.slots = slots;
-  try {
-    return mount(component);
-  } finally {
-    harness.slots = current;
-  }
-}
-
-/** Press a button whether or not it renders disabled: a click the handler must refuse. */
-function press(tree: Host[], label: string) {
-  const button = tree.find((host) => host.type === "button" && text(host.props.children) === label);
-  if (!button) throw new Error(`No button "${label}"`);
-  const onClick = button.props.onClick as () => void;
-  return { disabled: button.props.disabled === true, click: () => onClick() };
-}
-
-/**
- * Hold the `nth` call of one mutation, either just before it runs or just
- * after it commits (its response withheld): `reached` resolves at that
- * point, `release` lets it continue.
- */
-function hold(name: string, nth: number, when: "before" | "after") {
-  let release!: () => void;
-  let reach!: () => void;
-  const gate = new Promise<void>((resolve) => (release = resolve));
-  const reached = new Promise<void>((resolve) => (reach = resolve));
-  let calls = 0;
-  harness.intercept = async (called, run) => {
-    const held = called === name && ++calls === nth;
-    if (held && when === "before") {
-      reach();
-      await gate;
-    }
-    const result = await run();
-    if (held && when === "after") {
-      reach();
-      await gate;
-    }
-    return result;
-  };
-  return { reached, release };
-}
-
-/** Wait until every mutation the click chain starts (batches included) settles. */
-async function settle() {
-  for (;;) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    if (harness.inflight.length === 0) return;
-    await Promise.allSettled(harness.inflight.splice(0));
-  }
-}
-
-/** Like settle(), but leaves the first `held` in-flight calls alone. */
-async function settleBesides(held: number) {
-  for (;;) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const rest = harness.inflight.splice(held);
-    if (rest.length === 0) return;
-    await Promise.allSettled(rest);
-  }
-}
-
-/** A Series of `count` single-Volume books, one physical Release each. */
-async function seed(t: ReturnType<typeof convexTest>, count: number) {
+async function seed(t: TestT, count: number) {
   return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Viz",
-      slug: "viz",
-    });
-    const seriesId = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "One Piece",
-      altTitles: [],
-      searchText: "One Piece",
-    });
+    const publisherId = await insertPublisher(ctx, { name: "Viz", slug: "viz" });
+    const seriesId = await insertSeries(ctx, { publicId: 1, title: "One Piece" });
     const books = [];
     for (let i = 0; i < count; i++) {
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 1000 + i,
-        seriesId,
-        position: i + 1,
-        label: String(i + 1),
-      });
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 5000 + i,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId,
-        order: 1,
-        extent: "complete",
-      });
-      const releaseId = await ctx.db.insert("releases", {
-        status: "active",
-        editionId,
-        format: "physical",
-        binding: "paperback",
-        language: "en",
-        publisherId,
-        seriesIds: [seriesId],
-      });
+      const volumeId = await insertVolume(ctx, { publicId: 1000 + i, seriesId, position: i + 1 });
+      const editionId = await insertEdition(ctx, { publicId: 5000 + i, publisherId });
+      await insertCoverage(ctx, { editionId, volumeId });
+      const releaseId = await insertRelease(ctx, { editionId, binding: "paperback", publisherId, seriesIds: [seriesId] });
       books.push({
         publicId: 5000 + i,
-        releases: [{ id: releaseId as string, format: "physical" as const }],
+        releases: [{ id: releaseId, format: "physical" as const }],
         coverage: [{ volumePublicId: 1000 + i, extent: "complete" as const }],
       });
     }
@@ -236,41 +73,29 @@ async function seed(t: ReturnType<typeof convexTest>, count: number) {
 }
 
 /**
- * Another Edition of the same Series (an omnibus on another reading path)
- * covering the seeded Volumes at `positions` completely, with one Release.
+ * Another Edition of the same Series (an omnibus on another reading path,
+ * public id 9000) covering the seeded Volumes at `positions` completely,
+ * with one Release.
  */
-async function addOmnibus(t: ReturnType<typeof convexTest>, positions: number[]) {
+async function addOmnibus(t: TestT, positions: number[]): Promise<OverlayBook> {
   return await t.run(async (ctx) => {
     const publisher = (await ctx.db.query("publishers").first())!;
     const series = (await ctx.db.query("series").first())!;
-    const editionId = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 9000,
-      publisherId: publisher._id,
-    });
+    const volumes = await ctx.db.query("volumes").collect();
+    const editionId = await insertEdition(ctx, { publicId: 9000, publisherId: publisher._id });
     for (const [order, position] of positions.entries()) {
-      const volume = (await ctx.db.query("volumes").collect()).find(
-        (row) => row.position === position,
-      )!;
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId: volume._id,
-        order: order + 1,
-        extent: "complete",
-      });
+      const volume = volumes.find((row) => row.position === position)!;
+      await insertCoverage(ctx, { editionId, volumeId: volume._id, order: order + 1 });
     }
-    const releaseId = await ctx.db.insert("releases", {
-      status: "active",
+    const releaseId = await insertRelease(ctx, {
       editionId,
-      format: "physical",
       binding: "paperback",
-      language: "en",
       publisherId: publisher._id,
       seriesIds: [series._id],
     });
     return {
       publicId: 9000,
-      releases: [{ id: releaseId as string, format: "physical" as const }],
+      releases: [{ id: releaseId, format: "physical" as const }],
       coverage: positions.map((position) => ({
         volumePublicId: 999 + position,
         extent: "complete" as const,
@@ -279,52 +104,92 @@ async function addOmnibus(t: ReturnType<typeof convexTest>, positions: number[])
   });
 }
 
-async function signIn(t: ReturnType<typeof convexTest>) {
-  const as = t.withIdentity({ subject: "user_2collector" });
-  await as.mutation(api.users.claimUsername, { username: "collector" });
-  harness.backend = as;
-  return as;
+async function signIn(t: TestT) {
+  harness.backend = await withUser(t, { subject: "user_2collector", username: "collector" });
+  return harness.backend;
 }
 
 /** Refresh the useQuery snapshot and read the overlay the way a shelf does. */
-async function overlayFor(as: Backend) {
-  harness.snapshot.set(
-    getFunctionName(api.collection.seriesEntries),
-    await as.query(api.collection.seriesEntries, { seriesPublicId: 1 }),
-  );
-  harness.snapshot.set(
-    getFunctionName(api.reading.seriesTracking),
-    await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }),
-  );
+async function overlayFor(as: Accessor) {
+  setQuery(api.collection.seriesEntries, await as.query(api.collection.seriesEntries, { seriesPublicId: 1 }));
+  setQuery(api.reading.seriesTracking, await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }));
   const overlay = useSeriesOverlay(1);
   if (!overlay) throw new Error("overlay missing");
   return overlay;
 }
 
-beforeEach(() => {
-  harness.backend = null;
-  harness.intercept = null;
-  harness.snapshot.clear();
-  harness.inflight = [];
-  harness.slots = [];
-  harness.cursor = 0;
-});
+/** A book's cover controls, rendered against `overlay`. */
+function cover(book: OverlayBook, overlay: SeriesOverlay) {
+  const quick = quickBookFor(book, overlay);
+  return mount(() => BookQuickActions({ book: quick, onPrompt: () => undefined }));
+}
+
+/** The whole-run controls over `books`, ignoring prompts. */
+function runActions(books: ReadonlyArray<OverlayBook>, overlay: SeriesOverlay) {
+  return () => RunActions({ books, overlay, onPrompt: () => undefined });
+}
+
+/** Press a button (a cover's or any control's); reports whether it went out as a write. */
+function attempt(tree: Host[], label: string) {
+  const button = press(tree, label);
+  const before = harness.inflight.length;
+  button.click();
+  return { disabled: button.disabled, accepted: harness.inflight.length > before };
+}
+
+/** A book's collection state. */
+async function stateOf(as: Accessor, book: OverlayBook) {
+  const releaseId = book.releases[0]!.id;
+  return (await as.query(api.collection.entryForRelease, { releaseId }))?.entry?.state ?? null;
+}
+
+/** Whether a book's cover reads it as read. */
+async function readOf(as: Accessor, book: OverlayBook) {
+  return quickBookFor(book, await overlayFor(as)).read;
+}
+
+/**
+ * The two kinds of whole run, as the tests drive them: the run's button and
+ * the mutation its batches call; the cover button that would change what
+ * the run writes while it runs, and what the book reads (`picture`) once the
+ * run marked it; the cover button that changes it after the run, and what
+ * it reads then.
+ */
+const KINDS = {
+  entries: {
+    run: "Own all",
+    call: "collection:setManyReleaseEntries",
+    during: "Want",
+    marked: "owned",
+    after: "Want",
+    chosen: "wanted",
+    picture: stateOf,
+  },
+  reads: {
+    run: "Read all",
+    call: "reading:setEditionsRead",
+    during: "Mark read",
+    marked: true,
+    after: "Read ✓",
+    chosen: false,
+    picture: readOf,
+  },
+} as const;
+
+beforeEach(resetHarness);
 
 describe("BookQuickActions", () => {
   // B28: a state change from the cover must not drop the Variant the entry pins.
   it("keeps the pinned Variant when the cover changes the state", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { books } = await seed(t, 1);
     const book = books[0]!;
-    const releaseId = book.releases[0]!.id as Id<"releases">;
-    const variantId = await t.run((ctx) =>
-      ctx.db.insert("releaseVariants", { status: "active", releaseId, name: "Exclusive" }),
-    );
+    const releaseId = book.releases[0]!.id;
+    const variantId = await t.run((ctx) => insertVariant(ctx, { releaseId, name: "Exclusive" }));
     const as = await signIn(t);
     await as.mutation(api.collection.setReleaseEntry, { releaseId, state: "wanted", variantId });
 
-    const quick = quickBookFor(book, await overlayFor(as));
-    click(mount(() => BookQuickActions({ book: quick, onPrompt: () => undefined })), "Own");
+    click(cover(book, await overlayFor(as)), "Own");
     await settle();
 
     const entry = await as.query(api.collection.entryForRelease, { releaseId });
@@ -332,15 +197,14 @@ describe("BookQuickActions", () => {
   });
 
   it("still removes the entry when the active state is clicked again", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { books } = await seed(t, 1);
     const book = books[0]!;
-    const releaseId = book.releases[0]!.id as Id<"releases">;
+    const releaseId = book.releases[0]!.id;
     const as = await signIn(t);
     await as.mutation(api.collection.setReleaseEntry, { releaseId, state: "owned" });
 
-    const quick = quickBookFor(book, await overlayFor(as));
-    click(mount(() => BookQuickActions({ book: quick, onPrompt: () => undefined })), "Own");
+    click(cover(book, await overlayFor(as)), "Own");
     await settle();
 
     const entry = await as.query(api.collection.entryForRelease, { releaseId });
@@ -356,7 +220,7 @@ describe("RunActions", () => {
 
   // B30: more applicable books than one mutation accepts.
   it("marks every book of a run longer than one batch", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const count = MANY_ENTRIES_CAP + 5;
     const { books } = await seed(t, count);
     const as = await signIn(t);
@@ -380,13 +244,12 @@ describe("RunActions", () => {
   });
 
   it("marks every book of a long run read", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const count = MANY_ENTRIES_CAP + 5;
     const { books } = await seed(t, count);
     const as = await signIn(t);
 
-    const overlay = await overlayFor(as);
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Read all");
+    click(mount(runActions(books, await overlayFor(as))), "Read all");
     await settle();
 
     const read = await t.run(async (ctx) => await ctx.db.query("volumeProgress").collect());
@@ -394,17 +257,17 @@ describe("RunActions", () => {
   });
 
   it("shows the failure and how far it got when a batch is rejected", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const count = MANY_ENTRIES_CAP + 5;
     const { books } = await seed(t, count);
     const as = await signIn(t);
     const overlay = await overlayFor(as);
     // The last book vanishes from the catalog after the shelf loaded.
     await t.run(async (ctx) => {
-      await ctx.db.delete(books[count - 1]!.releases[0]!.id as Id<"releases">);
+      await ctx.db.delete(books[count - 1]!.releases[0]!.id);
     });
 
-    const run = () => RunActions({ books, overlay, onPrompt: () => undefined });
+    const run = runActions(books, overlay);
     click(mount(run), "Own all");
     await settle();
 
@@ -420,254 +283,189 @@ describe("RunActions", () => {
   });
 });
 
-/** A book's cover controls, rendered against `overlay`. */
-function cover(book: OverlayBook, overlay: SeriesOverlay) {
-  const quick = quickBookFor(book, overlay);
-  return mount(() => BookQuickActions({ book: quick, onPrompt: () => undefined }));
-}
+// The claims every control locks on (RunClaims) live in a store outside
+// React, read through useSyncExternalStore. The fake React reads its
+// snapshot on each render, so this checks the subscription itself: a
+// control re-renders only if the store tells its subscribers.
+describe("the run claims store", () => {
+  it("notifies its subscribers when a run claims and frees books, until they unsubscribe", async () => {
+    const t = makeT();
+    const { books } = await seed(t, 1);
+    const as = await signIn(t);
+    const book = books[0]!;
+    const overlay = await overlayFor(as);
+    // A cover subscribes through useRunLock.
+    cover(book, overlay);
+    const listener = vi.fn();
+    const unsubscribe = harness.subscribe!(listener);
 
-/** Press a button (a cover's or any control's); reports whether it went out as a write. */
-function pressCover(tree: Host[], label: string) {
-  const button = press(tree, label);
-  const before = harness.inflight.length;
-  button.click();
-  return { disabled: button.disabled, accepted: harness.inflight.length > before };
-}
+    const write = hold("collection:setManyReleaseEntries", 1, "after");
+    click(mount(runActions(books, overlay)), "Own all");
+    const onClaim = listener.mock.calls.length;
+    await write.reached;
+    const locked = press(cover(book, overlay), "Want").disabled;
+    write.release();
+    await settle();
+
+    // Claiming the book notified at once, before the write went out, and
+    // freeing it notified again.
+    expect(onClaim).toBeGreaterThan(0);
+    expect(locked).toBe(true);
+    expect(listener.mock.calls.length).toBeGreaterThan(onClaim);
+    expect(press(cover(book, await overlayFor(as)), "Want").disabled).toBe(false);
+
+    unsubscribe();
+    listener.mockClear();
+    click(mount(runActions(books, await overlayFor(as))), "Want all");
+    await settle();
+    expect(await stateOf(as, book)).toBe("wanted");
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
 
 // Review R17: a whole run's later batches must never overwrite a choice made
 // on a cover (or by another run) while the run was still going.
 describe("covers during a whole run", () => {
   const count = MANY_ENTRIES_CAP + 5;
 
-  async function stateOf(as: Backend, book: { releases: ReadonlyArray<{ id: string }> }) {
-    const releaseId = book.releases[0]!.id as Id<"releases">;
-    return (await as.query(api.collection.entryForRelease, { releaseId }))?.entry?.state ?? null;
-  }
+  it.each([KINDS.entries, KINDS.reads])(
+    "refuses a cover's $during while the first batch of $run is outstanding, then takes it",
+    async (kind) => {
+      const t = makeT();
+      const { books } = await seed(t, count);
+      const as = await signIn(t);
+      const first = hold(kind.call, 1, "after");
+      click(mount(runActions(books, await overlayFor(as))), kind.run);
+      await first.reached;
 
-  it("keeps a cover choice made while the first batch's response is outstanding", async () => {
-    const t = convexTest(schema);
-    const { books } = await seed(t, count);
-    const as = await signIn(t);
-    const overlay = await overlayFor(as);
-    const first = hold("collection:setManyReleaseEntries", 1, "after");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Own all");
-    await first.reached;
+      // Book 205 still waits for the second batch.
+      const last = books[count - 1]!;
+      const during = attempt(cover(last, await overlayFor(as)), kind.during);
+      await settleBesides(1);
+      first.release();
+      await settle();
 
-    // Book 205 still waits for the second batch.
-    const last = books[count - 1]!;
-    const want = pressCover(cover(last, await overlayFor(as)), "Want");
-    await settleBesides(1);
-    const chosen = await stateOf(as, last);
-    first.release();
-    await settle();
-
-    // A choice the cover accepted is the newest one and must stand.
-    if (want.accepted) expect(await stateOf(as, last)).toBe(chosen);
-    // The cover was locked instead, and the run finished the book.
-    expect(want).toEqual({ disabled: true, accepted: false });
-    expect(await stateOf(as, last)).toBe("owned");
-    // With the run over, the cover takes the choice and it stays.
-    click(cover(last, await overlayFor(as)), "Want");
-    await settle();
-    expect(await stateOf(as, last)).toBe("wanted");
-  });
+      // The cover was locked, and the run finished the book.
+      expect(during).toEqual({ disabled: true, accepted: false });
+      expect(await kind.picture(as, last)).toBe(kind.marked);
+      // With the run over, the cover takes the choice and it stays.
+      click(cover(last, await overlayFor(as)), kind.after);
+      await settle();
+      expect(await kind.picture(as, last)).toBe(kind.chosen);
+    },
+  );
 
   it("frees the covers of landed batches while later ones still wait", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { books } = await seed(t, count);
     const as = await signIn(t);
-    const overlay = await overlayFor(as);
     const second = hold("collection:setManyReleaseEntries", 2, "before");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Own all");
+    click(mount(runActions(books, await overlayFor(as))), "Own all");
     await second.reached;
 
     const fresh = await overlayFor(as);
     const early = books[4]!;
     const last = books[count - 1]!;
-    const earlyWant = pressCover(cover(early, fresh), "Want");
-    const lastWant = pressCover(cover(last, fresh), "Want");
+    const earlyWant = attempt(cover(early, fresh), "Want");
+    const lastWant = attempt(cover(last, fresh), "Want");
     await settleBesides(2);
-    const chosenLast = await stateOf(as, last);
     second.release();
     await settle();
 
-    if (lastWant.accepted) expect(await stateOf(as, last)).toBe(chosenLast);
     expect(lastWant).toEqual({ disabled: true, accepted: false });
     expect(earlyWant).toEqual({ disabled: false, accepted: true });
     expect(await stateOf(as, early)).toBe("wanted");
     expect(await stateOf(as, last)).toBe("owned");
   });
 
-  it("keeps a read toggle made mid-run", async () => {
-    const t = convexTest(schema);
-    const { books } = await seed(t, count);
-    const as = await signIn(t);
-    const overlay = await overlayFor(as);
-    const first = hold("reading:setEditionsRead", 1, "after");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Read all");
-    await first.reached;
-
-    // Mark book 205 read from its cover, then change your mind.
-    const last = books[count - 1]!;
-    const markRead = pressCover(cover(last, await overlayFor(as)), "Mark read");
-    await settleBesides(1);
-    const readNow = quickBookFor(last, await overlayFor(as)).read;
-    const unmark = readNow
-      ? pressCover(cover(last, await overlayFor(as)), "Read ✓")
-      : { disabled: true, accepted: false };
-    await settleBesides(1);
-    const chosen = quickBookFor(last, await overlayFor(as)).read;
-    first.release();
-    await settle();
-
-    if (markRead.accepted || unmark.accepted) {
-      expect(quickBookFor(last, await overlayFor(as)).read).toBe(chosen);
-    }
-    expect(markRead).toEqual({ disabled: true, accepted: false });
-    expect(quickBookFor(last, await overlayFor(as)).read).toBe(true);
-  });
-
-  it("refuses a second run over books the first has not finished", async () => {
-    const t = convexTest(schema);
-    const { books } = await seed(t, count);
-    const as = await signIn(t);
-    const overlay = await overlayFor(as);
-    const first = hold("collection:setManyReleaseEntries", 1, "after");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Own all");
-    await first.reached;
-
-    // The same books on another shelf (a Release shelved under two Series),
-    // with its own component state.
-    const slots = harness.slots;
-    harness.slots = [];
-    const other = press(
-      mount(() => RunActions({ books, overlay, onPrompt: () => undefined })),
-      "Want all",
-    );
-    const before = harness.inflight.length;
-    other.click();
-    const accepted = harness.inflight.length > before;
-    await settleBesides(1);
-    harness.slots = slots;
-    first.release();
-    await settle();
-
-    const states = await Promise.all(books.map((book) => stateOf(as, book)));
-    if (accepted) expect(states.every((state) => state === "wanted")).toBe(true);
-    expect({ disabled: other.disabled, accepted }).toEqual({ disabled: true, accepted: false });
-    expect(states.every((state) => state === "owned")).toBe(true);
-    // The refused run left no claim behind: every cover is live again.
-    const settled = await overlayFor(as);
-    expect(books.filter((book) => press(cover(book, settled), "Want").disabled)).toEqual([]);
-  });
-
-  // Reading is per Volume: another Edition covering a Volume the run has yet
-  // to mark writes that same Volume, so its cover waits for the run too.
-  it("keeps a read toggle made on another Edition covering a waiting Volume", async () => {
-    const t = convexTest(schema);
+  it.each([
+    // The same books on another shelf (a Release shelved under two Series).
+    { ...KINDS.entries, second: "Want all", shelf: (books: OverlayBook[], _omnibus: OverlayBook) => books },
+    // The omnibus's own reading path, sharing the run's Volume 205.
+    { ...KINDS.reads, second: "Read all", shelf: (_books: OverlayBook[], omnibus: OverlayBook) => [omnibus] },
+  ])("refuses a second $second over what a running $run has not finished", async ({ second, shelf, ...kind }) => {
+    const t = makeT();
     const { books } = await seed(t, count);
     const omnibus = await addOmnibus(t, [count]);
     const as = await signIn(t);
     const overlay = await overlayFor(as);
-    const first = hold("reading:setEditionsRead", 1, "after");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Read all");
+    const first = hold(kind.call, 1, "after");
+    click(mount(runActions(books, overlay)), kind.run);
     await first.reached;
 
-    // Volume 205 waits for batch 2; mark it read through the omnibus, then unmark it.
-    const markRead = pressCover(cover(omnibus, await overlayFor(as)), "Mark read");
+    // The other run, with its own component state.
+    const others = shelf(books, omnibus);
+    const other = attempt(mountAside([], runActions(others, overlay)), second);
     await settleBesides(1);
-    const unmark = quickBookFor(omnibus, await overlayFor(as)).read
-      ? pressCover(cover(omnibus, await overlayFor(as)), "Read ✓")
-      : { disabled: true, accepted: false };
-    await settleBesides(1);
-    const chosen = quickBookFor(omnibus, await overlayFor(as)).read;
     first.release();
     await settle();
 
-    if (markRead.accepted || unmark.accepted) {
-      expect(quickBookFor(omnibus, await overlayFor(as)).read).toBe(chosen);
+    expect(other).toEqual({ disabled: true, accepted: false });
+    // The first run's marks stand, and the refused run left no claim behind:
+    // every cover is live again.
+    const settled = await overlayFor(as);
+    for (const book of others) {
+      expect(await kind.picture(as, book)).toBe(kind.marked);
+      expect(press(cover(book, settled), kind.after).disabled).toBe(false);
     }
+  });
+
+  // Reading is per Volume: another Edition covering a Volume the run has yet
+  // to mark writes that same Volume, so its cover waits for the run too.
+  it("refuses a read toggle on another Edition covering a waiting Volume", async () => {
+    const t = makeT();
+    const { books } = await seed(t, count);
+    const omnibus = await addOmnibus(t, [count]);
+    const as = await signIn(t);
+    const first = hold("reading:setEditionsRead", 1, "after");
+    click(mount(runActions(books, await overlayFor(as))), "Read all");
+    await first.reached;
+
+    // Volume 205 waits for batch 2; try to mark it read through the omnibus.
+    const markRead = attempt(cover(omnibus, await overlayFor(as)), "Mark read");
+    await settleBesides(1);
+    first.release();
+    await settle();
+
     expect(markRead).toEqual({ disabled: true, accepted: false });
-    expect(quickBookFor(omnibus, await overlayFor(as)).read).toBe(true);
+    expect(await readOf(as, omnibus)).toBe(true);
     // With the run over, the omnibus cover is live again.
     expect(press(cover(omnibus, await overlayFor(as)), "Read ✓").disabled).toBe(false);
   });
 
   it("keeps a Volume claimed after one batch lands while a later batch still writes it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { books } = await seed(t, count);
     // First on the shelf, so batch 1 marks Volume 205 that batch 2's single also covers.
     const omnibus = await addOmnibus(t, [count]);
-    const shelf = [omnibus, ...books];
     const as = await signIn(t);
-    const overlay = await overlayFor(as);
     const second = hold("reading:setEditionsRead", 2, "before");
-    click(mount(() => RunActions({ books: shelf, overlay, onPrompt: () => undefined })), "Read all");
+    click(mount(runActions([omnibus, ...books], await overlayFor(as))), "Read all");
     await second.reached;
 
     // Batch 1 already read Volume 205 through the omnibus; unmark it on the single.
     const last = books[count - 1]!;
     const fresh = await overlayFor(as);
     expect(quickBookFor(last, fresh).read).toBe(true);
-    const unmark = pressCover(cover(last, fresh), "Read ✓");
+    const unmark = attempt(cover(last, fresh), "Read ✓");
     // A Volume only batch 1 wrote is free again.
-    const early = pressCover(cover(books[4]!, fresh), "Read ✓");
+    const early = attempt(cover(books[4]!, fresh), "Read ✓");
     await settleBesides(2);
-    const chosen = quickBookFor(last, await overlayFor(as)).read;
     second.release();
     await settle();
 
-    if (unmark.accepted) expect(quickBookFor(last, await overlayFor(as)).read).toBe(chosen);
     expect(unmark).toEqual({ disabled: true, accepted: false });
     expect(early).toEqual({ disabled: false, accepted: true });
-    expect(quickBookFor(last, await overlayFor(as)).read).toBe(true);
-    expect(quickBookFor(books[4]!, await overlayFor(as)).read).toBe(false);
-  });
-
-  it("refuses a second Read all sharing a Volume the first has not marked", async () => {
-    const t = convexTest(schema);
-    const { books } = await seed(t, count);
-    const omnibus = await addOmnibus(t, [count]);
-    const as = await signIn(t);
-    const overlay = await overlayFor(as);
-    const first = hold("reading:setEditionsRead", 1, "after");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Read all");
-    await first.reached;
-
-    // The omnibus's own reading path, with its own component state.
-    const slots = harness.slots;
-    harness.slots = [];
-    const other = press(
-      mount(() => RunActions({ books: [omnibus], overlay, onPrompt: () => undefined })),
-      "Read all",
-    );
-    const before = harness.inflight.length;
-    other.click();
-    const accepted = harness.inflight.length > before;
-    await settleBesides(1);
-    harness.slots = slots;
-    first.release();
-    await settle();
-
-    expect({ disabled: other.disabled, accepted }).toEqual({ disabled: true, accepted: false });
-    expect(quickBookFor(omnibus, await overlayFor(as)).read).toBe(true);
+    expect(await readOf(as, last)).toBe(true);
+    expect(await readOf(as, books[4]!)).toBe(false);
   });
 });
 
 /** Refresh the useQuery snapshot the way a Release row and Volume page read it. */
-async function pageFor(as: Backend, releaseId: Id<"releases">) {
-  harness.snapshot.set(
-    getFunctionName(api.collection.entryForRelease),
-    await as.query(api.collection.entryForRelease, { releaseId }),
-  );
-  harness.snapshot.set(
-    getFunctionName(api.reading.passForRelease),
-    await as.query(api.reading.passForRelease, { releaseId }),
-  );
-  harness.snapshot.set(
-    getFunctionName(api.reading.seriesTracking),
-    await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }),
-  );
+async function pageFor(as: Accessor, releaseId: Id<"releases">) {
+  setQuery(api.collection.entryForRelease, await as.query(api.collection.entryForRelease, { releaseId }));
+  setQuery(api.reading.passForRelease, await as.query(api.reading.passForRelease, { releaseId }));
+  setQuery(api.reading.seriesTracking, await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }));
 }
 
 // Review R17, second pass: the controls on the Release, Volume and Edition
@@ -677,23 +475,20 @@ describe("catalog-page controls during a whole run", () => {
   const count = MANY_ENTRIES_CAP + 5;
 
   it("locks a Release row's states and Variant until the run writes it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { books } = await seed(t, count);
-    const releaseId = books[count - 1]!.releases[0]!.id as Id<"releases">;
-    const variantId = await t.run((ctx) =>
-      ctx.db.insert("releaseVariants", { status: "active", releaseId, name: "Exclusive" }),
-    );
+    const releaseId = books[count - 1]!.releases[0]!.id;
+    const variantId = await t.run((ctx) => insertVariant(ctx, { releaseId, name: "Exclusive" }));
     const as = await signIn(t);
     await as.mutation(api.collection.setReleaseEntry, { releaseId, state: "wanted" });
-    const overlay = await overlayFor(as);
     const first = hold("collection:setManyReleaseEntries", 1, "after");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Own all");
+    click(mount(runActions(books, await overlayFor(as))), "Own all");
     await first.reached;
 
     // Book 205's Edition page, while batch 2 still waits.
     await pageFor(as, releaseId);
     const row = mountAside([], () => ReleaseCollectionControls({ releaseId }));
-    const ordered = pressCover(row, "Ordered");
+    const ordered = attempt(row, "Ordered");
     const select = row.find((host) => host.type === "select")!;
     const before = harness.inflight.length;
     (select.props.onChange as (event: { currentTarget: { value: string } }) => void)({
@@ -713,22 +508,21 @@ describe("catalog-page controls during a whole run", () => {
     // With the run over, the row takes the choice and it stays.
     await pageFor(as, releaseId);
     const row2 = mountAside([], () => ReleaseCollectionControls({ releaseId }));
-    expect(pressCover(row2, "Wanted")).toEqual({ disabled: false, accepted: true });
+    expect(attempt(row2, "Wanted")).toEqual({ disabled: false, accepted: true });
     await settle();
     expect((await entry())?.state).toBe("wanted");
   });
 
   it("locks a Volume's read count until the run marks it", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { books } = await seed(t, count);
-    const releaseId = books[count - 1]!.releases[0]!.id as Id<"releases">;
+    const releaseId = books[count - 1]!.releases[0]!.id;
     const as = await signIn(t);
-    const overlay = await overlayFor(as);
     const first = hold("reading:setEditionsRead", 1, "after");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Read all");
+    click(mount(runActions(books, await overlayFor(as))), "Read all");
     await first.reached;
 
-    // Volume 205's page: Mark read, then −1, while batch 2 still waits.
+    // Volume 205's page: Mark read while batch 2 still waits.
     const volumePublicId = 1000 + count - 1;
     const readCount = async () =>
       (await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }))!.volumes.find(
@@ -737,29 +531,27 @@ describe("catalog-page controls during a whole run", () => {
     const volume = () =>
       mountAside([], () => VolumeReadCount({ seriesPublicId: 1, volumePublicId }));
     await pageFor(as, releaseId);
-    const markRead = pressCover(volume(), "Mark read");
+    const markRead = attempt(volume(), "Mark read");
     await settleBesides(1);
-    await pageFor(as, releaseId);
-    const takeBack = (await readCount()) > 0 ? pressCover(volume(), "−1") : null;
-    await settleBesides(1);
+    // Refused, so there is no read to take back while the run is out.
+    expect(await readCount()).toBe(0);
     first.release();
     await settle();
 
     expect(markRead).toEqual({ disabled: true, accepted: false });
-    expect(takeBack).toBeNull();
     expect(await readCount()).toBe(1);
 
     // With the run over, the count is live again.
     await pageFor(as, releaseId);
-    expect(pressCover(volume(), "−1")).toEqual({ disabled: false, accepted: true });
+    expect(attempt(volume(), "−1")).toEqual({ disabled: false, accepted: true });
     await settle();
     expect(await readCount()).toBe(0);
   });
 
   it("holds pass completion and its undo while a Read all is marking", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { books } = await seed(t, count);
-    const releaseId = books[count - 1]!.releases[0]!.id as Id<"releases">;
+    const releaseId = books[count - 1]!.releases[0]!.id;
     const as = await signIn(t);
     await as.mutation(api.reading.startPass, { releaseId });
     await pageFor(as, releaseId);
@@ -767,13 +559,12 @@ describe("catalog-page controls during a whole run", () => {
     const controls = () => mountAside(pass, () => ReleasePassControls({ releaseId }));
     click(controls(), "Finished…");
 
-    const overlay = await overlayFor(as);
     const first = hold("reading:setEditionsRead", 1, "after");
-    click(mount(() => RunActions({ books, overlay, onPrompt: () => undefined })), "Read all");
+    click(mount(runActions(books, await overlayFor(as))), "Read all");
     await first.reached;
 
     // Completing now would +1 a Volume batch 2 has yet to mark.
-    const complete = pressCover(controls(), "Complete pass");
+    const complete = attempt(controls(), "Complete pass");
     await settleBesides(1);
     first.release();
     await settle();
@@ -785,13 +576,10 @@ describe("catalog-page controls during a whole run", () => {
     await pageFor(as, releaseId);
     expect(press(controls(), "Undo").disabled).toBe(false);
     await as.mutation(api.reading.setEditionRead, { editionPublicId: 5000, read: false });
-    const unread = await overlayFor(as);
     const again = hold("reading:setEditionsRead", 1, "after");
-    const other = () =>
-      RunActions({ books: [books[0]!], overlay: unread, onPrompt: () => undefined });
-    click(mountAside([], other), "Read all");
+    click(mountAside([], runActions([books[0]!], await overlayFor(as))), "Read all");
     await again.reached;
-    const undo = pressCover(controls(), "Undo");
+    const undo = attempt(controls(), "Undo");
     await settleBesides(1);
     again.release();
     await settle();
@@ -806,7 +594,7 @@ describe("catalog-page controls during a whole run", () => {
  * `fail`); call 3 is run B's first batch, held after it commits. The three
  * stay first in harness.inflight, so settleBesides(3) leaves B held.
  */
-function overlap(name: string, fail = false) {
+function overlapCalls(name: string, fail = false) {
   let releaseA!: () => void;
   let releaseB!: () => void;
   let reachA!: () => void;
@@ -840,56 +628,67 @@ function overlap(name: string, fail = false) {
 describe("overlapping whole runs", { timeout: 30_000 }, () => {
   const count = 2 * MANY_ENTRIES_CAP + 9;
 
-  async function stateOf(as: Backend, book: OverlayBook) {
-    const releaseId = book.releases[0]!.id as Id<"releases">;
-    return (await as.query(api.collection.entryForRelease, { releaseId }))?.entry?.state ?? null;
-  }
+  /**
+   * Run B's button for each kind; the cover button B's claim on book 5
+   * locks; what book 5 reads while B holds it and once B lands; and how
+   * book 5 is made pending for B after A's first batch marked it (an entry
+   * run B changes the state, a Read all needs the book unread again).
+   */
+  const OVERLAPS = {
+    entries: { ...KINDS.entries, b: "Want all", cover: "Order", held: "owned", landed: "wanted", reopen: null },
+    reads: {
+      ...KINDS.reads,
+      b: "Read all",
+      cover: "Mark read",
+      held: false,
+      landed: true,
+      reopen: (as: Accessor, book: OverlayBook) =>
+        as.mutation(api.reading.setEditionRead, { editionPublicId: book.publicId, read: false }),
+    },
+  } as const;
 
-  /** Own all over books 1–205, then Want all over 206–409 plus book 5 once A's batch 1 lands. */
-  async function ownThenWant(fail: boolean) {
-    const t = convexTest(schema);
+  /** A over books 1–205, then B over 206–409 plus book 5 once A's batch 1 lands. */
+  async function overlapping(overlap: (typeof OVERLAPS)[keyof typeof OVERLAPS], fail = false) {
+    const t = makeT();
     const { books } = await seed(t, count);
     const as = await signIn(t);
     const shared = books[4]!;
-    const runs = overlap("collection:setManyReleaseEntries", fail);
+    const runs = overlapCalls(overlap.call, fail);
     const aSlots: unknown[] = [];
-    const overlay = await overlayFor(as);
-    const runA = () =>
-      RunActions({ books: books.slice(0, 205), overlay, onPrompt: () => undefined });
-    click(mountAside(aSlots, runA), "Own all");
+    const runA = runActions(books.slice(0, 205), await overlayFor(as));
+    click(mountAside(aSlots, runA), overlap.run);
     await runs.reachedA;
-    const fresh = await overlayFor(as);
-    const bBooks = [...books.slice(205), shared];
-    const runB = () => RunActions({ books: bBooks, overlay: fresh, onPrompt: () => undefined });
-    click(mountAside([], runB), "Want all");
+    await overlap.reopen?.(as, shared);
+    click(mountAside([], runActions([...books.slice(205), shared], await overlayFor(as))), overlap.b);
     await runs.reachedB;
     // B holds book 5 for its last batch.
-    expect(press(cover(shared, await overlayFor(as)), "Order").disabled).toBe(true);
+    expect(press(cover(shared, await overlayFor(as)), overlap.cover).disabled).toBe(true);
 
     runs.releaseA();
     await vi.waitFor(() => expect(aSlots[0]).toBeNull(), { timeout: 10_000 });
-    const order = pressCover(cover(shared, await overlayFor(as)), "Order");
+    const pressed = attempt(cover(shared, await overlayFor(as)), overlap.cover);
     await settleBesides(3);
-    const chosen = await stateOf(as, shared);
+    const meanwhile = await overlap.picture(as, shared);
     runs.releaseB();
     await settle();
 
-    expect({ order, chosen }).toEqual({
-      order: { disabled: true, accepted: false },
-      chosen: "owned",
+    // A's end left book 5 to B: its cover stayed locked, and B wrote it.
+    expect({ pressed, meanwhile }).toEqual({
+      pressed: { disabled: true, accepted: false },
+      meanwhile: overlap.held,
     });
-    expect(await stateOf(as, shared)).toBe("wanted");
+    expect(await overlap.picture(as, shared)).toBe(overlap.landed);
     const alert = mountAside(aSlots, runA).find((host) => host.props.role === "alert");
     return { as, books, alert };
   }
 
-  it("a finishing run frees only the claims it still holds", async () => {
-    const { alert } = await ownThenWant(false);
+  it.each([OVERLAPS.entries, OVERLAPS.reads])("a finishing $run frees only the claims it still holds", async (overlap) => {
+    const { alert } = await overlapping(overlap);
     expect(alert).toBeUndefined();
   });
 
   it("a run that fails mid-way frees only what it still holds", async () => {
-    const { as, books, alert } = await ownThenWant(true);
+    const { as, books, alert } = await overlapping(OVERLAPS.entries, true);
     expect(text(alert?.props.children)).toContain("Marked 200 of 205");
     // A's unlanded tail, never claimed by B, is free again.
     const settled = await overlayFor(as);
@@ -899,53 +698,14 @@ describe("overlapping whole runs", { timeout: 30_000 }, () => {
     );
   });
 
-  it("a finishing Read all frees only the Volumes it still holds", async () => {
-    const t = convexTest(schema);
-    const { books } = await seed(t, count);
-    const as = await signIn(t);
-    const shared = books[4]!;
-    const runs = overlap("reading:setEditionsRead");
-    const aSlots: unknown[] = [];
-    const overlay = await overlayFor(as);
-    click(
-      mountAside(aSlots, () =>
-        RunActions({ books: books.slice(0, 205), overlay, onPrompt: () => undefined }),
-      ),
-      "Read all",
-    );
-    await runs.reachedA;
-    // Book 5's Volume is free again: unmark it so B has it to read.
-    await as.mutation(api.reading.setEditionRead, {
-      editionPublicId: shared.publicId,
-      read: false,
-    });
-    const fresh = await overlayFor(as);
-    const bBooks = [...books.slice(205), shared];
-    const runB = () => RunActions({ books: bBooks, overlay: fresh, onPrompt: () => undefined });
-    click(mountAside([], runB), "Read all");
-    await runs.reachedB;
-    expect(press(cover(shared, await overlayFor(as)), "Mark read").disabled).toBe(true);
-
-    runs.releaseA();
-    await vi.waitFor(() => expect(aSlots[0]).toBeNull(), { timeout: 10_000 });
-    const markRead = pressCover(cover(shared, await overlayFor(as)), "Mark read");
-    await settleBesides(3);
-    runs.releaseB();
-    await settle();
-
-    expect(markRead).toEqual({ disabled: true, accepted: false });
-    expect(quickBookFor(shared, await overlayFor(as)).read).toBe(true);
-  });
-
   // Two clicks before a re-render: the second run is refused and leaves no claim.
   it("refuses a repeated click on the same run and frees everything after", async () => {
-    const t = convexTest(schema);
+    const t = makeT();
     const { books } = await seed(t, 3);
     const as = await signIn(t);
-    const overlay = await overlayFor(as);
-    const tree = mount(() => RunActions({ books, overlay, onPrompt: () => undefined }));
+    const tree = mount(runActions(books, await overlayFor(as)));
     click(tree, "Own all");
-    const again = pressCover(tree, "Own all");
+    const again = attempt(tree, "Own all");
     await settle();
 
     expect(again.accepted).toBe(false);

@@ -1,4 +1,4 @@
-// Username policy (spec §8, ticket #26): required at first sign-in, unique
+// Username policy (spec §8): required at first sign-in, unique
 // case-insensitively via a normalized copy, changeable with immediate release
 // of the old name. The reserved list lives here in code — an open vocabulary
 // per the schema's convention, so extending it is never a schema event.

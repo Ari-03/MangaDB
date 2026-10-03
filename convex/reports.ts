@@ -1,5 +1,5 @@
 // The per-Series "see something missing/wrong? → report" affordance
-// (ticket #40, spec §7): any signed-in user — no data-team role required —
+// (spec §7): any signed-in user — no data-team role required —
 // files a free-text report from a Series page, and it lands in the shared
 // review queue as a zero-op In-Review Proposal. Gap-spotters become the
 // Editor pipeline: a reviewer acts on the report (a direct edit, their own
@@ -8,10 +8,12 @@
 // itself carries the public history.
 
 import { HOUR, RateLimiter } from "@convex-dev/rate-limiter";
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import { components } from "./_generated/api";
 import { mutation } from "./_generated/server";
 import { requireUser } from "./lib/auth";
+import { fail } from "./lib/errors";
+import { insertFirstVersion } from "./moderation";
 
 // Reports are the one write open to every signed-in user, so they get their
 // own (tighter) bucket than the Editor proposal limits.
@@ -39,25 +41,15 @@ export const submit = mutation({
     await rateLimiter.limit(ctx, "reportSubmit", { key: user._id, throws: true });
 
     const message = args.message.trim();
-    if (!message) {
-      throw new ConvexError({
-        code: "emptyReport",
-        message: "Say what's missing or wrong.",
-      });
-    }
+    if (!message) fail("emptyReport", "Say what's missing or wrong.");
     if (message.length > MAX_REPORT_LENGTH) {
-      throw new ConvexError({
-        code: "reportTooLong",
-        message: `Keep reports under ${MAX_REPORT_LENGTH} characters.`,
-      });
+      fail("reportTooLong", `Keep reports under ${MAX_REPORT_LENGTH} characters.`);
     }
     const series = await ctx.db
       .query("series")
       .withIndex("by_publicId", (q) => q.eq("publicId", args.seriesPublicId))
       .unique();
-    if (!series || series.status !== "active") {
-      throw new ConvexError({ code: "notFound", message: "No such series." });
-    }
+    if (!series || series.status !== "active") fail("notFound", "No such series.");
 
     const proposalId = await ctx.db.insert("proposals", {
       author: {
@@ -69,9 +61,7 @@ export const submit = mutation({
       currentVersionNo: 1,
       submittedAt: Date.now(),
     });
-    await ctx.db.insert("proposalVersions", {
-      proposalId,
-      versionNo: 1,
+    await insertFirstVersion(ctx, proposalId, {
       ops: [],
       evidence: [
         {

@@ -48,8 +48,8 @@ export const summary = query({
 
 /**
  * The viewer's own Rating of a target, with the target's ID for `set`. Null
- * when signed out, username pending, or the target is unknown, so the
- * rating control renders nothing.
+ * without a viewer (viewerOrNull) or for an unknown target, so the rating
+ * control renders nothing.
  */
 export const mine = query({
   args: { target: targetRefArg },

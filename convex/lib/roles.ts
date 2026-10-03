@@ -1,13 +1,13 @@
-// Data-team roles and the governance matrix (spec §4/§5, ticket #31):
+// Data-team roles and the governance matrix (spec §4/§5):
 // Administrators appoint Moderators (and, as a superset, everything else);
 // Moderators appoint Editors and approve/reject proposals; Editors propose.
 // Role checks always read the live User doc — the role is never baked into a
 // session — and suspension removes privileges immediately.
 
-import { ConvexError } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { requireUser } from "./auth";
+import { fail } from "./errors";
 
 export type DataRole = NonNullable<Doc<"users">["role"]>;
 
@@ -34,10 +34,7 @@ export async function requireRole(
 ): Promise<Doc<"users">> {
   const user = await requireUser(ctx);
   if (!user.role || !roles.includes(user.role)) {
-    throw new ConvexError({
-      code: "forbidden",
-      message: "This action needs a data-team role you do not hold.",
-    });
+    fail("forbidden", "This action needs a data-team role you do not hold.");
   }
   return user;
 }

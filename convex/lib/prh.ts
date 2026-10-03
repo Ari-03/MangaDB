@@ -1,15 +1,14 @@
-// PRH Enhanced API parsing (ticket #36, spec §6/§7): pure functions from
-// the Penguin Random House title-list JSON to normalized snapshots. PRH
-// distributes 50+ publishers including Kodansha, Seven Seas, Dark Horse,
-// Square Enix, Denpa, and Vertical (VIZ is NOT PRH-distributed); the
-// adapter overlays authoritative onsale dates and ISBNs on those records.
+// PRH Enhanced API parsing (spec §6/§7): pure functions from the Penguin
+// Random House title-list JSON to normalized snapshots (prh.ts says what
+// the adapter does with them).
 //
 // Endpoint (requires an api_key; docs at developer.penguinrandomhouse.com):
 //   GET /resources/v2/title/domains/PRH.US/imprints/{code}/titles
 //       ?api_key=…&rows=200&start=N&sort=onsale&dir=asc|desc
 // The imprint-scoped path is mandatory: the flat /titles endpoint silently
-// ignores its `imprint` and `onsaleFrom` query params (verified live
-// 2026-08 and 2026-09), so date filtering happens client-side in the sync.
+// ignores its `imprint` and `onsaleFrom` query params (every "imprint="
+// query returns the whole ~313k-title domain, and sorting that set 504s),
+// so date filtering happens client-side in the sync.
 // The sync adds the content zoom
 // (`zoom=https://api.penguinrandomhouse.com/title/titles/content/definition`),
 // which embeds each title's marketing copy in the same response
@@ -38,7 +37,8 @@
 import { v, type Infer } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import { outOfScopeReason, parseBookTitle } from "./bookTitle";
-import { catalogTitleFields } from "./catalogTitle";
+import { catalogTitleFields, parsedTitleFields } from "./catalogTitle";
+import type { FullDate } from "./dates";
 import { cleanBlurb } from "./text";
 
 // ---------- the normalized snapshot ----------
@@ -52,10 +52,11 @@ export type PrhTitleSnapshot = Infer<typeof prhTitleValidator>;
 
 // ---------- field plumbing ----------
 
-/** "2026-12-08" or "2026-12-08T00:00:00-05:00" → a full-precision date. */
-export function parseOnsale(
-  raw: unknown,
-): { year: number; month: number; day: number } | undefined {
+/**
+ * "2026-12-08" or "2026-12-08T00:00:00-05:00" → a full-precision date. Only
+ * the day's range is checked, not that it exists: "2026-02-31" passes.
+ */
+export function parseOnsale(raw: unknown): FullDate | undefined {
   if (typeof raw !== "string") return undefined;
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
   if (!m) return undefined;
@@ -247,7 +248,6 @@ function readTitle(raw: unknown): PrhTitleSnapshot | DropReason {
       ? entry.seriesNumber
       : undefined;
   const parsed = parseBookTitle(title, { seriesNumber });
-  const coverRange = parsed.packaging?.coverRange ?? null;
 
   const seo = entry.seoFriendlyUrl;
   const url =
@@ -261,14 +261,8 @@ function readTitle(raw: unknown): PrhTitleSnapshot | DropReason {
     isbn13,
     isbn10: asIsbn10(entry.isbn10),
     title,
-    seriesTitle: parsed.seriesTitle,
-    volumeLabel: parsed.volumeLabel ?? undefined,
-    multiVolume: coverRange !== null && coverRange.from !== coverRange.to,
-    packaging: parsed.packaging ?? undefined,
+    ...parsedTitleFields(parsed),
     isBox: parsed.isBox || undefined,
-    bareNumber: parsed.bareNumber || undefined,
-    bareRoman: parsed.bareRoman || undefined,
-    bareSplit: parsed.bareSplit ?? undefined,
     author: typeof entry.author === "string" ? entry.author.trim() : undefined,
     onsale: parseOnsale(entry.onsale ?? entry.onSaleDate),
     format: digital ? "digital" : "physical",
@@ -301,7 +295,7 @@ export type DroppedTitle = {
  *
  * Entries the parser drops are reported in `dropped`: presence at the
  * source does not depend on normalizing, so the sync keeps them present
- * rather than letting a full sweep withdraw them (B09).
+ * rather than letting a full sweep withdraw them.
  */
 export function parseTitleList(raw: unknown): {
   titles: PrhTitleSnapshot[];

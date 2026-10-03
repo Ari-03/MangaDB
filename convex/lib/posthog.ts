@@ -1,5 +1,5 @@
 // Backend analytics through PostHog's Convex component, @posthog/convex
-// (README "Analytics (PostHog)" → Backend).
+// (docs/configuration.md "Analytics (PostHog)").
 //
 // - `capture(ctx, user, event, props)` records a named event from a mutation
 //   or an action. The component schedules its own action to send it, so from

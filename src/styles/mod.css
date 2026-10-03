@@ -1,4 +1,4 @@
-/* Moderation surfaces (#31/#32/#37/#40): revision history, edit forms, proposals + review queue, imports dashboard, launch dashboard. Owner: mod port. */
+/* Moderation surfaces: revision history, edit forms, proposals + review queue, imports dashboard, launch dashboard. */
 
 /* These are the data team's working tools, not catalog display. They borrow
    the Bookshelf vocabulary — warm surfaces, hairlines, the gold accent, the
@@ -311,7 +311,7 @@
 }
 .mod-page .queue-filters .filter-toggle input { min-width: 0; }
 
-/* ---------- revision history (#31) ---------------------------------------- */
+/* ---------- revision history ---------------------------------------- */
 
 /* On a public catalog page this must stay quiet: a hairline disclosure the
    reader can ignore, opened only by someone who cares who changed what. */
@@ -433,7 +433,7 @@
 }
 .mod-edit-link a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
-/* ---------- edit + propose forms (#31/#32) -------------------------------- */
+/* ---------- edit + propose forms -------------------------------- */
 
 .mod-edit-form {
   display: grid;
@@ -442,7 +442,7 @@
   margin-top: 24px;
 }
 
-/* ---------- review queue + proposals (#32) -------------------------------- */
+/* ---------- review queue + proposals -------------------------------- */
 
 .queue-row {
   padding: 13px 18px;
@@ -470,7 +470,10 @@
 
 .queue-warnings { color: var(--mod-warn); }
 
-.proposal-actions {
+.proposal-actions,
+.proposal-version,
+.proposal-notes,
+.manage-action {
   margin-top: 26px;
   padding: 0 18px 18px;
   border: 1px solid var(--line);
@@ -483,7 +486,8 @@
   border-bottom: 1px solid var(--line);
   font-size: 1.02rem;
 }
-.proposal-actions label {
+.proposal-actions label,
+.proposal-notes label {
   display: grid;
   gap: 5px;
   margin: 16px 0;
@@ -493,20 +497,16 @@
   color: var(--text-dim);
 }
 
-/* one immutable version, or the mutable draft */
-.proposal-version {
-  margin-top: 26px;
-  padding: 0 18px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
-.proposal-version > h2 {
+.proposal-version > h2,
+.proposal-notes > h2,
+.manage-action > h2 {
   margin: 0 -18px 0;
   padding: 14px 18px;
   border-bottom: 1px solid var(--line);
   font-size: 1.02rem;
 }
+
+/* one immutable version, or the mutable draft */
 .proposal-version > h3 {
   margin: 20px 0 8px;
   font-size: 0.92rem;
@@ -544,19 +544,6 @@
 .proposal-evidence a:hover { border-bottom: 1px solid var(--accent); }
 
 /* internal discussion — data-team only, never public */
-.proposal-notes {
-  margin-top: 26px;
-  padding: 0 18px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
-.proposal-notes > h2 {
-  margin: 0 -18px 0;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--line);
-  font-size: 1.02rem;
-}
 .proposal-notes > .section-hint { margin-top: 14px; }
 .proposal-notes ol {
   list-style: none;
@@ -572,17 +559,8 @@
   color: var(--text-dim);
 }
 .proposal-notes ol strong { color: var(--text); }
-.proposal-notes label {
-  display: grid;
-  gap: 5px;
-  margin: 16px 0;
-  max-width: 40rem;
-  font-size: 0.86rem;
-  font-weight: 700;
-  color: var(--text-dim);
-}
 
-/* ---------- sensitive operations (#33) ------------------------------------ */
+/* ---------- sensitive operations ------------------------------------ */
 
 .manage-status {
   display: flex;
@@ -627,19 +605,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.manage-action {
-  margin-top: 26px;
-  padding: 0 18px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
-.manage-action > h2 {
-  margin: 0 -18px 0;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--line);
-  font-size: 1.02rem;
-}
 .manage-action > .section-hint { margin-top: 14px; }
 .manage-action form {
   display: grid;
@@ -668,7 +633,7 @@
   color: var(--text);
 }
 
-/* ---------- imports dashboard (#37) --------------------------------------- */
+/* ---------- imports dashboard --------------------------------------- */
 
 .import-source,
 .import-run {
@@ -732,7 +697,7 @@
 }
 .import-run-errors code { word-break: break-word; }
 
-/* ---------- launch dashboard (#40) ---------------------------------------- */
+/* ---------- launch dashboard ---------------------------------------- */
 
 /* The gate list is the page's one loud element: seven lines, each either
    satisfied or not, nothing between. */
@@ -844,7 +809,7 @@
 .mod-page .attest-form input { max-width: 22rem; }
 .attest-form .form-error { flex-basis: 100%; }
 
-/* ---------- roles (#31) ---------------------------------------------------- */
+/* ---------- roles ---------------------------------------------------- */
 
 .roster-list,
 .audit-list { font-size: 0.89rem; margin-bottom: 0; }

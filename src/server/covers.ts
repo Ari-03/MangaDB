@@ -17,11 +17,12 @@
 // burst of lookups never hides art for a day. Spec §6: covers are stored under
 // industry-standard tolerance with the takedown contact on /about-the-data.
 //
-// Measured on a stratified sample of the catalog's ISBNs (README "Cover
-// art"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
+// Measured on a stratified sample of the catalog's ISBNs (docs/decisions.md,
+// "Cover art sources"): PRH ≈86%, OpenLibrary ≈8.5% more, ≈5% nowhere.
 import { env, waitUntil } from "cloudflare:workers";
 
 import type { CoverShelf } from "~/lib/homeShelves";
+import { readEdgeCache } from "~/server/edgeCache";
 
 const COVER_PATH = /^\/covers\/(97[89]\d{10})\.jpg$/;
 const ISBN13 = /^97[89]\d{10}$/;
@@ -58,13 +59,9 @@ export async function coverResponse(request: Request): Promise<Response | null> 
   const isbn13 = match[1]!;
 
   // Edge cache first. Keyed on the bare path so query strings can't bust it.
-  const cache = (caches as unknown as { default: Cache }).default;
+  const cache = caches.default;
   const cacheKey = new Request(`${url.origin}${url.pathname}`);
-  // A failed read is a miss: the cache may cost a lookup, never the art.
-  const cached = await cache.match(cacheKey).catch((error: unknown) => {
-    console.error("covers: edge cache read failed", error);
-    return undefined;
-  });
+  const cached = await readEdgeCache(cacheKey, "covers: edge cache read failed");
   if (cached) {
     const hit = new Response(cached.body, cached);
     hit.headers.set("X-Cover-Cache", "hit");

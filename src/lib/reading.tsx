@@ -1,8 +1,6 @@
-// Reading tracking UI (ticket #28, spec §3), rendered as a signed-in overlay
-// on the public catalog pages: the Series Reading Status picker, per-Volume
-// read counts, and Release Progress pass controls. Everything fetches through
-// the reactive Convex client; signed-out viewers get null from the tracking
-// queries, so the public pages render identically without the controls.
+// Reading tracking UI (spec §3): the Series Reading Status picker,
+// per-Volume read counts, and Release Progress pass controls. A signed-in
+// overlay on the catalog pages, like lib/collection.tsx.
 //
 // The prompt rules from the glossary hold throughout: starting a pass or
 // finishing everything only ever *suggests* a status change — the suggestion
@@ -13,6 +11,7 @@
 
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
@@ -23,7 +22,7 @@ import { useRunLock } from "~/lib/quickActions";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
 
-export const STATUS_LABELS = {
+const STATUS_LABELS = {
   planToRead: "Plan to Read",
   reading: "Reading",
   paused: "Paused",
@@ -33,7 +32,7 @@ export const STATUS_LABELS = {
 
 export type ReadingStatus = keyof typeof STATUS_LABELS;
 
-export const STATUS_ORDER: ReadingStatus[] = [
+const STATUS_ORDER: ReadingStatus[] = [
   "reading",
   "planToRead",
   "paused",
@@ -41,7 +40,10 @@ export const STATUS_ORDER: ReadingStatus[] = [
   "dropped",
 ];
 
-export type SeriesSuggestion = { seriesId: Id<"series">; title: string };
+/** A Series a reading write suggests a status for (reading.completePass and kin). */
+export type SeriesSuggestion = FunctionReturnType<
+  typeof api.reading.completePass
+>["suggestCompleted"][number];
 
 /**
  * The fully-read prompt (spec §3): a completion that leaves every Volume of
@@ -284,11 +286,9 @@ function VolumeReadCountInner({
  * not know here, so both wait while any "Read all" run is still marking
  * (useRunLock): its later batch could otherwise re-mark an undone Volume.
  */
-export function ReleasePassControls({ releaseId }: { releaseId: string }) {
+export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }) {
   if (!convexClient) return null;
-  // Release rows carry the Convex document id serialized through the SSR
-  // loader; re-brand it for the typed function references.
-  return <ReleasePassControlsInner releaseId={releaseId as Id<"releases">} />;
+  return <ReleasePassControlsInner releaseId={releaseId} />;
 }
 
 function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) {

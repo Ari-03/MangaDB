@@ -1,53 +1,29 @@
-// Series Follows + My Upcoming Releases (ticket #29, spec §3).
-//
-// The invariants, straight from the glossary (CONTEXT.md):
-// - A Series Follow is an explicit choice, independent of Collection Entries
-//   and Volume Progress. Recording another tracking fact may *suggest* a
-//   follow (collection.ts returns the suggestion after a first Collection
-//   Entry in a Series) but never creates one without confirmation — only
-//   setSeriesFollow ever writes `following`.
-// - The post-first-entry prompt appears once per Series; dismissal is
-//   permanent (`followPromptDismissed`, written only by dismissFollowPrompt).
-// - My Upcoming Releases = announced future Canonical Releases from followed
-//   Series matching the user's Physical/Digital/Both preference, plus every
-//   future Wanted/Ordered Release *and Bundle* regardless of preference —
-//   deduplicated, Owned excluded (direct or derived), computed live and
-//   never stored.
-// - Follows are always private in v1: nothing here is readable for another
-//   user, and sharing.ts never exposes them.
+// Series Follows and My Upcoming Releases (CONTEXT.md). Only
+// setSeriesFollow writes `following` and only dismissFollowPrompt sets
+// `followPromptDismissed`; collection.ts merely suggests a follow. My
+// Upcoming is computed live, never stored. Follows stay private: sharing.ts
+// never exposes them.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { resolveActiveSeries } from "./catalog";
-import { followMerges } from "./catalogPages";
+import { bundleReleases } from "./collection";
+import { getActive, requireActive } from "./lib/merges";
+import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
-import { requireActiveSeries } from "./reading";
 import { joinBrowseRows } from "./releases";
+import { seriesStatsRow } from "./seriesBrowse";
 
 // My Upcoming scans the uncapped future horizon (spec §7) over by_date; the
 // cap guards pathology and is surfaced as `capped` so the view can say so.
 export const UPCOMING_SCAN_CAP = 4000;
 
-async function seriesStateRow(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  seriesId: Id<"series">,
-) {
-  return await ctx.db
-    .query("userSeriesStates")
-    .withIndex("by_user_series", (q) =>
-      q.eq("userId", userId).eq("seriesId", seriesId),
-    )
-    .unique();
-}
-
 // ---------- queries ----------
 
 /**
- * The viewer's follow state for one Series page. Null when signed out,
- * username pending, or the Series is unknown — the public page renders
- * identically, just without the toggle.
+ * The viewer's follow state for one Series page. Null without a viewer
+ * (viewerOrNull) or for an unknown Series.
  */
 export const seriesFollow = query({
   args: { seriesPublicId: v.number() },
@@ -66,7 +42,7 @@ export const seriesFollow = query({
  * Releases browser's overlay for the subtle followed marker and the
  * followed-Series filter (both applied client-side, per the recorded spec §8
  * trade-off: array-containment filters run in memory, never on an index).
- * Null when signed out or username pending.
+ * Null without a viewer.
  */
 export const followedSeries = query({
   args: {},
@@ -80,7 +56,7 @@ export const followedSeries = query({
     const seriesPublicIds = [];
     for (const state of states) {
       if (!state.following) continue;
-      const series = await followMerges(ctx, "series", await ctx.db.get(state.seriesId));
+      const series = await getActive(ctx, "series", state.seriesId);
       if (series) seriesPublicIds.push(series.publicId);
     }
     return { seriesPublicIds };
@@ -91,8 +67,7 @@ export const followedSeries = query({
  * The Series the viewer follows, for the library's Following shelf: each
  * with its library cover and the next announced release date (0 when
  * nothing is announced) from seriesStats, falling back to the Series doc
- * when the rebuild has not stored a row yet. Null when signed out or
- * username pending.
+ * when the rebuild has not stored a row yet. Null without a viewer.
  */
 export const myFollowing = query({
   args: {},
@@ -107,13 +82,10 @@ export const myFollowing = query({
     const seen = new Set<Id<"series">>();
     for (const state of states) {
       if (!state.following) continue;
-      const doc = await followMerges(ctx, "series", await ctx.db.get(state.seriesId));
+      const doc = await getActive(ctx, "series", state.seriesId);
       if (!doc || seen.has(doc._id)) continue;
       seen.add(doc._id);
-      const stats = await ctx.db
-        .query("seriesStats")
-        .withIndex("by_series", (q) => q.eq("seriesId", doc._id))
-        .unique();
+      const stats = await seriesStatsRow(ctx, doc._id);
       series.push({
         seriesId: doc._id,
         seriesPublicId: doc.publicId,
@@ -175,7 +147,7 @@ export const myUpcoming = query({
     for (const state of states) {
       if (!state.following) continue;
       followed.add(state.seriesId);
-      const series = await followMerges(ctx, "series", await ctx.db.get(state.seriesId));
+      const series = await getActive(ctx, "series", state.seriesId);
       if (series) followed.add(series._id);
     }
     const inFollowed = (doc: Doc<"releases">) =>
@@ -199,14 +171,10 @@ export const myUpcoming = query({
     >();
     for (const entry of entries) {
       if (entry.releaseId) {
-        const doc = await followMerges(ctx, "releases", await ctx.db.get(entry.releaseId));
+        const doc = await getActive(ctx, "releases", entry.releaseId);
         if (doc) releaseEntries.set(doc._id, { doc, state: entry.state });
       } else if (entry.bundleId) {
-        const doc = await followMerges(
-          ctx,
-          "releaseBundles",
-          await ctx.db.get(entry.bundleId),
-        );
+        const doc = await getActive(ctx, "releaseBundles", entry.bundleId);
         if (doc) bundleEntries.set(doc._id, { doc, state: entry.state });
       }
     }
@@ -215,18 +183,7 @@ export const myUpcoming = query({
     const derivedOwned = new Set<Id<"releases">>();
     for (const { doc, state } of bundleEntries.values()) {
       if (state !== "owned") continue;
-      const memberships = await ctx.db
-        .query("bundleMemberships")
-        .withIndex("by_bundle", (q) => q.eq("bundleId", doc._id))
-        .collect();
-      for (const membership of memberships) {
-        const release = await followMerges(
-          ctx,
-          "releases",
-          await ctx.db.get(membership.releaseId),
-        );
-        if (release) derivedOwned.add(release._id);
-      }
+      for (const release of await bundleReleases(ctx, doc._id)) derivedOwned.add(release._id);
     }
 
     // Candidate Releases, deduplicated by document: the followed-Series
@@ -276,30 +233,22 @@ export const myUpcoming = query({
     // Future Wanted/Ordered Bundles, regardless of preference. An undated
     // Bundle is not announced (CONTEXT.md: an Upcoming Release has a *known*
     // future date), so it never appears.
-    const bundleItems: Array<{
-      kind: "bundle";
-      id: Id<"releaseBundles">;
-      bundlePublicId: number;
-      name: string;
-      sort: number;
-      day: number | null;
-      format: "physical" | "digital" | null;
-      state: "wanted" | "ordered";
-    }> = [];
-    for (const { doc, state } of bundleEntries.values()) {
-      if (state !== "wanted" && state !== "ordered") continue;
-      if (!upcoming(doc.pubDate)) continue;
-      bundleItems.push({
-        kind: "bundle" as const,
-        id: doc._id,
-        bundlePublicId: doc.publicId,
-        name: doc.name,
-        sort: doc.pubDate!.sort,
-        day: doc.pubDate!.day ?? null,
-        format: doc.format ?? null,
-        state,
-      });
-    }
+    const bundleItems = [...bundleEntries.values()].flatMap(({ doc, state }) =>
+      (state === "wanted" || state === "ordered") && upcoming(doc.pubDate)
+        ? [
+            {
+              kind: "bundle" as const,
+              id: doc._id,
+              bundlePublicId: doc.publicId,
+              name: doc.name,
+              sort: doc.pubDate!.sort,
+              day: doc.pubDate!.day ?? null,
+              format: doc.format ?? null,
+              state,
+            },
+          ]
+        : [],
+    );
 
     const name = (
       item: (typeof releaseItems)[number] | (typeof bundleItems)[number],
@@ -325,18 +274,8 @@ export const setSeriesFollow = mutation({
   args: { seriesId: v.id("series"), following: v.boolean() },
   handler: async (ctx, { seriesId, following }) => {
     const user = await requireUser(ctx);
-    const series = await requireActiveSeries(ctx, seriesId);
-    const state = await seriesStateRow(ctx, user._id, series._id);
-    if (state) {
-      await ctx.db.patch(state._id, { following });
-    } else if (following) {
-      await ctx.db.insert("userSeriesStates", {
-        userId: user._id,
-        seriesId: series._id,
-        following: true,
-        followPromptDismissed: false,
-      });
-    }
+    const series = await requireActive(ctx, "series", seriesId, "Series");
+    await writeSeriesState(ctx, user._id, series._id, { following }, following);
     return { following };
   },
 });
@@ -350,18 +289,8 @@ export const dismissFollowPrompt = mutation({
   args: { seriesId: v.id("series") },
   handler: async (ctx, { seriesId }) => {
     const user = await requireUser(ctx);
-    const series = await requireActiveSeries(ctx, seriesId);
-    const state = await seriesStateRow(ctx, user._id, series._id);
-    if (state) {
-      await ctx.db.patch(state._id, { followPromptDismissed: true });
-    } else {
-      await ctx.db.insert("userSeriesStates", {
-        userId: user._id,
-        seriesId: series._id,
-        following: false,
-        followPromptDismissed: true,
-      });
-    }
+    const series = await requireActive(ctx, "series", seriesId, "Series");
+    await writeSeriesState(ctx, user._id, series._id, { followPromptDismissed: true }, true);
     return null;
   },
 });

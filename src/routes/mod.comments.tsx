@@ -5,7 +5,10 @@ import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { FEATURES } from "../../convex/lib/features";
-import { CommentsQueueLink, useIsDataTeam, useIsModerator } from "~/lib/moderation";
+import { plural } from "~/lib/format";
+import { ModGate, ModTools } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
+import { useIsModerator } from "~/lib/viewer";
 import { writeErrorMessage } from "~/lib/ratings";
 import { slugParams } from "~/lib/slug";
 import { convexClient } from "~/providers";
@@ -18,9 +21,7 @@ import { convexClient } from "~/providers";
  * Never indexed. While FEATURES.comments is off it only says so.
  */
 export const Route = createFileRoute("/mod/comments")({
-  head: () => ({
-    meta: [{ title: "Comments queue — MangaDB" }, { name: "robots", content: "noindex" }],
-  }),
+  head: () => ({ meta: [{ title: "Comments queue — MangaDB" }] }),
   component: CommentsQueuePage,
 });
 
@@ -72,9 +73,7 @@ function CommentsQueuePage() {
   if (!FEATURES.comments) {
     return (
       <main className="mod-page">
-        <nav className="breadcrumbs" aria-label="Breadcrumb">
-          <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span> <span>Comments</span>
-        </nav>
+        <Breadcrumbs trail={["Comments"]} />
         <h1>Comments</h1>
         <p className="notice">
           Comments are switched off. Nobody can post, and pages show none. The switch is{" "}
@@ -90,57 +89,33 @@ function CommentsQueuePage() {
       </main>
     );
   }
-  return <QueueGate />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="The Comments queue is visible to Editors, Moderators, and Administrators."
+    >
+      <CommentsQueue />
+    </ModGate>
+  );
 }
 
-function QueueGate() {
-  const viewer = useQuery(api.users.viewer, {});
-  const isDataTeam = useIsDataTeam();
-  const isModerator = useIsModerator();
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          The Comments queue is visible to Editors, Moderators, and Administrators.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <CommentsQueue canAct={isModerator} />;
-}
-
-function CommentsQueue({ canAct }: { canAct: boolean }) {
+/** Editors read the queue; Moderators act on it. */
+function CommentsQueue() {
+  const canAct = useIsModerator();
   const [tab, setTab] = useState<Tab>("pending");
   const queue = useQuery(api.comments.queue, { tab });
   const counts = useQuery(api.comments.queueCounts, {});
   const current = TABS.find((entry) => entry.tab === tab)!;
   return (
     <main className="mod-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span> <span>Comments</span>
-      </nav>
+      <Breadcrumbs trail={["Comments"]} />
       <h1>Comments</h1>
       <p className="section-hint">
         Comments publish at once unless a hold rule fires (a new account, fewer than three approved
         comments, or more than two links). Three reports hide one until you decide.
         {canAct ? null : " Editors can read this queue; Moderators act on it."}
       </p>
-      <nav className="mod-tools" aria-label="Data team tools">
-        <Link to="/mod/queue">Review queue</Link>
-        <Link to="/mod/imports">Imports</Link>
-        <Link to="/mod/launch">Launch</Link>
-        <Link to="/mod/packaging">Catalog gaps</Link>
-        <CommentsQueueLink />
-      </nav>
+      <ModTools />
 
       <div className="comment-tabs" role="group" aria-label="Queue">
         {TABS.map((entry) => {
@@ -216,7 +191,7 @@ function QueueRow({ row, canAct }: { row: Row; canAct: boolean }) {
         <span className="chip mod-chip">{row.status}</span>
         {row.reportCount > 0 ? (
           <span className="chip mod-chip mod-chip--bad">
-            {row.reportCount} {row.reportCount === 1 ? "report" : "reports"}
+            {plural(row.reportCount, "report")}
           </span>
         ) : null}
         <span>

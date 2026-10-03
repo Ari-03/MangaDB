@@ -1,13 +1,13 @@
-// The moderation core (ticket #31, spec §4/§5): immutable, versioned
-// Proposals are the single write path for catalog changes. This slice
-// implements the Administrator/Moderator direct edit — a save that is an
-// immediately approved Proposal Version — producing one immutable public
-// Revision per affected record, plus the public per-record history and the
-// implicit Human Override marking. Editor submission and the review queue
-// (ticket #32) live in proposals.ts and reuse `applyUpdate`,
-// `validateChanges`, and the record plumbing exported here.
+// The moderation core (spec §4/§5): immutable, versioned Proposals are the
+// single write path for catalog changes. This module holds the
+// Administrator/Moderator direct edit — a save that is an immediately
+// approved Proposal Version — producing one immutable public Revision per
+// affected record, plus the public per-record history and the implicit
+// Human Override marking. Editor submission and the review queue live in
+// proposals.ts and reuse `applyUpdate`, `validateChanges`, and the record
+// plumbing exported here.
 
-import { ConvexError, v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   mutation,
@@ -15,10 +15,12 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { editionCoverage, followMerges } from "./catalogPages";
+import { editionCoverage } from "./catalogPages";
+import { followMerges } from "./lib/merges";
 import { getSourceByKey } from "./importSources";
-import { recordRef } from "./schema";
+import { recordRef, recordType } from "./schema";
 import { latestTouch } from "./lib/authority";
+import { fail } from "./lib/errors";
 import { ratedByDataTeam } from "./lib/mature";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
@@ -29,7 +31,9 @@ import {
 } from "./lib/moderationFields";
 import { seriesSearchText } from "./lib/searchMatch";
 import { syncMatureProjection } from "./seriesBrowse";
+import type { OpMeta } from "./lib/sensitiveOps";
 import { volumeTitle } from "./lib/titles";
+import { usernameLookup } from "./lib/usernameLookup";
 import { sameValue } from "./lib/values";
 
 // ---------- record refs & lookup ----------
@@ -48,13 +52,13 @@ export const TABLE_FOR_TYPE = {
 
 export type CatalogTable = (typeof TABLE_FOR_TYPE)[RecordType];
 export type CatalogDoc = Doc<CatalogTable>;
-export type RecordRef = { type: RecordType; id: Id<CatalogTable> };
+export type RecordRef = Infer<typeof recordRef>;
 
 export async function getCanonical(
   ctx: QueryCtx | MutationCtx,
   ref: RecordRef,
 ): Promise<CatalogDoc | null> {
-  return (await ctx.db.get(ref.id)) as CatalogDoc | null;
+  return await ctx.db.get(ref.id);
 }
 
 /** Revisions of one record, newest first (the by_record index ends on seq). */
@@ -62,13 +66,13 @@ export async function revisionsOf(ctx: QueryCtx | MutationCtx, ref: RecordRef) {
   return await ctx.db
     .query("revisions")
     .withIndex("by_record", (q) =>
-      q.eq("ref.type", ref.type).eq("ref.id", ref.id as never),
+      q.eq("ref.type", ref.type).eq("ref.id", ref.id),
     )
     .order("desc")
     .collect();
 }
 
-// ---------- Human Override detection (spec §4, ticket #31) ----------
+// ---------- Human Override detection (spec §4) ----------
 
 /**
  * Which of `fields` are currently import-authored on this record: the most
@@ -107,24 +111,12 @@ export function validateChanges(
   const changes: FieldChange[] = [];
   const next: Record<string, unknown> = {};
   for (const { field, value } of submitted) {
-    if (seen.has(field)) {
-      throw new ConvexError({
-        code: "invalidField",
-        message: `Field "${field}" appears twice.`,
-      });
-    }
+    if (seen.has(field)) fail("invalidField", `Field "${field}" appears twice.`);
     seen.add(field);
     const descriptor = fieldDescriptor(type, field);
-    if (!descriptor) {
-      throw new ConvexError({
-        code: "unknownField",
-        message: `"${field}" is not an editable field of a ${type}.`,
-      });
-    }
+    if (!descriptor) fail("unknownField", `"${field}" is not an editable field of a ${type}.`);
     const normalized = normalizeFieldValue(descriptor, value);
-    if (!normalized.ok) {
-      throw new ConvexError({ code: "invalidField", message: normalized.message });
-    }
+    if (!normalized.ok) fail("invalidField", normalized.message);
     const before = (doc as Record<string, unknown>)[field];
     next[field] = normalized.value;
     if (sameValue(before, normalized.value)) continue;
@@ -136,29 +128,77 @@ export function validateChanges(
     const release = doc as Doc<"releases">;
     const binding = "binding" in next ? next.binding : release.binding;
     if (release.format === "digital" && binding !== undefined) {
-      throw new ConvexError({
-        code: "invalidField",
-        message: "Binding applies only to physical releases.",
-      });
+      fail("invalidField", "Binding applies only to physical releases.");
     }
   }
 
-  if (changes.length === 0) {
-    throw new ConvexError({
-      code: "noChanges",
-      message: "Nothing changed — edit at least one field.",
-    });
-  }
+  if (changes.length === 0) fail("noChanges", "Nothing changed — edit at least one field.");
   return changes;
 }
 
 // ---------- the approved-update write path ----------
 
+type Author = Doc<"proposals">["author"];
+
+/**
+ * A Proposal approved as it is made (direct edits, sensitive operations,
+ * the data repair): its author's approver decides it at submission.
+ */
+export async function insertApprovedProposal(
+  ctx: MutationCtx,
+  author: Author,
+  approvedBy: Id<"users">,
+): Promise<Id<"proposals">> {
+  const now = Date.now();
+  return await ctx.db.insert("proposals", {
+    author,
+    state: "approved",
+    currentVersionNo: 1,
+    submittedAt: now,
+    decidedBy: approvedBy,
+    decidedAt: now,
+  });
+}
+
+/** A Proposal's immutable version 1. */
+export async function insertFirstVersion(
+  ctx: MutationCtx,
+  proposalId: Id<"proposals">,
+  version: Pick<Doc<"proposalVersions">, "ops" | "evidence" | "changeComment">,
+): Promise<void> {
+  await ctx.db.insert("proposalVersions", { proposalId, versionNo: 1, ...version });
+}
+
+/**
+ * Append the next immutable Revision to one record's history. `latest` is
+ * the record's newest Revision as the caller read it (none for a record
+ * just created), and the new one's `seq` follows it.
+ */
+export async function insertRevision(
+  ctx: MutationCtx,
+  ref: RecordRef,
+  latest: Doc<"revisions"> | null | undefined,
+  changes: Doc<"revisions">["changes"],
+  meta: OpMeta,
+) {
+  const seq = (latest?.seq ?? 0) + 1;
+  const revisionId = await ctx.db.insert("revisions", {
+    ref,
+    seq,
+    proposalId: meta.proposalId,
+    author: meta.author,
+    approvedBy: meta.approvedBy,
+    changes,
+    comment: meta.comment,
+  });
+  return { revisionId, seq };
+}
+
 /**
  * Apply one approved update op to its record: staleness check against the
  * base Revision, the patch itself (plus derived fields), implicit Human
  * Override marking, and the new immutable Revision. Shared by direct edits
- * today and the review-queue approval in the next slice.
+ * and review-queue approval.
  */
 export async function applyUpdate(
   ctx: MutationCtx,
@@ -181,11 +221,7 @@ export async function applyUpdate(
   // base change before approval requires an explicit rebase, never a silent
   // one. For a direct edit this surfaces as "reload and re-edit".
   if ((latest?._id ?? null) !== args.baseRevisionId) {
-    throw new ConvexError({
-      code: "stale",
-      message:
-        "This record changed since the edit was loaded. Reload and re-apply your change.",
-    });
+    fail("stale", "This record changed since the edit was loaded. Reload and re-apply your change.");
   }
 
   const patch: Record<string, unknown> = {};
@@ -213,7 +249,8 @@ export async function applyUpdate(
 
   // Implicit Human Override (spec §4): a human author's approved change to an
   // import-authored field joins the record's sticky overridden-fields list.
-  // Only an explicit clearOverride op (a later slice) removes an entry.
+  // Only an explicit clearOverride op may remove an entry, and none is
+  // approvable yet.
   if (args.author.kind === "user") {
     const overridden = importAuthoredFields(
       history,
@@ -226,21 +263,11 @@ export async function applyUpdate(
   }
 
   await ctx.db.patch(ref.id, patch as never);
-
-  const revisionId = await ctx.db.insert("revisions", {
-    ref: ref as never,
-    seq: (latest?.seq ?? 0) + 1,
-    proposalId: args.proposalId,
-    author: args.author,
-    approvedBy: args.approvedBy,
-    changes,
-    comment: args.comment,
-  });
-  return { revisionId, seq: (latest?.seq ?? 0) + 1 };
+  return await insertRevision(ctx, ref, latest, changes, args);
 }
 
 /**
- * The Administrator/Moderator direct edit (ticket #31): the form's save is an
+ * The Administrator/Moderator direct edit: the form's save is an
  * immediately approved Proposal Version — the same machinery as reviewed
  * proposals, with the author as approver — producing one immutable public
  * Revision. Hidden and merged records are locked against ordinary edits, as
@@ -255,32 +282,17 @@ export const submitDirectEdit = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireModerator(ctx);
-    const ref = args.ref as RecordRef;
+    const ref = args.ref;
 
     const comment = args.comment.trim();
-    if (comment === "") {
-      throw new ConvexError({
-        code: "commentRequired",
-        message: "Every change needs a change comment.",
-      });
-    }
+    if (comment === "") fail("commentRequired", "Every change needs a change comment.");
 
     const doc = await getCanonical(ctx, ref);
-    if (!doc) {
-      throw new ConvexError({ code: "notFound", message: "No such record." });
-    }
+    if (!doc) fail("notFound", "No such record.");
     if (doc.status !== "active") {
-      throw new ConvexError({
-        code: "locked",
-        message: `This record is ${doc.status} and locked against ordinary edits.`,
-      });
+      fail("locked", `This record is ${doc.status} and locked against ordinary edits.`);
     }
-    if (doc.locked) {
-      throw new ConvexError({
-        code: "locked",
-        message: "This record is temporarily locked.",
-      });
-    }
+    if (doc.locked) fail("locked", "This record is temporarily locked.");
 
     const changes = validateChanges(ref.type, doc, args.changes);
     const author = {
@@ -288,28 +300,10 @@ export const submitDirectEdit = mutation({
       userId: user._id,
       roleAtAuthorship: user.role,
     };
-    const now = Date.now();
 
-    // The immediately approved Proposal + its immutable version 1.
-    const proposalId = await ctx.db.insert("proposals", {
-      author,
-      state: "approved",
-      currentVersionNo: 1,
-      submittedAt: now,
-      decidedBy: user._id,
-      decidedAt: now,
-    });
-    await ctx.db.insert("proposalVersions", {
-      proposalId,
-      versionNo: 1,
-      ops: [
-        {
-          kind: "update",
-          ref: ref as never,
-          baseRevisionId: args.baseRevisionId,
-          changes,
-        },
-      ],
+    const proposalId = await insertApprovedProposal(ctx, author, user._id);
+    await insertFirstVersion(ctx, proposalId, {
+      ops: [{ kind: "update", ref, baseRevisionId: args.baseRevisionId, changes }],
       evidence: [],
       changeComment: comment,
     });
@@ -330,17 +324,21 @@ export const submitDirectEdit = mutation({
 
 // ---------- the edit form (moderator/administrator) ----------
 
-export const recordTypeArg = v.union(
-  v.literal("publisher"),
-  v.literal("seriesFamily"),
-  v.literal("series"),
-  v.literal("volume"),
-  v.literal("editionLine"),
-  v.literal("edition"),
-  v.literal("release"),
-  v.literal("releaseVariant"),
-  v.literal("releaseBundle"),
-);
+/**
+ * The stored record with this public ID, merged or hidden ones included.
+ * The four tables that carry one share the by_publicId index, so one
+ * table's typing serves for all of them.
+ */
+function storedByPublicId(
+  ctx: QueryCtx,
+  table: "series" | "volumes" | "editions" | "releaseBundles",
+  publicId: number,
+) {
+  return ctx.db
+    .query(table as "volumes")
+    .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
+    .unique();
+}
 
 /**
  * Resolve an edit-form key to its doc: the public ID for entities that have
@@ -353,37 +351,13 @@ export async function resolveEditTarget(
   key: string,
 ): Promise<CatalogDoc | null> {
   switch (type) {
-    case "series": {
-      const publicId = Number(key);
-      if (!Number.isInteger(publicId)) return null;
-      return await ctx.db
-        .query("series")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-    }
-    case "volume": {
-      const publicId = Number(key);
-      if (!Number.isInteger(publicId)) return null;
-      return await ctx.db
-        .query("volumes")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-    }
-    case "edition": {
-      const publicId = Number(key);
-      if (!Number.isInteger(publicId)) return null;
-      return await ctx.db
-        .query("editions")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-    }
+    case "series":
+    case "volume":
+    case "edition":
     case "releaseBundle": {
       const publicId = Number(key);
       if (!Number.isInteger(publicId)) return null;
-      return await ctx.db
-        .query("releaseBundles")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
+      return await storedByPublicId(ctx, TABLE_FOR_TYPE[type], publicId);
     }
     case "publisher":
       return await ctx.db
@@ -475,11 +449,11 @@ export async function displayInfo(
  * editable fields with current values (straight from the registry the
  * mutations validate against), the base Revision for the staleness check,
  * and the record's overridden-fields list. Editors use it to draft update
- * Proposals (#32); Moderators for direct edits — the mutations re-check the
+ * Proposals; Moderators for direct edits — the mutations re-check the
  * stronger role.
  */
 export const editForm = query({
-  args: { type: recordTypeArg, key: v.string() },
+  args: { type: recordType, key: v.string() },
   handler: async (ctx, { type, key }) => {
     await requireDataTeam(ctx);
     const doc = await resolveEditTarget(ctx, type, key);
@@ -536,7 +510,7 @@ export const sourceBlurbs = query({
     const field = ref.type === "release" ? "description" : "synopsis";
     const canonicalText = blurbText((doc as Record<string, unknown>)[field]);
 
-    const touch = latestTouch(await revisionsOf(ctx, { type: ref.type, id }), field);
+    const touch = latestTouch(await revisionsOf(ctx, { type: ref.type, id } as RecordRef), field);
     const author =
       touch === undefined
         ? null
@@ -612,7 +586,7 @@ export const sourceBlurbs = query({
   },
 });
 
-// ---------- public revision history (spec §5, ticket #31) ----------
+// ---------- public revision history (spec §5) ----------
 
 const historyTargetArg = v.union(
   v.literal("series"),
@@ -631,43 +605,17 @@ const historyTargetArg = v.union(
 export const recordHistory = query({
   args: { type: historyTargetArg, publicId: v.number() },
   handler: async (ctx, { type, publicId }) => {
-    let resolved: CatalogDoc | null = null;
-    if (type === "series") {
-      const stored = await ctx.db
-        .query("series")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-      // Series merges resolve like every other record; catalog.ts's
-      // resolveActiveSeries predates the shared helper.
-      let current = stored;
-      const visited = new Set<string>();
-      while (current && current.status === "merged" && current.mergedIntoId) {
-        if (visited.has(current._id)) return null;
-        visited.add(current._id);
-        current = await ctx.db.get(current.mergedIntoId);
-      }
-      resolved = current && current.status === "active" ? current : null;
-    } else {
-      const table = TABLE_FOR_TYPE[type];
-      const stored = await ctx.db
-        .query(table as "volumes")
-        .withIndex("by_publicId", (q) => q.eq("publicId", publicId))
-        .unique();
-      resolved = await followMerges(ctx, table as "volumes", stored);
-    }
+    const table = TABLE_FOR_TYPE[type];
+    const resolved: CatalogDoc | null = await followMerges(
+      ctx,
+      table as "volumes",
+      await storedByPublicId(ctx, table, publicId),
+    );
     if (!resolved) return null;
 
     const ref = { type, id: resolved._id } as RecordRef;
     const revisions = await revisionsOf(ctx, ref);
-
-    const usernameCache = new Map<Id<"users">, string | null>();
-    const usernameOf = async (userId: Id<"users">) => {
-      if (!usernameCache.has(userId)) {
-        const user = await ctx.db.get(userId);
-        usernameCache.set(userId, user?.username ?? null);
-      }
-      return usernameCache.get(userId) ?? null;
-    };
+    const usernameOf = usernameLookup(ctx);
 
     const entries = [];
     for (const revision of revisions) {

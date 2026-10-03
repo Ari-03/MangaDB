@@ -15,6 +15,7 @@ import {
 } from "~/lib/catalogData";
 import { ConcealArt, showMature } from "~/lib/mature";
 import { Cover } from "~/lib/cover";
+import { plural } from "~/lib/format";
 import {
   addMonths,
   currentMonth,
@@ -22,22 +23,23 @@ import {
   monthEndSortKey,
   monthParam,
   monthTitle,
+  sortKeyMonth,
   todaySortKey,
   weekdayName,
   type YearMonth,
 } from "~/lib/month";
 import { ModEditLink } from "~/lib/moderation";
 import {
-  breadcrumbListJsonLd,
-  jsonLdScript,
   organizationJsonLd,
   pageHead,
   publisherTitleTag,
 } from "~/lib/seo";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { slugParams } from "~/lib/slug";
+import { SeriesShelfItem } from "~/lib/shelfItem";
 
 // The upcoming lane's horizon: the three months after this one (~a 90-day
-// shelf, prototype #17). The Releases browser owns everything beyond it.
+// shelf). The Releases browser owns everything beyond it.
 const LANE_HORIZON_MONTHS = 3;
 /** Top series shown: the publisher's biggest active series. */
 const TOP_SERIES = 12;
@@ -45,7 +47,7 @@ const TOP_SERIES = 12;
 const SHELF_PREVIEW = 12;
 
 /**
- * The Publisher Spotlight page (ticket #25, spec §10/§11): `/publisher/{slug}`
+ * The Publisher Spotlight page (spec §10/§11): `/publisher/{slug}`
  * is a publisher-led profile. Identity and a few numbers first, then this
  * month's books (still to come, then already out), the publisher's top
  * series, and what lands in the months after, each book once however many
@@ -101,35 +103,26 @@ export const Route = createFileRoute("/publisher/$slug")({
     };
   },
   // Title/description formulas, canonical link, and BreadcrumbList +
-  // Organization JSON-LD (spec §11, ticket #39).
+  // Organization JSON-LD (spec §11).
   head: ({ loaderData }) => {
     if (!loaderData) return {};
     const { publisher } = loaderData;
     const path = `/publisher/${publisher.slug}`;
-    return {
-      ...pageHead({
-        title: publisherTitleTag(publisher.name),
-        description: `${publisher.name} on MangaDB: publisher profile, upcoming English manga releases, and the full release calendar.`,
-        path,
-        // An adult-only publisher is marked for safe-search (lib/mature.tsx).
-        mature: publisher.mature,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            { name: publisher.name },
-          ]),
-        ),
-        jsonLdScript(
-          organizationJsonLd({
-            name: publisher.name,
-            path,
-            description: publisher.description,
-          }),
-        ),
+    return pageHead({
+      title: publisherTitleTag(publisher.name),
+      description: `${publisher.name} on MangaDB: publisher profile, upcoming English manga releases, and the full release calendar.`,
+      path,
+      // An adult-only publisher is marked for safe-search (lib/mature.tsx).
+      mature: publisher.mature,
+      breadcrumbs: [{ name: publisher.name }],
+      jsonLd: [
+        organizationJsonLd({
+          name: publisher.name,
+          path,
+          description: publisher.description,
+        }),
       ],
-    };
+    });
   },
   component: ConcealedPublisherPage,
   notFoundComponent: PublisherNotFound,
@@ -156,8 +149,7 @@ const stillToCome = (book: Book, todaySort: number) =>
 
 /** "Tue, Sep 29", or "Sep, date TBA" for a book dated only to its month. */
 function bookDate(book: Book): string {
-  const year = Math.floor(book.sort / 10000);
-  const month = Math.floor(book.sort / 100) % 100;
+  const { year, month } = sortKeyMonth(book.sort);
   const name = MONTH_NAMES[month - 1]?.slice(0, 3) ?? "";
   return book.day === null
     ? `${name}, date TBA`
@@ -168,10 +160,7 @@ function bookDate(book: Book): string {
 function groupByMonth(books: ReadonlyArray<Book>) {
   const groups: Array<{ month: YearMonth; books: Book[] }> = [];
   for (const book of books) {
-    const month = {
-      year: Math.floor(book.sort / 10000),
-      month: Math.floor(book.sort / 100) % 100,
-    };
+    const month = sortKeyMonth(book.sort);
     const group = groups.at(-1);
     if (group && group.month.year === month.year && group.month.month === month.month) {
       group.books.push(book);
@@ -222,10 +211,7 @@ function PublisherPage() {
 
   return (
     <main className="publisher-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <Link to="/publishers">Publishers</Link>
-      </nav>
+      <Breadcrumbs trail={[<Link to="/publishers">Publishers</Link>]} />
 
       <header className="pub-hero">
         <span className="pub-logo" aria-hidden="true">
@@ -257,8 +243,8 @@ function PublisherPage() {
               ))}
             </p>
           ) : null}
-          {/* The clear route into the main Releases browser, pre-filtered
-              (prototype #17): cross-publisher comparison lives there. */}
+          {/* The clear route into the main Releases browser, pre-filtered:
+              cross-publisher comparison lives there. */}
           <p className="pub-cta">
             <Link
               className="btn btn-primary"
@@ -391,7 +377,7 @@ function PublisherPage() {
         ) : null}
       </section>
 
-      {/* The moderator/administrator edit entry point (#31); publishers are
+      {/* The moderator/administrator edit entry point; publishers are
           keyed by slug in the edit form. */}
       <ModEditLink type="publisher" editKey={publisher.slug} />
     </main>
@@ -492,30 +478,11 @@ function BookItem({ book, eager }: { book: Book; eager: boolean }) {
 
 /** A top series: its jacket to the Series page, and how big it is. */
 function SeriesItem({ item }: { item: SeriesBrowseItem }) {
-  const params = slugParams(item.publicId, item.title);
   return (
-    <div className="shelf-item">
-      <div className="cover-wrap">
-        <Link
-          className="cover-link"
-          to="/series/$publicId/$slug"
-          params={params}
-          tabIndex={-1}
-          aria-hidden="true"
-        >
-          <Cover src={item.coverUrl} isbn13={item.coverIsbn} title={item.title} />
-        </Link>
+    <SeriesShelfItem series={item}>
+      <div className="caption-meta">
+        <span>{plural(item.volumeCount, "volume")}</span>
       </div>
-      <div className="caption">
-        <Link className="caption-title" to="/series/$publicId/$slug" params={params}>
-          {item.title}
-        </Link>
-        <div className="caption-meta">
-          <span>
-            {item.volumeCount} {item.volumeCount === 1 ? "volume" : "volumes"}
-          </span>
-        </div>
-      </div>
-    </div>
+    </SeriesShelfItem>
   );
 }

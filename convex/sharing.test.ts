@@ -1,204 +1,92 @@
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
-
-const SUBJECT = "user_2sharer";
+import { seedCatalog } from "./test.factories";
+import { makeT, withUser, type Accessor, type TestT } from "./test.helpers";
+import { describeNoViewer, witchHatShelf } from "./test.tracking";
 
 /**
- * A catalog exercising ticket #30's corners: Series A with two Volumes, an
- * Edition + Release per Volume, a cover Variant, and a box set bundling both
- * Releases (pinning the Variant) — plus a separate Series B with its own
- * Release, so per-Series overrides can differ between the two.
+ * A catalog exercising ticket #30's corners: the Witch Hat Atelier shelf
+ * (Series A: two Volumes, an Edition + Release per Volume, a cover Variant,
+ * and a box set bundling both Releases, pinning the Variant), plus a
+ * separate Series B with its own digital Release, so per-Series overrides
+ * can differ between the two. `as` is the sharer, username claimed.
  */
-async function seed(t: ReturnType<typeof convexTest>) {
-  return await t.run(async (ctx) => {
-    const publisherId = await ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas",
-      slug: "seven-seas",
+async function setup(username = "sharer") {
+  const t = makeT();
+  const ids = await t.run(async (ctx) => {
+    const shelf = await witchHatShelf(ctx);
+    const b = await seedCatalog(ctx, {
+      publisher: shelf.publisherId,
+      series: { publicId: 2, title: "Yokohama Kaidashi Kikou" },
+      volume: { publicId: 31 },
+      edition: { publicId: 32 },
+      release: { format: "digital" },
     });
-    const seriesA = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 1,
-      title: "Witch Hat Atelier",
-      altTitles: [],
-      searchText: "Witch Hat Atelier",
-    });
-    const seriesB = await ctx.db.insert("series", {
-      status: "active",
-      publicId: 2,
-      title: "Yokohama Kaidashi Kikou",
-      altTitles: [],
-      searchText: "Yokohama Kaidashi Kikou",
-    });
-
-    const volumes: Array<Id<"volumes">> = [];
-    const releasesA: Array<Id<"releases">> = [];
-    for (const position of [1, 2]) {
-      const volumeId = await ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 10 + position,
-        seriesId: seriesA,
-        position,
-        label: String(position),
-      });
-      volumes.push(volumeId);
-      const editionId = await ctx.db.insert("editions", {
-        status: "active",
-        publicId: 20 + position,
-        publisherId,
-      });
-      await ctx.db.insert("volumeCoverages", {
-        editionId,
-        volumeId,
-        order: 1,
-        extent: "complete",
-      });
-      releasesA.push(
-        await ctx.db.insert("releases", {
-          status: "active",
-          editionId,
-          format: "physical",
-          binding: "paperback",
-          language: "en",
-          publisherId,
-          seriesIds: [seriesA],
-        }),
-      );
-    }
-    const [v1, v2] = volumes as [Id<"volumes">, Id<"volumes">];
-    const [r1, r2] = releasesA as [Id<"releases">, Id<"releases">];
-
-    const variantId = await ctx.db.insert("releaseVariants", {
-      status: "active",
-      releaseId: r1,
-      name: "Bookstore exclusive",
-    });
-    const bundleId = await ctx.db.insert("releaseBundles", {
-      status: "active",
-      publicId: 41,
-      name: "Witch Hat Atelier Box Set",
-      publisherId,
-      format: "physical",
-    });
-    await ctx.db.insert("bundleMemberships", {
-      bundleId,
-      releaseId: r1,
-      variantId,
-      order: 1,
-    });
-    await ctx.db.insert("bundleMemberships", { bundleId, releaseId: r2, order: 2 });
-
-    // Series B: one Volume, one Release.
-    const vB = await ctx.db.insert("volumes", {
-      status: "active",
-      publicId: 31,
-      seriesId: seriesB,
-      position: 1,
-      label: "1",
-    });
-    const editionB = await ctx.db.insert("editions", {
-      status: "active",
-      publicId: 32,
-      publisherId,
-    });
-    await ctx.db.insert("volumeCoverages", {
-      editionId: editionB,
-      volumeId: vB,
-      order: 1,
-      extent: "complete",
-    });
-    const rB = await ctx.db.insert("releases", {
-      status: "active",
-      editionId: editionB,
-      format: "digital",
-      language: "en",
-      publisherId,
-      seriesIds: [seriesB],
-    });
-
-    return { seriesA, seriesB, v1, v2, vB, r1, r2, rB, variantId, bundleId };
+    return { ...shelf, seriesA: shelf.seriesId, seriesB: b.seriesId, rB: b.releaseId };
   });
+  const as = await withUser(t, { subject: "user_2sharer", username });
+  return { t, as, ...ids };
 }
 
-function signedIn(t: ReturnType<typeof convexTest>, subject = SUBJECT) {
-  return t.withIdentity({ subject });
-}
-
-async function withUser(t: ReturnType<typeof convexTest>, username = "sharer") {
-  const as = signedIn(t);
-  await as.mutation(api.users.claimUsername, { username });
-  return as;
-}
-
-/** Everything the user tracks, exercising every profile surface at once. */
-async function trackEverything(
-  t: ReturnType<typeof convexTest>,
-  seeded: Awaited<ReturnType<typeof seed>>,
-) {
-  const as = await withUser(t);
+/** Everything the sharer tracks, exercising every profile surface at once. */
+async function trackEverything() {
+  const s = await setup();
+  const { as } = s;
   // Ownership: r1 owned with the Variant, r2 merely wanted, rB ordered,
   // and the box set owned (derived member ownership).
   await as.mutation(api.collection.setReleaseEntry, {
-    releaseId: seeded.r1,
+    releaseId: s.r1,
     state: "owned",
-    variantId: seeded.variantId,
+    variantId: s.variantId,
   });
-  await as.mutation(api.collection.setReleaseEntry, {
-    releaseId: seeded.r2,
-    state: "wanted",
-  });
-  await as.mutation(api.collection.setReleaseEntry, {
-    releaseId: seeded.rB,
-    state: "ordered",
-  });
-  await as.mutation(api.collection.setBundleEntry, {
-    bundleId: seeded.bundleId,
-    state: "owned",
-  });
+  await as.mutation(api.collection.setReleaseEntry, { releaseId: s.r2, state: "wanted" });
+  await as.mutation(api.collection.setReleaseEntry, { releaseId: s.rB, state: "ordered" });
+  await as.mutation(api.collection.setBundleEntry, { bundleId: s.bundleId, state: "owned" });
   // Reading: status on A, read count on v1, an active pass on rB at 40%.
-  await as.mutation(api.reading.setSeriesReadingStatus, {
-    seriesId: seeded.seriesA,
-    status: "reading",
-  });
-  await as.mutation(api.reading.setVolumeReadCount, {
-    volumeId: seeded.v1,
-    readCount: 2,
-  });
-  await as.mutation(api.reading.startPass, { releaseId: seeded.rB });
-  await as.mutation(api.reading.setPassPercent, {
-    releaseId: seeded.rB,
-    percent: 40,
-  });
-  // A Follow, which must never surface anywhere (v1). (ReturnType<typeof
-  // convexTest> erases the schema generic, so plain collect + find here.)
-  await t.run(async (ctx) => {
-    const states = await ctx.db.query("userSeriesStates").collect();
-    const state = states.find((row) => row.seriesId === seeded.seriesA);
-    await ctx.db.patch(state!._id, { following: true });
-  });
-  return as;
+  await as.mutation(api.reading.setSeriesReadingStatus, { seriesId: s.seriesA, status: "reading" });
+  await as.mutation(api.reading.setVolumeReadCount, { volumeId: s.v1, readCount: 2 });
+  await as.mutation(api.reading.startPass, { releaseId: s.rB });
+  await as.mutation(api.reading.setPassPercent, { releaseId: s.rB, percent: 40 });
+  // A Follow, which must never surface anywhere (v1).
+  await as.mutation(api.follows.setSeriesFollow, { seriesId: s.seriesA, following: true });
+  return s;
 }
+
+/** Opens one of the sharer's two defaults to the public. */
+async function makePublic(as: Accessor, kind: "ownership" | "reading") {
+  await as.mutation(api.sharing.setDefaultVisibility, { kind, visibility: "public" });
+}
+
+/** The sharer's profile as an anonymous visitor sees it. */
+async function profileOf(t: TestT, username = "sharer") {
+  return await t.query(api.sharing.publicProfile, { username });
+}
+
+describeNoViewer(setup, {
+  queries: [["seriesVisibility", (as) => as.query(api.sharing.seriesVisibility, { seriesPublicId: 1 })]],
+  mutations: [
+    [
+      "setDefaultVisibility",
+      (as) => as.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" }),
+    ],
+    [
+      "setSeriesVisibility",
+      (as, { seriesA }) =>
+        as.mutation(api.sharing.setSeriesVisibility, { seriesId: seriesA, kind: "reading", visibility: "public" }),
+    ],
+  ],
+});
 
 describe("sharing.publicProfile", () => {
   it("is null for an unknown username", async () => {
-    const t = convexTest(schema);
-    expect(
-      await t.query(api.sharing.publicProfile, { username: "nobody_here" }),
-    ).toBeNull();
+    expect(await profileOf(makeT(), "nobody_here")).toBeNull();
   });
 
   it("shares nothing while both defaults are private (the default)", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    await trackEverything(t, seeded);
+    const { t } = await trackEverything();
 
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const profile = await profileOf(t);
     expect(profile).not.toBeNull();
     expect(profile!.username).toBe("sharer");
     expect(profile!.ownership.releases).toEqual([]);
@@ -207,27 +95,16 @@ describe("sharing.publicProfile", () => {
   });
 
   it("resolves the username case-insensitively", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    await withUser(t, "Sharer");
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sHaReR",
-    });
+    const { t } = await setup("Sharer");
+    const profile = await profileOf(t, "sHaReR");
     expect(profile!.username).toBe("Sharer");
   });
 
   it("public Ownership shows Owned only — never Wanted/Ordered — with the selected Variant and derived member ownership", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await trackEverything(t, seeded);
-    await as.mutation(api.sharing.setDefaultVisibility, {
-      kind: "ownership",
-      visibility: "public",
-    });
+    const { t, as } = await trackEverything();
+    await makePublic(as, "ownership");
 
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const profile = await profileOf(t);
     // r1 owned with the Variant; the Wanted r2 and Ordered rB never appear.
     expect(profile!.ownership.releases).toHaveLength(1);
     expect(profile!.ownership.releases[0]!.variantName).toBe(
@@ -244,17 +121,10 @@ describe("sharing.publicProfile", () => {
   });
 
   it("public Reading shows status, volume read counts, and active pass percentage — Ownership stays private", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await trackEverything(t, seeded);
-    await as.mutation(api.sharing.setDefaultVisibility, {
-      kind: "reading",
-      visibility: "public",
-    });
+    const { t, as } = await trackEverything();
+    await makePublic(as, "reading");
 
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const profile = await profileOf(t);
     expect(profile!.ownership.releases).toEqual([]);
     expect(profile!.ownership.bundles).toEqual([]);
     expect(profile!.reading).toHaveLength(2);
@@ -273,105 +143,72 @@ describe("sharing.publicProfile", () => {
   });
 
   it("never exposes Follows at any visibility", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await trackEverything(t, seeded);
-    for (const kind of ["ownership", "reading"] as const) {
-      await as.mutation(api.sharing.setDefaultVisibility, {
-        kind,
-        visibility: "public",
-      });
-    }
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const { t, as } = await trackEverything();
+    await makePublic(as, "ownership");
+    await makePublic(as, "reading");
+    const profile = await profileOf(t);
     // The profile payload carries no follow fields anywhere, even though the
     // user follows Series A.
     expect(JSON.stringify(profile)).not.toMatch(/follow/i);
   });
 
   it("a private per-Series override hides that Series from a public default — including the box set that contains it", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await trackEverything(t, seeded);
-    await as.mutation(api.sharing.setDefaultVisibility, {
-      kind: "ownership",
-      visibility: "public",
-    });
+    const { t, as, seriesA } = await trackEverything();
+    await makePublic(as, "ownership");
     await as.mutation(api.sharing.setSeriesVisibility, {
-      seriesId: seeded.seriesA,
+      seriesId: seriesA,
       kind: "ownership",
       visibility: "private",
     });
 
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const profile = await profileOf(t);
     // r1 (Series A) and the box set (members cover Series A) both disappear.
     expect(profile!.ownership.releases).toEqual([]);
     expect(profile!.ownership.bundles).toEqual([]);
   });
 
   it("a hidden bundle member still carries its private Series — the box set stays off the profile", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await trackEverything(t, seeded);
-    await as.mutation(api.sharing.setDefaultVisibility, {
-      kind: "ownership",
-      visibility: "public",
-    });
+    const { t, as, seriesA, r1, r2 } = await trackEverything();
+    await makePublic(as, "ownership");
     await as.mutation(api.sharing.setSeriesVisibility, {
-      seriesId: seeded.seriesA,
+      seriesId: seriesA,
       kind: "ownership",
       visibility: "private",
     });
     // A Moderator hides every member Release; they leave the display but
     // not the privacy decision.
     await t.run(async (ctx) => {
-      await ctx.db.patch(seeded.r1, { status: "hidden" });
-      await ctx.db.patch(seeded.r2, { status: "hidden" });
+      await ctx.db.patch(r1, { status: "hidden" });
+      await ctx.db.patch(r2, { status: "hidden" });
     });
 
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const profile = await profileOf(t);
     expect(profile!.ownership.bundles).toEqual([]);
   });
 
   it("a box set of hidden members on a public Series shows with no members listed", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await trackEverything(t, seeded);
-    await as.mutation(api.sharing.setDefaultVisibility, {
-      kind: "ownership",
-      visibility: "public",
-    });
+    const { t, as, r1, r2 } = await trackEverything();
+    await makePublic(as, "ownership");
     await t.run(async (ctx) => {
-      await ctx.db.patch(seeded.r1, { status: "hidden" });
-      await ctx.db.patch(seeded.r2, { status: "hidden" });
+      await ctx.db.patch(r1, { status: "hidden" });
+      await ctx.db.patch(r2, { status: "hidden" });
     });
 
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const profile = await profileOf(t);
     expect(profile!.ownership.bundles).toEqual([
       { bundlePublicId: 41, name: "Witch Hat Atelier Box Set", members: [] },
     ]);
   });
 
   it("a public per-Series override opens exactly that Series against a private default", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await trackEverything(t, seeded);
+    const { t, as, seriesA } = await trackEverything();
     await as.mutation(api.sharing.setSeriesVisibility, {
-      seriesId: seeded.seriesA,
+      seriesId: seriesA,
       kind: "reading",
       visibility: "public",
     });
 
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const profile = await profileOf(t);
     // Series A's status + read counts show; Series B's pass stays private.
     expect(profile!.reading).toHaveLength(1);
     expect(profile!.reading[0]!.title).toBe("Witch Hat Atelier");
@@ -381,40 +218,31 @@ describe("sharing.publicProfile", () => {
   });
 
   it("clearing an override with \"default\" falls back to the default again", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await trackEverything(t, seeded);
+    const { t, as, seriesA } = await trackEverything();
     await as.mutation(api.sharing.setSeriesVisibility, {
-      seriesId: seeded.seriesA,
+      seriesId: seriesA,
       kind: "reading",
       visibility: "public",
     });
     await as.mutation(api.sharing.setSeriesVisibility, {
-      seriesId: seeded.seriesA,
+      seriesId: seriesA,
       kind: "reading",
       visibility: "default",
     });
-    const profile = await t.query(api.sharing.publicProfile, {
-      username: "sharer",
-    });
+    const profile = await profileOf(t);
     expect(profile!.reading).toEqual([]);
   });
 });
 
 describe("sharing.setDefaultVisibility", () => {
   it("updates exactly the named default; accounts start private on both", async () => {
-    const t = convexTest(schema);
-    await seed(t);
-    const as = await withUser(t);
+    const { as } = await setup();
     const before = await as.query(api.users.viewer, {});
     expect(before).toMatchObject({
       ownershipVisibility: "private",
       readingVisibility: "private",
     });
-    await as.mutation(api.sharing.setDefaultVisibility, {
-      kind: "ownership",
-      visibility: "public",
-    });
+    await makePublic(as, "ownership");
     const after = await as.query(api.users.viewer, {});
     expect(after).toMatchObject({
       ownershipVisibility: "public",
@@ -424,16 +252,10 @@ describe("sharing.setDefaultVisibility", () => {
 });
 
 describe("sharing.seriesVisibility", () => {
-  it("is null signed out; signed in it reports defaults and overrides", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    expect(
-      await t.query(api.sharing.seriesVisibility, { seriesPublicId: 1 }),
-    ).toBeNull();
-
-    const as = await withUser(t);
+  it("reports defaults and overrides", async () => {
+    const { as, seriesA } = await setup();
     await as.mutation(api.sharing.setSeriesVisibility, {
-      seriesId: seeded.seriesA,
+      seriesId: seriesA,
       kind: "ownership",
       visibility: "public",
     });
@@ -448,18 +270,16 @@ describe("sharing.seriesVisibility", () => {
   });
 
   it("an override row created before any other tracking never disturbs it later", async () => {
-    const t = convexTest(schema);
-    const seeded = await seed(t);
-    const as = await withUser(t);
+    const { as, seriesA } = await setup();
     // Override first: the state row is created carrying only the override…
     await as.mutation(api.sharing.setSeriesVisibility, {
-      seriesId: seeded.seriesA,
+      seriesId: seriesA,
       kind: "reading",
       visibility: "public",
     });
     // …then a status lands on the same row.
     await as.mutation(api.reading.setSeriesReadingStatus, {
-      seriesId: seeded.seriesA,
+      seriesId: seriesA,
       status: "paused",
     });
     const state = await as.query(api.sharing.seriesVisibility, {

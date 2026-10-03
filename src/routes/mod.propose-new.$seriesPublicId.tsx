@@ -1,27 +1,21 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery } from "convex/react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQuery } from "convex/react";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
-import { PROPOSAL_WARNINGS } from "../../convex/proposals";
-import { mutationErrorMessage } from "~/lib/editForm";
-import { useIsDataTeam } from "~/lib/moderation";
+import { ProposalWarnings, useProposalDraft, type DraftContent } from "~/lib/proposalDraft";
+import { ModGate } from "~/lib/moderation";
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { convexClient } from "~/providers";
 
 /**
- * The atomic multi-record proposal (ticket #32, spec §5): one Proposal that
+ * The atomic multi-record proposal (spec §5): one Proposal that
  * creates a new Volume, an Edition covering it, and a Release — wired
  * together with temp-IDs so approval lands all three (plus coverage) in one
  * mutation, or nothing. Data-Team-only; never indexed.
  */
 export const Route = createFileRoute("/mod/propose-new/$seriesPublicId")({
-  head: () => ({
-    meta: [
-      { title: "Propose new records — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Propose new records — MangaDB" }] }),
   component: ProposeNewPage,
 });
 
@@ -47,40 +41,21 @@ function ProposeNewPage() {
       </main>
     );
   }
-  return <Gate publicId={publicId} />;
-}
-
-function Gate({ publicId }: { publicId: number }) {
-  const isDataTeam = useIsDataTeam();
-  const viewer = useQuery(api.users.viewer, {});
-  if (viewer === undefined) {
-    return (
-      <main className="mod-page">
-        <p className="notice">Checking your access…</p>
-      </main>
-    );
-  }
-  if (!isDataTeam) {
-    return (
-      <main className="mod-page">
-        <h1>Data team only</h1>
-        <p className="notice">
-          Proposing new records needs an Editor (or stronger) role.{" "}
-          {viewer === null ? <a href="/sign-in">Sign in</a> : null}
-        </p>
-      </main>
-    );
-  }
-  return <ProposeNewForm publicId={publicId} />;
+  return (
+    <ModGate
+      role="dataTeam"
+      refusal="Proposing new records needs an Editor (or stronger) role."
+    >
+      <ProposeNewForm publicId={publicId} />
+    </ModGate>
+  );
 }
 
 function ProposeNewForm({ publicId }: { publicId: number }) {
-  const navigate = useNavigate();
   const form = useQuery(api.proposals.newRecordsForm, {
     seriesPublicId: publicId,
   });
-  const saveDraft = useMutation(api.proposals.saveDraft);
-  const submitProposal = useMutation(api.proposals.submitProposal);
+  const draft = useProposalDraft();
 
   const [volumeLabel, setVolumeLabel] = useState("");
   const [publisherId, setPublisherId] = useState("");
@@ -94,11 +69,6 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
   const [day, setDay] = useState("");
   const [comment, setComment] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
-  const [draftId, setDraftId] = useState<Id<"proposals"> | null>(null);
-  const [pendingWarnings, setPendingWarnings] = useState<string[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [savedDraft, setSavedDraft] = useState(false);
 
   if (form === undefined) {
     return (
@@ -118,7 +88,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
     );
   }
 
-  const buildArgs = () => {
+  const buildArgs = (): DraftContent => {
     const pubDate =
       year.trim() !== ""
         ? {
@@ -128,7 +98,6 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
           }
         : undefined;
     return {
-      proposalId: draftId ?? undefined,
       ops: [
         {
           kind: "create" as const,
@@ -176,55 +145,9 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
     };
   };
 
-  const save = async (): Promise<Id<"proposals">> => {
-    const { proposalId } = await saveDraft(buildArgs());
-    setDraftId(proposalId);
-    return proposalId;
-  };
-
-  const onSaveDraft = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await save();
-      setSavedDraft(true);
-    } catch (err) {
-      setError(mutationErrorMessage(err, "Saving the draft failed."));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onSubmit = async (acknowledgeWarnings?: string[]) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const proposalId = await save();
-      await submitProposal({ proposalId, acknowledgeWarnings });
-      await navigate({
-        to: "/mod/proposal/$id",
-        params: { id: proposalId as string },
-      });
-    } catch (err) {
-      const data = (err as { data?: unknown })?.data as
-        | { code?: string; warnings?: string[] }
-        | undefined;
-      if (data?.code === "warningsUnacknowledged" && data.warnings) {
-        setPendingWarnings(data.warnings);
-      } else {
-        setError(mutationErrorMessage(err, "Submitting the proposal failed."));
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <main className="mod-page mod-edit-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>Propose new records</span>
-      </nav>
+      <Breadcrumbs trail={["Propose new records"]} />
       <h1>New volume + edition + release: {form.title}</h1>
       <p className="section-hint">
         One atomic proposal creates all three records together (temp-IDs wire
@@ -235,7 +158,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
         className="mod-edit-form"
         onSubmit={(event) => {
           event.preventDefault();
-          void onSubmit();
+          void draft.submit(buildArgs);
         }}
       >
         <label>
@@ -355,45 +278,31 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
           <button
             type="button"
             className="btn"
-            disabled={busy || publisherId === ""}
-            onClick={() => void onSaveDraft()}
+            disabled={draft.busy || publisherId === ""}
+            onClick={() => void draft.saveDraft(buildArgs)}
           >
             Save draft
           </button>
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={busy || publisherId === "" || comment.trim() === ""}
+            disabled={draft.busy || publisherId === "" || comment.trim() === ""}
           >
-            {busy ? "Working…" : "Submit for review"}
+            {draft.busy ? "Working…" : "Submit for review"}
           </button>
         </div>
-        {pendingWarnings ? (
-          <div className="notice">
-            <p>This proposal carries warnings:</p>
-            <ul>
-              {pendingWarnings.map((warning) => (
-                <li key={warning}>
-                  {PROPOSAL_WARNINGS[warning as keyof typeof PROPOSAL_WARNINGS] ??
-                    warning}
-                </li>
-              ))}
-            </ul>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={busy}
-              onClick={() => void onSubmit(pendingWarnings)}
-            >
-              Acknowledge and submit
-            </button>
-          </div>
+        {draft.pendingWarnings ? (
+          <ProposalWarnings
+            warnings={draft.pendingWarnings}
+            busy={draft.busy}
+            onAcknowledge={(warnings) => void draft.submit(buildArgs, warnings)}
+          />
         ) : null}
-        {error ? <p className="form-error">{error}</p> : null}
-        {savedDraft && draftId ? (
+        {draft.error ? <p className="form-error">{draft.error}</p> : null}
+        {draft.savedDraft && draft.draftId ? (
           <p className="notice">
             Draft saved.{" "}
-            <Link to="/mod/proposal/$id" params={{ id: draftId as string }}>
+            <Link to="/mod/proposal/$id" params={{ id: draft.draftId as string }}>
               View it
             </Link>
             .

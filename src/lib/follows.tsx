@@ -1,4 +1,4 @@
-// Series Follows + My Upcoming Releases UI (ticket #29, spec §3), rendered
+// Series Follows + My Upcoming Releases UI (spec §3), rendered
 // as a signed-in overlay like the collection and reading slices: signed-out
 // viewers get null from the follow queries, so the public pages render
 // identically without the controls. Follows are always private in v1 —
@@ -10,15 +10,18 @@ import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
 import { track } from "~/lib/analytics";
 import { Cover, CoverBadge } from "~/lib/cover";
-import { formatPartialDate } from "~/lib/format";
-import { todaySortKey } from "~/lib/month";
+import { formatPartialDate, plural } from "~/lib/format";
+import { sortKeyMonth, todaySortKey } from "~/lib/month";
 import { convexClient } from "~/providers";
+import { useReadyViewer } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
 
-export type FollowSuggestion = { seriesId: Id<"series">; title: string };
+/** A Series a collection write suggests following (collection.setReleaseEntry and kin). */
+export type FollowSuggestion = FunctionReturnType<
+  typeof api.collection.setReleaseEntry
+>["suggestFollow"][number];
 
 // ---------- Series page follow toggle ----------
 
@@ -163,8 +166,7 @@ const PREFERENCE_LABELS = {
 
 /** A pubDate.sort key back to its partial-precision display form. */
 function sortDate(sort: number, day: number | null): string | null {
-  const year = Math.floor(sort / 10000);
-  const month = Math.floor(sort / 100) % 100;
+  const { year, month } = sortKeyMonth(sort);
   return formatPartialDate({
     year,
     month: month || undefined,
@@ -188,7 +190,7 @@ function LibraryUpcomingInner() {
   const [todaySort] = useState(() => todaySortKey());
   const upcoming = useQuery(api.follows.myUpcoming, { todaySort });
   const following = useQuery(api.follows.myFollowing, {});
-  const viewer = useQuery(api.users.viewer, {});
+  const viewer = useReadyViewer();
   const setPreference = useMutation(api.users.setFormatPreference);
   const setFollow = useMutation(api.follows.setSeriesFollow);
 
@@ -205,7 +207,7 @@ function LibraryUpcomingInner() {
           <p className="lib-block-note">
             {following.series.length === 0
               ? "Follow a series from its page to see its announced releases here. Follows are private."
-              : `${following.series.length === 1 ? "1 series" : `${following.series.length} series`} · new releases appear below. Follows are private.`}
+              : `${plural(following.series.length, "series", "series")} · new releases appear below. Follows are private.`}
           </p>
         </div>
         {following.series.length > 0 ? (
@@ -274,7 +276,7 @@ function LibraryUpcomingInner() {
       <section className="lib-block">
         <div className="lib-block-head">
           <h3 className="lib-group-title">Announced releases</h3>
-          {viewer && !viewer.needsUsername ? (
+          {viewer ? (
             <label className="upcoming-preference">
               From followed series, show{" "}
               <select

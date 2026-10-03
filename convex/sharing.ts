@@ -1,29 +1,17 @@
-// Tracking visibility + public profiles (ticket #30, spec §3): personal
-// tracking is private by default, with separate visibility defaults for
-// Ownership and Reading (on the User) plus per-Series overrides (on
-// userSeriesStates). `/u/{username}` is a current-state public profile.
-//
-// The invariants, straight from the glossary (CONTEXT.md):
-// - Tracking Visibility is a private-by-default sharing policy with separate
-//   defaults for Ownership and Reading and per-Series overrides — never
-//   configured for individual Volumes or Releases.
-// - Public Ownership shows Owned Releases, selected Variants, Bundles, and
-//   derived member ownership — never Wanted/Ordered entries.
-// - Public Reading shows Series Reading Status, active Release percentage,
-//   and Volume read counts.
-// - Series Follows always stay private in v1: nothing here ever reads or
-//   returns the following/followPromptDismissed fields.
-// - The profile is current-state only — no activity feed, no timestamps.
-// - Rated Series and omnibus Editions ride on the Reading visibility of
-//   their Series (a Rating is part of how the user reads a Series); Reviews
-//   are public content and listed whenever FEATURES.publicReviews is on
-//   (lib/features.ts). Both leave Mature Series out unless the viewer opted in.
+// Tracking Visibility and the public profile at /u/{username} (CONTEXT.md):
+// the two defaults (on the User), per-Series overrides (on
+// userSeriesStates), and the current-state profile they govern: Owned
+// entries only, never Wanted/Ordered or Follows, and no activity feed.
+// Rated Series and omnibus Editions ride on their Series' Reading
+// visibility; Reviews list while FEATURES.publicReviews is on
+// (lib/features.ts). Both leave Mature Series out unless the viewer opted in.
 
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { resolveActiveSeries } from "./catalog";
-import { followMerges } from "./catalogPages";
+import { activeVolumes, resolveActiveSeries } from "./catalog";
+import { followMerges, getActive, requireActive } from "./lib/merges";
+import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { releaseLink, variantName } from "./collection";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { showMatureArg, visibleTo } from "./lib/mature";
@@ -31,7 +19,6 @@ import { FEATURES } from "./lib/features";
 import { omnibusEdition, ratingRow, targetOfRow, type TargetId } from "./lib/ratings";
 import { volumeTitle } from "./lib/titles";
 import { normalizeUsername } from "./lib/usernames";
-import { requireActiveSeries } from "./reading";
 
 // Mirrors the visibility union in schema.ts.
 const visibilityValidator = v.union(v.literal("public"), v.literal("private"));
@@ -51,7 +38,7 @@ type Kind = "ownership" | "reading";
 async function profileTarget(ctx: QueryCtx, stored: TargetId) {
   switch (stored.kind) {
     case "series": {
-      const series = await followMerges(ctx, "series", await ctx.db.get(stored.id));
+      const series = await getActive(ctx, "series", stored.id);
       if (!series) return null;
       return {
         target: { kind: "series" as const, id: series._id },
@@ -61,7 +48,7 @@ async function profileTarget(ctx: QueryCtx, stored: TargetId) {
       };
     }
     case "volume": {
-      const volume = await followMerges(ctx, "volumes", await ctx.db.get(stored.id));
+      const volume = await getActive(ctx, "volumes", stored.id);
       const series = volume ? await ctx.db.get(volume.seriesId) : null;
       if (!volume || !series || series.status !== "active") return null;
       return {
@@ -127,7 +114,7 @@ async function resolvedSeriesIds(
 ): Promise<Array<Id<"series">>> {
   const out = new Set<Id<"series">>();
   for (const id of raw) {
-    const series = await followMerges(ctx, "series", await ctx.db.get(id));
+    const series = await getActive(ctx, "series", id);
     // A hidden Series keeps its override reachable under the stored id, so
     // the user's per-Series choice still governs entries that point at it.
     out.add(series ? series._id : id);
@@ -195,31 +182,14 @@ export const setSeriesVisibility = mutation({
   },
   handler: async (ctx, { seriesId, kind, visibility }) => {
     const user = await requireUser(ctx);
-    const series = await requireActiveSeries(ctx, seriesId);
+    const series = await requireActive(ctx, "series", seriesId, "Series");
     const override = visibility === "default" ? undefined : visibility;
     const patch =
       kind === "ownership"
         ? { ownershipVisibility: override }
         : { readingVisibility: override };
-
-    const state = await ctx.db
-      .query("userSeriesStates")
-      .withIndex("by_user_series", (q) =>
-        q.eq("userId", user._id).eq("seriesId", series._id),
-      )
-      .unique();
-    if (state) {
-      // Patching with undefined clears the override back to the default.
-      await ctx.db.patch(state._id, patch);
-    } else if (override) {
-      await ctx.db.insert("userSeriesStates", {
-        userId: user._id,
-        seriesId: series._id,
-        following: false,
-        followPromptDismissed: false,
-        ...patch,
-      });
-    }
+    // Patching with undefined clears the override back to the default.
+    await writeSeriesState(ctx, user._id, series._id, patch, override !== undefined);
     return { kind, visibility };
   },
 });
@@ -228,9 +198,8 @@ export const setSeriesVisibility = mutation({
 
 /**
  * The viewer's visibility picture for one Series page: both defaults and both
- * overrides, plus the username for the "view your profile" link. Null when
- * signed out, username pending, or the Series is unknown — the public page
- * renders identically without the sharing controls.
+ * overrides, plus the username for the "view your profile" link. Null
+ * without a viewer (viewerOrNull) or for an unknown Series.
  */
 export const seriesVisibility = query({
   args: { seriesPublicId: v.number() },
@@ -240,12 +209,7 @@ export const seriesVisibility = query({
     const series = await resolveActiveSeries(ctx, seriesPublicId);
     if (!series) return null;
 
-    const state = await ctx.db
-      .query("userSeriesStates")
-      .withIndex("by_user_series", (q) =>
-        q.eq("userId", user._id).eq("seriesId", series._id),
-      )
-      .unique();
+    const state = await seriesStateRow(ctx, user._id, series._id);
     return {
       seriesId: series._id,
       username: user.username,
@@ -308,11 +272,7 @@ export const publicProfile = query({
       // Wanted/Ordered never appear on a profile, whatever the visibility.
       if (row.state !== "owned") continue;
       if (row.releaseId) {
-        const release = await followMerges(
-          ctx,
-          "releases",
-          await ctx.db.get(row.releaseId),
-        );
+        const release = await getActive(ctx, "releases", row.releaseId);
         if (!release || !(await ownershipPublic(release.seriesIds))) continue;
         const link = await releaseLink(ctx, release);
         if (!link) continue;
@@ -321,11 +281,7 @@ export const publicProfile = query({
           variantName: await variantName(ctx, row.variantId),
         });
       } else if (row.bundleId) {
-        const bundle = await followMerges(
-          ctx,
-          "releaseBundles",
-          await ctx.db.get(row.bundleId),
-        );
+        const bundle = await getActive(ctx, "releaseBundles", row.bundleId);
         if (!bundle) continue;
         const memberships = await ctx.db
           .query("bundleMemberships")
@@ -386,25 +342,16 @@ export const publicProfile = query({
         position: number;
         readCount: number;
       }>;
-      passes: Array<{
-        editionPublicId: number;
-        editionTitle: string;
-        anchor: string;
-        format: "physical" | "digital";
-        binding: string | null;
-        percent: number | null;
-      }>;
+      passes: Array<
+        NonNullable<Awaited<ReturnType<typeof releaseLink>>> & { percent: number | null }
+      >;
     };
     const readingRows = new Map<Id<"series">, ReadingRow>();
 
     const readingRowFor = async (
       rawSeriesId: Id<"series">,
     ): Promise<ReadingRow | null> => {
-      const series = await followMerges(
-        ctx,
-        "series",
-        await ctx.db.get(rawSeriesId),
-      );
+      const series = await getActive(ctx, "series", rawSeriesId);
       if (!series) return null;
       if (
         effectiveVisibility(user, overrides, "reading", series._id) !== "public"
@@ -413,16 +360,11 @@ export const publicProfile = query({
       }
       const existing = readingRows.get(series._id);
       if (existing) return existing;
-      const volumes = await ctx.db
-        .query("volumes")
-        .withIndex("by_series", (q) => q.eq("seriesId", series._id))
-        .collect();
       const row: ReadingRow = {
         seriesPublicId: series.publicId,
         title: series.title,
         readingStatus: null,
-        totalVolumes: volumes.filter((volume) => volume.status === "active")
-          .length,
+        totalVolumes: (await activeVolumes(ctx, series._id)).length,
         readVolumes: [],
         passes: [],
       };
@@ -445,11 +387,7 @@ export const publicProfile = query({
       .collect();
     for (const progress of volumeRows) {
       if (progress.readCount < 1) continue;
-      const volume = await followMerges(
-        ctx,
-        "volumes",
-        await ctx.db.get(progress.volumeId),
-      );
+      const volume = await getActive(ctx, "volumes", progress.volumeId);
       if (!volume) continue;
       const row = await readingRowFor(volume.seriesId);
       if (!row) continue;
@@ -468,11 +406,7 @@ export const publicProfile = query({
       .withIndex("by_user_release", (q) => q.eq("userId", user._id))
       .collect();
     for (const pass of passRows) {
-      const release = await followMerges(
-        ctx,
-        "releases",
-        await ctx.db.get(pass.releaseId),
-      );
+      const release = await getActive(ctx, "releases", pass.releaseId);
       if (!release) continue;
       if (
         !(await seriesAllPublic(ctx, user, overrides, "reading", release.seriesIds))

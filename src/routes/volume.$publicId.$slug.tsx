@@ -8,23 +8,19 @@ import { AboutSeriesNote, CoverageChips, ReleaseRow } from "~/lib/catalogRows";
 import { CommentsSection } from "~/lib/comments";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { FavoriteButton } from "~/lib/favorites";
+import { plural } from "~/lib/format";
 import { ModEditLink, RecordHistory } from "~/lib/moderation";
 import { VolumeOwnership } from "~/lib/collection";
 import { ConcealArt } from "~/lib/mature";
 import { RatingAggregate } from "~/lib/ratings";
 import { VolumeReadCount } from "~/lib/reading";
 import { ReviewsSection, TakePanel } from "~/lib/reviews";
-import {
-  breadcrumbListJsonLd,
-  jsonLdScript,
-  pageHead,
-  truncateDescription,
-  volumeTitleTag,
-} from "~/lib/seo";
+import { Breadcrumbs, NotFound } from "~/lib/pageScaffold";
+import { pageHead, truncateDescription, volumeTitleTag } from "~/lib/seo";
 import { parsePublicId, seriesPath, slugParams, volumePath } from "~/lib/slug";
 
 /**
- * The Volume page (ticket #23): `/volume/{id}/{slug}`, server-rendered from
+ * The Volume page: `/volume/{id}/{slug}`, server-rendered from
  * Convex. It reveals every Release covering this Volume, grouped under its
  * Edition, with complete and partial coverage listed distinctly — including
  * the omnibus case, whose full ordered Coverage shows what else it spans.
@@ -65,7 +61,7 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
     return { ...page, rating, reviews, comments };
   },
   // Title/description formulas, cover-led social card, canonical link, and
-  // BreadcrumbList JSON-LD (spec §11, ticket #39). The description is the
+  // BreadcrumbList JSON-LD (spec §11). The description is the
   // Volume's own (its Synopsis or a single-volume Edition's blurb), falling
   // back to fact assembly; the Series synopsis fallback is not about this
   // Volume, so it never becomes the meta description.
@@ -73,54 +69,31 @@ export const Route = createFileRoute("/volume/$publicId/$slug")({
     if (!loaderData) return {};
     const { volume, series, editions, description, coverUrl, mature } = loaderData;
     const path = volumePath(volume.publicId, volume.title);
-    const editionCount =
-      editions.length === 1 ? "1 English edition" : `${editions.length} English editions`;
-    return {
-      ...pageHead({
-        title: volumeTitleTag(series.title, volume.label),
-        description:
-          description && description.source !== "series"
-            ? truncateDescription(description.text)
-            : `${volume.title} in English: ${editionCount} with every release date, format, and ISBN.`,
-        path,
-        image: coverUrl,
-        ogType: "book",
-        mature,
-      }),
-      scripts: [
-        jsonLdScript(
-          breadcrumbListJsonLd([
-            { name: "MangaDB", path: "/" },
-            {
-              name: series.title,
-              path: seriesPath(series.publicId, series.title),
-            },
-            { name: volume.title },
-          ]),
-        ),
+    const editionCount = plural(editions.length, "English edition");
+    return pageHead({
+      title: volumeTitleTag(series.title, volume.label),
+      description:
+        description && description.source !== "series"
+          ? truncateDescription(description.text)
+          : `${volume.title} in English: ${editionCount} with every release date, format, and ISBN.`,
+      path,
+      image: coverUrl,
+      ogType: "book",
+      mature,
+      breadcrumbs: [
+        {
+          name: series.title,
+          path: seriesPath(series.publicId, series.title),
+        },
+        { name: volume.title },
       ],
-    };
+    });
   },
   component: ConcealedVolumePage,
-  notFoundComponent: VolumeNotFound,
+  notFoundComponent: () => <NotFound noun="Volume" kind="volume" />,
 });
 
-function VolumeNotFound() {
-  return (
-    <main className="volume-page">
-      <h1 className="volume-title">Volume not found</h1>
-      <p className="notice">
-        No volume lives at this address. <Link to="/">Browse the catalog</Link>.
-      </p>
-    </main>
-  );
-}
-
 type CoveringEditionData = VolumePageData["editions"][number];
-
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
 
 /** A Mature Series' page hides its art from viewers who have not opted in (lib/mature.tsx). */
 function ConcealedVolumePage() {
@@ -151,19 +124,14 @@ function VolumePage() {
 
   return (
     <main className="volume-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <Link
-          to="/series/$publicId/$slug"
-          params={slugParams(series.publicId, series.title)}
-        >
-          {series.title}
-        </Link>{" "}
-        <span aria-hidden="true">/</span>{" "}
-        <span>
-          {volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume"}
-        </span>
-      </nav>
+      <Breadcrumbs
+        trail={[
+          <Link to="/series/$publicId/$slug" params={slugParams(series.publicId, series.title)}>
+            {series.title}
+          </Link>,
+          volume.label !== null ? `Volume ${volume.label}` : "Unnumbered volume",
+        ]}
+      />
 
       <div className="volume-hero">
         <div className="volume-hero-aside">
@@ -197,11 +165,11 @@ function VolumePage() {
             out (or with nothing owned or read), leaving the card's blocks
             empty — CSS hides it then. */}
         <div className="track-card">
-          {/* Volume ownership (#27): displayed purely through the owned
+          {/* Volume ownership: displayed purely through the owned
               Releases covering it — direct or via an Owned Bundle; no
               stored Volume state. */}
           <VolumeOwnership volumePublicId={volume.publicId} />
-          {/* Durable, edition-independent read count (#28). */}
+          {/* Durable, edition-independent read count. */}
           <VolumeReadCount
             seriesPublicId={series.publicId}
             volumePublicId={volume.publicId}
@@ -318,7 +286,7 @@ function VolumePage() {
         <CommentsSection target={ratingTarget} initial={page.comments} noun="volume" />
       ) : null}
 
-      {/* Public revision history + the moderator edit entry point (#31). */}
+      {/* Public revision history + the moderator edit entry point. */}
       <RecordHistory type="volume" publicId={volume.publicId} />
       <ModEditLink type="volume" editKey={String(volume.publicId)} />
     </main>

@@ -1,5 +1,5 @@
-// Display-title composition for Volume, Edition, and Bundle pages (ticket
-// #23). Editions have no stored name (spec §8): page titles derive from
+// Display-title composition for Volume, Edition, and Bundle pages.
+// Editions have no stored name (spec §8): page titles derive from
 // series + line + position; Volumes derive from series + Label. These
 // composed titles are also what the cosmetic URL slugs are computed from
 // (spec §11), so both Convex queries and the routes import this module —

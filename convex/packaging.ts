@@ -11,11 +11,14 @@
 // never attached, kept out of public discovery by the stats rebuild
 // (seriesBrowse.ts) until a book lands or the Data Team decides.
 
-import { ConvexError, v } from "convex/values";
-import type { Doc, Id } from "./_generated/dataModel";
+import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { activeVolumes } from "./catalog";
 import { editionCoverage } from "./catalogPages";
-import { activeVolumes, createAudit, replaceCoverage, sameLabel, updateRecord } from "./lib/repair/audit";
+import { releasesOf } from "./lib/editionRows";
+import { fail } from "./lib/errors";
+import { createAudit, replaceCoverage, sameLabel, updateRecord } from "./lib/repair/audit";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 
 const QUEUE_PAGE = 100;
@@ -33,16 +36,12 @@ export const unmappedQueue = query({
       .take(QUEUE_PAGE + 1);
     const rows = [];
     for (const edition of flagged.slice(0, QUEUE_PAGE)) {
-      if (edition.status !== "active") continue;
       const line = edition.editionLineId ? await ctx.db.get(edition.editionLineId) : null;
       const series = line ? await ctx.db.get(line.seriesId) : null;
       if (!line || !series || series.status !== "active") continue;
       const publisher = await ctx.db.get(edition.publisherId);
       const { title } = await editionCoverage(ctx, edition);
-      const releases = await ctx.db
-        .query("releases")
-        .withIndex("by_edition", (q) => q.eq("editionId", edition._id))
-        .collect();
+      const releases = await releasesOf(ctx, edition._id);
       const volumes = (
         await ctx.db
           .query("volumes")
@@ -89,36 +88,29 @@ export const mapEditionCoverage = mutation({
   handler: async (ctx, { editionId, from, to, comment }) => {
     const user = await requireModerator(ctx);
     const rationale = comment.trim();
-    if (rationale === "") throw new ConvexError({ code: "commentRequired", message: "Say why." });
+    if (rationale === "") fail("commentRequired", "Say why.");
     const edition = await ctx.db.get(editionId);
-    if (!edition || edition.status !== "active") {
-      throw new ConvexError({ code: "notFound", message: "No such active Edition." });
-    }
-    if (edition.locked) throw new ConvexError({ code: "locked", message: "This Edition is locked." });
-    if (!edition.editionLineId) {
-      throw new ConvexError({ code: "noLine", message: "Only Edition Line members can be mapped here." });
-    }
+    if (!edition || edition.status !== "active") fail("notFound", "No such active Edition.");
+    if (edition.locked) fail("locked", "This Edition is locked.");
+    if (!edition.editionLineId) fail("noLine", "Only Edition Line members can be mapped here.");
     const line = await ctx.db.get(edition.editionLineId);
-    if (!line) throw new ConvexError({ code: "notFound", message: "The Edition's line vanished." });
+    if (!line) fail("notFound", "The Edition's line vanished.");
     const volumes = (await activeVolumes(ctx, line.seriesId)).sort((a, b) => a.position - b.position);
     const pick = (label: string): Doc<"volumes"> => {
       const matches = volumes.filter((volume) => sameLabel(volume.label, label));
       if (matches.length !== 1) {
-        throw new ConvexError({
-          code: "unknownVolume",
-          message:
-            matches.length === 0
-              ? `The Series has no Volume "${label}".`
-              : `The Series has ${matches.length} Volumes labelled "${label}".`,
-        });
+        fail(
+          "unknownVolume",
+          matches.length === 0
+            ? `The Series has no Volume "${label}".`
+            : `The Series has ${matches.length} Volumes labelled "${label}".`,
+        );
       }
       return matches[0]!;
     };
     const first = pick(from);
     const last = pick(to);
-    if (last.position < first.position) {
-      throw new ConvexError({ code: "badRange", message: `"${to}" comes before "${from}".` });
-    }
+    if (last.position < first.position) fail("badRange", `"${to}" comes before "${from}".`);
     const covered = volumes.filter(
       (volume) => volume.position >= first.position && volume.position <= last.position,
     );
@@ -132,7 +124,7 @@ export const mapEditionCoverage = mutation({
     const ref = { type: "edition" as const, id: editionId };
     await updateRecord(ctx, audit, ref, edition, { coverageUnmapped: undefined });
     await audit.finish();
-    return { covered: covered.length, volumeIds: covered.map((volume) => volume._id) as Id<"volumes">[] };
+    return { covered: covered.length, volumeIds: covered.map((volume) => volume._id) };
   },
 });
 
@@ -153,7 +145,6 @@ export const booklessQueue = query({
       .take(QUEUE_PAGE + 1);
     const rows = [];
     for (const series of flagged.slice(0, QUEUE_PAGE)) {
-      if (series.status !== "active") continue;
       const volumes = await ctx.db
         .query("volumes")
         .withIndex("by_series", (q) => q.eq("seriesId", series._id))

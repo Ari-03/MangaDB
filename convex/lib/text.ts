@@ -198,7 +198,6 @@ export function mapC1Controls(text: string): string {
  * Page bytes → text: strict UTF-8, or, where a byte sequence is not valid
  * UTF-8, that sequence read as Windows-1252 (legacy bytes pasted into a
  * UTF-8 page), instead of the U+FFFD `Response.text()` would leave.
- * Well-formed UTF-8 decodes exactly as before.
  */
 export function decodeUtf8OrWindows1252(bytes: Uint8Array): string {
   try {
@@ -223,7 +222,7 @@ export function decodeUtf8OrWindows1252(bytes: Uint8Array): string {
           // Not a whole UTF-8 sequence: fall through to one legacy byte.
         }
       }
-      out += lead >= 0x80 && lead <= 0x9f ? CP1252_HIGH[lead - 0x80]! : String.fromCharCode(lead);
+      out += lead <= 0x9f ? CP1252_HIGH[lead - 0x80]! : String.fromCharCode(lead);
       at += 1;
     }
     return out;

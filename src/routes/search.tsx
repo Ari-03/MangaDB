@@ -12,7 +12,7 @@ import { slugParams } from "~/lib/slug";
 import { useUrlDraft } from "~/lib/urlDraft";
 
 /**
- * v1 search (ticket #38, spec §8/§11): `/search?q=…` over Series via the
+ * v1 search (spec §8/§11): `/search?q=…` over Series via the
  * title + alt-titles search index, results linking canonical Series pages
  * with their jackets; Publisher lookup via the small publisher list, linking
  * Publisher pages. When nothing contains the whole query, a "Did you mean"
@@ -21,7 +21,7 @@ import { useUrlDraft } from "~/lib/urlDraft";
  *
  * An input recognized as a valid ISBN never runs a text search: the loader
  * redirects through the `/isbn/{isbn}` route, which owns resolution to the
- * owning Edition (or Bundle) page and 301s there (ticket #23). The search →
+ * owning Edition (or Bundle) page and 301s there. The search →
  * /isbn hop is a 302 because it depends on the typed query, not on a record.
  *
  * No Volume or Bundle search in v1. Search pages are not in the indexable
@@ -292,7 +292,7 @@ function SearchResultsView({
           </div>
           <div className="pub-hits">
             {results.publishers.map((p) => (
-              // The Publisher Spotlight page (ticket #25, spec §11).
+              // The Publisher Spotlight page (spec §11).
               <Link
                 className="pub-hit"
                 key={p.slug}

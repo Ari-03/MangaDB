@@ -4,99 +4,88 @@
 // Data-Team queue with coordinating claims, atomic multi-record creation
 // via temp-IDs, and the per-user rate limits + bulk caps.
 
-import { convexTest } from "convex-test";
-import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
 import { api } from "./_generated/api";
-import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import schema from "./schema";
 import { queueCreationProposal } from "./lib/pipeline";
 import { MAX_OPS_PER_PROPOSAL } from "./proposals";
+import { insertObservation, insertPublisher, insertSeries, insertVolume } from "./test.factories";
+import {
+  ADMIN,
+  EDITOR,
+  MOD,
+  PLAIN,
+  alice,
+  bob,
+  carol,
+  dave,
+  makeT,
+  seedTeam,
+  type TestT,
+  type TestUser,
+} from "./test.helpers";
 
-const ADMIN = "user_admin";
-const MOD = "user_mod";
-const MOD2 = "user_mod2";
-const EDITOR = "user_editor";
-const PLAIN = "user_plain";
+/** A second Moderator, for the claims test. */
+const beth = { subject: "user_mod2", username: "beth", role: "moderator" } as const satisfies TestUser;
 
-function makeT() {
-  const t = convexTest(schema);
-  // The rate-limiter component (convex.config.ts) backs the proposal rate
-  // limits; tests register its schema + implementation.
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
+const setup = (t: TestT) => seedTeam(t, [alice, bob, beth, carol, dave]);
+
+async function addSeries(t: TestT, overrides: Partial<{ title: string; publicId: number }> = {}) {
+  return await t.run((ctx) => insertSeries(ctx, { publicId: 1, title: "Alpha", ...overrides }));
 }
 
-async function setup(t: ReturnType<typeof convexTest>) {
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.users.claimUsername, { username: "alice" });
-  await t
-    .withIdentity({ subject: MOD })
-    .mutation(api.users.claimUsername, { username: "bob" });
-  await t
-    .withIdentity({ subject: MOD2 })
-    .mutation(api.users.claimUsername, { username: "beth" });
-  await t
-    .withIdentity({ subject: EDITOR })
-    .mutation(api.users.claimUsername, { username: "carol" });
-  await t
-    .withIdentity({ subject: PLAIN })
-    .mutation(api.users.claimUsername, { username: "dave" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  const asAdmin = t.withIdentity({ subject: ADMIN });
-  await asAdmin.mutation(api.roles.appoint, { username: "bob", role: "moderator" });
-  await asAdmin.mutation(api.roles.appoint, { username: "beth", role: "moderator" });
-  await asAdmin.mutation(api.roles.appoint, { username: "carol", role: "editor" });
+async function addPublisher(t: TestT) {
+  return await t.run((ctx) => insertPublisher(ctx, { name: "Seven Seas" }));
 }
 
-async function addSeries(
-  t: ReturnType<typeof convexTest>,
-  overrides: Partial<{ title: string; publicId: number }> = {},
-) {
-  return await t.run((ctx) =>
-    ctx.db.insert("series", {
-      status: "active",
-      publicId: overrides.publicId ?? 1,
-      title: overrides.title ?? "Alpha",
-      altTitles: [],
-      searchText: overrides.title ?? "Alpha",
-    }),
-  );
-}
+/** The op renaming a Series. */
+const titleOp = (seriesId: Id<"series">, title: string) => ({
+  kind: "update" as const,
+  ref: { type: "series" as const, id: seriesId },
+  changes: [{ field: "title", value: title }],
+});
 
-async function addPublisher(t: ReturnType<typeof convexTest>) {
-  return await t.run((ctx) =>
-    ctx.db.insert("publishers", {
-      status: "active",
-      name: "Seven Seas",
-      slug: "seven-seas",
-    }),
-  );
-}
+/**
+ * An importer's creation proposal through the real queue path, from a fresh
+ * Seven Seas observation: coverage of `labels` (existing Volumes by ID, the
+ * rest as temp-ID creates) and a physical Release.
+ */
+const queueImport = (
+  t: TestT,
+  seriesId: Id<"series">,
+  sourceRecordId: string,
+  labels: string[],
+  release: { isbn13?: string } = {},
+) =>
+  t.run(async (ctx) => {
+    const observationId = await insertObservation(ctx, {
+      sourceKey: "sevenseas",
+      sourceRecordId,
+      snapshot: { url: `https://sevenseasentertainment.com/books/${sourceRecordId}` },
+      lastSeenAt: 1,
+    });
+    return await queueCreationProposal(ctx, {
+      sourceKey: "sevenseas",
+      observation: (await ctx.db.get(observationId))!,
+      seriesId,
+      seriesTitle: "Alpha",
+      labels,
+      release: { format: "physical", publisherSlug: "seven-seas", ...release },
+      comment: "Queued by the creation gate.",
+      now: 1,
+    });
+  });
 
 const URL_EVIDENCE = [
   { kind: "url" as const, url: "https://publisher.example/announcement" },
 ];
 
 /** Draft + submit one title-update proposal as the Editor. */
-async function submitTitleProposal(
-  t: ReturnType<typeof convexTest>,
-  seriesId: Id<"series">,
-  title = "Beta",
-) {
+async function submitTitleProposal(t: TestT, seriesId: Id<"series">, title = "Beta") {
   const asEditor = t.withIdentity({ subject: EDITOR });
   const { proposalId } = await asEditor.mutation(api.proposals.saveDraft, {
-    ops: [
-      {
-        kind: "update",
-        ref: { type: "series", id: seriesId },
-        changes: [{ field: "title", value: title }],
-      },
-    ],
+    ops: [titleOp(seriesId, title)],
     evidence: URL_EVIDENCE,
     comment: "Official romanization per the publisher.",
   });
@@ -109,20 +98,10 @@ describe("proposals — authorization", () => {
     const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
-    const draftArgs = {
-      ops: [
-        {
-          kind: "update" as const,
-          ref: { type: "series" as const, id: seriesId },
-          changes: [{ field: "title", value: "Beta" }],
-        },
-      ],
-      evidence: [],
-      comment: "Nope.",
-    };
-    await expect(t.mutation(api.proposals.saveDraft, draftArgs)).rejects.toThrow(
-      ConvexError,
-    );
+    const draftArgs = { ops: [titleOp(seriesId, "Beta")], evidence: [], comment: "Nope." };
+    await expect(t.mutation(api.proposals.saveDraft, draftArgs)).rejects.toMatchObject({
+      data: { code: "unauthenticated" },
+    });
     await expect(
       t.withIdentity({ subject: PLAIN }).mutation(api.proposals.saveDraft, draftArgs),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
@@ -202,13 +181,7 @@ describe("proposals — lifecycle", () => {
     await setup(t);
     const seriesId = await addSeries(t);
     const asEditor = t.withIdentity({ subject: EDITOR });
-    const ops = [
-      {
-        kind: "update" as const,
-        ref: { type: "series" as const, id: seriesId },
-        changes: [{ field: "title", value: "Beta" }],
-      },
-    ];
+    const ops = [titleOp(seriesId, "Beta")];
 
     const { proposalId } = await asEditor.mutation(api.proposals.saveDraft, {
       ops,
@@ -247,15 +220,7 @@ describe("proposals — lifecycle", () => {
     const t = makeT();
     await setup(t);
     const seriesId = await addSeries(t);
-    const volumeId = await t.run((ctx) =>
-      ctx.db.insert("volumes", {
-        status: "active",
-        publicId: 1,
-        seriesId,
-        position: 1,
-        label: "1",
-      }),
-    );
+    const volumeId = await t.run((ctx) => insertVolume(ctx, { seriesId }));
     const asEditor = t.withIdentity({ subject: EDITOR });
     const { proposalId } = await asEditor.mutation(api.proposals.saveDraft, {
       ops: [
@@ -279,7 +244,6 @@ describe("proposals — lifecycle", () => {
     await setup(t);
     const seriesId = await addSeries(t);
     const asEditor = t.withIdentity({ subject: EDITOR });
-    const change = { field: "title", value: "Beta" };
 
     await expect(
       asEditor.mutation(api.proposals.saveDraft, {
@@ -297,37 +261,22 @@ describe("proposals — lifecycle", () => {
 
     await expect(
       asEditor.mutation(api.proposals.saveDraft, {
-        ops: [
-          { kind: "update", ref: { type: "series", id: seriesId }, changes: [change] },
-          { kind: "update", ref: { type: "series", id: seriesId }, changes: [change] },
-        ],
+        ops: [titleOp(seriesId, "Beta"), titleOp(seriesId, "Beta")],
         evidence: [],
         comment: "Twice.",
       }),
     ).rejects.toMatchObject({ data: { code: "duplicateRecord" } });
 
-    const hiddenId = await t.run((ctx) =>
-      ctx.db.insert("series", {
-        status: "hidden",
-        publicId: 2,
-        title: "Hidden",
-        altTitles: [],
-        searchText: "Hidden",
-      }),
-    );
+    const hiddenId = await t.run((ctx) => insertSeries(ctx, { status: "hidden", publicId: 2, title: "Hidden" }));
     await expect(
       asEditor.mutation(api.proposals.saveDraft, {
-        ops: [
-          { kind: "update", ref: { type: "series", id: hiddenId }, changes: [change] },
-        ],
+        ops: [titleOp(hiddenId, "Beta")],
         evidence: [],
         comment: "Hidden.",
       }),
     ).rejects.toMatchObject({ data: { code: "locked" } });
 
     // Bulk cap: more ops than the per-proposal maximum is refused outright.
-    const publisherId = await addPublisher(t);
-    void publisherId;
     const tooMany = Array.from({ length: MAX_OPS_PER_PROPOSAL + 1 }, (_, i) => ({
       kind: "create" as const,
       table: "volumes",
@@ -367,13 +316,7 @@ describe("proposals — lifecycle", () => {
     // untouched.
     await asEditor.mutation(api.proposals.saveDraft, {
       proposalId,
-      ops: [
-        {
-          kind: "update",
-          ref: { type: "series", id: seriesId },
-          changes: [{ field: "title", value: "Beta (cover)" }],
-        },
-      ],
+      ops: [titleOp(seriesId, "Beta (cover)")],
       evidence: URL_EVIDENCE,
       comment: "Cover romanization.",
     });
@@ -516,13 +459,7 @@ describe("proposals — stale-base detection and explicit rebase", () => {
     const seriesId = await addSeries(t);
     const asEditor = t.withIdentity({ subject: EDITOR });
     const { proposalId } = await asEditor.mutation(api.proposals.saveDraft, {
-      ops: [
-        {
-          kind: "update",
-          ref: { type: "series", id: seriesId },
-          changes: [{ field: "title", value: "Beta" }],
-        },
-      ],
+      ops: [titleOp(seriesId, "Beta")],
       evidence: URL_EVIDENCE,
       comment: "Rename.",
     });
@@ -542,37 +479,15 @@ describe("proposals — stale-base detection and explicit rebase", () => {
     const seriesId = await addSeries(t);
     await addPublisher(t);
     const asMod = t.withIdentity({ subject: MOD });
-    const addVolume = (label: string, publicId: number) =>
-      t.run((ctx) =>
-        ctx.db.insert("volumes", { status: "active", publicId, seriesId, position: 1, label }),
-      );
+    const addVolume = () => t.run((ctx) => insertVolume(ctx, { seriesId, label: "1", position: 1 }));
     // The importer's real path: coverage over the existing Volume 1 by ID,
     // a temp-ID create for the missing Volume 2.
-    const queue = (sourceRecordId: string) =>
-      t.run(async (ctx) => {
-        const observationId = await ctx.db.insert("sourceObservations", {
-          sourceKey: "sevenseas",
-          sourceRecordId,
-          snapshot: { url: `https://sevenseasentertainment.com/books/${sourceRecordId}` },
-          lastSeenAt: 1,
-          withdrawn: false,
-        });
-        return await queueCreationProposal(ctx, {
-          sourceKey: "sevenseas",
-          observation: (await ctx.db.get(observationId))!,
-          seriesId,
-          seriesTitle: "Alpha",
-          labels: ["1", "2"],
-          release: { format: "physical", publisherSlug: "seven-seas" },
-          comment: "Omnibus 1-2 — creation gate.",
-          now: 1,
-        });
-      });
+    const queue = (sourceRecordId: string) => queueImport(t, seriesId, sourceRecordId, ["1", "2"]);
 
-    const volumeId = await addVolume("1", 1);
+    const volumeId = await addVolume();
     const proposalId = await queue("alpha-omnibus");
     // A moderator merges Volume 1 into a duplicate row before review.
-    const survivorId = await addVolume("1", 2);
+    const survivorId = await addVolume();
     await t.run((ctx) =>
       ctx.db.patch(volumeId, { status: "merged", mergedIntoId: survivorId }),
     );
@@ -841,58 +756,9 @@ describe("proposals — temp-ID multi-record creation", () => {
     const seriesId = await addSeries(t);
     await addPublisher(t);
 
-    // The shape sevenSeas.ts queueCreationProposal writes: publisher by
-    // slug, coverage rows keyed `volume`, a real series ID as a string.
-    const proposalId = await t.run(async (ctx) => {
-      const observationId = await ctx.db.insert("sourceObservations", {
-        sourceKey: "sevenseas",
-        sourceRecordId: "alpha-vol-2",
-        snapshot: { url: "https://sevenseasentertainment.com/books/alpha-2" },
-        lastSeenAt: Date.now(),
-        withdrawn: false,
-      });
-      const proposalId = await ctx.db.insert("proposals", {
-        author: { kind: "source", sourceKey: "sevenseas" },
-        state: "inReview",
-        currentVersionNo: 1,
-        submittedAt: Date.now(),
-      });
-      await ctx.db.insert("proposalVersions", {
-        proposalId,
-        versionNo: 1,
-        ops: [
-          {
-            kind: "create",
-            table: "volumes",
-            tempId: "volume-1",
-            fields: { seriesId: seriesId as string, label: "2" },
-          },
-          {
-            kind: "create",
-            table: "editions",
-            tempId: "edition",
-            fields: {
-              publisherSlug: "seven-seas",
-              volumeCoverage: [{ volume: "volume-1", order: 1, extent: "complete" }],
-            },
-          },
-          {
-            kind: "create",
-            table: "releases",
-            tempId: "release",
-            fields: {
-              editionId: "edition",
-              format: "physical",
-              language: "en",
-              isbn13: "9781999000721",
-            },
-          },
-        ],
-        evidence: [{ kind: "observation", observationId }],
-        changeComment: 'Multi-volume coverage "Alpha Vol. 2" — creation gate.',
-      });
-      return proposalId;
-    });
+    // Queued the way the importers do: publisher by slug, a temp-ID Volume
+    // create for vol 2, a real series ID as a string.
+    const proposalId = await queueImport(t, seriesId, "alpha-vol-2", ["2"], { isbn13: "9781999000721" });
 
     const asMod = t.withIdentity({ subject: MOD });
     const queue = await asMod.query(api.proposals.reviewQueue, {
@@ -984,7 +850,7 @@ describe("proposals — the review queue", () => {
     const seriesId = await addSeries(t);
     const proposalId = await submitTitleProposal(t, seriesId);
     const asMod = t.withIdentity({ subject: MOD });
-    const asMod2 = t.withIdentity({ subject: MOD2 });
+    const asMod2 = t.withIdentity({ subject: beth.subject });
 
     await asMod.mutation(api.proposals.claimProposal, { proposalId });
     let queue = await asMod.query(api.proposals.reviewQueue, {});
@@ -1065,13 +931,7 @@ describe("proposals — per-user rate limits", () => {
       await submitTitleProposal(t, seriesIds[i], `S${i} fixed`);
     }
     const { proposalId } = await asEditor.mutation(api.proposals.saveDraft, {
-      ops: [
-        {
-          kind: "update",
-          ref: { type: "series", id: seriesIds[5] },
-          changes: [{ field: "title", value: "S5 fixed" }],
-        },
-      ],
+      ops: [titleOp(seriesIds[5], "S5 fixed")],
       evidence: URL_EVIDENCE,
       comment: "One too many.",
     });
@@ -1084,13 +944,7 @@ describe("proposals — per-user rate limits", () => {
     const { proposalId: adminDraft } = await asAdmin.mutation(
       api.proposals.saveDraft,
       {
-        ops: [
-          {
-            kind: "update",
-            ref: { type: "series", id: seriesIds[5] },
-            changes: [{ field: "title", value: "S5 fixed" }],
-          },
-        ],
+        ops: [titleOp(seriesIds[5], "S5 fixed")],
         evidence: URL_EVIDENCE,
         comment: "Different user.",
       },

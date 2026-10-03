@@ -2,6 +2,7 @@ import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { ActionCtx, QueryCtx } from "../_generated/server";
 import { todaySortKey } from "./dates";
+import { coveringOf, releasesOf } from "./editionRows";
 import { politeFetch } from "./http";
 
 // Some publishers serve a generic "no cover yet" SVG where the artwork would
@@ -236,12 +237,7 @@ export function jacketCache(
   const lendsMemo = new Map<Id<"editions">, Promise<boolean>>();
   const releases = (editionId: Id<"editions">) =>
     once(releasesMemo, editionId, async () =>
-      (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", editionId))
-          .collect()
-      )
+      (await releasesOf(ctx, editionId))
         .filter((r) => r.status === "active")
         .sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity)),
     );
@@ -250,12 +246,7 @@ export function jacketCache(
   const lends = (editionId: Id<"editions">) =>
     once(lendsMemo, editionId, async () => (await edition(editionId))?.status === "active");
   const covering = (volumeId: Id<"volumes">) =>
-    once(coveringMemo, volumeId, () =>
-      ctx.db
-        .query("volumeCoverages")
-        .withIndex("by_volume", (q) => q.eq("volumeId", volumeId))
-        .collect(),
-    );
+    once(coveringMemo, volumeId, () => coveringOf(ctx, volumeId));
   // The ISBN an ISBN-less Edition borrows from another Edition of its first Volume.
   const borrowed = async (editionId: Id<"editions">) => {
     const first = (await coverage(editionId))[0];
@@ -353,21 +344,13 @@ export async function seriesCover(ctx: QueryCtx, seriesId: Id<"series">): Promis
   const seen = new Set<Id<"editions">>();
   for (const volume of volumes) {
     if (volume.status !== "active") continue;
-    const covering = await ctx.db
-      .query("volumeCoverages")
-      .withIndex("by_volume", (q) => q.eq("volumeId", volume._id))
-      .collect();
+    const covering = await coveringOf(ctx, volume._id);
     for (const row of covering) {
       if (seen.has(row.editionId)) continue;
       seen.add(row.editionId);
       const edition = await ctx.db.get(row.editionId);
       if (!edition || edition.status !== "active") continue;
-      const releases = (
-        await ctx.db
-          .query("releases")
-          .withIndex("by_edition", (q) => q.eq("editionId", row.editionId))
-          .collect()
-      ).filter((r) => r.status === "active");
+      const releases = (await releasesOf(ctx, row.editionId)).filter((r) => r.status === "active");
       for (const release of releases) {
         const url = await coverUrl(ctx, release.coverImage?.storageId);
         if (url) return { coverUrl: url, coverIsbns: release.isbn13 ? [release.isbn13] : [] };

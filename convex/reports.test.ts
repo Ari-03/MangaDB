@@ -2,47 +2,17 @@
 // user's free-text report lands in the shared review queue as a zero-op
 // In-Review Proposal, where a Moderator handles it like any other item.
 
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import rateLimiterTest from "@convex-dev/rate-limiter/test";
 
-import { api, internal } from "./_generated/api";
-import schema from "./schema";
+import { api } from "./_generated/api";
 import { MAX_REPORT_LENGTH } from "./reports";
+import { insertSeries } from "./test.factories";
+import { MOD, PLAIN, alice, bob, dave, makeT, seedTeam, type TestT } from "./test.helpers";
 
-const ADMIN = "user_admin";
-const MOD = "user_mod";
-const PLAIN = "user_plain";
-
-function makeT() {
-  const t = convexTest(schema);
-  rateLimiterTest.register(t, "rateLimiter");
-  return t;
-}
-
-async function setup(t: ReturnType<typeof convexTest>) {
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.users.claimUsername, { username: "alice" });
-  await t
-    .withIdentity({ subject: MOD })
-    .mutation(api.users.claimUsername, { username: "bob" });
-  await t
-    .withIdentity({ subject: PLAIN })
-    .mutation(api.users.claimUsername, { username: "dave" });
-  await t.mutation(internal.roles.bootstrapAdministrator, { username: "alice" });
-  await t
-    .withIdentity({ subject: ADMIN })
-    .mutation(api.roles.appoint, { username: "bob", role: "moderator" });
-  return await t.run((ctx) =>
-    ctx.db.insert("series", {
-      status: "active",
-      publicId: 7,
-      title: "Witch Hat Atelier",
-      altTitles: [],
-      searchText: "Witch Hat Atelier",
-    }),
-  );
+/** alice, bob the Moderator and dave, and the Series "Witch Hat Atelier" (public id 7). */
+async function setup(t: TestT) {
+  await seedTeam(t, [alice, bob, dave]);
+  return await t.run((ctx) => insertSeries(ctx, { publicId: 7, title: "Witch Hat Atelier" }));
 }
 
 describe("reports.submit", () => {
@@ -83,7 +53,7 @@ describe("reports.submit", () => {
     await setup(t);
     await expect(
       t.mutation(api.reports.submit, { seriesPublicId: 7, message: "hi" }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ data: { code: "unauthenticated" } });
   });
 
   it("rejects empty and over-long reports, and unknown series", async () => {
@@ -128,6 +98,6 @@ describe("reports.submit", () => {
     }
     await expect(
       asPlain.mutation(api.reports.submit, { seriesPublicId: 7, message: "again" }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ data: { kind: "RateLimited", name: "reportSubmit" } });
   });
 });

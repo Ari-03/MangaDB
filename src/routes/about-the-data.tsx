@@ -1,12 +1,13 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
+import { Breadcrumbs } from "~/lib/pageScaffold";
 import { pageHead } from "~/lib/seo";
 
 /**
- * The "about the data" page (ticket #40, spec §7): where the catalog comes
+ * The "about the data" page (spec §7): where the catalog comes
  * from, the honest digital-coverage note, the ANN attribution its license
- * requires, and the cover takedown contact (#13). Static, indexable.
+ * requires, and the cover takedown contact. Static, indexable.
  *
  * Set as one readable column (~68ch) — this is the only page on the site that
  * is read rather than browsed, so it gets no shelves, only the display face.
@@ -23,7 +24,7 @@ export const Route = createFileRoute("/about-the-data")({
 });
 
 // The takedown/attribution contact. A mailbox the operator must actually
-// run — see the README's launch section.
+// run — see docs/operations.md, "Seeding a new catalog".
 export const DATA_CONTACT_EMAIL = "data@mangadb.org";
 
 type Source = {
@@ -71,10 +72,7 @@ const SOURCES: Source[] = [
 function AboutTheData() {
   return (
     <main className="about-page">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <Link to="/">MangaDB</Link> <span aria-hidden="true">/</span>{" "}
-        <span>About the data</span>
-      </nav>
+      <Breadcrumbs trail={["About the data"]} />
 
       <h1>About the data</h1>
       <p className="about-lede">

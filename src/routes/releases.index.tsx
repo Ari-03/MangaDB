@@ -4,12 +4,7 @@ import { api } from "../../convex/_generated/api";
 import { catalogQuery } from "~/lib/catalogData";
 import { showMature } from "~/lib/mature";
 import { currentMonth } from "~/lib/month";
-import {
-  breadcrumbListJsonLd,
-  browserTitleTag,
-  jsonLdScript,
-  pageHead,
-} from "~/lib/seo";
+import { browserTitleTag, pageHead } from "~/lib/seo";
 import {
   followPublisherSlug,
   isFiltered,
@@ -19,7 +14,7 @@ import {
 } from "~/lib/releasesBrowser";
 
 /**
- * `/releases` — the Release Agenda (ticket #24, spec §10): the first-visit
+ * `/releases` — the Release Agenda (spec §10): the first-visit
  * default of the Releases browser. A cover-led chronological list of the
  * current month's Canonical Releases, grouped and anchored by publication
  * date, each row showing cover, Volume label, Format, and Publisher.
@@ -48,23 +43,15 @@ export const Route = createFileRoute("/releases/")({
   // never indexed — is noindex/follow. The canonical always points at the
   // bare `/releases`, so no query-string variant — including a stray
   // `?page=N` — is ever the indexed URL.
-  head: ({ match }) => ({
-    ...pageHead({
+  head: ({ match }) =>
+    pageHead({
       title: browserTitleTag(),
       description:
         "English manga releases day by day: every volume publishing this month, with format, publisher, and edition details.",
       path: "/releases",
       robots: isFiltered(match.search) ? "noindex, follow" : undefined,
+      breadcrumbs: [{ name: "Releases" }],
     }),
-    scripts: [
-      jsonLdScript(
-        breadcrumbListJsonLd([
-          { name: "MangaDB", path: "/" },
-          { name: "Releases" },
-        ]),
-      ),
-    ],
-  }),
   component: ReleasesAgendaPage,
 });
 

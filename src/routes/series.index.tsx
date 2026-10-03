@@ -10,17 +10,12 @@ import {
   type SeriesBrowsePage,
   type SeriesFacets,
 } from "~/lib/catalogData";
-import { Cover } from "~/lib/cover";
+import { SeriesShelfItem } from "~/lib/shelfItem";
+import { plural } from "~/lib/format";
 import { MatureFilter, showMature } from "~/lib/mature";
-import { MONTH_NAMES } from "~/lib/month";
+import { MONTH_NAMES, sortKeyMonth } from "~/lib/month";
 import { RatingLine } from "~/lib/ratings";
-import {
-  breadcrumbListJsonLd,
-  jsonLdScript,
-  pageHead,
-  SITE_NAME,
-} from "~/lib/seo";
-import { slugParams } from "~/lib/slug";
+import { pageHead, SITE_NAME } from "~/lib/seo";
 import { useUrlDraft } from "~/lib/urlDraft";
 
 type SeriesSort = SeriesBrowseArgs["sort"];
@@ -209,23 +204,15 @@ export const Route = createFileRoute("/series/")({
       mature: showMature(),
     };
   },
-  head: ({ loaderData }) => ({
-    ...pageHead({
+  head: ({ loaderData }) =>
+    pageHead({
       title: `Browse Series | ${SITE_NAME}`,
       description:
         "Every manga series in the catalog. Filter by publisher, volume count, release timing, and format, then sort by title, latest, or upcoming releases.",
       path: "/series",
       robots: loaderData?.filtered ? "noindex, follow" : undefined,
+      breadcrumbs: [{ name: "Series" }],
     }),
-    scripts: [
-      jsonLdScript(
-        breadcrumbListJsonLd([
-          { name: "MangaDB", path: "/" },
-          { name: "Series" },
-        ]),
-      ),
-    ],
-  }),
   component: SeriesLibraryPage,
 });
 
@@ -838,45 +825,20 @@ function SeriesCard({
   sort: SeriesSort;
   eager: boolean;
 }) {
-  const params = slugParams(item.publicId, item.title);
   const publishers = item.publishers.map((publisher) => publisher.name).join(", ");
   return (
-    <div className="shelf-item">
-      <div className="cover-wrap">
-        {/* The cover repeats the title link, so it stays out of the tab order. */}
-        <Link
-          className="cover-link"
-          to="/series/$publicId/$slug"
-          params={params}
-          tabIndex={-1}
-          aria-hidden="true"
-        >
-          <Cover
-            src={item.coverUrl}
-            isbn13={item.coverIsbn}
-            title={item.title}
-            lazy={!eager}
-          />
-        </Link>
+    <SeriesShelfItem series={item} lazy={!eager}>
+      <div className="caption-meta">
+        <span>{plural(item.volumeCount, "vol")}</span>
+        {publishers ? (
+          <>
+            <span className="dot" />
+            <span>{publishers}</span>
+          </>
+        ) : null}
       </div>
-      <div className="caption">
-        <Link className="caption-title" to="/series/$publicId/$slug" params={params}>
-          {item.title}
-        </Link>
-        <div className="caption-meta">
-          <span>
-            {item.volumeCount} {item.volumeCount === 1 ? "vol" : "vols"}
-          </span>
-          {publishers ? (
-            <>
-              <span className="dot" />
-              <span>{publishers}</span>
-            </>
-          ) : null}
-        </div>
-        <SortDetail item={item} sort={sort} />
-      </div>
-    </div>
+      <SortDetail item={item} sort={sort} />
+    </SeriesShelfItem>
   );
 }
 
@@ -917,8 +879,7 @@ function SortDetail({ item, sort }: { item: SeriesBrowseItem; sort: SeriesSort }
  */
 function releaseDate(key: number): string | null {
   if (!key) return null;
-  const year = Math.floor(key / 10000);
-  const month = Math.floor(key / 100) % 100;
+  const { year, month } = sortKeyMonth(key);
   const day = key % 100;
   const monthName = MONTH_NAMES[month - 1]?.slice(0, 3);
   if (!monthName) return String(year);
