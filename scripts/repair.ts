@@ -8,7 +8,8 @@
 //   node scripts/repair.ts rebuild            # seriesBrowse:rebuild
 //
 // Options: --plan <repair-plan.json>  required for run; there is no default plan
-//          --out <dir>                where metrics and run reports go; default ./runs
+//          --out <dir>                where reports go; run defaults to runs/ beside
+//                                     the plan, metrics (no plan) to ./runs
 //          --deployment <name|prod>   passed to `convex run`; anything other
 //                                     than the local deployment needs --yes
 //          --force                    run stage 4 without complete research
@@ -18,7 +19,7 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 type Entry = { key: string; reason: string } & Record<string, unknown>;
 type Step = { step: string; title: string; kind: string; batchSize: number; entries: Entry[] };
@@ -43,7 +44,7 @@ if (command === "run" && (planPath === "" || planPath.startsWith("--"))) {
   console.error(USAGE);
   process.exit(1);
 }
-const outDir = option("out", "runs");
+const outDir = option("out", command === "run" ? join(dirname(planPath), "runs") : "runs");
 const deployment = option("deployment", "");
 const actor = option("actor", "ari");
 const apply = flag("apply");

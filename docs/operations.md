@@ -122,8 +122,9 @@ node scripts/repair.ts rebuild            # seriesBrowse:rebuild
 - The script refuses any deployment but the local one unless you pass
   `--yes`. Choose another with `--deployment <name|prod>`.
 - `run` needs `--plan`; without it the script prints its usage and exits
-  before touching any deployment. Metrics and run reports go to `./runs`
-  (`--out` to change).
+  before touching any deployment. Run reports go to `runs/` beside the
+  plan; metrics, which have no plan, go to `./runs` (gitignored). `--out`
+  overrides both.
 - Stage 4 needs the plan's packaging research and refuses without it
   unless `--force`.
 - `--actor` must be an existing Moderator or Administrator. Each entry that
