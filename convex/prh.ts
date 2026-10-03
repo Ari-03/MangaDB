@@ -22,7 +22,8 @@
 //   PRH_IMPRINT_CODES  comma-separated imprint codes to mirror (verify the
 //                      codes against /title/domains/PRH.US/imprints once a
 //                      key is active)
-// Without both, a run is skipped as "unconfigured" — never a failure.
+// Without both, a fresh call is skipped as "unconfigured" and opens no run;
+// a continuation of an open run closes that run as failed.
 //
 // The API cannot filter by date (lib/prh.ts), so future mode pages an
 // imprint newest-first and cuts off at today client-side.

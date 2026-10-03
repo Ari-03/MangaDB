@@ -90,16 +90,17 @@ is fixed.
   shared gate (`runToContinue` in `convex/lib/importRuns.ts`) lets the
   forced run through, and `applyCatalogTitle` (`convex/lib/catalogTitle.ts`)
   refuses every apply while the source is disabled. The run fetches every
-  page, imports nothing and closes as `succeeded`.
+  page, imports nothing and closes as `succeeded`. The fix is to carry the
+  run's automatic or forced state to the apply mutation.
 - **Disabling PRH inside the final link of a scheduled full sweep withdraws
   what it was listing.** `applyCatalogTitle` refuses the rest of that
   link's applies, so their observations never get a new last-seen time,
   but `prh.sync` still runs `imports.markWithdrawn` at the end of a
   complete sweep. Those observations are marked withdrawn, and a
   future-dated Release among them gets a hide Proposal. The run closes as
-  `succeeded`. The fix for both this and the Yen Press entry is to carry
-  the run's automatic or forced state to the apply mutation, and to skip
-  the withdrawal pass when any apply was refused.
+  `succeeded`. The fix is to skip the withdrawal pass when an apply was
+  refused. PRH runs carry no automatic flag, and a forced PRH run on a
+  disabled source is already refused before any fetch.
 - **Disabling PRH mid-run counts as a failure.** A PRH link that finds its
   source disabled closes the run as `failed` (`convex/prh.ts`), not
   `stopped` as the shared gate does for the other chained sources, so the
