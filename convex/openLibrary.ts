@@ -495,6 +495,29 @@ export async function placeEdition(
 }
 
 /**
+ * Keep the edition's `match` note in step with the ladder's flag (spec §6:
+ * a flat crowd-sourced record is never worth a human's review slot on its
+ * own, so the flag stays on the observation): written while the ladder
+ * flags the edition, its time kept while the flag is unchanged, and removed
+ * once it does not. The observation's other notes stay.
+ */
+async function noteFlag(
+  ctx: MutationCtx,
+  observationId: Id<"sourceObservations">,
+  offered: string,
+  reason: string | undefined,
+  now: number,
+): Promise<void> {
+  const conflicts = (await ctx.db.get(observationId))?.conflicts ?? [];
+  const prior = conflicts.find((c) => c.field === "match");
+  if (reason === undefined ? prior === undefined : prior?.reason === reason && prior.offered === offered) return;
+  const kept = conflicts.filter((c) => c.field !== "match");
+  await ctx.db.patch(observationId, {
+    conflicts: reason === undefined ? kept : [...kept, { field: "match", offered, at: now, reason }],
+  });
+}
+
+/**
  * Reconcile one OpenLibrary edition into the catalog. Match → fill; no
  * match → at most a leaf Release under fully pre-existing structure
  * (placeEdition); never a queue item, never new structure. A book a person
@@ -547,6 +570,9 @@ export const applyEdition = internalMutation({
     }
 
     const placement = await placeEdition(ctx, snapshot);
+    const flag =
+      placement.kind === "review" ? placement.reason : placement.kind === "hold" ? placement.review : undefined;
+    await noteFlag(ctx, observation._id, snapshot.title, flag, now);
 
     if (placement.kind === "match") {
       const release = placement.release;
@@ -563,21 +589,12 @@ export const applyEdition = internalMutation({
       return { status: "linked", changed: true, releaseId: release._id };
     }
 
-    // A flat crowd-sourced record is never worth a human's review slot on
-    // its own; the ladder's flag stays on the observation for the record.
-    const noteFlag = (reason: string) =>
-      ctx.db.patch(observation._id, {
-        conflicts: [{ field: "match", offered: snapshot.title, at: now, reason }],
-      });
-
     if (placement.kind === "review") {
       await clearHold(ctx, observation._id);
-      await noteFlag(placement.reason);
       return { status: "recordOnly", changed: false };
     }
 
     if (placement.kind === "hold") {
-      if (placement.review !== undefined) await noteFlag(placement.review);
       await recordUnplaced(ctx, observation, placement.hold, now);
       return { status: "recordOnly", changed: false };
     }

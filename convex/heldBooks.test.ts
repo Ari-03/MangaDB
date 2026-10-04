@@ -1,14 +1,16 @@
 // Held Books: what an import could not place, listed for the Data Team
 // (imports.heldBooks). Covers the hold lifecycle (held, re-sighted, linked,
-// withdrawn, queued for review), Open Library's held editions against the
-// ones it still skips, ANN lines no one can place, the list's gate, pages
-// and filters, and the backfill of stored rows.
+// withdrawn, in review and decided), Open Library's held editions against
+// the ones it still skips and its `match` note, ANN lines no one can place
+// or that are out of scope, the list's gate, pages and filters, and the
+// backfill of stored rows.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
 import { storedHoldKind } from "./imports";
+import { insertSourceProposal } from "./lib/reconcile";
 import { type Hold, type HoldKind, linkObservation, recordUnplaced } from "./lib/observations";
 import type { BookSnapshot } from "./lib/sevenSeas";
 import {
@@ -286,6 +288,112 @@ describe("Open Library holds", () => {
     await drain(t);
     expect((await list(t)).page).toEqual(held);
   });
+
+  it("keeps the `match` note only while the ladder flags the edition, beside the other notes", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, carol]);
+    const { publisherId } = await aliceSkeleton(t);
+    const takenBy = await t.run(async (ctx) => {
+      const other = await insertSeries(ctx, { publicId: 8, title: "Unrelated Story" });
+      const editionId = await insertEdition(ctx, { publisherId });
+      return await insertRelease(ctx, { editionId, publisherId, seriesIds: [other], isbn13: "9781974728374" });
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    const isbn10 = { field: "isbn10", offered: "1974728370", at: 1_500_000, reason: "Another field's note." };
+    await t.run(async (ctx) => {
+      const observation = (await ctx.db.query("sourceObservations").first())!;
+      await ctx.db.patch(observation._id, { conflicts: [...(observation.conflicts ?? []), isbn10] });
+    });
+    const notes = async () =>
+      ((await observationOf(t, "/books/OL1M"))?.conflicts ?? []).map((c) => [c.field, c.at]);
+
+    // Flagged twice: each note keeps its time, and the other field's stays.
+    vi.setSystemTime(2_000_000);
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    expect(await notes()).toEqual([
+      ["match", 1_000_000],
+      ["placement", 1_000_000],
+      ["isbn10", 1_500_000],
+    ]);
+
+    // The other Series' Release goes: no flag, so no `match` note.
+    await t.run((ctx) => ctx.db.delete(takenBy));
+    vi.setSystemTime(3_000_000);
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    expect(await notes()).toEqual([
+      ["isbn10", 1_500_000],
+      ["placement", 3_000_000],
+    ]);
+    expect((await list(t)).page.map((row) => row.kind)).toEqual(["volumeMissing"]);
+  });
+
+  it("lists an unlinked edition whose conflict Proposal was decided, and the backfill agrees", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, carol]);
+    const { seriesId, publisherId } = await aliceSkeleton(t);
+    const releaseId = await t.run(async (ctx) => {
+      const volumeId = await insertVolume(ctx, { seriesId, position: 1 });
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertCoverage(ctx, { editionId, volumeId });
+      return await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], isbn13: "9781974728374" });
+    });
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    const linked = await observationOf(t, "/books/OL1M");
+    expect(linked?.recordRef).toEqual({ type: "release", id: releaseId });
+
+    // A field conflict is queued from the link, then rejected.
+    const proposalId = await t.run(async (ctx) => {
+      const { proposalId } = await insertSourceProposal(ctx, {
+        sourceKey: "openlibrary",
+        state: "inReview",
+        ops: [
+          {
+            kind: "update",
+            ref: { type: "release", id: releaseId },
+            changes: [{ field: "binding", before: undefined, after: "hardcover" }],
+          },
+        ],
+        evidence: [linked!._id],
+        comment: "Import conflict.",
+        now: Date.now(),
+      });
+      await ctx.db.patch(linked!._id, { queuedProposalId: proposalId });
+      return proposalId;
+    });
+    await signedIn(t, alice).mutation(api.proposals.rejectProposal, { proposalId, note: "Paperback." });
+    // A repair finds the Release is another printing and unlinks the edition.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(releaseId, { isbn13: "9781974799990" });
+      await ctx.db.patch(linked!._id, { recordRef: undefined });
+    });
+
+    stubDump([alice1]);
+    await openLibrarySync(t);
+    const held = [
+      expect.objectContaining({
+        sourceRecordId: "/books/OL1M",
+        kind: "isbn",
+        reason: "Volume 1 already has a physical VIZ Media Release (ISBN 9781974799990).",
+      }),
+    ];
+    expect((await list(t)).page).toEqual(held);
+    expect((await observationOf(t, "/books/OL1M"))?.queuedProposalId).toBe(proposalId);
+
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("placementHolds").collect()) await ctx.db.delete(row._id);
+    });
+    await t.mutation(internal.imports.backfillHolds, {});
+    await drain(t);
+    expect((await list(t)).page).toEqual(held);
+  });
 });
 
 describe("the hold lifecycle", () => {
@@ -391,7 +499,7 @@ async function heldThenQueued(t: TestT) {
   return observation!;
 }
 
-describe("a queued Proposal takes the book off the list", () => {
+describe("a Proposal in review takes the book off the list", () => {
   it("held, queued, then approved: the Release exists and the book stays off the list", async () => {
     const t = makeT();
     const observation = await heldThenQueued(t);
@@ -405,7 +513,7 @@ describe("a queued Proposal takes the book off the list", () => {
     expect((await t.run((ctx) => ctx.db.get(observation._id)))?.recordRef).toBeUndefined();
   });
 
-  it("held, queued, then rejected: off the list, and a later hold is a note only", async () => {
+  it("held, queued, then rejected: off the list, and a later hold is listed", async () => {
     const t = makeT();
     const observation = await heldThenQueued(t);
     await signedIn(t, alice).mutation(api.proposals.rejectProposal, {
@@ -413,17 +521,30 @@ describe("a queued Proposal takes the book off the list", () => {
       note: "Not a Deluxe Edition.",
     });
     expect((await list(t)).page).toEqual([]);
-    // The listing drops its coverage again: the reason is noted, not listed.
+    // The listing drops its coverage again: the rejected Proposal is in no
+    // queue, so the book is held.
     await applySevenSeas(t, deluxe);
-    expect((await list(t)).page).toEqual([]);
+    expect((await list(t)).page.map((row) => [row.sourceRecordId, row.kind])).toEqual([["101", "packaging"]]);
     const conflicts = (await t.run((ctx) => ctx.db.get(observation._id)))?.conflicts;
     expect(conflicts?.find((c) => c.field === "placement")?.reason).toContain("an Editor maps it.");
+  });
+
+  it("refuses Request Changes on an import's Proposal, which stays in the review queue", async () => {
+    const t = makeT();
+    const observation = await heldThenQueued(t);
+    const proposalId = observation.queuedProposalId!;
+    await expect(
+      signedIn(t, alice).mutation(api.proposals.requestChanges, { proposalId, note: "Correct the coverage." }),
+    ).rejects.toMatchObject({ data: { code: "importAuthored" } });
+    expect((await t.run((ctx) => ctx.db.get(proposalId)))?.state).toBe("inReview");
+    const queue = await signedIn(t, alice).query(api.proposals.reviewQueue, {});
+    expect(queue.map((row) => row.proposalId)).toEqual([proposalId]);
   });
 });
 
 describe("ANN lines", () => {
-  /** An unlinked ANN line of manga 10 ("Alpha" vol. 1). */
-  const insertLine = (ctx: MutationCtx, annId: string) =>
+  /** An unlinked ANN line of manga 10 ("Alpha" vol. 1, unless `line` says otherwise). */
+  const insertLine = (ctx: MutationCtx, annId: string, line: { title?: string; multi?: boolean } = {}) =>
     insertObservation(ctx, {
       sourceKey: "ann",
       sourceRecordId: `release:${annId}`,
@@ -432,9 +553,9 @@ describe("ANN lines", () => {
         annId,
         mangaId: "10",
         url: `https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${annId}`,
-        title: "Alpha",
+        title: line.title ?? "Alpha",
         label: "1",
-        multi: false,
+        multi: line.multi ?? false,
         format: "physical",
         editionLineHint: false,
       },
@@ -474,6 +595,52 @@ describe("ANN lines", () => {
       ["release:2", '"Yen On" is a prose imprint: out of manga scope.'],
       ["release:3", 'Distributor "Unheard Of Press" resolves to no publisher row.'],
     ]);
+  });
+
+  it.each([
+    {
+      name: "a prose imprint's line with no linked Series",
+      line: {},
+      distributor: "Yen On",
+      before: "The manga entry has no linked active Series.",
+      reason: '"Yen On" is a prose imprint: out of manga scope.',
+    },
+    {
+      name: "a foreign-language distributor's line with no linked Series",
+      line: {},
+      distributor: "Kana",
+      before: "The manga entry has no linked active Series.",
+      reason: '"Kana" publishes in another language: out of English scope.',
+    },
+    {
+      name: "a box set's variant cover",
+      line: { title: "Alpha Box Set Exclusive Cover", multi: true },
+      distributor: "Seven Seas Entertainment",
+      before: "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.",
+      reason: "A store-exclusive or variant cover: never a Release of its own.",
+    },
+  ])("notes $name as out of scope, and the backfill takes its old row away", async ({ line, distributor, before, reason }) => {
+    const t = makeT();
+    await seedRegistry(t);
+    await seedTeam(t, [alice, carol]);
+    const id = await t.run((ctx) => insertLine(ctx, "1", line));
+    await placePage(t, "1", { isbn13: "9781999000417", distributor });
+    expect((await list(t)).page).toEqual([]);
+    const placement = async () =>
+      (await t.run((ctx) => ctx.db.get(id)))?.conflicts?.find((c) => c.field === "placement")?.reason;
+    expect(await placement()).toBe(reason);
+
+    // As held before scope came first: the backfill removes the row and
+    // notes the line as the page pass now does.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(id, { conflicts: [{ field: "placement", offered: null, at: 1, reason: before }] });
+      await ctx.db.insert("placementHolds", { observationId: id, sourceKey: "ann", kind: storedHoldKind(before)!, heldAt: 1 });
+    });
+    expect((await list(t)).page).toHaveLength(1);
+    await t.mutation(internal.imports.backfillHolds, {});
+    await drain(t);
+    expect((await list(t)).page).toEqual([]);
+    expect(await placement()).toBe(reason);
   });
 });
 
@@ -664,6 +831,42 @@ describe("imports.backfillHolds", () => {
       expect((await ctx.db.get(annLine))?.conflicts).toHaveLength(1);
     });
     expect((await observationOf(t, "/books/OL1M"))?.conflicts ?? []).toEqual([]);
+  });
+});
+
+describe("imports.backfillHolds on its first run", () => {
+  it("drops a stale note with no row to remove: a book in review, an Open Library edition it skips", async () => {
+    const t = makeT();
+    const queued = await heldThenQueued(t);
+    const note = { field: "placement", offered: null, at: 1, reason: "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched." };
+    const skipped = await t.run(async (ctx) => {
+      await ctx.db.patch(queued._id, { conflicts: [note] });
+      return await insertObservation(ctx, {
+        sourceKey: "openlibrary",
+        sourceRecordId: "/books/OL4M",
+        snapshot: {
+          kind: "olEdition",
+          key: "/books/OL4M",
+          url: "https://openlibrary.org/books/OL4M",
+          title: "Alice in Borderland, Vol. 2",
+          seriesTitle: "Alice in Borderland",
+          volumeLabel: "2",
+          multiVolume: false,
+          publishers: ["Unheard Of Press"],
+          format: "physical",
+        },
+        conflicts: [{ ...note, reason: "No Volume 2 under the Series." }],
+      });
+    });
+    expect(await t.run((ctx) => ctx.db.query("placementHolds").collect())).toEqual([]);
+
+    const result = await t.mutation(internal.imports.backfillHolds, {});
+    expect(result).toMatchObject({ cleared: 2, done: true });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(queued._id))?.conflicts).toEqual([]);
+      expect((await ctx.db.get(skipped))?.conflicts).toEqual([]);
+    });
+    expect((await list(t)).page).toEqual([]);
   });
 });
 

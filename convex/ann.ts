@@ -872,6 +872,24 @@ const FOREIGN_DISTRIBUTORS =
 const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
 
 /**
+ * Why a release line is out of scope, from its title and stored page, or
+ * null: a store-exclusive or variant cover, a prose imprint, or a
+ * foreign-language distributor. No one places such a line, so it is noted
+ * and never a Held Book (applyReleasePage; imports.backfillHolds reads the
+ * stored line the same way).
+ */
+export function lineOutOfScope(line: AnnReleaseSnapshot): string | null {
+  if (VARIANT_LINE.test(line.title)) return "A store-exclusive or variant cover: never a Release of its own.";
+  const distributor = line.page?.distributor;
+  if (distributor === undefined) return null;
+  if (NOVEL_DISTRIBUTORS.test(distributor)) return `"${distributor}" is a prose imprint: out of manga scope.`;
+  if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
+    return `"${distributor}" publishes in another language: out of English scope.`;
+  }
+  return null;
+}
+
+/**
  * ANN's packaged line titles come in two shapes: "Naruto [3-in-1 Edition]"
  * (the designator number is the line position) and "One Piece - [Omnibus]
  * 33 - Wano" (the position follows the tag; the designator holds the volume
@@ -1290,20 +1308,23 @@ export const applyReleasePage = internalMutation({
         ? await survivorOf<"series">(ctx, await ctx.db.get(seriesRef.id))
         : null;
 
-    // An existing Release with the ISBN: link it (same Series only). One an
-    // Editor hid is never recreated.
+    // An existing Release with the ISBN: link it (same Series only).
     const { active: byIsbn, hidden: isbnHidden } = await releaseByIsbn(ctx, isbn13);
+    if (byIsbn && series && byIsbn.seriesIds.includes(series._id)) return await link(byIsbn);
+
+    // A line out of scope is noted only, whatever else would hold it.
+    const outOfScope = lineOutOfScope(line);
+    if (outOfScope !== null) return await hold(null, outOfScope);
+
+    // One an Editor hid is never recreated.
     if (!byIsbn && isbnHidden) {
       return await hold("isbn", `ISBN ${isbn13} is on a Release an Editor hid — not recreated.`);
     }
     if (byIsbn) {
-      if (!series || !byIsbn.seriesIds.includes(series._id)) {
-        return await hold(
-          "isbn",
-          `ISBN ${isbn13} is already on a Release of another Series — a duplicate-Series question for an Editor.`,
-        );
-      }
-      return await link(byIsbn);
+      return await hold(
+        "isbn",
+        `ISBN ${isbn13} is already on a Release of another Series — a duplicate-Series question for an Editor.`,
+      );
     }
 
     // Packaging: an Edition Line member, never a Volume. A packaged line is
@@ -1316,9 +1337,6 @@ export const applyReleasePage = internalMutation({
     if ((line.multi || line.editionLineHint) && packaging === null) {
       return await hold("packaging", "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
     }
-    if (VARIANT_LINE.test(line.title)) {
-      return await hold(null, "A store-exclusive or variant cover: never a Release of its own.");
-    }
     if (!series || series.status !== "active") {
       return await hold("series", "The manga entry has no linked active Series.");
     }
@@ -1326,12 +1344,6 @@ export const applyReleasePage = internalMutation({
 
     const distributor = page.distributor;
     if (distributor === undefined) return await hold("other", "The release page names no distributor.", series._id);
-    if (NOVEL_DISTRIBUTORS.test(distributor)) {
-      return await hold(null, `"${distributor}" is a prose imprint: out of manga scope.`, series._id);
-    }
-    if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
-      return await hold(null, `"${distributor}" publishes in another language: out of English scope.`, series._id);
-    }
     const publisher = await findPublisherByName(ctx, distributor);
     if (!publisher) {
       return await hold("other", `Distributor "${distributor}" resolves to no publisher row.`, series._id);

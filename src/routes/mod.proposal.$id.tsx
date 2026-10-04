@@ -356,7 +356,9 @@ function ProposalDetail({ id }: { id: string }) {
             </button>
           </div>
           <label>
-            Decision note (required to reject or request changes)
+            {detail.author.kind === "user"
+              ? "Decision note (required to reject or request changes)"
+              : "Decision note (required to reject)"}
             <textarea
               value={decisionNote}
               onChange={(event) => setDecisionNote(event.target.value)}
@@ -364,18 +366,21 @@ function ProposalDetail({ id }: { id: string }) {
             />
           </label>
           <div className="mod-actions">
-            <button
-              className="btn btn-sm"
-              disabled={busy || decisionNote.trim() === ""}
-              onClick={() =>
-                void run(
-                  () => requestChanges({ proposalId, note: decisionNote }),
-                  "Returned to Draft — the author can revise and resubmit.",
-                )
-              }
-            >
-              Request changes
-            </button>
+            {/* An import cannot revise a Draft (proposals.requestChanges). */}
+            {detail.author.kind === "user" ? (
+              <button
+                className="btn btn-sm"
+                disabled={busy || decisionNote.trim() === ""}
+                onClick={() =>
+                  void run(
+                    () => requestChanges({ proposalId, note: decisionNote }),
+                    "Returned to Draft — the author can revise and resubmit.",
+                  )
+                }
+              >
+                Request changes
+              </button>
+            ) : null}
             <button
               className="btn btn-sm"
               disabled={busy || decisionNote.trim() === ""}

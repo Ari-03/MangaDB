@@ -9,9 +9,9 @@
 // A record an import cannot place is held (recordUnplaced): its reason is
 // the observation's `placement` note, and one a person could act on is
 // listed as a Held Book (`placementHolds`) while it is unlinked, not
-// withdrawn, and has no queued Proposal. Linking it (linkObservation),
-// withdrawing it, or queuing a creation Proposal for it clears both
-// (clearHold).
+// withdrawn, and its queued Proposal, if any, is not in review. Linking it
+// (linkObservation), withdrawing it, or queuing a creation Proposal for it
+// clears both (clearHold).
 
 import type { Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -159,6 +159,20 @@ export async function upsertObservation(
   return { observation, changed: true };
 }
 
+/**
+ * Whether the Proposal the observation points to is in review, so the
+ * review queue has the book. `queuedProposalId` is a dedup pointer that
+ * outlives its Proposal's decision, and conflict and cancellation reviews
+ * set it too: only the Proposal's state says whether anyone will act on it.
+ */
+export async function proposalInReview(
+  ctx: QueryCtx | MutationCtx,
+  observation: Doc<"sourceObservations">,
+): Promise<boolean> {
+  if (observation.queuedProposalId === undefined) return false;
+  return (await ctx.db.get(observation.queuedProposalId))?.state === "inReview";
+}
+
 /** The observation's Held Book row, if it is listed. */
 export async function holdOf(
   ctx: QueryCtx | MutationCtx,
@@ -173,13 +187,15 @@ export async function holdOf(
 /**
  * Leave a record the importer cannot place on its observation (spec §6:
  * record, never guess): the reason becomes its `placement` note, and an
- * unlinked, non-withdrawn observation with no queued Proposal is listed as
- * a Held Book of `hold.kind`. A re-sighting of the same hold keeps its
- * place in the list (`heldAt`); a new kind moves it to the top. An
- * unlisted hold (null kind), a linked observation (a box set placed as a
- * Release Bundle that now names another Series), and one whose creation
- * Proposal was queued (the review queue has it) carry the note only, and
- * any row they had is removed. Returns whether anything was written.
+ * unlinked, non-withdrawn observation is listed as a Held Book of
+ * `hold.kind` unless the Proposal it points to is in review
+ * (proposalInReview). A re-sighting of the same hold keeps its place in
+ * the list (`heldAt`); a new kind moves it to the top. An unlisted hold
+ * (null kind), a linked observation (a box set placed as a Release Bundle
+ * that now names another Series), and one whose Proposal is in review (the
+ * review queue has it) carry the note only, and any row they had is
+ * removed. Once that Proposal is decided, the next hold lists the book
+ * again. Returns whether anything was written.
  */
 export async function recordUnplaced(
   ctx: MutationCtx,
@@ -198,7 +214,8 @@ export async function recordUnplaced(
     changed = true;
   }
   const row = await holdOf(ctx, current._id);
-  const listed = current.recordRef === undefined && !current.withdrawn && current.queuedProposalId === undefined;
+  const listed =
+    current.recordRef === undefined && !current.withdrawn && !(await proposalInReview(ctx, current));
   const kind = listed ? hold.kind : null;
   if (kind === null) {
     if (row === null) return changed;

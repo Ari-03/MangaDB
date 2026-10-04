@@ -135,8 +135,8 @@ lists the current set.
 
 A book an import observed but could not place, and that a person could,
 is a Held Book. The importer records why as a `placement` note on its
-observation and lists an unlinked, non-withdrawn one with no queued
-Proposal in `placementHolds` with a kind:
+observation, and lists the book in `placementHolds` with a kind while the
+observation is unlinked, not withdrawn, and has no Proposal in review:
 
 | Kind | Meaning | Recorded by |
 |---|---|---|
@@ -151,10 +151,12 @@ record but is not listed: an ANN line with no ISBN, a variant cover, a
 prose imprint or a foreign-language distributor, and the Open Library
 editions described under "Open Library" below.
 
-Once an importer queues a creation Proposal for a book, the book is the
-review queue's: the hold and its note go, and a later hold of that
-observation is a note only, whether the Proposal is open, approved or
-rejected.
+While a Proposal of a book is in review, the book is the review queue's:
+queuing a creation Proposal removes the hold and its note, and a hold
+recorded meanwhile is a note only. The observation's `queuedProposalId`
+stays after the Proposal is decided (and conflict and cancellation
+reviews set it too), so only the Proposal's state counts: once it is
+approved, rejected or withdrawn, the next hold lists the book again.
 
 A hold keeps the time it was first held while the importer sees the same
 kind again, and moves to the top when its kind changes. Linking the
@@ -178,8 +180,13 @@ the backfill holds unlinked notes under the kind their reason names and
 leaves the unlisted ones as notes, classifies unlinked Open Library
 editions as the next run would, and drops `placement` notes left on
 linked observations (not on a Release Bundle). It removes only holds that
-are no longer held: a book with a queued Proposal, an ANN line no one can
-place, or an Open Library edition the next run would skip. Withdrawn
+are no longer held: a book whose Proposal is in review, an ANN line no one
+can place or that its stored title or page puts out of scope (a variant
+cover, a prose imprint, a foreign-language distributor), or an Open Library
+edition the next run would skip or leave to the ladder's flag. The book in
+review and the Open Library edition lose their `placement` note too, on
+the first run as on any other, and the ANN line's note is rewritten to
+say why it is out of scope. Withdrawn
 observations are left alone. Run it once after deploying the list; it is
 safe to rerun:
 
@@ -295,7 +302,9 @@ row. It never creates a Series, Volume, publisher, packaging, variant
 cover, prose imprint, or a second same-format Release of a Volume from one
 publisher. Lines it cannot place are Held Books, except lines no one can
 place or that are out of scope (no ISBN, a variant cover, a prose imprint,
-a foreign-language distributor), which keep only their note. The page's description fills
+a foreign-language distributor), which keep only their note. Scope is
+checked right after the ISBN link, before any other hold, so an
+out-of-scope line is never held for its packaging, its Series or its ISBN. The page's description fills
 a blank Release Description at weak authority, and the pass refetches up
 to 2,000 linked pages a run to read descriptions. Citations link the
 Encyclopedia, as ANN's license requires.
@@ -399,7 +408,8 @@ Series is locked, or whose Volume already has that publisher's Release in
 its format; its packaging cannot be mapped; or the matching ladder flagged
 it (`isbn` for its ISBN or a taken slot, `series` for a same-titled
 Series), in which case the flag also stays on the observation as a `match`
-note. An edition with no Series match, an unknown publisher, or an ISBN
+note. The `match` note lasts only while the ladder flags the edition, and
+the observation's other notes stay beside it. An edition with no Series match, an unknown publisher, or an ISBN
 Yen Press holds out of scope is skipped and listed nowhere; a ladder flag
 on such an edition stays only as its `match` note. Library rebinds (Turtleback, Perfection Learning) never count
 as publishers. A Volume gets at most one Open Library leaf per (publisher,

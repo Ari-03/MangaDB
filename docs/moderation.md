@@ -63,6 +63,12 @@ with a reason, or requests changes with a reason, which returns it to
 Draft. Resubmitting creates the next version. Authors can withdraw from
 Draft or In Review. Reviewers never edit a version.
 
+A Proposal an import wrote cannot be sent back for changes: no one can
+revise an import's Draft, and no list shows one, so the book would be in
+neither the review queue nor the held list. `requestChanges` refuses it
+and the Proposal page does not offer the button. Approve it, reject it,
+or edit the record directly.
+
 Every update op records the record's base Revision. If any base moves
 before approval, approval applies nothing and marks the proposal stale.
 The author rebases it (`rebaseProposal`), reviews and resubmits. There is

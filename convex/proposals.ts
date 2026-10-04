@@ -615,13 +615,20 @@ export const addNote = mutation({
  * Request Changes: the proposal returns to Draft seeded with the reviewed
  * version, alongside a required note telling the author what to fix.
  * Resubmission creates the next immutable version — reviewers never edit a
- * version themselves.
+ * version themselves. Refused for an import's proposal: no one revises an
+ * import's Draft, and no list shows one, so it would strand the book.
  */
 export const requestChanges = mutation({
   args: { proposalId: v.id("proposals"), note: v.string() },
   handler: async (ctx, args) => {
     const user = await requireModerator(ctx);
     const proposal = await requireInReview(ctx, args.proposalId);
+    if (proposal.author.kind === "source") {
+      fail(
+        "importAuthored",
+        "An import wrote this proposal, so no one can revise it: approve it, reject it, or edit the record directly.",
+      );
+    }
     const note = args.note.trim();
     if (note === "") {
       fail("noteRequired", "Tell the author what needs to change.");

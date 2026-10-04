@@ -22,13 +22,14 @@ import { todaySortKey } from "./lib/dates";
 import { releasesOf } from "./lib/editionRows";
 import { sendAdminEmail } from "./lib/email";
 import { isStranded, lastActiveAt } from "./lib/importRuns";
-import { clearHold, type HoldKind, holdOf, recordUnplaced } from "./lib/observations";
+import { clearHold, type HoldKind, holdOf, proposalInReview, recordUnplaced } from "./lib/observations";
 import type { OlEditionSnapshot } from "./lib/openLibrary";
 import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
 import { insertSourceProposal } from "./lib/reconcile";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import { revisionsOf } from "./moderation";
+import { type AnnReleaseSnapshot, lineOutOfScope, SOURCE_KEY as ANN } from "./ann";
 import { placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
 import { holdKind } from "./schema";
 
@@ -671,8 +672,8 @@ export const markWithdrawn = internalMutation({
 /**
  * Held Books, most recently held first, optionally of one kind and from one
  * source. Data Team. Each row carries what the source says about the book
- * and why it is held. A book with a queued Proposal is never held: the
- * review queue has it.
+ * and why it is held. A book whose Proposal is in review is never held:
+ * the review queue has it.
  */
 export const heldBooks = query({
   args: {
@@ -768,8 +769,8 @@ const BACKFILL_PAGE = 10;
  *
  * - a linked observation's `placement` note is dropped as stale, except on
  *   a Release Bundle, where it is a box set's live Series conflict;
- * - an observation with a queued Proposal is the review queue's: its hold
- *   and note go;
+ * - an observation whose Proposal is in review is the review queue's: its
+ *   hold and note go (proposalInReview; a decided Proposal does not count);
  * - an unlinked Open Library edition is classified as applyEdition would
  *   (placeEdition): held if unheld and placeEdition holds it, its hold and
  *   note dropped if placeEdition skips it or leaves it to the ladder's flag
@@ -777,7 +778,9 @@ const BACKFILL_PAGE = 10;
  * - any other unlinked observation with a `placement` note and no row is
  *   held under the kind its reason names (storedHoldKind), first held when
  *   the note was written; a row whose note names an unlisted line goes and
- *   the note stays.
+ *   the note stays;
+ * - an unlinked ANN line whose stored title or page puts it out of scope
+ *   (lineOutOfScope) is noted as the page pass notes it, and any row goes.
  *
  * Withdrawn observations are skipped. Writes observations and holds only:
  * no fetch, no canonical record, no link. Safe to rerun. A page that fails
@@ -807,11 +810,11 @@ export const backfillHolds = internalMutation({
         }
         continue;
       }
-      const row = await holdOf(ctx, observation._id);
-      if (observation.queuedProposalId !== undefined) {
-        if (row !== null && (await clearHold(ctx, observation._id))) counts.cleared++;
+      if (await proposalInReview(ctx, observation)) {
+        if (await clearHold(ctx, observation._id)) counts.cleared++;
         continue;
       }
+      const row = await holdOf(ctx, observation._id);
       if (observation.sourceKey === OPEN_LIBRARY) {
         const placement = await placeEdition(ctx, observation.snapshot as OlEditionSnapshot);
         if (placement.kind === "hold") {
@@ -819,13 +822,19 @@ export const backfillHolds = internalMutation({
           const at = note?.reason === placement.hold.reason ? note.at : Date.now();
           if (await recordUnplaced(ctx, observation, placement.hold, at)) counts.classified++;
         } else if (placement.kind === "skip" || placement.kind === "review") {
-          if (row !== null && (await clearHold(ctx, observation._id))) counts.cleared++;
+          if (await clearHold(ctx, observation._id)) counts.cleared++;
         }
         continue;
       }
       if (note === undefined) continue;
       const kind = storedHoldKind(note.reason);
-      if (row === null && kind !== null) {
+      const outOfScope =
+        kind !== null && observation.sourceKey === ANN && observation.snapshot?.kind === "annRelease"
+          ? lineOutOfScope(observation.snapshot as AnnReleaseSnapshot)
+          : null;
+      if (outOfScope !== null) {
+        if (await recordUnplaced(ctx, observation, { kind: null, reason: outOfScope }, Date.now())) counts.cleared++;
+      } else if (row === null && kind !== null) {
         if (await recordUnplaced(ctx, observation, { kind, reason: note.reason }, note.at)) counts.held++;
       } else if (row !== null && kind === null) {
         if (await recordUnplaced(ctx, observation, { kind, reason: note.reason }, note.at)) counts.cleared++;

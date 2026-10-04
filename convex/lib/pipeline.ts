@@ -1754,9 +1754,9 @@ async function queueEditionLine(
  * These land in the shared review queue (proposals.ts); a Moderator's
  * approval applies the ops via the creation registry. The observation
  * remembers the proposal (queuedProposalId) so an unchanged snapshot never
- * re-queues — not while one is open, and not after a rejection. From here
- * the book is the review queue's, never a Held Book (clearHold), whatever
- * the Proposal's outcome.
+ * re-queues — not while one is open, and not after a rejection. While the
+ * Proposal is in review the book is the review queue's, never a Held Book
+ * (clearHold); once it is decided, a later hold lists the book again.
  */
 export async function queueCreationProposal(
   ctx: MutationCtx,
