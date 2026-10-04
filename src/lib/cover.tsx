@@ -19,8 +19,10 @@ const CLOTH = [
  * Cover art by ISBN-13, served from our own domain (src/server/covers.ts):
  * the Worker fetches it from a publisher-distribution CDN or OpenLibrary on
  * first request and keeps it. A Release with an ISBN therefore always has a
- * cover URL; the 404 for art nobody has is caught by <Cover>, which tries its
- * next candidate and ends at cloth.
+ * cover URL; the 404 for art nobody has, and the 503 for art not fetched
+ * within the Worker's 3 s wait, are caught by <Cover>, which tries its next
+ * candidate and ends at cloth. So a cover settles within about 3 s per
+ * candidate; the art the wait cut short is there on the next view.
  */
 function coverPath(isbn13: string): string {
   return `/covers/${isbn13}.jpg`;

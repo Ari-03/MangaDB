@@ -425,6 +425,17 @@ day. An upstream that is down, rate-limiting or has not delivered within 10
 seconds gives a five-minute miss.
 Found art is stored in R2 and cached for 30 days.
 
+A visitor waits at most 3 seconds for art R2 does not hold. Past that they
+get an uncached 503, and the page moves to the Release's next ISBN and then
+to cloth. The lookup keeps running in the background and stores its
+answer (the art, or the day's or five minutes' miss), so the next view
+finds it. Every jacket is sent with an `ETag`: R2's for a stored copy, and
+for fresh art the MD5 tag R2 gives it once stored. A request whose
+`If-None-Match` names it gets a 304, whether it is answered from the edge
+cache or from R2. The 304 repeats the 200's caching headers and the edge
+copy's `Age`, so a stale jacket's hour is not restarted downstream.
+`If-Modified-Since` is not answered.
+
 A stored jacket is checked again once 90 days have passed since its
 upstreams were last asked. The stored copy is still served, cached for an
 hour, while the check runs in the background in the same source order,

@@ -375,12 +375,49 @@ export default defineSchema({
     // lists (used only where PRH credits nothing). Absent for rows derived
     // from ANN.
     source: v.optional(v.union(v.literal("prh"), v.literal("creators"))),
-    // Publisher rows only: the role the observations of the rebuild that
-    // last stamped the row gave it. `role` may show a fuller role from an
-    // earlier run until that rebuild settles (people.ts settleRoles), so a
-    // role the run has yet to reach doesn't flicker away and back.
+    // Legacy: the rebuild's run fields, kept here before they moved to
+    // `seriesCreditRuns`. The first rebuild to see a row moves them there
+    // and clears them; one it never sees is swept by its `rebuiltAt`
+    // (people.ts sweepCredits). Rows written since have none of them.
     runRole: v.optional(creditRole),
-    // PRH rows only: the names this rebuild's observations gave this credit,
+    runNames: v.optional(
+      v.array(
+        v.object({ name: v.string(), role: creditRole, count: v.number(), seenAt: v.number() }),
+      ),
+    ),
+    runApart: v.optional(v.array(v.string())),
+    runVariants: v.optional(
+      v.array(v.object({ personId: v.id("people"), count: v.number(), seenAt: v.number() })),
+    ),
+    rebuiltAt: v.optional(v.number()),
+  })
+    .index("by_series", ["seriesId"])
+    .index("by_person", ["personId"])
+    // The sweep of legacy rows (above) a rebuild never reached.
+    .index("by_rebuiltAt", ["rebuiltAt"])
+    .index("by_source_and_rebuiltAt", ["source", "rebuiltAt"]),
+
+  // What the author-credit rebuild (people.ts rebuild) last did with each
+  // `seriesCredits` row: one row per credit, deleted with it. Kept apart so
+  // stamping a credit every run never writes the credit itself, which every
+  // page showing its Series' byline reads; a credit is written only when
+  // what it shows (person, role) changes.
+  seriesCreditRuns: defineTable({
+    creditId: v.id("seriesCredits"),
+    seriesId: v.id("series"),
+    // The credit's `source`, which never changes, for the sweep of ANN's
+    // rows alone.
+    source: v.optional(v.union(v.literal("prh"), v.literal("creators"))),
+    // The `startedAt` of the latest rebuild whose observations gave the
+    // credit. One older than a finished run's is no longer given and is
+    // swept with its credit.
+    rebuiltAt: v.number(),
+    // Publisher rows only: the role that rebuild's observations gave the
+    // credit. Its `role` may show a fuller role from an earlier run until
+    // the rebuild settles (people.ts settleRoles), so a role the run has
+    // yet to reach doesn't flicker away and back.
+    runRole: v.optional(creditRole),
+    // PRH rows only: the names that rebuild's observations gave the credit,
     // one per spelling key, near spellings of one name among them ("Choe
     // Gyu-Seok", "Choi Gyu-Seok"), each with its roles, how many
     // observations named it, and the latest of those observations'
@@ -391,19 +428,12 @@ export default defineSchema({
         v.object({ name: v.string(), role: creditRole, count: v.number(), seenAt: v.number() }),
       ),
     ),
-    // PRH rows only: pairs of spelling keys ("a|b") one line of this
+    // PRH rows only: pairs of spelling keys ("a|b") one line of that
     // rebuild named together, so settle keeps them two people. A line names
     // a handful of people, so a Series has a few pairs.
     runApart: v.optional(v.array(v.string())),
-    // Superseded by runNames; left by a staging rehearsal of the previous
-    // rule and cleared from each row the next time a rebuild stamps it.
-    runVariants: v.optional(
-      v.array(v.object({ personId: v.id("people"), count: v.number(), seenAt: v.number() })),
-    ),
-    rebuiltAt: v.number(),
   })
     .index("by_series", ["seriesId"])
-    .index("by_person", ["personId"])
     .index("by_rebuiltAt", ["rebuiltAt"])
     // The sweep of ANN's rows alone, when a rebuild's publisher pass failed.
     .index("by_source_and_rebuiltAt", ["source", "rebuiltAt"]),

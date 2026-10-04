@@ -396,7 +396,20 @@ evidence in `workMatch`.
 
 The rebuild runs in phases (rekey, ANN, publishers, sweep, settle roles,
 prune, stats)
-and hands off to a fresh action after five minutes. `npx convex run
+and hands off to a fresh action after five minutes. A run marks each
+credit it derives, and keeps its PRH tallies, in `seriesCreditRuns`, not
+on the credit. Every Series page reads its credits, so a credit row is
+written only when its person or role changes, and a run that finds
+nothing new invalidates no page. The sweep deletes the credits whose run
+row is older than the run. Rows written before that table existed carry
+their marks themselves. The first run to derive one moves the marks off
+it, and one that no run derives is swept by its own mark. A run cut off
+by the deploy that brought the table starts over when its next action
+begins, since its settle step would miss the rows it had already marked
+the old way. An action already running when that deploy lands can still
+finish its settle step without those rows; a role it should have lowered
+or a spelling it should have folded then waits for the next 6-hourly run,
+which settles it. `npx convex run
 people:rebuild` returns after the first action. For ANN observations stored
 before credits were kept, `npx convex run people:backfillAnnCredits`
 fetches them at ANN's rate and then rebuilds.
