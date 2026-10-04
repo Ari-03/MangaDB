@@ -1670,7 +1670,8 @@ export async function variantMergeRefusal(
   if (entries + memberships > VARIANT_MERGE_PIN_LIMIT) {
     return (
       `More than ${VARIANT_MERGE_PIN_LIMIT} collection entries and bundle memberships pin the ` +
-      "variant being merged. Split puts every pin back in one transaction, which cannot read that many."
+      `variant being merged, and a variant merge moves at most ${VARIANT_MERGE_PIN_LIMIT}, since Split ` +
+      "puts every pin back in one transaction."
     );
   }
   return null;
