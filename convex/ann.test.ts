@@ -518,6 +518,11 @@ describe("ann.sync — the series-structured backbone (Bootstrap Mode)", () => {
     }) as unknown as typeof setTimeout);
     stubAnn([BETA]);
     await sync(t, { politeDelayMs: undefined });
+    // The completed mirror chains the page pass, which the stub has already
+    // started: finish it here, so its pause is counted and its fetch never
+    // reaches a later test's stub after a real 1.1 s sleep.
+    await t.finishInProgressScheduledFunctions();
+    expect(await obsFor(t, 9101)).toMatchObject({ snapshot: { page: { status: "notFound" } } });
     expect(waits.length).toBeGreaterThan(0);
     expect(Math.min(...waits.filter((w) => w > 0))).toBeGreaterThanOrEqual(1000);
   });
@@ -2439,7 +2444,11 @@ describe("ann — release-page descriptions", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await drain(t);
     // One failure in the first link, four in the next: five in a row, stop.
-    expect(pageRequests).toHaveLength(5);
+    // Only this test's pages: a page pass another test left scheduled can
+    // fetch its own fixture's page through this stub.
+    expect(pageRequests.filter((url) => /\?id=[1-7]$/.test(url))).toEqual(
+      ["1", "2", "3", "4", "5"].map((id) => `https://www.animenewsnetwork.com/encyclopedia/releases.php?id=${id}`),
+    );
     expect(warn).toHaveBeenCalledWith(
       expect.stringMatching(/backfillDescriptions\] stopped: ANN looks down: 5 page fetches/),
     );
