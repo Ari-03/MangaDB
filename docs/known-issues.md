@@ -53,6 +53,23 @@ is fixed.
   Clerk id, with its username, role and past events, stays until someone
   deletes it in PostHog. Opting out of analytics in Settings stops new
   events only.
+- **A page opened while Off can reach PostHog after another tab opts
+  in.** posthog-js stores its opt-out in localStorage, shared by every
+  tab, so another tab of the same browser opting in (switching On,
+  signing out) turns capturing back on in a tab that is Off or still
+  loading its choice, until that tab receives the same change or its
+  choice answers. `before_send` in `src/lib/analyticsClient.tsx` drops
+  the events of that moment, but posthog-js has already updated its state
+  from them. Once sending resumes, the next pageview names a dropped
+  pageview's pathname as `$prev_pageview_pathname`; and a session that
+  began on a dropped event (the first after 30 minutes idle, or the
+  browser's first) carries that event's address, query string included,
+  as `$session_entry_url` on every later event of the session, across
+  reloads. A fix needs a consent store not shared between tabs, or
+  clearing posthog-js's previous-page and session state, which its public
+  API does not offer: `reset()` starts a new session but keeps the
+  previous page and replaces the anonymous id. A test in
+  `src/lib/analyticsClient.test.ts` pins the session case.
 
 ## Catalog and imports
 

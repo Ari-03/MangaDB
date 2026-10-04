@@ -3,7 +3,8 @@
 
 // The PostHog client (lib/analyticsClient.tsx) against the real posthog-js
 // in a happy-dom page: its options and applyConsent drive posthog.init and
-// every consent change, as the provider and ConsentSync do. fetch, XHR and
+// every consent change, as the provider and ConsentSync do; the remount
+// tests render the real component (mountPage) instead. fetch, XHR and
 // sendBeacon are stubbed, so nothing leaves the process, and every request
 // body is decoded into the events it carries. A page load is a fresh
 // posthog-js module over the same localStorage and cookies. Assertions are
@@ -145,6 +146,50 @@ async function openPage(path: string, consent: AnalyticsConsent) {
   };
 }
 
+/**
+ * Load a page at `path` with the real component (PostHogAnalytics, its
+ * provider and ConsentSync) rendered in a React root. `render` passes the
+ * session's consent as props; `unmount` removes the component while the
+ * page and its posthog-js stay, as an error boundary reset does.
+ */
+async function mountPage(path: string) {
+  Object.assign(history, pristineHistory);
+  history.replaceState(null, "", path);
+  stubNetwork();
+  vi.resetModules();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const { act, createElement } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { default: posthog } = await import("posthog-js");
+  const { default: PostHogAnalytics } = await import("./analyticsClient");
+  const init = posthog.init.bind(posthog);
+  // happy-dom's user agent reads as a bot, which posthog-js drops.
+  vi.spyOn(posthog, "init").mockImplementation((token, config, name) =>
+    init(token, { ...config, opt_out_useragent_filter: true }, name),
+  );
+  // The provider's second init() on a remount warns that posthog-js is already loaded.
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  mounted.push(() => act(async () => root.unmount()));
+  return {
+    render: async (consent: AnalyticsConsent) => {
+      await act(async () => root.render(createElement(PostHogAnalytics, { apiKey: "phc_test", consent })));
+      await settle();
+    },
+    unmount: async () => {
+      await act(async () => root.render(null));
+      await settle();
+    },
+    go: async (to: string) => {
+      history.pushState(null, "", to);
+      await settle();
+    },
+  };
+}
+
+// Roots mountPage rendered, unmounted after each test.
+const mounted: Array<() => Promise<void>> = [];
+
 /** A page visited with no client loaded (an opted-out viewer's page loads). */
 function visitWithoutClient(path: string) {
   Object.assign(history, pristineHistory);
@@ -193,7 +238,9 @@ beforeEach(() => {
   events.length = 0;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const unmount of mounted.splice(0)) await unmount();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -430,6 +477,32 @@ describe("analyticsClient against posthog-js", () => {
     expect(requests.slice(switched)).toEqual([]);
   });
 
+  // A known limit (docs/known-issues.md): before_send drops the event, but
+  // posthog-js has already begun the session on it. Fails if posthog-js stops
+  // doing so, when the limit and its docs can go.
+  it("known limit: a session begun on a page dropped while Off after another tab opted in keeps it as its entry URL", async () => {
+    const page = await openPage("/", identified("user_a"));
+    await page.apply(OFF);
+    localStorage.setItem("__ph_opt_in_out_phc_test", "1");
+    vi.setSystemTime(Date.now() + 31 * 60 * 1000);
+    await page.go(`/search?q=${OFF_TIME}-query`);
+    const resumed = events.length;
+    await page.apply(identified("user_a"));
+    await page.go("/series/2");
+    await openPage("/me", identified("user_a"));
+
+    const sent = since(resumed);
+    expect(named(sent)).toEqual([
+      ["$pageview", "user_a"],
+      ["$pageview", "user_a"],
+      ["$set", "user_a"],
+    ]);
+    for (const event of sent) {
+      expect(event.properties.$session_entry_url).toBe(`https://mangadb.test/search?q=${OFF_TIME}-query`);
+      expect(event.properties.$session_entry_pathname).toBe("/search");
+    }
+  });
+
   it("links anonymous browsing to the account it signs in to, once", async () => {
     const page = await openPage("/", ANONYMOUS);
     await page.go("/series/1");
@@ -461,5 +534,36 @@ describe("analyticsClient against posthog-js", () => {
     await page.go("/series/2");
     await openPage("/series/3", ANONYMOUS);
     expect(requests).toEqual([]);
+  });
+
+  it("stops sending when switched Off after the client remounts", async () => {
+    const page = await mountPage("/series/1");
+    await page.render(identified("user_b"));
+    await page.go("/series/2");
+    expect(named(events)).toEqual([
+      ["$identify", "user_b"],
+      ["$pageview", "user_b"],
+      ["$pageview", "user_b"],
+    ]);
+    await page.unmount();
+    await page.render(identified("user_b"));
+    const switched = requests.length;
+    await page.render(OFF);
+    await page.go("/series/3");
+    expect(requests.slice(switched)).toEqual([]);
+  });
+
+  it("resumes sending once when switched On after a client that was Off remounts", async () => {
+    const page = await mountPage("/series/1");
+    await page.render(identified("user_b"));
+    await page.render(OFF);
+    await page.unmount();
+    await page.render(OFF);
+    const resumed = events.length;
+    await page.render(identified("user_b"));
+    await page.go("/series/2");
+    expect(since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+      ["$pageview", "user_b", "/series/2"],
+    ]);
   });
 });

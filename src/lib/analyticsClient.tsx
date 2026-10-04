@@ -39,6 +39,9 @@ let sending = false;
 // or found a denial, and has not opted in since. The stored opt-out cannot
 // say, since another tab's reset() or opt-in changes it for every tab.
 let needsOptIn = false;
+// Whether `loaded` has run. The posthog-js singleton outlives the component
+// and calls `loaded` once, so a remounted component starts from this.
+let clientLoaded = false;
 
 /**
  * posthog.init's options: `loaded` hands the instance to track() and applies
@@ -48,6 +51,7 @@ export function clientOptions(current: () => AnalyticsConsent, onLoaded: () => v
   return {
     ...baseOptions,
     loaded: (instance) => {
+      clientLoaded = true;
       attachAnalyticsClient(instance);
       applyConsent(current());
       onLoaded();
@@ -65,8 +69,9 @@ export default function PostHogAnalytics({
   // The provider inits posthog-js's default instance (`posthog`) in its own
   // effect, after its children's effects, so the consent sync mounts on
   // `loaded` instead of racing init. `loaded` runs before posthog-js sends
-  // its first pageview, so the consent of that moment is applied there.
-  const [loaded, setLoaded] = useState(false);
+  // its first pageview, so the consent of that moment is applied there. A
+  // remount finds posthog-js already loaded and mounts the sync at once.
+  const [loaded, setLoaded] = useState(clientLoaded);
   const latest = useRef(consent);
   latest.current = consent;
   const options = useMemo(() => clientOptions(() => latest.current, () => setLoaded(true)), []);

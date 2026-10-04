@@ -248,7 +248,11 @@ are reinstated.
 Settings, Analytics turns product analytics off for the account: nothing
 from the browser while signed in, and none of the events the user causes
 from the server, moderation included. Nothing is sent while a
-signed-in user's choice is still loading. A browser that sends Do Not Track
+signed-in user's choice is still loading. If another tab turns analytics
+on while this one is Off or loading, a page opened in this tab before it
+catches up can still be named later: as the previous page of the next page
+view, or, if a visit began on it, as that visit's entry address, search
+text included, on every event of the visit. A browser that sends Do Not Track
 or Global Privacy Control sends nothing either way, and switches an account
 that has never chosen to Off, once; the panel says so. A browser without
 it never switches an account back on. Signed-out visitors have no toggle;
