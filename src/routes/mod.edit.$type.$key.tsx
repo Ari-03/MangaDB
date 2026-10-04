@@ -36,7 +36,8 @@ import { convexClient } from "~/providers";
  * The inputs lock while a save is in flight, since its success resets the
  * form to the live record. Each Human Override on the record has a Clear
  * control that lifts it the same way: a reason, a preview of what stays,
- * and an immediately approved Proposal with one public Revision.
+ * and an immediately approved Proposal with one public Revision, anchored
+ * on the base Revision the preview was captured from.
  *
  * Auth-gated client-side for UX; the Convex functions re-check the role on
  * every call. Never indexed.
@@ -104,6 +105,8 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedSeq, setSavedSeq] = useState<number | null>(null);
+  // Held here, not in the panel: clearing the last override unmounts it.
+  const [cleared, setCleared] = useState<{ label: string; seq: number } | null>(null);
 
   if (form === undefined) {
     return (
@@ -182,7 +185,12 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
         revision to this record's history.
       </p>
       {form.overriddenFields.length > 0 ? (
-        <HumanOverrides form={form} editable={editable} />
+        <HumanOverrides form={form} editable={editable} setCleared={setCleared} />
+      ) : null}
+      {cleared ? (
+        <p className="notice">
+          Override on {cleared.label} cleared — revision #{cleared.seq} recorded.
+        </p>
       ) : null}
       {!editable ? (
         <p className="notice">
@@ -266,34 +274,73 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
 type EditForm = NonNullable<FunctionReturnType<typeof api.moderation.editForm>>;
 
 /**
+ * What the Moderator saw when opening Clear: the record, the override, the
+ * base Revision, and the value that stays. The clear is submitted against
+ * this base, so a change landing meanwhile is shown, never silently adopted.
+ */
+type ClearSnapshot = EditForm["overrides"][number] & {
+  ref: EditForm["ref"];
+  baseRevisionId: EditForm["baseRevisionId"];
+  value: unknown;
+};
+
+/**
  * The record's Human Overrides, each editable one with a Clear control: the
  * Moderator gives a reason, sees the value that stays and who wrote it, and
  * the clear applies at once (moderation.submitDirectClear) against the base
- * Revision the form shows, so a concurrent change is refused as stale.
+ * Revision captured when Clear opened. If the record changes before the
+ * clear is confirmed, confirmation waits until the Moderator reviews the
+ * current state, which captures it afresh.
  */
-function HumanOverrides({ form, editable }: { form: EditForm; editable: boolean }) {
+function HumanOverrides({
+  form,
+  editable,
+  setCleared,
+}: {
+  form: EditForm;
+  editable: boolean;
+  setCleared: (cleared: { label: string; seq: number } | null) => void;
+}) {
   const submitDirectClear = useMutation(api.moderation.submitDirectClear);
-  const [clearing, setClearing] = useState<string | null>(null);
+  const [clearing, setClearing] = useState<ClearSnapshot | null>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cleared, setCleared] = useState<{ label: string; seq: number } | null>(null);
 
   const clearable = new Set(form.overrides.map((override) => override.field));
   const others = form.overriddenFields.filter((field) => !clearable.has(field));
-  const selected = form.overrides.find((override) => override.field === clearing);
+  // Someone changed the record after the Clear dialog captured it.
+  const changed =
+    clearing !== null &&
+    (clearing.ref.id !== form.ref.id || clearing.baseRevisionId !== form.baseRevisionId);
 
-  const clear = async ({ field, label }: EditForm["overrides"][number]) => {
+  /** Open (or refresh) the Clear dialog on the live record's state. */
+  const capture = (field: string, label: string) => {
+    const override = form.overrides.find((candidate) => candidate.field === field);
+    setError(override ? null : `${label} is no longer overridden; there is nothing to clear.`);
+    setClearing(
+      override
+        ? {
+            ...override,
+            ref: form.ref,
+            baseRevisionId: form.baseRevisionId,
+            value: form.fields.find((candidate) => candidate.name === field)?.value,
+          }
+        : null,
+    );
+  };
+
+  const clear = async (snapshot: ClearSnapshot) => {
     setBusy(true);
     setError(null);
     try {
       const { seq } = await submitDirectClear({
-        ref: form.ref as never,
-        field,
-        baseRevisionId: form.baseRevisionId ?? undefined,
+        ref: snapshot.ref as never,
+        field: snapshot.field,
+        baseRevisionId: snapshot.baseRevisionId ?? undefined,
         comment: reason,
       });
-      setCleared({ label, seq });
+      setCleared({ label: snapshot.label, seq });
       setClearing(null);
       setReason("");
     } catch (err) {
@@ -316,14 +363,13 @@ function HumanOverrides({ form, editable }: { form: EditForm; editable: boolean 
             <div className="revision-meta">
               <span className="revision-author">{override.label}</span>
               <span>{writtenByLabel(override.writtenBy)}</span>
-              {editable && clearing !== override.field ? (
+              {editable && clearing?.field !== override.field ? (
                 <button
                   type="button"
                   className="btn btn-sm"
                   disabled={busy}
                   onClick={() => {
-                    setClearing(override.field);
-                    setError(null);
+                    capture(override.field, override.label);
                     setCleared(null);
                   }}
                 >
@@ -334,21 +380,37 @@ function HumanOverrides({ form, editable }: { form: EditForm; editable: boolean 
           </li>
         ))}
       </ol>
-      {selected ? (
+      {clearing ? (
         <form
           className="mod-edit-form"
           onSubmit={(event) => {
             event.preventDefault();
-            void clear(selected);
+            if (!changed) void clear(clearing);
           }}
         >
+          {changed ? (
+            <div className="notice" role="alert">
+              <p>
+                This record was changed by someone else after you opened Clear. Review its
+                current state before clearing; your reason is kept.
+              </p>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => capture(clearing.field, clearing.label)}
+              >
+                Review current state
+              </button>
+            </div>
+          ) : null}
           <p className="section-hint">
-            Clearing the override on {selected.label} keeps its value,{" "}
-            <code>
-              {renderFieldValue(form.fields.find((field) => field.name === selected.field)?.value)}
-            </code>{" "}
-            ({writtenByLabel(selected.writtenBy)}), and adds a public revision to this record's
-            history.
+            Clearing the override on {clearing.label} keeps its value,{" "}
+            <code>{renderFieldValue(clearing.value)}</code> ({writtenByLabel(clearing.writtenBy)}),
+            and adds a public revision to this record's history
+            {form.importReviewPending
+              ? "; an import's Proposal still in review on this record goes stale, so approve it first if you want its value."
+              : "."}
           </p>
           <label>
             Reason (required)
@@ -364,7 +426,11 @@ function HumanOverrides({ form, editable }: { form: EditForm; editable: boolean 
             />
           </label>
           <div className="mod-actions">
-            <button type="submit" className="btn btn-primary" disabled={busy || reason.trim() === ""}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={busy || changed || reason.trim() === ""}
+            >
               {busy ? "Clearing…" : "Clear override"}
             </button>
             <button
@@ -382,11 +448,6 @@ function HumanOverrides({ form, editable }: { form: EditForm; editable: boolean 
         </form>
       ) : null}
       {error ? <p className="form-error">{error}</p> : null}
-      {cleared ? (
-        <p className="notice">
-          Override on {cleared.label} cleared — revision #{cleared.seq} recorded.
-        </p>
-      ) : null}
     </section>
   );
 }

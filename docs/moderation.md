@@ -56,17 +56,31 @@ record's base Revision like an update. A Moderator clears directly with
 direct edit). An Editor ticks the field on the propose page, and the clear
 goes to review in that Proposal. Either way `applyClearOverride` takes the
 field off the list and writes one public Revision recording
-`overriddenFields` before and after, with the reason as its comment.
+`overriddenFields` before and after, with the reason as its comment. Both
+pages hold the state the person looked at: the Clear dialog captures the
+base, value and author when it opens, and the propose page pins its values
+at the first edit or tick. If the record changes before confirming, the
+page says so and waits for an explicit reload.
 
 Clearing removes only the sticky flag. The field keeps its value, and the
-Revisions that wrote it are unchanged. If a source wrote the current
-value, the next differing import value is weighed under the usual Field
-Authority rules and may apply. If a person wrote it, or nothing records
-who did, that value still goes to review once. Clearing replays no stored
-observation: an import changes the field only when its source offers a
-value again. To take a value a source already offered, approve that
-source's conflict Proposal. Clearing a description override changes which
-Release speaks for an Edition or Volume at the next page read.
+Revisions that wrote it are unchanged. Imports then follow the usual Field
+Authority rules: replacing a value a person wrote (or that nothing records
+who wrote) still needs review, and a value a source wrote may update
+automatically. Not every differing offer reaches review, though. A less
+precise date that agrees with the current one, an offer a reviewer already
+rejected, and an offer from a source with no authority over the field are
+skipped or only recorded on the observation. An empty field that no one
+wrote can be filled by an import. Clearing replays no stored observation:
+an import changes the field only when its source offers a value again.
+
+To take a value a source already offered, approve that source's conflict
+Proposal first, then clear the override if it should go. A clear writes a
+Revision, which moves the record's base: a conflict Proposal still open at
+that moment goes stale, cannot be rebased (a source wrote it), and is
+replaced only when the source record next changes. The Clear control on
+the edit page says so when such a Proposal is waiting. Clearing a
+description override changes which Release speaks for an Edition or Volume
+at the next page read.
 
 A Proposal may clear overrides beside other ops, on the same record or
 others, and applies all of them or none. It may not both change a field

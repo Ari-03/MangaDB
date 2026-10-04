@@ -311,7 +311,8 @@ type StaleRecord = {
  * references by ID — an importer's coverage over existing Volumes, a new
  * volume's series — is no longer active. Spec §5: any base change before
  * approval makes the version stale — explicit rebase and resubmit, never a
- * silent rebase.
+ * silent rebase. Each record is listed once per reason, however many of
+ * its ops are stale.
  */
 async function staleRecordsOf(
   ctx: QueryCtx | MutationCtx,
@@ -340,7 +341,13 @@ async function staleRecordsOf(
   for (const ref of await unavailableCreateRefs(ctx, creates)) {
     stale.push({ ...ref, reason: "unavailable" });
   }
-  return stale;
+  const seen = new Set<string>();
+  return stale.filter(({ type, id, reason }) => {
+    const key = `${type}:${id}:${reason}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // ---------- the Editor lifecycle: draft → submit → withdraw/rebase ----------
@@ -1012,9 +1019,13 @@ async function describeCreate(
 /**
  * Render an op set for review: grouped before/after per record, the base
  * Revision each update anchors on, per-record staleness, and structural
- * summaries for creates (the temp-ID graph made readable).
+ * summaries for creates (the temp-ID graph made readable). Staleness and a
+ * clear's kept value compare against the live record, so they are reported
+ * only for `live` ops (the working copy or current version of a Proposal
+ * still in Draft or review); a decided Proposal's approval itself moved the
+ * base, and the live value is not what it reviewed.
  */
-async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
+async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boolean) {
   const rendered = [];
   const tempLabels = new Map<string, string>();
   for (const op of ops) {
@@ -1044,10 +1055,11 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
           ? { seq: base.seq, comment: base.comment }
           : { seq: 0, comment: null },
         stale:
-          !doc ||
-          doc.status !== "active" ||
-          Boolean(doc.locked) ||
-          (latest?._id ?? null) !== (op.baseRevisionId ?? null),
+          live &&
+          (!doc ||
+            doc.status !== "active" ||
+            Boolean(doc.locked) ||
+            (latest?._id ?? null) !== (op.baseRevisionId ?? null)),
       });
     } else if (op.kind === "clearOverride") {
       const ref = op.ref;
@@ -1061,17 +1073,22 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[]) {
         recordTitle: doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)",
         field: op.field,
         fieldLabel: fieldDescriptor(ref.type, op.field)?.label ?? op.field,
-        value: doc ? (doc as Record<string, unknown>)[op.field] : undefined,
-        writtenBy: writtenBy(history, op.field),
+        kept: live
+          ? {
+              value: doc ? (doc as Record<string, unknown>)[op.field] : undefined,
+              writtenBy: writtenBy(history, op.field),
+            }
+          : null,
         base: base
           ? { seq: base.seq, comment: base.comment }
           : { seq: 0, comment: null },
         stale:
-          !doc ||
-          doc.status !== "active" ||
-          Boolean(doc.locked) ||
-          !(doc.overriddenFields ?? []).includes(op.field) ||
-          (history[0]?._id ?? null) !== (op.baseRevisionId ?? null),
+          live &&
+          (!doc ||
+            doc.status !== "active" ||
+            Boolean(doc.locked) ||
+            !(doc.overriddenFields ?? []).includes(op.field) ||
+            (history[0]?._id ?? null) !== (op.baseRevisionId ?? null)),
       });
     } else if (op.kind === "merge") {
       rendered.push({
@@ -1226,14 +1243,16 @@ export const proposalDetail = query({
       .collect();
     versions.sort((a, b) => a.versionNo - b.versionNo);
 
+    const undecided = proposal.state === "draft" || proposal.state === "inReview";
     const renderedVersions = [];
     for (const version of versions) {
+      const current = version.versionNo === proposal.currentVersionNo;
       renderedVersions.push({
         versionNo: version.versionNo,
-        current: version.versionNo === proposal.currentVersionNo,
+        current,
         changeComment: version.changeComment,
         warnings: version.warningsAcknowledged ?? [],
-        ops: await renderOps(ctx, version.ops),
+        ops: await renderOps(ctx, version.ops, undecided && current),
         evidence: await renderEvidence(ctx, version.evidence),
         submittedAt: version._creationTime,
       });
@@ -1275,7 +1294,7 @@ export const proposalDetail = query({
       versions: renderedVersions,
       draft: proposal.draft
         ? {
-            ops: await renderOps(ctx, proposal.draft.ops),
+            ops: await renderOps(ctx, proposal.draft.ops, undecided),
             evidence: await renderEvidence(ctx, proposal.draft.evidence),
             comment: proposal.draft.comment,
             warnings: computeWarnings(proposal.draft.ops),

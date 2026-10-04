@@ -25,8 +25,11 @@ import { convexClient } from "~/providers";
  * Version In Review in the shared queue. Each Human Override on an editable
  * field can be ticked for clearing, which adds a clearOverride op to the
  * same Proposal. Renders from the same registry the mutations validate
- * against. Auth-gated client-side for UX; the Convex functions re-check the
- * role on every call. Never indexed.
+ * against. The server anchors every op on the base Revision current when
+ * the draft is saved, so the form follows the live record until the first
+ * edit or tick and pins its values then; a newer Revision arriving asks the
+ * Editor to reload before saving. Auth-gated client-side for UX; the Convex
+ * functions re-check the role on every call. Never indexed.
  */
 export const Route = createFileRoute("/mod/propose/$type/$key")({
   head: () => ({ meta: [{ title: "Propose a change — MangaDB" }] }),
@@ -70,6 +73,9 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
   const [state, setState] = useState<FormState | null>(null);
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
   const [clears, setClears] = useState<ReadonlySet<string>>(new Set());
+  // The base Revision the pinned values and ticks were made against; unset
+  // while the form still follows the live record.
+  const [pinnedBase, setPinnedBase] = useState<{ id: string | null } | null>(null);
   const [comment, setComment] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
   const [evidenceNote, setEvidenceNote] = useState("");
@@ -93,7 +99,14 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
   }
 
   const values = state ?? initialFormState(form.fields);
+  const pin = () => {
+    if (!pinnedBase) setPinnedBase({ id: form.baseRevisionId });
+  };
+  // Someone else changed the record after the values were pinned: a save
+  // now would anchor the ops on a state the Editor has not seen.
+  const stale = pinnedBase !== null && pinnedBase.id !== form.baseRevisionId;
   const setValue = (key: string, value: string) => {
+    pin();
     setState({ ...values, [key]: value });
     setDirty(new Set([...dirty, key]));
     draft.clearSaved();
@@ -101,13 +114,17 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
 
   const editable = form.status === "active" && !form.locked;
   const toggleClear = (field: string, on: boolean) => {
+    pin();
     const next = new Set(clears);
     if (on) next.add(field);
     else next.delete(field);
     setClears(next);
     draft.clearSaved();
   };
-  const changed = dirty.size > 0 || clears.size > 0;
+  // A ticked clear counts only while the override is still on the record:
+  // once someone else clears it, its checkbox is gone and so is the op.
+  const activeClears = form.overrides.filter((override) => clears.has(override.field));
+  const changed = dirty.size > 0 || activeClears.length > 0;
 
   const buildArgs = (): DraftContent => {
     const changes: Array<{ field: string; value: unknown }> = [];
@@ -131,7 +148,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
         ...(changes.length > 0
           ? [{ kind: "update" as const, ref: form.ref as never, changes }]
           : []),
-        ...[...clears].map((field) => ({
+        ...activeClears.map(({ field }) => ({
           kind: "clearOverride" as const,
           ref: form.ref as never,
           field,
@@ -167,9 +184,32 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
           className="mod-edit-form"
           onSubmit={(event) => {
             event.preventDefault();
-            void draft.submit(buildArgs);
+            if (!stale) void draft.submit(buildArgs);
           }}
         >
+          {stale ? (
+            <div className="notice" role="alert">
+              <p>
+                This record was changed by someone else after you started
+                editing. Reload the latest version to continue; your unsaved
+                edits and ticked clears will be discarded.
+              </p>
+              <button
+                type="button"
+                className="btn"
+                disabled={draft.busy}
+                onClick={() => {
+                  setState(null);
+                  setDirty(new Set());
+                  setClears(new Set());
+                  setPinnedBase(null);
+                  draft.clearSaved();
+                }}
+              >
+                Reload latest
+              </button>
+            </div>
+          ) : null}
           {form.fields.map((field) => (
             <FieldInput
               key={field.name}
@@ -227,7 +267,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="button"
               className="btn"
-              disabled={draft.busy || !changed}
+              disabled={draft.busy || stale || !changed}
               onClick={() => void draft.saveDraft(buildArgs)}
             >
               Save draft
@@ -235,7 +275,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={draft.busy || !changed || comment.trim() === ""}
+              disabled={draft.busy || stale || !changed || comment.trim() === ""}
             >
               {draft.busy ? "Working…" : "Submit for review"}
             </button>
@@ -243,7 +283,7 @@ function ProposeForm({ type, editKey }: { type: RecordType; editKey: string }) {
           {draft.pendingWarnings ? (
             <ProposalWarnings
               warnings={draft.pendingWarnings}
-              busy={draft.busy}
+              busy={draft.busy || stale}
               onAcknowledge={(warnings) => void draft.submit(buildArgs, warnings)}
             />
           ) : null}

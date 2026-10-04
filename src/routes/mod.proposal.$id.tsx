@@ -118,10 +118,12 @@ function OpsList({ ops }: { ops: RenderedOps }) {
                 ) : null}
               </p>
               <ul className="revision-changes">
-                <li>
-                  <code>{op.field}</code> keeps its value:{" "}
-                  {renderFieldValue(op.value)} ({writtenByLabel(op.writtenBy)})
-                </li>
+                {op.kept ? (
+                  <li>
+                    <code>{op.field}</code> keeps its value:{" "}
+                    {renderFieldValue(op.kept.value)} ({writtenByLabel(op.kept.writtenBy)})
+                  </li>
+                ) : null}
                 <li>{CLEAR_OVERRIDE_HINT}</li>
               </ul>
             </>

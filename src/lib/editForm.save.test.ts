@@ -41,6 +41,7 @@ function liveForm(name: string, baseRevisionId: string | null = null) {
     fields: [{ name: "name", label: "Name", kind: "text", required: true, value: name }],
     ref: { type: "publisher", id: "pub-a" },
     baseRevisionId,
+    importReviewPending: false,
     status: "active",
     locked: false,
     title: name,

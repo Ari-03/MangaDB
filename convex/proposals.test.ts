@@ -1052,8 +1052,7 @@ describe("proposals — clearing a Human Override", () => {
         recordTitle: "Beta",
         field: "title",
         fieldLabel: "Title",
-        value: "Beta",
-        writtenBy: { kind: "human" },
+        kept: { value: "Beta", writtenBy: { kind: "human" } },
         base: { seq: 2, comment: "The publisher renamed it." },
         stale: false,
       },
@@ -1275,6 +1274,56 @@ describe("proposals — clearing a Human Override", () => {
         ["title"],
         ["title"],
         ...applied,
+      ]);
+    }
+  });
+
+  it("names a stale record once, and shows staleness and the kept value only while undecided", async () => {
+    const t = makeT();
+    await setup(t);
+    const seriesId = await overriddenTitle(t);
+    const asMod = t.withIdentity({ subject: MOD });
+    const asEditor = t.withIdentity({ subject: EDITOR });
+    const altTitles = {
+      kind: "update" as const,
+      ref: SERIES(seriesId),
+      changes: [{ field: "altTitles", value: ["B-side"] }],
+    };
+    const { proposalId } = await asEditor.mutation(api.proposals.saveDraft, {
+      ops: [altTitles, clearOp(seriesId)],
+      evidence: URL_EVIDENCE,
+      comment: "Alt title, and let imports weigh the title.",
+    });
+    await asEditor.mutation(api.proposals.submitProposal, { proposalId });
+    await asMod.mutation(api.moderation.submitDirectEdit, {
+      ref: SERIES(seriesId),
+      baseRevisionId: (await revisionsOf(t, seriesId)).at(-1)!._id,
+      changes: [{ field: "title", value: "Gamma" }],
+      comment: "The publisher renamed it again.",
+    });
+
+    // Both ops anchor on the moved base; the record is named once.
+    expect(await asMod.mutation(api.proposals.approveProposal, { proposalId })).toEqual({
+      status: "stale",
+      stale: [{ type: "series", id: seriesId, reason: "baseChanged" }],
+    });
+    const pending = await asMod.query(api.proposals.proposalDetail, { proposalId });
+    expect(pending?.versions[0]?.ops).toMatchObject([
+      { kind: "update", stale: true },
+      { kind: "clearOverride", stale: true, kept: { value: "Gamma", writtenBy: { kind: "human" } } },
+    ]);
+
+    await asEditor.mutation(api.proposals.rebaseProposal, { proposalId });
+    await asEditor.mutation(api.proposals.submitProposal, { proposalId });
+    expect((await asMod.mutation(api.proposals.approveProposal, { proposalId })).status).toBe("approved");
+    // Approval itself moved the base: no version of a decided Proposal is stale,
+    // and the record's live value is not what the clear was reviewed against.
+    const decided = await asMod.query(api.proposals.proposalDetail, { proposalId });
+    expect(decided?.versions).toHaveLength(2);
+    for (const version of decided!.versions) {
+      expect(version.ops).toMatchObject([
+        { kind: "update", stale: false },
+        { kind: "clearOverride", stale: false, kept: null },
       ]);
     }
   });

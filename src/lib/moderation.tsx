@@ -48,10 +48,12 @@ export function renderFieldValue(value: unknown): string {
 /**
  * What lifting a Human Override does, said beside every control that lifts
  * one: the flag goes, the value and its author stay, and the import rules
- * weigh that author (convex/lib/authority.ts decideField).
+ * weigh that author (convex/lib/authority.ts decideField). It promises only
+ * that an import never replaces a human-written value unreviewed: an offer
+ * may also be skipped, or fill an empty field nobody wrote.
  */
 export const CLEAR_OVERRIDE_HINT =
-  "Clearing keeps the current value and who wrote it: unless a source wrote it, the next differing import value still goes to review; if a source did, imports update it under the usual Field Authority rules.";
+  "Clearing keeps the value and who wrote it; imports then follow the usual Field Authority rules, so replacing a human-written value still needs review, and a value a source wrote may update automatically.";
 
 /** Who wrote a field's current value, as moderation.writtenBy reports it. */
 export function writtenByLabel(author: WrittenBy): string {

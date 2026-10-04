@@ -179,7 +179,7 @@ An Approved Source whose last three Import Runs all failed. The transition email
 MangaDB's currently approved representation of a Series, Volume, or Release. This is what the public site displays.
 
 **Human Override**:
-An approved field-level correction to a Canonical Record. Imports may report a conflicting Source Observation but cannot replace the corrected value until a Moderator explicitly clears the override.
+An approved field-level correction to a Canonical Record. Imports may report a conflicting Source Observation but never replace the corrected value. A Moderator can clear the override; the value and its author stay, and imports then follow the usual Field Authority rules, under which replacing a human-written value still needs review.
 
 **Proposal**:
 A coherent, atomic data-maintenance intent submitted for review. A Proposal may affect multiple Canonical Records when all of its changes must succeed or fail together; unrelated changes belong in separate Proposals.

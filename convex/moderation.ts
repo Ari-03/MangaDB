@@ -24,6 +24,7 @@ import { liveUser } from "./lib/auth";
 import { latestTouch } from "./lib/authority";
 import { fail } from "./lib/errors";
 import { ratedByDataTeam } from "./lib/mature";
+import { proposalInReview } from "./lib/observations";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
   EDITABLE_FIELDS,
@@ -548,7 +549,9 @@ export async function displayInfo(
  * editable fields with current values (straight from the registry the
  * mutations validate against), the base Revision for the staleness check,
  * the record's overridden-fields list, and for each overridden editable
- * field who wrote its value (what clearing it would leave imports to weigh).
+ * field who wrote its value (what clearing it would leave imports to weigh),
+ * and whether an import's Proposal on the record waits in review (which a
+ * clear, moving the base, would leave stale).
  * Editors use it to draft update and clearOverride Proposals; Moderators for
  * direct edits and clears — the mutations re-check the stronger role.
  */
@@ -574,6 +577,7 @@ export const editForm = query({
           : [];
       }),
       baseRevisionId: history[0]?._id ?? null,
+      importReviewPending: await importReviewPending(ctx, ref),
       fields: EDITABLE_FIELDS[type].map((descriptor) => ({
         ...descriptor,
         value: (doc as Record<string, unknown>)[descriptor.name] ?? null,
@@ -587,6 +591,25 @@ export const editForm = query({
 
 /** Observations read per record; a record links a handful of sources in practice. */
 const BLURB_OBSERVATION_CAP = 50;
+
+/**
+ * Whether an observation linked to the record has queued a Proposal that is
+ * still in review (a field conflict, a cancellation review). A source's
+ * Proposal cannot be rebased, so any Revision on the record leaves it stale
+ * until the source record next changes. Past the observation cap it answers
+ * yes rather than read on.
+ */
+async function importReviewPending(ctx: QueryCtx, ref: RecordRef): Promise<boolean> {
+  const observations = await ctx.db
+    .query("sourceObservations")
+    .withIndex("by_record", (q) => q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id))
+    .take(BLURB_OBSERVATION_CAP + 1);
+  if (observations.length > BLURB_OBSERVATION_CAP) return true;
+  for (const observation of observations) {
+    if (await proposalInReview(ctx, observation)) return true;
+  }
+  return false;
+}
 
 /** A non-empty string, or null: snapshots are `v.any()` and adapters evolve. */
 function blurbText(raw: unknown): string | null {

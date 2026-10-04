@@ -124,6 +124,32 @@ describe("authority rules — after a Human Override is cleared", () => {
     expect((await versionOf(t, open[0]!))?.ops[0]).toMatchObject({
       changes: [{ field: "pubDate", after: { year: 2026, month: 2, day: 3, sort: 20260203 } }],
     });
+
+    // The same offer again leaves that one Proposal, neither repeated nor
+    // replaced: from an unchanged listing (which stops before reconciling),
+    // and from a touched book page offering the same date (which reconciles).
+    await sync(t);
+    expect((await inReviewProposals(t)).map((proposal) => proposal._id)).toEqual([open[0]!._id]);
+    stubSite([{ ...ALPHA_1, modified: "2026-08-11T00:00:00", date: "February 3, 2026" }]);
+    await sync(t);
+    expect((await inReviewProposals(t)).map((proposal) => proposal._id)).toEqual([open[0]!._id]);
+    expect((await theRelease(t)).pubDate?.sort).toBe(20260301);
+  });
+
+  it("tells the edit form while an import's conflict waits in review, which a clear would strand", async () => {
+    const t = makeT();
+    const asMod = await overriddenDate(t);
+    const pending = async () =>
+      (await asMod.query(api.moderation.editForm, { type: "release", key: (await theRelease(t))._id }))
+        ?.importReviewPending;
+    expect(await pending()).toBe(false);
+
+    stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
+    await sync(t);
+    expect(await pending()).toBe(true);
+    const [conflict] = await inReviewProposals(t);
+    await asMod.mutation(api.proposals.approveProposal, { proposalId: conflict!._id });
+    expect(await pending()).toBe(false);
   });
 
   it("lets a source update a value a source wrote under the usual rules", async () => {
