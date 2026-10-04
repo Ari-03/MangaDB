@@ -29,7 +29,6 @@ import {
   type CoverRequest,
   type StoredCovers,
 } from "./lib/covers";
-import type { ApplyResult } from "./lib/catalogTitle";
 import { errorMessage, politeFetch } from "./lib/http";
 import { closeRun, registryRow, runToContinue, stopAtGate, storeRunCover } from "./lib/importRuns";
 import { applyRetrying } from "./lib/occ";
@@ -66,7 +65,7 @@ import {
   type BookSnapshot,
 } from "./lib/sevenSeas";
 import { withExceptionCapture } from "./lib/posthog";
-import { placeUnmatched } from "./lib/unmatched";
+import { placeUnmatched, type ApplyResult } from "./lib/unmatched";
 
 export const SOURCE_KEY = "sevenseas";
 const BASE_URL = "https://sevenseasentertainment.com";
@@ -625,11 +624,11 @@ export const applyBook = internalMutation({
           : undefined,
       description: snapshot.description,
     };
-    const bootstrap = await getBootstrapMode(ctx);
 
     // A box set is never a Release: it skips the ladder for a Release
     // Bundle of the base Series' existing Releases.
     if (snapshot.isBox) {
+      const bootstrap = await getBootstrapMode(ctx);
       if (seriesId === null || labels.length === 0 || !bootstrap) {
         await recordUnplaced(
           ctx,
@@ -723,13 +722,13 @@ export const applyBook = internalMutation({
         ambiguousSeries,
         seriesKey: snapshot.seriesSlug,
         seriesUrl: snapshot.seriesUrl,
-        packaging,
+        packaging: packaging && { ...packaging, hold: unplacedNote(snapshot) },
         labels,
-        packagingHold: unplacedNote(snapshot),
         publisher: PUBLISHER,
         publisherId: publisher?._id ?? null,
         release: releasePayload,
-        bootstrap,
+        // Read here, as before the tail was shared, for every unmatched book.
+        bootstrap: await getBootstrapMode(ctx),
         now,
       },
       {

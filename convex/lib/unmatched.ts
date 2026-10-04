@@ -15,6 +15,9 @@
 // 6. otherwise it is created (lib/pipeline.ts createCanonicalRecords)
 //
 // Queueing is deduplicated per observation (lib/pipeline.ts alreadyHandled).
+// Bootstrap Mode is read only at a step that uses it (1 and 5), unless the
+// adapter already read it, so a book held or queued before those steps
+// leaves app config out of its transaction's reads.
 // The adapters keep everything source-shaped: parsing, source-slug series
 // links, the linked-record reconcile, covers and blurbs, publisher
 // resolution, box sets, and what they hold packaging with. Where sources
@@ -22,8 +25,9 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { getBootstrapMode } from "../importSources";
 import type { Packaging } from "./bookTitle";
-import type { ApplyResult } from "./catalogTitle";
+import type { CoverRequest } from "./covers";
 import type { MatchOutcome } from "./matching";
 import { recordUnplaced } from "./observations";
 import {
@@ -36,6 +40,24 @@ import {
   type ReleasePayload,
 } from "./pipeline";
 import type { CanonicalPublisher } from "./publishers";
+
+/** What a source's apply mutation returns; the tail returns it for an unmatched book. */
+export type ApplyResult = {
+  status:
+    | "unchanged"
+    | "created"
+    | "updated"
+    | "linked"
+    | "queued"
+    | "alreadyQueued"
+    | "needsReview"
+    | "recordOnly";
+  changed: boolean;
+  releaseId?: Id<"releases">;
+  /** Art the action should store on the Release (Seven Seas, Kodansha). */
+  cover?: CoverRequest;
+  reason?: string;
+};
 
 /** A book the ladder matched to no Release, as its adapter resolved it. */
 export type UnmatchedBook = {
@@ -57,17 +79,21 @@ export type UnmatchedBook = {
   seriesKey?: string;
   seriesUrl?: string;
   seriesSynopsis?: string;
-  packaging: Packaging | null;
+  /** The book's packaging, with the note it is held with when it cannot be placed. */
+  packaging: (Packaging & { hold: string }) | null;
   /** The Volume labels the book covers; [] for packaging whose coverage nothing states. */
   labels: string[];
-  /** The note packaging is held with when it cannot be placed. */
-  packagingHold: string;
   /** The publisher a Release is filed under; undefined when the record names none. */
   publisher: CanonicalPublisher | undefined;
   /** The publisher row the adapter resolved, which tells a hidden namesake from another house. */
   publisherId: Id<"publishers"> | null;
   release: ReleasePayload;
-  bootstrap: boolean;
+  /**
+   * Bootstrap Mode, when the adapter has read it already: Seven Seas for
+   * every unmatched book and the catalog feeds for every book, as each did
+   * before the tail was shared. Kodansha leaves it to the tail.
+   */
+  bootstrap?: boolean;
   now: number;
 };
 
@@ -76,8 +102,8 @@ export type UnmatchedOptions = {
   /**
    * In Bootstrap Mode, a named line's member with no stated coverage is
    * created as Unmapped Packaging (CONTEXT.md) for a Moderator to map.
-   * Seven Seas, PRH, Yen Press. Kodansha holds every unmatched packaging
-   * book instead: its feeds never state a packaged book's coverage.
+   * Seven Seas, PRH, Yen Press. Kodansha's adapter reads no coverage: it
+   * passes no labels for packaging, so every such book is held.
    */
   unmappedPackaging: boolean;
   /**
@@ -89,7 +115,9 @@ export type UnmatchedOptions = {
   /**
    * Queueing first ensures the publisher row exists and takes its slug, so
    * the guess stays appliable (PRH, Yen Press: an imprint may have no row
-   * yet). Seven Seas and Kodansha queue under their own fixed slug.
+   * yet). Seven Seas and Kodansha queue under the publisher slug the
+   * adapter resolved, without ensuring its row exists (Seven Seas' is
+   * fixed; Kodansha's can be Vertical).
    */
   ensurePublisherToQueue: boolean;
   /**
@@ -116,6 +144,11 @@ export async function placeUnmatched(
     packaging?.lineName != null
       ? { name: packaging.lineName, position: packaging.linePosition }
       : undefined;
+  // Each read at most once per invocation, and only by a step that needs it.
+  let bootstrap = book.bootstrap;
+  const bootstrapMode = async () => (bootstrap ??= await getBootstrapMode(ctx));
+  let handled: boolean | undefined;
+  const isHandled = async () => (handled ??= await alreadyHandled(ctx, observation));
 
   // Packaging with no coverage from any signal. In Bootstrap Mode a named
   // line's member is still created, as Unmapped Packaging under its line:
@@ -128,14 +161,14 @@ export async function placeUnmatched(
     packaging !== null &&
     labels.length === 0 &&
     editionLine !== undefined &&
-    book.bootstrap &&
+    (await bootstrapMode()) &&
     book.ambiguousSeries === 0 &&
     publisher !== undefined;
   if (packaging !== null && labels.length === 0 && !unmapped) {
     await recordUnplaced(
       ctx,
       observation,
-      { kind: "packaging", reason: book.packagingHold, ...(seriesId !== null ? { seriesId } : {}) },
+      { kind: "packaging", reason: packaging.hold, ...(seriesId !== null ? { seriesId } : {}) },
       now,
     );
     return { status: "recordOnly", changed: false, reason: "packaging without coverage" };
@@ -145,7 +178,7 @@ export async function placeUnmatched(
   // packaging guess carries its Edition Line, so approval files the Edition
   // under the base Series' line of that name (or creates it).
   const queue = async (comment: string, reason?: string): Promise<ApplyResult> => {
-    if (await alreadyHandled(ctx, observation)) {
+    if (await isHandled()) {
       return { status: "alreadyQueued", changed: false, reason };
     }
     // No publisher on the record: nothing reviewable to pre-fill.
@@ -194,13 +227,14 @@ export async function placeUnmatched(
   // Release under an existing Series creates; a brand-new Series,
   // multi-Volume Coverage, or an Edition Line always queues, pre-filled so a
   // correct guess is one click. Bootstrap Mode lifts the gates (spec §7).
+  const bootstrapping = await bootstrapMode();
   const gates = creationGates({
     seriesId,
     multiVolume: labels.length > 1,
     editionLineHint: editionLine !== undefined,
   });
-  if (gates.length > 0 && !book.bootstrap) {
-    if (!options.hiddenWorkBeforeQueued && (await alreadyHandled(ctx, observation))) {
+  if (gates.length > 0 && !bootstrapping) {
+    if (!options.hiddenWorkBeforeQueued && (await isHandled())) {
       return { status: "alreadyQueued", changed: false };
     }
     if (seriesId === null) {
@@ -239,7 +273,7 @@ export async function placeUnmatched(
     ...(unmapped ? { coverageUnmapped: true as const } : {}),
     release: { ...book.release, publisher },
     // Tag exactly what steady state would have queued (spec §7).
-    tagBootstrapUnreviewed: book.bootstrap && gates.length > 0,
+    tagBootstrapUnreviewed: bootstrapping && gates.length > 0,
     now,
   });
   // A Series an Editor hid: nothing was created, the reason is noted.

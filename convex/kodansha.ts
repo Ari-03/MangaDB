@@ -53,8 +53,7 @@ import {
   internalQuery,
   type MutationCtx,
 } from "./_generated/server";
-import { getBootstrapMode, getSourceByKey } from "./importSources";
-import type { ApplyResult } from "./lib/catalogTitle";
+import { getSourceByKey } from "./importSources";
 import { coverKey, coverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { applyRetrying } from "./lib/occ";
@@ -109,7 +108,7 @@ import type { CanonicalPublisher } from "./lib/publishers";
 import { reconcileFields } from "./lib/reconcile";
 import { sameValue } from "./lib/values";
 import { withExceptionCapture } from "./lib/posthog";
-import { placeUnmatched } from "./lib/unmatched";
+import { placeUnmatched, type ApplyResult } from "./lib/unmatched";
 
 export const SOURCE_KEY = "kodansha";
 /** The backlist crawl's registry row: its runs, cadence, health, and crawl state. */
@@ -876,13 +875,14 @@ export const applyVolume = internalMutation({
         seriesKey: snapshot.seriesSlug,
         seriesUrl: snapshot.seriesUrl,
         seriesSynopsis: snapshot.seriesSynopsis,
-        packaging,
+        packaging: packaging && {
+          ...packaging,
+          hold: `"${snapshot.title}" is ${packaging.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
+        },
         labels,
-        packagingHold: `"${snapshot.title}" is ${packaging?.lineName ?? "packaging"} of "${snapshot.seriesTitle}" with no stated coverage — an Editor maps it.`,
         publisher: publisherRef,
         publisherId: publisher?._id ?? null,
         release: releasePayload,
-        bootstrap: await getBootstrapMode(ctx),
         now,
       },
       {

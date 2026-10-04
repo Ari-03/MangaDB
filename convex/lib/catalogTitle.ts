@@ -16,7 +16,6 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getBootstrapMode, getSourceByKey } from "../importSources";
 import { packagingValidator, rangeLabels, type ParsedBookTitle } from "./bookTitle";
 import { fullDateValidator } from "./dates";
-import type { CoverRequest } from "./covers";
 import { inferCoverage } from "./coverage";
 import { candidateSeries, hiddenSeriesTitled, matchRelease, type ReleaseFact } from "./matching";
 import { linkObservation, recordUnplaced, upsertObservation } from "./observations";
@@ -31,7 +30,7 @@ import {
 } from "./pipeline";
 import { canonicalPublisherFor, type CanonicalPublisher } from "./publishers";
 import { reconcileFields } from "./reconcile";
-import { placeUnmatched } from "./unmatched";
+import { placeUnmatched, type ApplyResult } from "./unmatched";
 
 /** The snapshot fields every catalog-title source normalizes to. */
 export const catalogTitleFields = {
@@ -91,23 +90,6 @@ export function parsedTitleFields(parsed: ParsedBookTitle) {
     bareSplit: parsed.bareSplit ?? undefined,
   };
 }
-
-export type ApplyResult = {
-  status:
-    | "unchanged"
-    | "created"
-    | "updated"
-    | "linked"
-    | "queued"
-    | "alreadyQueued"
-    | "needsReview"
-    | "recordOnly";
-  changed: boolean;
-  releaseId?: Id<"releases">;
-  /** Art the action should store on the Release (Seven Seas, Kodansha). */
-  cover?: CoverRequest;
-  reason?: string;
-};
 
 /**
  * The fields this source offers on a linked Release, in canonical form.
@@ -469,9 +451,11 @@ export async function applyCatalogTitle(
       seriesId,
       seriesTitle,
       ambiguousSeries: candidates.length > 1 ? candidates.length : 0,
-      packaging,
+      packaging: packaging && {
+        ...packaging,
+        hold: `"${snapshot.title}" is packaging (${packaging.lineName ?? "multi-volume"}) whose covered Volumes the title does not state — an Editor maps it.`,
+      },
       labels,
-      packagingHold: `"${snapshot.title}" is packaging (${packaging?.lineName ?? "multi-volume"}) whose covered Volumes the title does not state — an Editor maps it.`,
       publisher: publisherRow,
       publisherId: publisher?._id ?? null,
       release: releasePayload,

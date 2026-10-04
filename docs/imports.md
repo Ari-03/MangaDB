@@ -164,13 +164,15 @@ record, covers and blurbs, publisher resolution and box sets, and passes the
 note it holds packaging with. Four differences are options of the function:
 
 - Seven Seas, PRH and Yen Press create Unmapped Packaging in Bootstrap Mode.
-  Kodansha never states a packaged book's coverage and holds every
-  unmatched packaging book.
+  Kodansha's adapter reads no coverage: it passes no labels for packaging,
+  so every such book is held.
 - A queued ambiguity quotes the book's title with the reason "ambiguous
   series" (PRH, Yen Press), or the Series title with the count (Seven Seas,
   Kodansha).
 - PRH and Yen Press create the imprint's publisher row before queuing a
-  Proposal. Seven Seas and Kodansha queue under their fixed slug.
+  Proposal. Seven Seas and Kodansha queue under the publisher slug the
+  adapter resolved, without ensuring its row exists (Seven Seas' is fixed;
+  Kodansha's can be Vertical).
 - Outside Bootstrap Mode, PRH and Yen Press look for a hidden work before
   checking for an open Proposal, so a book whose Proposal is still in review
   gets the hidden work's note. Seven Seas and Kodansha answer

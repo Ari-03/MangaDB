@@ -5,16 +5,21 @@
 // its note, the records created, the Proposal queued with its comment and
 // ops, and what a second, unchanged run returns and writes. Where the
 // sources differ the table says so; each difference is an option of the
-// shared tail, or a value its adapter passes.
+// shared tail, or a value its adapter passes. A second table pins the
+// documents some of those runs read, so the tail reads no more (Bootstrap
+// Mode on a path that does not use it) and no less than its sources did.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
 
 import { internal } from "./_generated/api";
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import type { Packaging } from "./lib/bookTitle";
-import type { ApplyResult } from "./lib/catalogTitle";
+import { linkSeriesObservation } from "./lib/pipeline";
 import { BOOK_PAGE_VERSION } from "./lib/sevenSeas";
+import type { ApplyResult } from "./lib/unmatched";
 import {
   insertCoverage,
   insertEdition,
@@ -53,8 +58,26 @@ const volume3: Book = { title: "Gamma Quest Vol. 3", seriesTitle: SERIES, volume
 
 const packaged = (title: string, packaging: Packaging): Book => ({ title, seriesTitle: SERIES, packaging, isbn13: ISBN });
 
-/** Apply the book through one source's own mutation, as its sync would. */
-async function apply(t: TestT, source: Source, book: Book): Promise<ApplyResult> {
+/** One source's apply mutation, run at the top level (`t.mutation`) or nested (`ctx.runMutation`). */
+type Run<M extends FunctionReference<"mutation", "internal">> = (
+  ref: M,
+  args: FunctionArgs<M>,
+) => Promise<FunctionReturnType<M>>;
+type Mutate = Run<typeof internal.sevenSeas.applyBook> &
+  Run<typeof internal.kodansha.applyVolume> &
+  Run<typeof internal.prh.applyTitle> &
+  Run<typeof internal.yenPress.applyTitle>;
+
+/** Each source's key, which its observations are stored under. */
+const SOURCE_KEYS: Record<Source, string> = {
+  sevenSeas: "sevenseas",
+  kodansha: "kodansha",
+  prh: "prh",
+  yenPress: "yenpress",
+};
+
+/** Apply the book through one source's own mutation, as its sync would (`t.mutation`, or nested). */
+async function apply(mutate: Mutate, source: Source, book: Book): Promise<ApplyResult> {
   const coverRange = book.packaging?.coverRange ?? null;
   const catalog = {
     url: `https://example.com/${source}/${ISBN}`,
@@ -72,7 +95,7 @@ async function apply(t: TestT, source: Source, book: Book): Promise<ApplyResult>
   };
   switch (source) {
     case "sevenSeas":
-      return await t.mutation(internal.sevenSeas.applyBook, {
+      return await mutate(internal.sevenSeas.applyBook, {
         sourceRecordId: "9001",
         snapshot: {
           kind: "book",
@@ -95,7 +118,7 @@ async function apply(t: TestT, source: Source, book: Book): Promise<ApplyResult>
         },
       });
     case "kodansha":
-      return await t.mutation(internal.kodansha.applyVolume, {
+      return await mutate(internal.kodansha.applyVolume, {
         sourceRecordId: `${SLUG}/${SLUG}-${ISBN}#physical`,
         snapshot: {
           kind: "kodanshaVolume",
@@ -115,11 +138,11 @@ async function apply(t: TestT, source: Source, book: Book): Promise<ApplyResult>
         },
       });
     case "prh":
-      return await t.mutation(internal.prh.applyTitle, {
+      return await mutate(internal.prh.applyTitle, {
         snapshot: { kind: "prhTitle", ...catalog, imprint: book.noImprint ? undefined : "Gamma Comics" },
       });
     case "yenPress":
-      return await t.mutation(internal.yenPress.applyTitle, {
+      return await mutate(internal.yenPress.applyTitle, {
         snapshot: { kind: "yenTitle", ...catalog, imprint: book.noImprint ? undefined : "Yen Press", category: "manga" },
       });
   }
@@ -238,8 +261,9 @@ function result(r: ApplyResult): string {
 }
 
 /** The book's observation, and the source's series link when it wrote one. */
-async function observations(t: TestT) {
-  const rows = await t.run((ctx) => ctx.db.query("sourceObservations").collect());
+async function observations(t: TestT, source: Source) {
+  const all = await t.run((ctx) => ctx.db.query("sourceObservations").collect());
+  const rows = all.filter((o) => o.sourceKey === SOURCE_KEYS[source]);
   const book = rows.filter((o) => !o.sourceRecordId.startsWith("series:"));
   const links = rows.filter((o) => o.sourceRecordId.startsWith("series:"));
   expect(book).toHaveLength(1);
@@ -275,9 +299,9 @@ async function outcome(c: Case, source: Source): Promise<Outcome> {
   await seedRegistry(t, c.bootstrap);
   if (c.seed) await t.run(c.seed);
   const start = await dump(t);
-  const first = await apply(t, source, c.book);
+  const first = await apply(t.mutation, source, c.book);
   const afterFirst = await dump(t);
-  const { book: obs, link } = await observations(t);
+  const { book: obs, link } = await observations(t, source);
   const note = obs.conflicts?.find((conflict) => conflict.field === "placement")?.reason;
   const row = await t.run((ctx) =>
     ctx.db
@@ -304,7 +328,7 @@ async function outcome(c: Case, source: Source): Promise<Outcome> {
         });
   if (c.between) await t.run(c.between);
   const beforeSecond = await dump(t);
-  const second = await apply(t, source, c.book);
+  const second = await apply(t.mutation, source, c.book);
   return {
     result: result(first),
     hold:
@@ -546,7 +570,64 @@ const CASES: Case[] = [
     book: volume3,
     between: (ctx) => insertSeries(ctx, { title: SERIES, status: "hidden" }),
   },
+  {
+    // The ladder's flag is answered before the missing publisher.
+    name: "no imprint, ISBN on a hidden Release",
+    bootstrap: false,
+    book: { ...volume3, noImprint: true },
+    seed: async (ctx) => {
+      await gammaQuest(ctx);
+      await isbnHolder(ctx, SERIES, "hidden");
+    },
+  },
+  {
+    // Unmapped Packaging needs a publisher to file the Edition under.
+    name: "packaging with unknown coverage and no imprint, Bootstrap Mode",
+    bootstrap: true,
+    book: {
+      ...packaged("Gamma Quest Deluxe Edition 2", { lineName: "Deluxe Edition", linePosition: "2", coverRange: null }),
+      noImprint: true,
+    },
+    seed: (ctx) => gammaQuest(ctx),
+  },
+  {
+    // The hidden work found by the source's series key, not by title.
+    name: "Series hidden under another title, linked by the source's series key",
+    bootstrap: false,
+    book: volume3,
+    seed: async (ctx) => {
+      const seriesId = await insertSeries(ctx, { title: "Old Name", publicId: 1, status: "hidden" });
+      for (const sourceKey of ["sevenseas", "kodansha"]) {
+        await linkSeriesObservation(ctx, { sourceKey, seriesKey: SLUG, title: SERIES, seriesId, now: Date.now() });
+      }
+    },
+  },
+  {
+    // A hidden Series of the same title from another house is not this work.
+    name: "Series of the work's title hidden, from another house",
+    bootstrap: false,
+    book: volume3,
+    seed: async (ctx) => {
+      await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+      await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
+      await insertPublisher(ctx, { name: "Gamma Comics", slug: "gamma-comics" });
+      await insertPublisher(ctx, { name: "Yen Press", slug: "yen-press" });
+      const publisherId = await insertPublisher(ctx, { name: "Other House", slug: "other-house" });
+      const seriesId = await insertSeries(ctx, { title: SERIES, publicId: 1, status: "hidden" });
+      const volumeId = await insertVolume(ctx, { seriesId, position: 1 });
+      const editionId = await insertEdition(ctx, { publisherId });
+      await insertCoverage(ctx, { editionId, volumeId });
+    },
+  },
 ];
+
+/** A book the ladder matches to a Release, which never reaches the tail. */
+const MATCHED: Case = {
+  name: "ISBN on an active Release of the book's Series",
+  bootstrap: false,
+  book: volume3,
+  seed: (ctx) => isbnHolder(ctx, SERIES, "active"),
+};
 
 describe("the unmatched-placement tail, through every source", () => {
   for (const c of CASES) {
@@ -554,6 +635,81 @@ describe("the unmatched-placement tail, through every source", () => {
       const outcomes: Partial<Record<Source, Outcome>> = {};
       for (const source of SOURCES) outcomes[source] = await outcome(c, source);
       expect(outcomes).toEqual(EXPECTED[c.name]);
+    });
+  }
+});
+
+/** Documents the first and the second run of the case's book read, through one source. */
+async function documentsRead(c: Case, source: Source): Promise<[number, number]> {
+  const t = makeT();
+  tickingClock();
+  await seedRegistry(t, c.bootstrap);
+  if (c.seed) await t.run(c.seed);
+  // Nested, so the reads are the apply mutation's own.
+  const run = () =>
+    t.run(async (ctx) => {
+      const used = async () => (await ctx.meta.getTransactionMetrics()).documentsRead.used;
+      const before = await used();
+      await apply(ctx.runMutation, source, c.book);
+      return (await used()) - before;
+    });
+  const first = await run();
+  if (c.between) await t.run(c.between);
+  return [first, await run()];
+}
+
+/**
+ * Documents read by the first and the second run, for the paths that hold
+ * or queue before the tail's Bootstrap Mode check (Kodansha read it only at
+ * its creation gate; Seven Seas and the catalog feeds for every unmatched
+ * book, the catalog feeds for a matched one too), and for a matched book.
+ */
+const READS: Record<string, Record<Source, [number, number]>> = {
+  "Series missing, steady state: the queued Proposal": {
+    sevenSeas: [5, 5],
+    kodansha: [5, 6],
+    prh: [5, 7],
+    yenPress: [5, 7],
+  },
+  "ISBN on an active Release of another Series": {
+    sevenSeas: [15, 10],
+    kodansha: [16, 12],
+    prh: [12, 11],
+    yenPress: [12, 10],
+  },
+  "ambiguous Series title, steady state": {
+    sevenSeas: [17, 17],
+    kodansha: [16, 17],
+    prh: [17, 18],
+    yenPress: [17, 18],
+  },
+  "packaging with unknown coverage, steady state": {
+    sevenSeas: [11, 9],
+    kodansha: [10, 9],
+    prh: [7, 8],
+    yenPress: [7, 8],
+  },
+  "packaging with unknown coverage, Bootstrap Mode": {
+    sevenSeas: [17, 4],
+    kodansha: [10, 9],
+    prh: [12, 4],
+    yenPress: [12, 4],
+  },
+  "ISBN on an active Release of the book's Series": {
+    sevenSeas: [20, 4],
+    kodansha: [24, 6],
+    prh: [15, 4],
+    yenPress: [15, 4],
+  },
+};
+
+describe("documents the tail's runs read, through every source", () => {
+  for (const [name, expected] of Object.entries(READS)) {
+    it(name, async () => {
+      const c = [...CASES, MATCHED].find((each) => each.name === name)!;
+      const reads: Partial<Record<Source, [number, number]>> = {};
+      for (const source of SOURCES) reads[source] = await documentsRead(c, source);
+      expect(reads).toEqual(expected);
     });
   }
 });
@@ -1348,4 +1504,138 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       }),
     },
   ),
+  "no imprint, ISBN on a hidden Release": each(
+    (s) => ({
+      result: `needsReview, changed, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+      hold: null,
+      created: ["proposal inReview", "proposalVersion"],
+      seriesLink: null,
+      proposal: {
+        comment: "Flagged by the matching ladder (rung 2): ISBN 9781999000300 belongs to a Release an Editor hid. Pre-filled creation guess — approve only if this is genuinely a distinct release; the importer never merges.",
+        ops: [
+          `series series {"altTitles":[],"title":"Gamma Quest"}`,
+          `volumes volume-1 {"label":"3","seriesId":"series"}`,
+          `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
+          RELEASE_OP,
+        ],
+      },
+      second: {
+        result: `alreadyQueued, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+        writes: ["~ sourceObservations lastSeenAt"],
+      },
+    }),
+    {
+      prh: () => ({
+        result: `needsReview, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+        created: [],
+        proposal: null,
+        second: {
+          result: `needsReview, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+          writes: ["~ sourceObservations lastSeenAt"],
+        },
+      }),
+      yenPress: () => ({
+        result: `needsReview, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+        created: [],
+        proposal: null,
+        second: {
+          result: `needsReview, unchanged, reason "ISBN 9781999000300 belongs to a Release an Editor hid"`,
+          writes: ["~ sourceObservations lastSeenAt"],
+        },
+      }),
+    },
+  ),
+  "packaging with unknown coverage and no imprint, Bootstrap Mode": each(
+    (s) => ({
+      result: `recordOnly, unchanged, reason "packaging without coverage"`,
+      hold: `packaging under series "Gamma Quest": "Gamma Quest Deluxe Edition 2" is packaging (Deluxe Edition) whose covered Volumes the title does not state — an Editor maps it.`,
+      created: ["placementHold"],
+      seriesLink: link(s, `series "Gamma Quest"`),
+      proposal: null,
+      second: {
+        result: `recordOnly, unchanged, reason "packaging without coverage"`,
+        writes: ["~ sourceObservations lastSeenAt"],
+      },
+    }),
+    {
+      sevenSeas: (s) => ({
+        result: "created, changed, releaseId",
+        hold: null,
+        created: [
+          `edition of publisher ${s.publisher} in line "Deluxe Edition" 2 (unreviewed) (unmapped)`,
+          `line "Deluxe Edition" (unreviewed)`,
+          "proposal approved",
+          "proposalVersion",
+          `publisher ${s.publisher}`,
+          "release 9781999000300 (unreviewed)",
+          "revision ×4",
+        ],
+        second: { result: "unchanged, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
+      }),
+      kodansha: () => ({
+        hold: `packaging under series "Gamma Quest": "Gamma Quest Deluxe Edition 2" is Deluxe Edition of "Gamma Quest" with no stated coverage — an Editor maps it.`,
+      }),
+    },
+  ),
+  "Series hidden under another title, linked by the source's series key": each(
+    (s) => ({
+      result: `recordOnly, unchanged, reason "hidden series"`,
+      hold: `series: "Gamma Quest" is Series 1 ("Old Name"), which an Editor hid — not recreated by an import.`,
+      created: ["placementHold"],
+      seriesLink: link(s, `series "Old Name" hidden`),
+      proposal: null,
+      second: {
+        result: `recordOnly, unchanged, reason "hidden series"`,
+        writes: ["~ sourceObservations lastSeenAt"],
+      },
+    }),
+    {
+      prh: (s) => ({
+        result: "queued, changed",
+        hold: null,
+        created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
+        proposal: {
+          comment: `"Gamma Quest Vol. 3" observed at ${s.name} needs a brand-new Series — steady-state creation gate.`,
+          ops: [
+            `series series {"altTitles":[],"title":"Gamma Quest"}`,
+            `volumes volume-1 {"label":"3","seriesId":"series"}`,
+            `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
+            RELEASE_OP,
+          ],
+        },
+        second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
+      }),
+      yenPress: (s) => ({
+        result: "queued, changed",
+        hold: null,
+        created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
+        proposal: {
+          comment: `"Gamma Quest Vol. 3" observed at ${s.name} needs a brand-new Series — steady-state creation gate.`,
+          ops: [
+            `series series {"altTitles":[],"title":"Gamma Quest"}`,
+            `volumes volume-1 {"label":"3","seriesId":"series"}`,
+            `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
+            RELEASE_OP,
+          ],
+        },
+        second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
+      }),
+    },
+  ),
+  "Series of the work's title hidden, from another house": each((s) => ({
+    result: "queued, changed",
+    hold: null,
+    created: ["proposal inReview", "proposalVersion"],
+    seriesLink: null,
+    proposal: {
+      comment: `"Gamma Quest Vol. 3" observed at ${s.name} needs a brand-new Series — steady-state creation gate.`,
+      ops: [
+        `series series {"altTitles":[],"title":"Gamma Quest"}`,
+        `volumes volume-1 {"label":"3","seriesId":"series"}`,
+        `editions edition {"publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume-1"}]}`,
+        RELEASE_OP,
+      ],
+    },
+    second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
+  })),
 };
