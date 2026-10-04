@@ -1,6 +1,6 @@
 // The browser-only half of lib/analytics.tsx, loaded lazily after
 // hydration: PostHogProvider inits posthog-js, and ConsentSync applies the
-// session's AnalyticsConsent to it (identify, reset, opt out or back in).
+// session's AnalyticsConsent to it (whether events go out, identify, reset).
 // Never imported statically, so neither posthog-js nor @posthog/react ends
 // up in the Worker bundle.
 
@@ -64,26 +64,24 @@ export default function PostHogAnalytics({
 }
 
 /**
- * Apply a consent to posthog-js. Each step is a no-op when already done,
- * so applying the same consent twice changes nothing.
- * - `pending`: send nothing, change nothing.
- * - `off`: opt out (persisted in this browser) and send nothing.
- * - `anonymous`: forget an identified user, as after a sign-out. Their
- *   id, and any opt-out stored with it, go before the next event.
- * - `identified`: opt back in if this browser was opted out, then identify
- *   with username and role (never email).
+ * Apply a consent to posthog-js. `before_send` is the only gate: `pending`
+ * and `off` drop every event and change nothing else. `anonymous` and
+ * `identified` let events out, first forgetting an identified user other
+ * than this one, so two accounts on one browser are never linked; then
+ * `identified` identifies with username and role (never email). Applying
+ * the same consent twice changes nothing.
  */
 function applyConsent(consent: AnalyticsConsent) {
   sending = consent.status === "anonymous" || consent.status === "identified";
-  if (consent.status === "off") {
-    if (!posthog.has_opted_out_capturing()) posthog.opt_out_capturing();
-  } else if (consent.status === "anonymous") {
-    if (posthog._isIdentified()) posthog.reset();
-  } else if (consent.status === "identified") {
-    if (posthog.has_opted_out_capturing()) posthog.opt_in_capturing();
-    const { userId, username, role } = consent;
+  if (!sending) return;
+  const userId = consent.status === "identified" ? consent.userId : null;
+  // posthog-js keeps an identified id across reloads. `_isIdentified` is
+  // internal to posthog-js, with no public equivalent; it may change on upgrade.
+  if (posthog._isIdentified() && posthog.get_distinct_id() !== userId) posthog.reset();
+  if (consent.status === "identified") {
+    const { username, role } = consent;
     // The second argument is the $set payload.
-    posthog.identify(userId, username ? { username, role } : undefined);
+    posthog.identify(consent.userId, username ? { username, role } : undefined);
   }
 }
 

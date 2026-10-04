@@ -94,26 +94,34 @@ choice are in [decisions.md](decisions.md#analytics).
 **Browser.** `src/lib/analytics.tsx` loads posthog-js after hydration and
 never in the Worker bundle. Autocapture, session replay and feature flags
 are off, `respect_dnt` is on, and person profiles exist only for signed-in
-users. Pageviews and pageleaves are automatic. Signed-in users are
-identified by their Clerk user id with `username` and `role`, never email,
-and sign-out resets the session. The Deploy workflow reads
+users. Pageviews and pageleaves are automatic. posthog-js adds the full
+page address (`$current_url`) to every event and the document title to
+pageviews, so a search's text reaches PostHog through `/search?q=…` and
+the search page's title. Signed-in users are identified by their Clerk
+user id with `username` and `role`, never email. Sign-out resets the
+session, and so does a different user signing in, so one browser never
+links two accounts. The Deploy workflow reads
 `VITE_PUBLIC_POSTHOG_KEY` from the GitHub environment it deploys to, so
 staging and production can use separate projects. A local deploy reads it
 from `.env.local` or the shell.
 
 **Opt-out.** Settings, Analytics on `/me` stores `users.analyticsOptOut`
 (`users.setAnalyticsOptOut`, absent until chosen). For a signed-in user
-who opted out, the browser never loads posthog-js, or opts it out if it is
-already running, and `capture` in `convex/lib/posthog.ts` sends none of
-their events, moderation included. While a signed-in user's choice is
-still loading, the client identifies no one and its `before_send` drops
-every event. A browser sending Do Not Track or Global Privacy Control sets
-the opt-out once on an account that has never chosen, so server events stop
-too; a browser without it never clears one. Signed-out visitors have no
-toggle: `respect_dnt` covers them. On sign-out the client calls `reset()`;
-for a user who had opted out nothing is sent before it, so nothing goes out
-under their id. Opting out stops future events; it deletes nothing PostHog
-already holds.
+who opted out, the browser never loads posthog-js, and `capture` in
+`convex/lib/posthog.ts` sends none of their events, moderation included.
+The client's `before_send` is its only gate: it drops every event while a
+signed-in user's choice is still loading or is Off, so a client already
+running when the user switches Off captures nothing more, and one that is
+waiting identifies no one. A browser sending Do Not Track or Global
+Privacy Control sets the opt-out once on an account that has never chosen,
+so server events stop too; a browser without it never clears one.
+Signed-out visitors have no toggle: `respect_dnt` covers them. On sign-out
+the client calls `reset()`; for a user who had opted out nothing was
+captured before it, so nothing goes out under their id. posthog-js sends
+captured events in batches about three seconds apart, and nothing public
+clears a batch, so events captured before a switch to Off or a sign-out can
+still arrive in the seconds after. Opting out stops new events; it deletes
+nothing PostHog already holds.
 
 **Proxy.** `src/server/posthogProxy.ts` forwards `/_s/*` from the site's
 own origin so ad blockers do not drop events. `/_s/static/*` and
@@ -124,7 +132,8 @@ EU cloud means changing `POSTHOG_REGION` in that file and setting
 `POSTHOG_HOST=https://eu.i.posthog.com` on each Convex deployment.
 
 **Browser events.** Capture only through the typed `track(event, props)`.
-Props are ids, enums and lengths, never free text or personal data.
+Props are ids, enums and lengths, never free text or personal data;
+posthog-js adds the page address and its own properties to each.
 
 | Event | Props |
 |---|---|

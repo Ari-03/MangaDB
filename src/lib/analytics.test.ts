@@ -1,9 +1,12 @@
 // The analytics consent gate (lib/analytics.tsx), the PostHog client that
 // applies it (lib/analyticsClient.tsx) and the Settings opt-out, driven as
 // plain functions (test.react.ts) against convex-test. Clerk's useAuth,
-// posthog-js and its React provider are fakes: the provider calls `loaded`
-// on its first render, as posthog-js does at the end of init, and the fake
-// posthog records the consent calls made on it.
+// posthog-js and its React provider are fakes. The provider calls `loaded`
+// on its first render and then captures the initial pageview, as posthog-js
+// does at the end of init. The fake posthog keeps its distinct id across
+// reloads, records the calls made on it, and logs each event that passes
+// its opt-out and the client's before_send in `sent`, under the id of the
+// moment, as posthog-js would queue it.
 
 import { isValidElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,15 +16,25 @@ import { makeT, reader, withUser, type Accessor } from "../../convex/test.helper
 import { harness, mount, mountAside, resetHarness, setQuery, settle, text, type Host } from "./test.react";
 
 const fakes = vi.hoisted(() => {
-  const state = { identified: false, optedOut: false, inited: false };
+  const state = { distinctId: "anon-1", anonymousIds: 1, identified: false, optedOut: false, inited: false };
   const calls: string[] = [];
-  return {
+  const sent: Array<{ event: string; id: string }> = [];
+  const fakes = {
     auth: { isLoaded: false, isSignedIn: undefined as boolean | undefined, userId: null as string | null },
     state,
     calls,
+    sent,
     // What the client handed posthog.init, for its before_send.
     options: null as { before_send?: unknown; loaded?: (instance: unknown) => void } | null,
     posthog: {
+      capture: (event: string) => {
+        const beforeSend = fakes.options?.before_send;
+        if (state.optedOut || (typeof beforeSend === "function" && beforeSend({ event }) === null)) return;
+        sent.push({ event, id: state.distinctId });
+      },
+      get_distinct_id: () => state.distinctId,
+      _isIdentified: () => state.identified,
+      // posthog-js's stored consent, which the client must leave alone.
       has_opted_out_capturing: () => state.optedOut,
       opt_out_capturing: () => {
         calls.push("opt_out_capturing");
@@ -30,20 +43,24 @@ const fakes = vi.hoisted(() => {
       opt_in_capturing: () => {
         calls.push("opt_in_capturing");
         state.optedOut = false;
+        fakes.posthog.capture("$opt_in");
       },
-      _isIdentified: () => state.identified,
-      // reset() forgets the id and the stored consent with it.
+      // reset() forgets the id, and the stored consent with it.
       reset: () => {
         calls.push("reset");
-        state.identified = false;
-        state.optedOut = false;
+        Object.assign(state, { distinctId: `anon-${++state.anonymousIds}`, identified: false, optedOut: false });
       },
+      // Moving off an anonymous id sends $identify; off another identified
+      // id it switches silently.
       identify: (id: string) => {
         calls.push(`identify ${id}`);
-        state.identified = true;
+        const fromAnonymous = !state.identified && id !== state.distinctId;
+        Object.assign(state, { distinctId: id, identified: true });
+        if (fromAnonymous) fakes.posthog.capture("$identify");
       },
     },
   };
+  return fakes;
 });
 
 vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
@@ -56,20 +73,23 @@ vi.mock("@posthog/react", () => ({
     if (!fakes.state.inited) {
       fakes.state.inited = true;
       options?.loaded?.(fakes.posthog);
+      fakes.posthog.capture("$pageview");
     }
     return children;
   },
 }));
 
-const { AnalyticsSettings, ViewerAnalytics } = await import("./analytics");
+const { AnalyticsSettings, ViewerAnalytics, track } = await import("./analytics");
 const { default: PostHogAnalytics } = await import("./analyticsClient");
 type AnalyticsConsent = import("./analytics").AnalyticsConsent;
 
-/** Whether the client's before_send lets an event out right now. */
-function sends(): boolean {
-  const beforeSend = fakes.options?.before_send;
-  if (typeof beforeSend !== "function") throw new Error("no before_send");
-  return beforeSend({ event: "$pageview" }) !== null;
+/** A named event from app code. */
+function search() {
+  track("search_performed", { queryLength: 4, resultCount: 2 });
+}
+
+function identified(userId: string): AnalyticsConsent {
+  return { status: "identified", userId, username: "reader", role: null };
 }
 
 /**
@@ -91,6 +111,12 @@ const clientSlots: unknown[][] = [];
 function client(consent: AnalyticsConsent) {
   if (clientSlots.length === 0) clientSlots.push([]);
   mountAside(clientSlots[0]!, () => PostHogAnalytics({ apiKey: "phc_test", consent }));
+}
+
+/** A new page load: the next client() inits again; posthog-js's stored id stays. */
+function reload() {
+  clientSlots.length = 0;
+  fakes.state.inited = false;
 }
 
 function signIn(userId: string | null) {
@@ -134,8 +160,9 @@ beforeEach(() => {
   fakes.auth.isLoaded = false;
   fakes.auth.isSignedIn = undefined;
   fakes.auth.userId = null;
-  Object.assign(fakes.state, { identified: false, optedOut: false, inited: false });
+  Object.assign(fakes.state, { distinctId: "anon-1", anonymousIds: 1, identified: false, optedOut: false, inited: false });
   fakes.calls.length = 0;
+  fakes.sent.length = 0;
   fakes.options = null;
   vi.stubGlobal("navigator", { doNotTrack: null });
   vi.stubGlobal("window", {});
@@ -238,52 +265,132 @@ describe("ViewerAnalytics", () => {
 });
 
 describe("PostHogAnalytics", () => {
-  it("sends nothing and identifies no one while consent is pending or off", () => {
+  it("sends nothing and identifies no one while consent is pending or off, leaving posthog-js's consent alone", () => {
     client({ status: "pending" });
-    expect(sends()).toBe(false);
+    search();
     client({ status: "pending" });
-    expect(fakes.calls).toEqual([]);
-
     client({ status: "off" });
-    expect(sends()).toBe(false);
-    expect(fakes.calls).toEqual(["opt_out_capturing"]);
+    search();
+    expect(fakes.sent).toEqual([]);
+    expect(fakes.calls).toEqual([]);
   });
 
   it("applies the consent of the moment it loads, before posthog-js's first pageview", () => {
-    client({ status: "identified", userId: reader.subject, username: "reader", role: null });
+    client(identified(reader.subject));
     expect(fakes.calls).toEqual([`identify ${reader.subject}`]);
-    expect(sends()).toBe(true);
+    expect(fakes.sent).toEqual([
+      { event: "$identify", id: reader.subject },
+      { event: "$pageview", id: reader.subject },
+    ]);
   });
 
-  it("opts out when the viewer turns analytics off, and back in when they turn it on", () => {
-    const identified: AnalyticsConsent = { status: "identified", userId: reader.subject, username: "reader", role: null };
-    client(identified);
-    client(identified);
+  it("drops events once the viewer turns analytics off, and identifies again without $opt_in when they turn it on", () => {
+    client(identified(reader.subject));
+    client(identified(reader.subject));
     fakes.calls.length = 0;
+    fakes.sent.length = 0;
 
     client({ status: "off" });
-    expect(fakes.calls).toEqual(["opt_out_capturing"]);
-    expect(sends()).toBe(false);
+    search();
+    expect(fakes.sent).toEqual([]);
+    expect(fakes.calls).toEqual([]);
 
-    client(identified);
-    expect(fakes.calls).toEqual(["opt_out_capturing", "opt_in_capturing", `identify ${reader.subject}`]);
-    expect(sends()).toBe(true);
+    client(identified(reader.subject));
+    search();
+    expect(fakes.calls).toEqual([`identify ${reader.subject}`]);
+    expect(fakes.sent).toEqual([{ event: "search_performed", id: reader.subject }]);
   });
 
   it("forgets an identified user on sign-out before anything else is sent", () => {
     // posthog-js remembers an earlier session's identified user across reloads.
-    fakes.state.identified = true;
+    Object.assign(fakes.state, { distinctId: "user_earlier", identified: true });
     client({ status: "anonymous" });
     expect(fakes.calls).toEqual(["reset"]);
-    expect(fakes.state.identified).toBe(false);
+    expect(fakes.sent).toEqual([{ event: "$pageview", id: "anon-2" }]);
 
-    // Mid-session: an opted-out viewer signs out.
+    // Mid-session: a viewer turns analytics off, then signs out.
     fakes.calls.length = 0;
+    fakes.sent.length = 0;
+    client(identified(reader.subject));
     client({ status: "off" });
-    fakes.state.identified = true;
     client({ status: "anonymous" });
-    expect(fakes.calls).toEqual(["opt_out_capturing", "reset"]);
-    expect(fakes.calls).not.toContain(`identify ${reader.subject}`);
+    search();
+    expect(fakes.calls).toEqual([`identify ${reader.subject}`, "reset"]);
+    expect(fakes.sent).toEqual([
+      { event: "$identify", id: reader.subject },
+      { event: "search_performed", id: "anon-3" },
+    ]);
+  });
+
+  it("forgets another account before identifying, so no event goes out under the earlier id", () => {
+    // A browser that remembers the first account, now signed in as a second.
+    Object.assign(fakes.state, { distinctId: "user_first", identified: true });
+    client(identified("user_second"));
+    expect(fakes.calls).toEqual(["reset", "identify user_second"]);
+
+    // Switching accounts on the page, with no signed-out render between.
+    client({ status: "pending" });
+    search();
+    client(identified(reader.subject));
+    search();
+    expect(fakes.calls).toEqual(["reset", "identify user_second", "reset", `identify ${reader.subject}`]);
+    expect(fakes.sent).toEqual([
+      { event: "$identify", id: "user_second" },
+      { event: "$pageview", id: "user_second" },
+      { event: "$identify", id: reader.subject },
+      { event: "search_performed", id: reader.subject },
+    ]);
+  });
+});
+
+describe("Signing in and out on one page", () => {
+  const run = () => client(gate()!);
+
+  it("sends nothing until a sign-in's preference is known, then identifies once", async () => {
+    const t = makeT();
+    const as = await withUser(t, reader);
+    signIn(null);
+    run();
+    signIn(reader.subject);
+    run();
+    search();
+    // Convex has not seen the new session yet: no viewer.
+    setQuery(api.users.viewer, null);
+    expect(gate()).toEqual({ status: "off" });
+    run();
+    search();
+
+    await refreshViewer(as);
+    run();
+    run();
+    expect(fakes.calls).toEqual([`identify ${reader.subject}`]);
+    expect(fakes.sent).toEqual([
+      { event: "$pageview", id: "anon-1" },
+      { event: "$identify", id: reader.subject },
+    ]);
+  });
+
+  it("captures signed-out visits again after an opted-out viewer signs out", async () => {
+    const t = makeT();
+    const as = await withUser(t, reader);
+    await as.mutation(api.users.setAnalyticsOptOut, { optOut: true });
+    signIn(null);
+    run();
+    signIn(reader.subject);
+    await refreshViewer(as);
+    expect(gate()).toEqual({ status: "off" });
+    run();
+    signIn(null);
+    run();
+    fakes.sent.length = 0;
+
+    search();
+    reload();
+    run();
+    expect(fakes.sent).toEqual([
+      { event: "search_performed", id: "anon-1" },
+      { event: "$pageview", id: "anon-1" },
+    ]);
   });
 });
 
@@ -300,6 +407,7 @@ describe("AnalyticsSettings", () => {
     run();
     run();
     fakes.calls.length = 0;
+    fakes.sent.length = 0;
 
     choose(settings(), "Off");
     await settle();
@@ -307,14 +415,18 @@ describe("AnalyticsSettings", () => {
     await refreshViewer(as);
     expect(gate()).toEqual({ status: "off" });
     run();
-    expect(fakes.calls).toEqual(["opt_out_capturing"]);
+    search();
+    expect(fakes.calls).toEqual([]);
+    expect(fakes.sent).toEqual([]);
 
     choose(settings(), "On");
     await settle();
     expect(await storedOptOut(as)).toBe(false);
     await refreshViewer(as);
     run();
-    expect(fakes.calls).toEqual(["opt_out_capturing", "opt_in_capturing", `identify ${reader.subject}`]);
+    search();
+    expect(fakes.calls).toEqual([`identify ${reader.subject}`]);
+    expect(fakes.sent).toEqual([{ event: "search_performed", id: reader.subject }]);
   });
 
   it("says when this browser sends Do Not Track", async () => {

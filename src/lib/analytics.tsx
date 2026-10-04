@@ -187,8 +187,9 @@ function AnalyticsSettingsInner() {
       <p className="sharing-lede">
         We send page views and actions such as follows, collection and reading changes, ratings,
         reviews, comments, favorites and searches to PostHog, to see how the site is used. While
-        you are signed in they carry your account id, username and any data-team role, never your
-        email or anything you write.
+        you are signed in they carry your account id, username and any data-team role. They never
+        carry your email or the text of your reviews and comments. Page addresses and titles are
+        included, so a search is sent as part of the search page's address and title.
       </p>
       <div className="vis-field">
         <span className="vis-legend" id="analytics-label">
@@ -209,7 +210,8 @@ function AnalyticsSettingsInner() {
         </span>
         <p className="vis-hint">
           Off stops new events about your account, from our server and from any browser you are
-          signed in on. Events already sent are not deleted.
+          signed in on. Events from before the switch, including any this browser still sends in
+          the next few seconds, are not deleted.
         </p>
         <p className="vis-hint">
           {doNotTrack()
