@@ -116,35 +116,43 @@ user's choice is still loading, calls posthog-js's `opt_out_capturing()`:
 `capture()` then returns before posthog-js records anything (its session
 and entry URL, the previous page), and its logs and metrics, which check
 `is_capturing()`, stop too. posthog-js stores the denial in localStorage,
-keeping the distinct id it holds. The client's `before_send` drops events
-in the same states, as a backstop. Convex having no viewer yet for a new
-session counts as still loading. Remote config is off only because
+keeping the distinct id it holds. That store is shared by every tab, so
+another tab opting in turns capturing back on in this one; the client's
+`before_send` drops every event while Off or loading to cover that.
+Convex having no viewer yet for a new session counts as still loading.
+Remote config is off only because
 `advanced_disable_flags` is set. A browser sending Do Not Track or Global
 Privacy Control sets the opt-out once on an account that has never chosen,
 so server events stop too; a browser without it never clears one.
 Signed-out visitors have no toggle: `respect_dnt` covers them.
 
 Sending resumes (switching On, signing out, a sign-in's choice answering)
-in a fixed order. First `reset()`, when posthog-js holds an identified id
-other than the one now signed in: on sign-out, or when a different user
-signs in. It clears the stored denial too. Then, if a denial is still
-stored, `opt_in_capturing({ captureEventName: false })`, which sends no
-`$opt_in` event. Then `identify()`. The client does the same when it
-loads, so a denial stored on an earlier page load, by an account since
-signed out or before a reload, does not outlive the choice. Opting in
-sends the page's initial `$pageview` only if this page load has not sent
-it (the client loaded while Off or loading), under the id posthog-js
-holds at that moment: the account's, or an anonymous id that `identify()`
-then links to it. A sign-in from a signed-out visit does not reset, so
-that browsing stays with the account. `reset()` does not clear posthog-js's
-record of the last page it captured, so the first pageview after a reset
-on the same page carries the previous identity's last page path as
-`$prev_pageview_pathname`: an account's last page on the first signed-out
-pageview after its sign-out, or one account's on the next account's first
-pageview. posthog-js sends captured events in batches, keeps a batch that
-fails to send and retries it with backoff, and nothing public clears one,
-so events captured before a switch to Off or a sign-out may still be
-delivered later, including after a lost connection is restored. Opting out
+in a fixed order. First the client notes whether a denial is stored. Then
+`reset()`, when posthog-js holds an identified id other than the one now
+signed in: on sign-out, or when a different user signs in. It clears the
+stored denial too. Then, if a denial was stored before the reset,
+`opt_in_capturing({ captureEventName: false })`, which sends no `$opt_in`
+event. Then `identify()`. The client does the same when it loads, so a
+denial stored on an earlier page load, by an account since signed out or
+before a reload, does not outlive the choice. Opting in starts
+posthog-js's send queue and sends the page's initial `$pageview` if this
+page load has not sent it (the client loaded while Off or loading);
+`reset()` does neither, which is why the opt-in follows a reset that has
+already cleared the denial. That pageview goes out under the id
+posthog-js holds at that moment: the account's, or an anonymous id that
+`identify()` then links to it. A sign-in from a signed-out visit does not
+reset, so that browsing stays with the account. `reset()` does not clear
+posthog-js's record of the last pageview it captured, so on the same page
+the events after a reset still refer to it: until the next pageview each
+carries its id as `$pageview_id`, and the next pageview carries
+`$prev_pageview_id`, `$prev_pageview_pathname` and that page's duration
+and scroll depth. That is how an account's last page reaches the first
+signed-out pageview after its sign-out, or one account's the next
+account's first pageview; no account id crosses. posthog-js sends
+captured events in batches, keeps a batch that fails to send and retries
+it with backoff, and nothing public clears one, so events captured before
+a switch to Off or a sign-out may still be delivered later, including
+after a lost connection is restored. Opting out
 stops new events; it deletes nothing PostHog already holds.
 
 `src/lib/analyticsClient.test.ts` pins this behaviour against the real

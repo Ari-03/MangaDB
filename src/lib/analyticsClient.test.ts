@@ -332,6 +332,53 @@ describe("analyticsClient against posthog-js", () => {
     for (const event of sent) expect(event.properties.$anon_distinct_id).not.toBe("user_a");
   });
 
+  it("sends the initial pageview once when a page that loaded pending forgets a remembered account for another", async () => {
+    await openPage("/", identified("user_a"));
+    const reloaded = events.length;
+    const page = await openPage("/series/1", PENDING);
+    await page.apply(identified("user_b"));
+    await page.go("/series/2");
+
+    const sent = since(reloaded);
+    const anonymousId = sent.find((e) => e.event === "$identify")?.properties.$anon_distinct_id;
+    expect(anonymousId).not.toBe("user_a");
+    // The initial pageview goes out under the id reset() made, which $identify links to user_b.
+    const expected = [
+      ["$pageview", anonymousId, "/series/1"],
+      ["$identify", "user_b", "/series/1"],
+      ["$pageview", "user_b", "/series/2"],
+    ];
+    const received = sent.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname]);
+    expect(received).toHaveLength(expected.length);
+    expect(received).toEqual(expect.arrayContaining(expected));
+  });
+
+  it("sends the initial pageview once when a page that loaded pending forgets a remembered account on sign-out", async () => {
+    await openPage("/", identified("user_a"));
+    const reloaded = events.length;
+    const page = await openPage("/series/1", PENDING);
+    await page.apply(ANONYMOUS);
+    await page.go("/series/2");
+
+    const sent = since(reloaded);
+    const anonymousId = page.posthog.get_distinct_id();
+    expect(anonymousId).not.toBe("user_a");
+    expect(sent.map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+      ["$pageview", anonymousId, "/series/1"],
+      ["$pageview", anonymousId, "/series/2"],
+    ]);
+  });
+
+  it("sends nothing while off when another tab opts the browser back in", async () => {
+    const page = await openPage("/", ANONYMOUS);
+    const switched = requests.length;
+    await page.apply(OFF);
+    // posthog-js keeps its consent in localStorage, shared by every tab.
+    localStorage.setItem("__ph_opt_in_out_phc_test", "1");
+    await page.go(`/series/${OFF_TIME}`);
+    expect(requests.slice(switched)).toEqual([]);
+  });
+
   it("links anonymous browsing to the account it signs in to, once", async () => {
     const page = await openPage("/", ANONYMOUS);
     await page.go("/series/1");

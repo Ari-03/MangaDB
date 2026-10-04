@@ -25,9 +25,11 @@ const baseOptions: Partial<PostHogConfig> = {
   // No feature flags in use: skip the /flags request entirely. This is also
   // what keeps remote config off.
   advanced_disable_flags: true,
-  // Nothing leaves while the consent last applied withholds it: a backstop
-  // to the opt-out. It runs last in capture(), after posthog-js has
-  // updated its session and pageview state.
+  // Nothing leaves while the consent last applied withholds it. posthog-js
+  // stores its opt-out in localStorage, shared by every tab, so another tab
+  // opting in turns capturing back on here while this account is Off. It
+  // runs last in capture(), after posthog-js has updated its session and
+  // pageview state.
   before_send: (event) => (sending ? event : null),
 };
 
@@ -78,12 +80,14 @@ export default function PostHogAnalytics({
  * holds. `anonymous` and `identified` resume in this order: reset() when
  * posthog-js holds an identified user other than this one, so two accounts
  * are never merged and no event carries the other's id (reset() clears the
- * stored denial and keeps `$device_id`); then opt back in if a denial is
- * stored, with no `$opt_in` event, which also covers a denial left by an
- * earlier page load; then `identified` identifies with username and role
- * (never email). Opting in sends the initial `$pageview` only if this page
- * load has not sent it, under the id of that moment. Applying the same
- * consent twice changes nothing.
+ * stored denial and keeps `$device_id`); then opt back in, with no `$opt_in`
+ * event, if a denial was stored before the reset, which also covers a
+ * denial left by an earlier page load; then `identified` identifies with
+ * username and role (never email). Opting in starts the send queue and
+ * sends the initial `$pageview` if this page load has not sent it, under
+ * the id of that moment; reset() does neither, so a client that loaded
+ * opted out needs the opt-in after it. Applying the same consent twice
+ * changes nothing.
  */
 export function applyConsent(consent: AnalyticsConsent) {
   sending = consent.status === "anonymous" || consent.status === "identified";
@@ -92,11 +96,13 @@ export function applyConsent(consent: AnalyticsConsent) {
     return;
   }
   const userId = consent.status === "identified" ? consent.userId : null;
+  // Read before reset(), which clears it.
+  const optedOut = posthog.has_opted_out_capturing();
   // identify() records itself in posthog-js's persisted `$user_state`.
   if (posthog.get_property("$user_state") === "identified" && posthog.get_distinct_id() !== userId) {
     posthog.reset();
   }
-  if (posthog.has_opted_out_capturing()) posthog.opt_in_capturing({ captureEventName: false });
+  if (optedOut) posthog.opt_in_capturing({ captureEventName: false });
   if (consent.status === "identified") {
     const { username, role } = consent;
     // The second argument is the $set payload.

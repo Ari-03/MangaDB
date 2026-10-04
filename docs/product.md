@@ -254,9 +254,10 @@ that has never chosen to Off, once; the panel says so. A browser without
 it never switches an account back on. Signed-out visitors have no toggle;
 Do Not Track covers them and they create no person profile. Two accounts
 used on one browser are never merged into one person, and no event carries
-the other account's id, though their events share a device id and the
-first page view after switching on one page names the previous account's
-last page. Events never
+the other account's id, though their events share a device id, and after
+switching on one page the next account's first events still point to the
+previous account's last page view: its address, how long it was open and
+how far it was scrolled. Events never
 carry the user's email or the text of their reviews and comments, but they
 include page addresses and titles, so a search's text is sent with the
 search page, and PostHog also receives the visitor's IP address and browser
