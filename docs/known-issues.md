@@ -399,8 +399,10 @@ is fixed.
   live query or a background reload of the page removes a row above the
   one whose link has keyboard focus, React keeps the focused element and
   gives it the next row's content, so Enter opens another book or URL.
-  The fix is a stable key per row: ownership rows already carry Edition,
-  Release and bundle ids; the other rows need an id from their query.
+  The fix is a stable key per row, from an id its query returns that
+  never changes. No row has one today: an ownership row carries its
+  Release's `anchor`, which is the ISBN when there is one, and an ISBN
+  correction changes it.
 
 ## Tests
 
