@@ -5,16 +5,6 @@ is fixed.
 
 ## Personal data and tracking
 
-- **Reading Undo depends on current coverage.** `reading.undoCompletion`
-  decrements the Volumes the Edition covers completely now, not the ones
-  the completion counted, and always restores the pass at 100%. A
-  completion that touched only partial coverage cannot be undone, and a
-  coverage change after completion leaves its reads behind. The fix is a
-  stored completion event with the original pass and Volume ids.
-- **Library badges run full queries.** Each tab label on `/me` subscribes
-  to its tab's full query (`collection.myLibrary`, `reading.myReading`,
-  `follows.myUpcoming`, `favorites.mine`) just to show a count, including
-  while Settings is open. Maintained counters would fix it.
 - **No analytics opt-out.** posthog-js honours Do Not Track, but there is
   no opt-out toggle in Settings.
 - **`volumeProgress.seriesId` goes stale after a Split.** The field is set

@@ -7,13 +7,12 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { useState } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { track } from "~/lib/analytics";
 import { Cover, CoverBadge } from "~/lib/cover";
 import { formatPartialDate, plural } from "~/lib/format";
-import { sortKeyMonth, todaySortKey } from "~/lib/month";
+import { sortKeyMonth } from "~/lib/month";
 import { convexClient } from "~/providers";
 import { useReadyViewer } from "~/lib/viewer";
 import { slugParams } from "~/lib/slug";
@@ -179,15 +178,14 @@ function sortDate(sort: number, day: number | null): string | null {
  * of covers (each with its next announced date, unfollowable in place), the
  * format preference that scopes them, and My Upcoming Releases —
  * follows.myUpcoming, computed live — as a shelf of covers, nearest first.
+ * `todaySort` comes from the page, so its tab count shares this query.
  */
-export function LibraryUpcoming() {
+export function LibraryUpcoming({ todaySort }: { todaySort: number }) {
   if (!convexClient) return null;
-  return <LibraryUpcomingInner />;
+  return <LibraryUpcomingInner todaySort={todaySort} />;
 }
 
-function LibraryUpcomingInner() {
-  // Computed once per mount so the reactive query key stays stable.
-  const [todaySort] = useState(() => todaySortKey());
+function LibraryUpcomingInner({ todaySort }: { todaySort: number }) {
   const upcoming = useQuery(api.follows.myUpcoming, { todaySort });
   const following = useQuery(api.follows.myFollowing, {});
   const viewer = useReadyViewer();

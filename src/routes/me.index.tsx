@@ -52,7 +52,8 @@ function viewHref(tab: Tab, shelf: EntryState): string {
  * (linkable, right before hydration) and then switched in place: a click
  * only changes local state and rewrites the address, never navigates, so
  * the /me auth gate is not re-run for every shelf. Each tab mounts the
- * slice that owns it; this page only frames them.
+ * slice that owns it; this page only frames them. Only the open tab's label
+ * shows a count, read from the query its panel already runs.
  */
 export const Route = createFileRoute("/me/")({
   validateSearch: (
@@ -72,6 +73,9 @@ function MePage() {
     shelf: search.shelf ?? "owned",
   });
   const { tab, shelf } = view;
+  // Today's key for the Upcoming panel and its count, once per mount so the
+  // shared query key stays stable.
+  const [todaySort] = useState(() => todaySortKey());
   const show = (next: typeof view) => (event: MouseEvent<HTMLAnchorElement>) => {
     // Plain clicks switch in place; modified clicks keep their link meaning.
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -130,7 +134,7 @@ function MePage() {
             onClick={show({ tab: entry.key, shelf })}
           >
             {entry.label}
-            <TabCount tab={entry.key} />
+            {tab === entry.key ? <TabCount tab={tab} todaySort={todaySort} /> : null}
           </a>
         ))}
       </nav>
@@ -166,7 +170,7 @@ function MePage() {
       ) : tab === "upcoming" ? (
         <section className="lib-panel lib-view" aria-label="Upcoming">
           {/* Series Follows + My Upcoming Releases. */}
-          <LibraryUpcoming />
+          <LibraryUpcoming todaySort={todaySort} />
         </section>
       ) : tab === "favorites" ? (
         <section className="lib-panel lib-view" aria-label="Favorites">
@@ -206,20 +210,19 @@ function MePage() {
   );
 }
 
-/** The count in a tab label; nothing until the slice's query answers. */
-function TabCount({ tab }: { tab: Tab }) {
+/**
+ * The count in the open tab's label (Settings has none); nothing until the
+ * slice's query answers. The arguments match the open panel's own query, so
+ * the two share one subscription.
+ */
+function TabCount({ tab, todaySort }: { tab: Tab; todaySort: number }) {
   if (!convexClient || tab === "settings") return null;
-  return <TabCountInner tab={tab} />;
+  return <TabCountInner tab={tab} todaySort={todaySort} />;
 }
 
-function TabCountInner({ tab }: { tab: Tab }) {
-  // Each tab's own query, so the counts stay live and switching tabs is
-  // instant — the subscriptions are already warm.
+function TabCountInner({ tab, todaySort }: { tab: Tab; todaySort: number }) {
   const library = useQuery(api.collection.myLibrary, tab === "collection" ? {} : "skip");
   const reading = useQuery(api.reading.myReading, tab === "reading" ? {} : "skip");
-  // Today's key like the Upcoming tab itself; once per mount so the query
-  // key stays stable.
-  const [todaySort] = useState(() => todaySortKey());
   const upcoming = useQuery(
     api.follows.myUpcoming,
     tab === "upcoming" ? { todaySort } : "skip",

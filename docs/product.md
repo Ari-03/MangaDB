@@ -182,9 +182,10 @@ Want all, Order all, Own all and Read all, capped at 200 books per click.
 Nothing removes entries in bulk.
 
 `/me` is the library, with tabs Collection, Reading, Upcoming, Favorites
-and Settings. Collection shelves entries by Series and reading path, one
-shelf per state (`?shelf=owned|ordered|wanted`). "Add the other N" opens
-the rest of a run with unmarked books faded.
+and Settings. The open tab's label shows its count; Settings has none.
+Collection shelves entries by Series and reading path, one shelf per state
+(`?shelf=owned|ordered|wanted`). "Add the other N" opens the rest of a run
+with unmarked books faded.
 
 ## Reading
 
@@ -197,7 +198,10 @@ Reading is three separate things (`convex/reading.ts`):
   you confirm.
 - **Volume Progress** is a read count per Volume. Confirming a pass adds
   one read to every Volume the Edition covers completely, never partially.
-  Another pass is a reread. Undo reverses the latest completion. The
+  Another pass is a reread. Undo, offered right after a completion, takes
+  back the reads it added, even if the Edition's coverage changed since,
+  and puts the pass back at its old percent. A Volume read again or raised
+  since keeps its count, and a pass started since stays as it is. The
   Volume page edits the count directly, and the Mark read toggle on a cover
   gives each completely covered Volume its first read.
 

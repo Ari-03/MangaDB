@@ -1,7 +1,9 @@
+import type { FunctionReturnType } from "convex/server";
 import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { PASS_VOLUMES_CAP } from "./reading";
 import {
   insertCoverage,
   insertEdition,
@@ -11,7 +13,7 @@ import {
   insertVolume,
 } from "./test.factories";
 import { alice, bob, makeT, reader, seedTeam, signedIn, withUser, type TestT } from "./test.helpers";
-import { mergeAs, splitAs } from "./test.moderation";
+import { hideRecord, mergeAs, splitAs } from "./test.moderation";
 import { describeNoViewer, seriesWithVolume } from "./test.tracking";
 
 const OTHER = { subject: "user_2other", username: "other" };
@@ -55,10 +57,20 @@ async function setup() {
     });
     const splitRelease = await insertRelease(ctx, { ...release, editionId: split, format: "digital" });
 
-    return { seriesId, v1, v2, v3, omnibus, standardRelease, omnibusRelease, splitRelease };
+    return { publisherId, seriesId, v1, v2, v3, omnibus, standardRelease, omnibusRelease, splitRelease };
   });
   const as = await withUser(t, reader);
   return { t, as, ...ids };
+}
+
+/** What undoCompletion takes back from a completePass result. */
+function undoArgs({ completedAt, volumeIds, percent }: FunctionReturnType<typeof api.reading.completePass>) {
+  return { completedAt, volumeIds, percent };
+}
+
+/** The reader's pass on a Release, as its row shows it. */
+async function passOn(as: Awaited<ReturnType<typeof setup>>["as"], releaseId: Id<"releases">) {
+  return (await as.query(api.reading.passForRelease, { releaseId }))?.pass;
 }
 
 async function readCount(t: TestT, volumeId: Id<"volumes">): Promise<number> {
@@ -88,7 +100,7 @@ describeNoViewer(setup, {
     [
       "undoCompletion",
       (as, { standardRelease }) =>
-        as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, completedAt: 1 }),
+        as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, completedAt: 1, volumeIds: [] }),
     ],
     ["cancelPass", (as, { standardRelease }) => as.mutation(api.reading.cancelPass, { releaseId: standardRelease })],
     ["setVolumeReadCount", (as, { v1 }) => as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 1 })],
@@ -273,6 +285,24 @@ describe("reading.completePass", () => {
     ).rejects.toThrow(/pass/i);
   });
 
+  it("refuses an Edition covering more volumes than one undo takes back, before writing", async () => {
+    const { t, as, publisherId, seriesId } = await setup();
+    const releaseId = await t.run(async (ctx) => {
+      const editionId = await insertEdition(ctx, { publisherId });
+      for (let position = 1; position <= PASS_VOLUMES_CAP + 1; position++) {
+        const volumeId = await insertVolume(ctx, { seriesId, position: 100 + position });
+        await insertCoverage(ctx, { editionId, volumeId, order: position });
+      }
+      return await insertRelease(ctx, { publisherId, seriesIds: [seriesId], editionId });
+    });
+    await as.mutation(api.reading.startPass, { releaseId });
+    await expect(as.mutation(api.reading.completePass, { releaseId })).rejects.toMatchObject({
+      data: { code: "tooMany" },
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("volumeProgress").collect())).toEqual([]);
+    expect(await passOn(as, releaseId)).toEqual({ percent: null });
+  });
+
   it("records a reread on another completed pass", async () => {
     const { t, as, standardRelease, v1 } = await setup();
     for (let i = 0; i < 2; i++) {
@@ -284,25 +314,60 @@ describe("reading.completePass", () => {
 });
 
 describe("reading.undoCompletion", () => {
-  it("decrements the most recent completion and restores the pass at 100%", async () => {
+  it("takes back exactly the counted volumes and restores a pass with no percent", async () => {
     const { t, as, omnibusRelease, v1, v2, v3 } = await setup();
     await as.mutation(api.reading.startPass, { releaseId: omnibusRelease });
-    const { completedAt } = await as.mutation(api.reading.completePass, {
-      releaseId: omnibusRelease,
-    });
+    const done = await as.mutation(api.reading.completePass, { releaseId: omnibusRelease });
+    expect(done.volumeIds).toEqual([v1, v2, v3]);
+    expect(done.percent).toBeUndefined();
 
-    const undo = await as.mutation(api.reading.undoCompletion, {
-      releaseId: omnibusRelease,
-      completedAt,
-    });
+    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, ...undoArgs(done) });
     expect(undo.decremented).toBe(3);
     expect(await readCount(t, v1)).toBe(0);
     expect(await readCount(t, v2)).toBe(0);
     expect(await readCount(t, v3)).toBe(0);
-    const state = await as.query(api.reading.passForRelease, {
-      releaseId: omnibusRelease,
+    expect(await passOn(as, omnibusRelease)).toEqual({ percent: null });
+  });
+
+  it("restores a pass at the percent it had, not 100%", async () => {
+    const { as, standardRelease } = await setup();
+    await as.mutation(api.reading.startPass, { releaseId: standardRelease });
+    await as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 40 });
+    const done = await as.mutation(api.reading.completePass, { releaseId: standardRelease });
+    expect(done.percent).toBe(40);
+
+    await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    expect(await passOn(as, standardRelease)).toEqual({ percent: 40 });
+  });
+
+  it("restores the pass of a completion that counted only partial coverage", async () => {
+    const { t, as, splitRelease, v3 } = await setup();
+    await as.mutation(api.reading.startPass, { releaseId: splitRelease });
+    await as.mutation(api.reading.setPassPercent, { releaseId: splitRelease, percent: 60 });
+    const done = await as.mutation(api.reading.completePass, { releaseId: splitRelease });
+    expect(done.volumeIds).toEqual([]);
+
+    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: splitRelease, ...undoArgs(done) });
+    expect(undo.decremented).toBe(0);
+    expect(await readCount(t, v3)).toBe(0);
+    expect(await passOn(as, splitRelease)).toEqual({ percent: 60 });
+  });
+
+  it("decrements the volumes the completion counted after the coverage changed", async () => {
+    const { t, as, omnibus, omnibusRelease, v1, v2, v3 } = await setup();
+    await as.mutation(api.reading.startPass, { releaseId: omnibusRelease });
+    const done = await as.mutation(api.reading.completePass, { releaseId: omnibusRelease });
+    // An Editor corrects the omnibus to cover Vol 1 only.
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("volumeCoverages").collect()) {
+        if (row.editionId === omnibus && row.volumeId !== v1) await ctx.db.delete(row._id);
+      }
     });
-    expect(state?.pass).toEqual({ percent: 100 });
+
+    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, ...undoArgs(done) });
+    expect(undo.decremented).toBe(3);
+    expect(await readCount(t, v2)).toBe(0);
+    expect(await readCount(t, v3)).toBe(0);
   });
 
   it("decrements a reread back down without erasing earlier reads", async () => {
@@ -314,10 +379,7 @@ describe("reading.undoCompletion", () => {
       releaseId: standardRelease,
     });
 
-    await as.mutation(api.reading.undoCompletion, {
-      releaseId: standardRelease,
-      completedAt: second.completedAt,
-    });
+    await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(second) });
     expect(await readCount(t, v1)).toBe(1);
   });
 
@@ -336,16 +398,104 @@ describe("reading.undoCompletion", () => {
     expect(second.completedAt).not.toBe(first.completedAt);
 
     // Undoing the *older* completion touches nothing and restores no pass.
-    const undo = await as.mutation(api.reading.undoCompletion, {
-      releaseId: standardRelease,
-      completedAt: first.completedAt,
-    });
+    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(first) });
     expect(undo.decremented).toBe(0);
     expect(await readCount(t, v1)).toBe(2);
-    const state = await as.query(api.reading.passForRelease, {
-      releaseId: standardRelease,
-    });
-    expect(state?.pass).toBeNull();
+    expect(await passOn(as, standardRelease)).toBeNull();
+  });
+
+  it("leaves a count changed directly since the completion alone", async () => {
+    const { t, as, standardRelease, v1 } = await setup();
+    await as.mutation(api.reading.startPass, { releaseId: standardRelease });
+    const done = await as.mutation(api.reading.completePass, { releaseId: standardRelease });
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 3 });
+
+    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    expect(undo.decremented).toBe(0);
+    expect(await readCount(t, v1)).toBe(3);
+    expect(await passOn(as, standardRelease)).toBeNull();
+  });
+
+  it("leaves a pass started since the completion alone", async () => {
+    const { t, as, standardRelease, v1 } = await setup();
+    await as.mutation(api.reading.startPass, { releaseId: standardRelease });
+    await as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 40 });
+    const done = await as.mutation(api.reading.completePass, { releaseId: standardRelease });
+    await as.mutation(api.reading.startPass, { releaseId: standardRelease });
+    await as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 10 });
+
+    await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    expect(await readCount(t, v1)).toBe(0);
+    expect(await passOn(as, standardRelease)).toEqual({ percent: 10 });
+  });
+
+  it("does nothing the second time", async () => {
+    const { t, as, standardRelease, splitRelease, v1 } = await setup();
+    await as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 2 });
+    await as.mutation(api.reading.startPass, { releaseId: standardRelease });
+    const done = await as.mutation(api.reading.completePass, { releaseId: standardRelease });
+    await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    expect(await readCount(t, v1)).toBe(2);
+
+    const again = await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    expect(again.decremented).toBe(0);
+    expect(await readCount(t, v1)).toBe(2);
+
+    // A completion that counted nothing: its pass comes back once.
+    await as.mutation(api.reading.startPass, { releaseId: splitRelease });
+    const partial = await as.mutation(api.reading.completePass, { releaseId: splitRelease });
+    await as.mutation(api.reading.undoCompletion, { releaseId: splitRelease, ...undoArgs(partial) });
+    await as.mutation(api.reading.undoCompletion, { releaseId: splitRelease, ...undoArgs(partial) });
+    const passes = await t.run(async (ctx) => await ctx.db.query("releaseProgress").collect());
+    expect(passes.map((pass) => pass.releaseId)).toEqual([standardRelease, splitRelease]);
+  });
+
+  it("decrements a volume merged since the completion once, through its survivor", async () => {
+    const { t, as, omnibusRelease, v1, v2, v3 } = await setup();
+    await seedTeam(t, [alice, bob]);
+    await as.mutation(api.reading.setVolumeReadCount, { volumeId: v1, readCount: 1 });
+    await as.mutation(api.reading.startPass, { releaseId: omnibusRelease });
+    const done = await as.mutation(api.reading.completePass, { releaseId: omnibusRelease });
+    await mergeAs(t, { type: "volume", id: v1 }, { type: "volume", id: v2 });
+
+    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, ...undoArgs(done) });
+    expect(undo.decremented).toBe(2);
+    expect(await readCount(t, v1)).toBe(1);
+    expect(await readCount(t, v3)).toBe(0);
+  });
+
+  it("still works after the Series is hidden", async () => {
+    const { t, as, seriesId, standardRelease, v1 } = await setup();
+    await seedTeam(t, [alice, bob]);
+    await as.mutation(api.reading.startPass, { releaseId: standardRelease });
+    await as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 40 });
+    const done = await as.mutation(api.reading.completePass, { releaseId: standardRelease });
+    await hideRecord(t, { type: "series", id: seriesId });
+
+    const undo = await as.mutation(api.reading.undoCompletion, { releaseId: standardRelease, ...undoArgs(done) });
+    expect(undo.decremented).toBe(1);
+    expect(await readCount(t, v1)).toBe(0);
+    expect(await passOn(as, standardRelease)).toEqual({ percent: 40 });
+  });
+
+  it("validates the volume list's size and the percent", async () => {
+    const { as, standardRelease, v1 } = await setup();
+    await expect(
+      as.mutation(api.reading.undoCompletion, {
+        releaseId: standardRelease,
+        completedAt: 1,
+        volumeIds: Array.from({ length: PASS_VOLUMES_CAP + 1 }, () => v1),
+      }),
+    ).rejects.toMatchObject({ data: { code: "tooMany" } });
+    await expect(
+      as.mutation(api.reading.undoCompletion, {
+        releaseId: standardRelease,
+        completedAt: 1,
+        volumeIds: [],
+        percent: 101,
+      }),
+    ).rejects.toMatchObject({ data: { code: "badPercent" } });
   });
 });
 
@@ -601,7 +751,7 @@ describe("reading progress belongs to one user", () => {
     const { t, as, seriesId, v2, standardRelease, omnibusRelease } = await setup();
     await as.mutation(api.reading.setSeriesReadingStatus, { seriesId, status: "reading" });
     await as.mutation(api.reading.startPass, { releaseId: omnibusRelease });
-    const { completedAt } = await as.mutation(api.reading.completePass, { releaseId: omnibusRelease });
+    const done = await as.mutation(api.reading.completePass, { releaseId: omnibusRelease });
     await as.mutation(api.reading.setVolumeReadCount, { volumeId: v2, readCount: 2 });
     await as.mutation(api.reading.startPass, { releaseId: standardRelease });
     await as.mutation(api.reading.setPassPercent, { releaseId: standardRelease, percent: 40 });
@@ -629,10 +779,11 @@ describe("reading progress belongs to one user", () => {
       other.mutation(api.reading.completePass, { releaseId: standardRelease }),
     ).rejects.toMatchObject({ data: { code: "noPass" } });
     await other.mutation(api.reading.cancelPass, { releaseId: standardRelease });
-    // Nor are the reader's completion, read counts or status theirs to undo.
-    expect(
-      await other.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, completedAt }),
-    ).toEqual({ decremented: 0 });
+    // Nor are the reader's completion, read counts or status theirs to undo,
+    // even sending back the reader's own completion and Volume ids.
+    expect(await other.mutation(api.reading.undoCompletion, { releaseId: omnibusRelease, ...undoArgs(done) })).toEqual({
+      decremented: 0,
+    });
     expect(await other.mutation(api.reading.setEditionRead, { editionPublicId: 22, read: false })).toMatchObject({
       changed: 0,
     });

@@ -18,6 +18,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { track } from "~/lib/analytics";
 import { Cover } from "~/lib/cover";
+import { mutationErrorMessage } from "~/lib/errors";
 import { useRunLock } from "~/lib/quickActions";
 import { convexClient } from "~/providers";
 import { slugParams } from "~/lib/slug";
@@ -40,10 +41,11 @@ const STATUS_ORDER: ReadingStatus[] = [
   "dropped",
 ];
 
+/** What reading.completePass did: what Undo sends back, and its suggestions. */
+type Completion = FunctionReturnType<typeof api.reading.completePass>;
+
 /** A Series a reading write suggests a status for (reading.completePass and kin). */
-export type SeriesSuggestion = FunctionReturnType<
-  typeof api.reading.completePass
->["suggestCompleted"][number];
+export type SeriesSuggestion = Completion["suggestCompleted"][number];
 
 /**
  * The fully-read prompt (spec §3): a completion that leaves every Volume of
@@ -281,10 +283,12 @@ function VolumeReadCountInner({
  * The pass controls on a Release row: start a pass, move the optional
  * 0–100% slider, confirm completion (with undo), abandon the pass. Mounts
  * anywhere a Release row renders — Series, Volume, and Edition pages.
- * `releaseId` is the row's document id from the page queries. Completing
- * and undoing write the covered Volumes' Progress, which the client does
- * not know here, so both wait while any "Read all" run is still marking
- * (useRunLock): its later batch could otherwise re-mark an undone Volume.
+ * `releaseId` is the row's document id from the page queries. Undo sends
+ * back what completePass returned, so it reverses that completion even if
+ * the Edition's coverage changed since. Completing and undoing write the
+ * covered Volumes' Progress, which the client does not know here, so both
+ * wait while any "Read all" run is still marking (useRunLock): its later
+ * batch could otherwise re-mark an undone Volume.
  */
 export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }) {
   if (!convexClient) return null;
@@ -308,11 +312,10 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
   // Start-reading suggestions returned by startPass (never auto-applied).
   const [suggestReading, setSuggestReading] = useState<SeriesSuggestion[]>([]);
   // The just-confirmed completion: drives the undo affordance and the
-  // completed-series suggestions.
-  const [completion, setCompletion] = useState<{
-    completedAt: number;
-    suggested: SeriesSuggestion[];
-  } | null>(null);
+  // completed-series suggestions. It stays until Undo succeeds.
+  const [completion, setCompletion] = useState<Completion | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const [undoError, setUndoError] = useState<string | null>(null);
 
   if (!data) return null; // loading, signed out, or username pending
   const pass = data.pass;
@@ -320,6 +323,7 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
 
   const start = async () => {
     setCompletion(null);
+    setUndoError(null);
     setDraft(null);
     const result = await startPass({ releaseId });
     setSuggestReading(result.suggestReading);
@@ -330,10 +334,27 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
     setConfirming(false);
     const result = await completePass({ releaseId });
     setDraft(null);
-    setCompletion({
-      completedAt: result.completedAt,
-      suggested: result.suggestCompleted,
-    });
+    setUndoError(null);
+    setCompletion(result);
+  };
+
+  const undo = async (done: Completion) => {
+    if (lock.held()) return;
+    setUndoing(true);
+    setUndoError(null);
+    try {
+      await undoCompletion({
+        releaseId,
+        completedAt: done.completedAt,
+        volumeIds: done.volumeIds,
+        percent: done.percent,
+      });
+      setCompletion(null);
+    } catch (err) {
+      setUndoError(mutationErrorMessage(err, "Undo didn't go through. Try again."));
+    } finally {
+      setUndoing(false);
+    }
   };
 
   return (
@@ -395,21 +416,19 @@ function ReleasePassControlsInner({ releaseId }: { releaseId: Id<"releases"> }) 
           Pass completed — read counts updated.{" "}
           <button
             type="button"
-            disabled={lock.locked}
-            onClick={() => {
-              if (lock.held()) return;
-              void undoCompletion({
-                releaseId,
-                completedAt: completion.completedAt,
-              });
-              setCompletion(null);
-            }}
+            disabled={lock.locked || undoing}
+            onClick={() => void undo(completion)}
           >
             Undo
           </button>
+          {undoError ? (
+            <span className="form-error" role="alert">
+              {undoError}
+            </span>
+          ) : null}
           <CompletedPrompt
-            suggestions={completion.suggested}
-            onDone={() => setCompletion({ ...completion, suggested: [] })}
+            suggestions={completion.suggestCompleted}
+            onDone={() => setCompletion({ ...completion, suggestCompleted: [] })}
           />
         </span>
       ) : (
