@@ -14,9 +14,9 @@
 // Proposal for it clears both (clearHold). A member's placement Proposal
 // (placement.ts) leaves the book listed, marked by that Proposal's state.
 //
-// Linking an observation, and a new snapshot on a linked one, make its
-// Series mature at once when it is 18+ evidence (lib/mature.ts
-// applyMatureEvidence), for every importer.
+// Linking an observation, a new snapshot on a linked one, and a withdrawn
+// linked one seen again make its Series mature at once when it is 18+
+// evidence (lib/mature.ts applyMatureEvidence), for every importer.
 
 import type { Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
@@ -90,10 +90,12 @@ export async function retireLapsedCancellation(
 
 /**
  * Note a record present at its source (a listing hit, an unchanged fetch):
- * bump last-seen, clear a withdrawn mark, and retire the possible-
- * cancellation review that withdrawal queued. Every presence path goes
- * through here, so no adapter clears withdrawal while leaving its review
- * approvable. Returns the observation as now stored.
+ * bump last-seen, clear a withdrawn mark, retire the possible-cancellation
+ * review that withdrawal queued, and apply the relisted record's 18+
+ * evidence (applyMatureEvidence). Every presence path goes through here, so
+ * no adapter clears withdrawal while leaving its review approvable. An
+ * ordinary sighting writes last-seen only. Returns the observation as now
+ * stored.
  */
 export async function markSeen(
   ctx: MutationCtx,
@@ -102,7 +104,10 @@ export async function markSeen(
 ): Promise<Doc<"sourceObservations">> {
   await ctx.db.patch(observation._id, { lastSeenAt: now, withdrawn: false });
   const seen = { ...observation, lastSeenAt: now, withdrawn: false };
-  if (observation.withdrawn) await retireLapsedCancellation(ctx, seen, now);
+  if (observation.withdrawn) {
+    await retireLapsedCancellation(ctx, seen, now);
+    await applyMatureEvidence(ctx, seen);
+  }
   return seen;
 }
 
@@ -305,7 +310,8 @@ export async function clearHold(
 
 /**
  * Link the observation to a canonical record (matching rung ①), the one way
- * every importer and repair writes the link. A linked record is placed, so
+ * every importer and repair writes the link (a merge or Split repoints
+ * links directly, lib/sensitiveOps.ts). A linked record is placed, so
  * its hold and `placement` note go (clearHold), and its Series becomes
  * mature at once if the link is 18+ evidence (applyMatureEvidence).
  */

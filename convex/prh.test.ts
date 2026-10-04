@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
 import * as catalogTitle from "./lib/catalogTitle";
+import { MATURE_FLIPS_PER_MUTATION } from "./lib/mature";
 import { parseTitle } from "./lib/prh";
 import {
   type CatalogOverrides,
@@ -1950,6 +1951,42 @@ describe("prh — a book of an adult-only imprint makes its Series mature", () =
     await rebuild(t);
     expect(await shownTo(t)).toEqual(HIDDEN);
     expect(await inLibrary(t)).toBe(true);
+  });
+
+  it("a withdrawn Steamship title PRH lists again unchanged flags its Series again, before any rebuild", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await fileUnder(t, "seven-seas");
+    await t.run(async (ctx) => {
+      for (const obs of await ctx.db.query("sourceObservations").collect()) {
+        if (obs.sourceKey === "prh") await ctx.db.patch(obs._id, { withdrawn: true });
+      }
+    });
+    await rebuild(t);
+    expect(await shownTo(t)).toEqual({ ...LISTED, library: true });
+
+    expect(await apply(t, 1)).toMatchObject({ changed: false });
+    expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await inLibrary(t)).toBe(true);
+  });
+
+  it("notes at most MATURE_FLIPS_PER_MUTATION withdrawn titles present per mutation, and hands back the rest", async () => {
+    const t = makeT();
+    const isbns = Array.from({ length: MATURE_FLIPS_PER_MUTATION + 2 }, (_, i) => `97800000000${10 + i}`);
+    await t.run(async (ctx) => {
+      for (const isbn of isbns) {
+        await insertObservation(ctx, { sourceKey: "prh", sourceRecordId: isbn, withdrawn: true });
+      }
+    });
+    const withdrawn = () =>
+      t.run(async (ctx) => (await ctx.db.query("sourceObservations").collect()).filter((o) => o.withdrawn).length);
+
+    const unknown = "9780000000999";
+    const rest = await t.mutation(internal.prh.notePresent, { isbns: [unknown, ...isbns] });
+    expect(rest).toEqual(isbns.slice(MATURE_FLIPS_PER_MUTATION));
+    expect(await withdrawn()).toBe(2);
+    expect(await t.mutation(internal.prh.notePresent, { isbns: rest })).toEqual([]);
+    expect(await withdrawn()).toBe(0);
   });
 
   it("a Data Team general rating keeps the Series listed in each case", async () => {

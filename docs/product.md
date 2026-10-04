@@ -370,9 +370,10 @@ shows your own books.
 
 The library rebuild derives `series.mature`. A Data Team call applies at
 once, and so does an import that links a book which is evidence, or whose
-Edition is under an adult-only publisher, or that brings a linked book new
-evidence; other changes, such as a publisher marked adult-only later or
-evidence that went away, wait for the next rebuild. Evidence, strongest
+Edition is under an adult-only publisher, that brings a linked book new
+evidence, or that lists a withdrawn linked book again; other changes, such
+as a publisher marked adult-only later, evidence that went away, or a merge
+or Split, wait for the next rebuild. Evidence, strongest
 first:
 
 | Evidence | Source |

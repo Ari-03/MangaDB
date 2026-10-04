@@ -15,10 +15,20 @@
 // The Series library rebuild derives `series.mature` from these
 // (seriesBrowse.upsertStats). An import applies new evidence at once
 // (applyMatureEvidence, from lib/observations.ts): linking an observation
-// that is evidence, or one to a Release under an adult-only Publisher, and
-// a linked observation's snapshot turning into evidence. So does an edit to
-// a Series' contentRating (moderation.applyUpdate). Evidence that goes away,
-// and a Publisher row marked adult-only later, wait for the rebuild.
+// that is evidence, or one to a Release under an adult-only Publisher, a
+// linked observation's snapshot turning into evidence, and a withdrawn
+// linked one listed again. So does an edit to a Series' contentRating
+// (moderation.applyUpdate). These wait for the rebuild: evidence that goes
+// away, a Publisher row marked adult-only later, and a merge or Split,
+// which repoint observations directly (lib/sensitiveOps.ts), not through
+// linkObservation, so a survivor or a restored Series is flagged only then.
+// An observation linked to a Release Bundle is evidence for neither the
+// import nor the rebuild.
+//
+// A flip rewrites the Series' library pack, about 500 KB in production, so
+// a mutation that applies a batch of observations stops at
+// MATURE_FLIPS_PER_MUTATION that could flip a Series and hands the rest
+// back to its caller.
 //
 // Visibility: everyone can see a Mature Series' own pages, but discovery
 // (browse, search, the calendars, boards, author shelves, the sitemap)
@@ -30,6 +40,15 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { canonicalPublisherFor } from "./publishers";
 import { patchPackEntry, seriesStatsRow } from "./seriesStats";
+
+/**
+ * The most observations that could flip a Series one batch mutation
+ * applies (kodansha.recordListingRatings, prh.notePresent): each flip reads
+ * and rewrites the Series' library pack (syncMatureProjection). With a
+ * 705 KB pack (production's run 470 to 500 KB), five flips read 7.1 MB of
+ * the 16 MiB limit and write 3.5 MB of 16 MiB (kodansha.test.ts).
+ */
+export const MATURE_FLIPS_PER_MUTATION = 5;
 
 /** The `showMature` argument every public discovery query accepts. */
 export const showMatureArg = { showMature: v.optional(v.boolean()) };
@@ -84,8 +103,8 @@ export async function sourceRatesMature(
  * Make a linked observation's Series mature at once when it is evidence:
  * the observation rates mature (observationRatesMature), or it links a
  * Release whose Edition's Publisher is adult-only. lib/observations.ts calls
- * this when it links an observation and when a linked one's snapshot
- * changes, for every importer, so the home shelves and discovery leave the
+ * this when it links an observation, when a linked one's snapshot changes,
+ * and when a withdrawn one is seen again, for every importer, so the home shelves and discovery leave the
  * Series out from the import's own transaction. A Series the Data Team rated
  * keeps its call. Nothing here clears the flag: a Series whose evidence went
  * away is cleared by the next rebuild.

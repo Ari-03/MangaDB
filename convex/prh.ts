@@ -45,6 +45,7 @@ import { applyCatalogTitle, type ApplyResult } from "./lib/catalogTitle";
 import { todaySortKey } from "./lib/dates";
 import { errorMessage, politeFetch } from "./lib/http";
 import { closeRun, registryRow, runToContinue, stampHandOff, stopAtGate } from "./lib/importRuns";
+import { MATURE_FLIPS_PER_MUTATION } from "./lib/mature";
 import { getObservation, markSeen } from "./lib/observations";
 import { applyRetrying } from "./lib/occ";
 import { toPartialDate } from "./lib/pipeline";
@@ -249,9 +250,9 @@ export const sync = internalAction({
             // its observation's last-seen so a full sweep never withdraws a
             // record PRH still lists. An entry with no readable ISBN could be
             // any record, so the sweep can no longer prove absence.
-            const presentIsbns = dropped.flatMap((d) => (d.isbn13 !== undefined ? [d.isbn13] : []));
-            if (presentIsbns.length > 0) {
-              await ctx.runMutation(internal.prh.notePresent, { isbns: presentIsbns });
+            let presentIsbns = dropped.flatMap((d) => (d.isbn13 !== undefined ? [d.isbn13] : []));
+            while (presentIsbns.length > 0) {
+              presentIsbns = await ctx.runMutation(internal.prh.notePresent, { isbns: presentIsbns });
             }
             for (const d of dropped) {
               if (d.isbn13 === undefined) completeSweep = false;
@@ -339,18 +340,25 @@ export const sync = internalAction({
  * presence bumps last-seen, clears a withdrawn mark and retires the
  * possible-cancellation review that withdrawal queued, exactly as an
  * unchanged fetch does (lib/observations.ts). ISBNs never imported are
- * ignored.
+ * ignored. A relisted observation can make its Series mature, so this
+ * relists at most MATURE_FLIPS_PER_MUTATION and returns the ISBNs it did not
+ * reach, for the caller to send again.
  */
 export const notePresent = internalMutation({
   args: { isbns: v.array(v.string()) },
   handler: async (ctx, { isbns }) => {
     const now = Date.now();
-    for (const isbn of isbns) {
+    let relisted = 0;
+    for (const [i, isbn] of isbns.entries()) {
       const obs = await getObservation(ctx, SOURCE_KEY, isbn);
       if (!obs) continue;
+      if (obs.withdrawn) {
+        if (relisted === MATURE_FLIPS_PER_MUTATION) return isbns.slice(i);
+        relisted++;
+      }
       await markSeen(ctx, obs, now);
     }
-    return null;
+    return [];
   },
 });
 

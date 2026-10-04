@@ -8,9 +8,12 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { BACKLIST_KEY } from "./kodansha";
 import { MIN_COVER_BYTES } from "./lib/covers";
+import { linkSeriesObservation } from "./lib/pipeline";
+import { PACK_SPAN, type PackEntry } from "./lib/seriesStats";
 import {
   insertCoverage,
   insertEdition,
@@ -713,6 +716,8 @@ type ListedSeries = {
   stamp?: string;
   /** The listing's `short_description`. */
   blurb?: string;
+  /** The listing's `age_rating`. */
+  ageRating?: number;
 };
 
 const BLUE_LOCK: ListedSeries = { slug: "blue-lock", name: "Blue Lock" };
@@ -771,6 +776,7 @@ function stubBacklist(
           type: row.type ?? "comic",
           short_description: row.blurb ?? "",
           last_updated_at: row.stamp ?? "2026-02-06T09:53:10+00:00",
+          age_rating: row.ageRating,
         }));
       return Response.json({
         success: true,
@@ -2186,5 +2192,112 @@ describe("kodansha.backlistSync — failed covers are retried (B22)", () => {
       // Art stored: nothing left to re-check.
       expect(crawl?.snapshot).toMatchObject({ recheck: [] });
     });
+  });
+});
+
+// Mature Series (lib/mature.ts) from the listing's age_rating: a new 18+
+// rating flags the Series in the rating's own mutation, and a chunk with
+// many of them is sent in parts, so no mutation rewrites the library pack
+// more than MATURE_FLIPS_PER_MUTATION times.
+describe("kodansha.backlistSync — listing age ratings", () => {
+  const STAMP = "2026-02-06T09:53:10+00:00";
+  const slugOf = (publicId: number) => `series-${publicId}`;
+
+  /** A pack entry about as large as production's (its 1,000-entry packs run 470 to 500 KB). */
+  const packEntry = (publicId: number): PackEntry => ({
+    publicId,
+    titleSort: `series ${publicId} ${"the title as long as a production one ".repeat(5)}`,
+    searchKey: `series ${publicId} ${"its title and alternative titles ".repeat(6)}`,
+    sourceStatus: "ongoing",
+    publishers: [{ name: "Kodansha", slug: "kodansha" }],
+    hasPhysical: true,
+    hasDigital: true,
+    volumeCount: 12,
+    latestReleaseSort: 20260101,
+    nextReleaseSort: 20261101,
+    lastReleasedSort: 20260101,
+    followers: 3,
+    collectors: 7,
+    ratingRank: 0.5,
+  });
+
+  /**
+   * Series 1..count, each linked to its Kodansha series page and crawled
+   * just now (so a run fetches nothing past the listing), in a library pack
+   * of production's size.
+   */
+  async function linkedSeries(t: TestT, count: number) {
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      for (let publicId = 1; publicId <= count; publicId++) {
+        const slug = slugOf(publicId);
+        const title = `Series ${publicId}`;
+        const seriesId = await insertSeries(ctx, { publicId, title });
+        await linkSeriesObservation(ctx, { sourceKey: "kodansha", seriesKey: slug, title, seriesId, now });
+        await insertObservation(ctx, {
+          sourceKey: BACKLIST_KEY,
+          sourceRecordId: slug,
+          lastSeenAt: now,
+          snapshot: {
+            kind: "kodanshaSeriesCrawl",
+            name: title,
+            url: `${BASE}/series/${slug}/`,
+            lastUpdatedAt: STAMP,
+            volumes: [],
+            recheck: [],
+            fullCrawledAt: now,
+          },
+        });
+      }
+      const entries = Array.from({ length: PACK_SPAN }, (_, publicId) => packEntry(publicId));
+      expect(JSON.stringify(entries).length).toBeGreaterThan(470_000);
+      await ctx.db.insert("seriesStatsPacks", { block: 0, entries });
+    });
+  }
+
+  /** The publicIds flagged mature on the Series, and in the pack. */
+  const flagged = (t: TestT) =>
+    t.run(async (ctx) => {
+      const series = await ctx.db.query("series").collect();
+      const pack = await ctx.db.query("seriesStatsPacks").unique();
+      return {
+        series: series.filter((s) => s.mature).map((s) => s.publicId),
+        pack: pack!.entries.filter((entry) => entry.mature).map((entry) => entry.publicId),
+      };
+    });
+
+  it("a new 18+ rating on a linked series makes the Series mature before any rebuild", async () => {
+    const t = makeT();
+    await linkedSeries(t, 1);
+    const shelf = async () =>
+      (await t.query(api.catalog.recentSeries, { limit: 10, showMature: false })).map((s) => s.publicId);
+    expect(await shelf()).toEqual([1]);
+
+    expect(
+      await t.mutation(internal.kodansha.recordListingRatings, {
+        entries: [{ slug: slugOf(1), mature: true }],
+      }),
+    ).toEqual([]);
+    expect(await flagged(t)).toEqual({ series: [1], pack: [1] });
+    expect(await shelf()).toEqual([]);
+  });
+
+  it("a listing chunk of 100 ratings, 40 of them new 18+ ones, applies within the read limit", async () => {
+    const t = makeT({ transactionLimits: true });
+    await seedBacklist(t, true);
+    await linkedSeries(t, 100);
+    const adult = Array.from({ length: 100 }, (_, i) => i + 1).filter((publicId) => publicId % 5 < 2);
+    expect(adult).toHaveLength(40);
+    stubBacklist(
+      Array.from({ length: 100 }, (_, i) => ({
+        slug: slugOf(i + 1),
+        name: `Series ${i + 1}`,
+        ageRating: adult.includes(i + 1) ? 18 : 13,
+      })),
+      {},
+    );
+
+    expect(await backlist(t)).toMatchObject({ errorCount: 0, fetched: 0, continued: false });
+    expect(await flagged(t)).toEqual({ series: adult, pack: adult });
   });
 });
