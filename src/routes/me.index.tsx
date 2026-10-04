@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
+import { AnalyticsSettings } from "~/lib/analytics";
 import { countLibrary, LibraryCollection } from "~/lib/collection";
 import { mutationErrorMessage } from "~/lib/errors";
 import { LibraryFavorites } from "~/lib/favorites";
@@ -194,6 +195,12 @@ function MePage() {
             {/* Rating Format: the control and display for scores; stored
                 ratings are 1-100 whatever is chosen here. */}
             <ScoreFormatSettings />
+          </div>
+          <div className="acct-panel">
+            <h2 className="lib-group-title">Analytics</h2>
+            {/* The account's analytics opt-out: the browser client and every
+                server event under the viewer's id. */}
+            <AnalyticsSettings />
           </div>
           <div className="acct-panel">
             <h2 className="lib-group-title">Account</h2>

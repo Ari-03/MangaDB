@@ -48,6 +48,39 @@ describe("users.setScoreFormat", () => {
   });
 });
 
+describe("users.setAnalyticsOptOut", () => {
+  it("is null until chosen, stores either choice, and needs a User", async () => {
+    const t = makeT();
+    const asA = t.withIdentity({ subject: SUBJECT_A });
+    await expect(asA.mutation(api.users.setAnalyticsOptOut, { optOut: true })).rejects.toMatchObject({
+      data: { code: "usernameRequired" },
+    });
+    await asA.mutation(api.users.claimUsername, { username: "alice" });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ analyticsOptOut: null });
+
+    expect(await asA.mutation(api.users.setAnalyticsOptOut, { optOut: true })).toEqual({ optOut: true });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ analyticsOptOut: true });
+    await asA.mutation(api.users.setAnalyticsOptOut, { optOut: false });
+    expect(await asA.query(api.users.viewer, {})).toMatchObject({ analyticsOptOut: false });
+
+    await expect(t.mutation(api.users.setAnalyticsOptOut, { optOut: true })).rejects.toMatchObject({
+      data: { code: "unauthenticated" },
+    });
+  });
+
+  it("stays open to a suspended User", async () => {
+    const t = makeT();
+    await seedTeam(t, [alice, bob]);
+    await signedIn(t, alice).mutation(api.roles.suspend, { username: bob.username, reason: "Spam." });
+    const asBob = signedIn(t, bob);
+    await expect(asBob.mutation(api.users.setScoreFormat, { format: "star5" })).rejects.toMatchObject({
+      data: { code: "suspended" },
+    });
+    await asBob.mutation(api.users.setAnalyticsOptOut, { optOut: true });
+    expect(await asBob.query(api.users.viewer, {})).toMatchObject({ analyticsOptOut: true });
+  });
+});
+
 describe("users.claimUsername", () => {
   it("rejects unauthenticated claims", async () => {
     const t = makeT();

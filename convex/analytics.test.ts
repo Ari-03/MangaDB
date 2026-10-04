@@ -1,8 +1,9 @@
 // Backend analytics (lib/posthog.ts) through PostHog's Convex component,
 // registered here from @posthog/convex/test: the no-op without
 // POSTHOG_PROJECT_TOKEN, the distinct-id rules, mutations scheduling the
-// component's send with the event, what the component delivers, and
-// $exception capture around unattended actions.
+// component's send with the event, what the component delivers, nothing
+// for a user who opted out, and $exception capture around unattended
+// actions.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -140,6 +141,36 @@ describe("capture", () => {
       distinctId: ADMIN,
       properties: { action: "reject", target_kind: "proposal", actor_role: "administrator" },
     });
+  });
+
+  it("sends nothing a user who opted out caused, moderation included, until they opt back in", async () => {
+    enableCapture();
+    const { t, target } = await seed();
+    const reader = t.withIdentity({ subject: READER });
+    const admin = t.withIdentity({ subject: ADMIN });
+    await reader.mutation(api.users.setAnalyticsOptOut, { optOut: true });
+    await admin.mutation(api.users.setAnalyticsOptOut, { optOut: true });
+
+    await reader.mutation(api.ratings.set, { target, score: 80 });
+    const { reviewId } = await reader.mutation(api.reviews.save, { target, body: "A".repeat(150), spoiler: false });
+    await reader.mutation(api.favorites.toggle, { target });
+    await admin.mutation(api.reviews.setHidden, { reviewId, hidden: true });
+    expect(await scheduled(t)).toEqual([]);
+
+    // System events carry no person and still go.
+    await t.mutation(internal.importSources.seedRegistry, {});
+    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
+    await t.mutation(internal.imports.finishRun, { runId, status: "succeeded", recordsSeen: 1, recordsChanged: 0, errors: [] });
+    expect((await scheduled(t)).map((job) => job.args)).toMatchObject([
+      { event: "import_run_finished", distinctId: "server" },
+    ]);
+
+    await reader.mutation(api.users.setAnalyticsOptOut, { optOut: false });
+    await reader.mutation(api.ratings.set, { target, score: 60 });
+    await admin.mutation(api.reviews.setHidden, { reviewId, hidden: false });
+    expect((await scheduled(t)).map((job) => job.args).slice(1)).toMatchObject([
+      { event: "rating_set", distinctId: READER, properties: { score: 60 } },
+    ]);
   });
 
   it("import_run_finished and source_unhealthy are anonymous server events", async () => {

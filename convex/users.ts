@@ -49,6 +49,8 @@ export const viewer = query({
       readingVisibility: user.readingVisibility,
       // Rating Format: how the viewer enters and reads scores.
       scoreFormat: user.scoreFormat ?? DEFAULT_SCORE_FORMAT,
+      // Null until chosen, so Do Not Track can fill it in (lib/analytics.tsx).
+      analyticsOptOut: user.analyticsOptOut ?? null,
       suspended: user.suspended ?? false,
     };
   },
@@ -157,6 +159,24 @@ export const setScoreFormat = mutation({
     const user = await requireUser(ctx);
     await ctx.db.patch(user._id, { scoreFormat: format });
     return { format };
+  },
+});
+
+/**
+ * Opt the viewer out of analytics, or back in (lib/posthog.ts `capture`,
+ * lib/analytics.tsx). Unlike the other settings it stays open to a
+ * suspended User, so nobody is kept in analytics by a suspension. It
+ * affects events from now on, not those already sent.
+ */
+export const setAnalyticsOptOut = mutation({
+  args: { optOut: v.boolean() },
+  handler: async (ctx, { optOut }) => {
+    const identity = await requireIdentity(ctx);
+    const user = await getUserBySubject(ctx, identity.subject);
+    if (user?.deletingSince !== undefined) fail("unauthenticated", "This account is being deleted.");
+    if (!user) fail("usernameRequired", "Claim a username to finish setting up your account.");
+    await ctx.db.patch(user._id, { analyticsOptOut: optOut });
+    return { optOut };
   },
 });
 

@@ -243,6 +243,19 @@ Profiles are noindex, absent from sitemaps, and show current state only,
 with no activity feed. A suspended user's profile is not found until they
 are reinstated.
 
+## Analytics
+
+Settings, Analytics turns product analytics off for the account: nothing
+from the browser while signed in, and none of the events the user causes
+from the server, moderation included. Nothing is sent while a
+signed-in user's choice is still loading. A browser that sends Do Not Track
+or Global Privacy Control sends nothing either way, and switches an account
+that has never chosen to Off, once; the panel says so. A browser without
+it never switches an account back on. Signed-out visitors have no toggle;
+Do Not Track covers them and they create no person profile. Off stops
+future events and deletes none already sent. What is collected is listed
+in [configuration](configuration.md#analytics-posthog).
+
 ## Account deletion
 
 Settings, Account deletes the account. The request is recorded first;

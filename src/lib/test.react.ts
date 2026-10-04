@@ -1,6 +1,8 @@
 // A fake React for driving components as plain functions under vitest's
 // edge runtime, which has no DOM. Importing this file mocks `react`:
-// useState keeps each component's state in `harness.slots` across renders,
+// useState, useRef and useMemo keep each component's values in
+// `harness.slots` across renders, useEffect queues its effect for `mount`
+// to run once the render is done (again only when a dependency changed),
 // and useSyncExternalStore reads the store's snapshot directly, recording
 // the subscribe function it was handed. `backendHooks` is a convex/react
 // whose useQuery answers from `harness.snapshot` and whose useMutation runs
@@ -22,9 +24,10 @@ import type { Accessor } from "../../convex/test.helpers";
  * State shared with the mocks: the signed-in backend, the query snapshot
  * useQuery answers from, an optional wrapper around every mutation call
  * (see hold), the in-flight mutation promises, the hook slots of the
- * component being rendered with its cursor, and the last subscribe an
- * external store was read with. Hoisted, so the react mock can use it (and
- * exported under another name, as vitest cannot export a hoisted binding).
+ * component being rendered with its cursor, the effects the render queued,
+ * and the last subscribe an external store was read with. Hoisted, so the
+ * react mock can use it (and exported under another name, as vitest cannot
+ * export a hoisted binding).
  */
 const state = vi.hoisted(() => ({
   backend: null as Accessor | null,
@@ -33,6 +36,7 @@ const state = vi.hoisted(() => ({
   inflight: [] as Array<Promise<unknown>>,
   slots: [] as unknown[],
   cursor: 0,
+  effects: [] as Array<() => void>,
   subscribe: null as ((listener: () => void) => () => void) | null,
 }));
 export const harness = state;
@@ -53,11 +57,39 @@ vi.mock("react", async (importOriginal) => {
     };
     return [slots[index] as S, set] as const;
   }
+  // Whether a hook's `deps` differ from those stored in its slot (always
+  // on its first render, and every render without deps).
+  const changed = (index: number, deps?: readonly unknown[]) => {
+    const prev = (state.slots[index] as { deps?: readonly unknown[] } | undefined)?.deps;
+    return !prev || !deps || prev.length !== deps.length || deps.some((dep, i) => !Object.is(dep, prev[i]));
+  };
+  function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]) {
+    const slots = state.slots;
+    const index = state.cursor++;
+    if (!changed(index, deps)) return;
+    const prev = slots[index] as { cleanup?: () => void } | undefined;
+    const slot: { deps?: readonly unknown[]; cleanup?: () => void } = { deps };
+    slots[index] = slot;
+    state.effects.push(() => {
+      prev?.cleanup?.();
+      slot.cleanup = effect() ?? undefined;
+    });
+  }
+  function useMemo<T>(create: () => T, deps: readonly unknown[]) {
+    const index = state.cursor++;
+    if (changed(index, deps)) state.slots[index] = { deps, value: create() };
+    return (state.slots[index] as { value: T }).value;
+  }
+  function useRef<T>(initial: T) {
+    const index = state.cursor++;
+    if (!(index in state.slots)) state.slots[index] = { current: initial };
+    return state.slots[index] as { current: T };
+  }
   function useSyncExternalStore<T>(subscribe: (listener: () => void) => () => void, snapshot: () => T) {
     state.subscribe = subscribe;
     return snapshot();
   }
-  return { ...actual, useState, useSyncExternalStore };
+  return { ...actual, useState, useEffect, useMemo, useRef, useSyncExternalStore };
 });
 
 /** convex/react wired to the harness: queries from the snapshot, mutations to the backend. */
@@ -79,6 +111,7 @@ export function resetHarness() {
   harness.inflight = [];
   harness.slots = [];
   harness.cursor = 0;
+  harness.effects = [];
   harness.subscribe = null;
 }
 
@@ -101,10 +134,15 @@ export function render(node: ReactNode): Host[] {
   return render(props.children);
 }
 
-/** Render a root component with a fresh hook cursor (slots persist). */
+/**
+ * Render a root component with a fresh hook cursor (slots persist), then
+ * run the effects the render queued.
+ */
 export function mount(component: () => ReactNode): Host[] {
   harness.cursor = 0;
-  return render(component());
+  const tree = render(component());
+  for (const effect of harness.effects.splice(0)) effect();
+  return tree;
 }
 
 /**

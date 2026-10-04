@@ -1012,6 +1012,11 @@ export default defineSchema({
     // Rating Format (CONTEXT.md): how this User enters and reads scores.
     // Absent means DEFAULT_SCORE_FORMAT (lib/scoreFormat.ts).
     scoreFormat: v.optional(scoreFormatValidator),
+    // True when this User opted out of analytics (users.setAnalyticsOptOut):
+    // lib/posthog.ts sends nothing under their id and the browser client
+    // neither loads nor identifies them. Absent means never chosen, which
+    // tracks as before; a browser sending Do Not Track sets it once.
+    analyticsOptOut: v.optional(v.boolean()),
     // When the User asked to delete their account (users.deleteAccount).
     // From then on they count as gone (lib/auth.ts) while the purge empties
     // their personal rows; the row itself goes last, a day after Clerk

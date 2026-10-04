@@ -16,6 +16,10 @@
 // the browser SDK identifies them by, so both halves land on one person.
 // Everything else is "server" with `$process_person_profile: false`, which
 // creates no person profile. Never email or username.
+//
+// A user who opted out (`users.analyticsOptOut`) is never sent: `capture`
+// drops every event they caused, moderation included. System events and
+// exceptions carry no person and always go.
 
 import { PostHog } from "@posthog/convex";
 import type { Scheduler } from "convex/server";
@@ -62,15 +66,16 @@ const enabled = () => Boolean(env.POSTHOG_PROJECT_TOKEN?.trim());
 
 /**
  * Capture a named event. Pass the user who caused it, or null for a system
- * event. The event keeps the caller's timestamp, not the send's.
+ * event; nothing is sent for a user who opted out of analytics. The event
+ * keeps the caller's timestamp, not the send's.
  */
 export async function capture<E extends ServerEventName>(
   ctx: CaptureCtx,
-  user: Pick<Doc<"users">, "clerkSubject"> | null,
+  user: Pick<Doc<"users">, "clerkSubject" | "analyticsOptOut"> | null,
   event: E,
   properties: ServerEvents[E],
 ): Promise<void> {
-  if (!enabled()) return;
+  if (!enabled() || user?.analyticsOptOut) return;
   await posthog.capture(ctx, {
     event,
     distinctId: user?.clerkSubject ?? SERVER_DISTINCT_ID,

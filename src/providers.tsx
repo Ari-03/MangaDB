@@ -14,8 +14,8 @@ import { useIsDataTeam, useReadyViewer } from "~/lib/viewer";
 // Convex client so every mutation/query authorizes via
 // ctx.auth.getUserIdentity(). Both are optional at runtime: without the
 // publishable key or a Convex URL the public catalog still renders.
-// PostHog (lib/analytics.tsx) sits innermost, so its identity sync can read
-// both the Clerk session and the Convex viewer; it is a pass-through when
+// PostHog (lib/analytics.tsx) sits innermost, so its consent gate can read
+// both the Clerk session and the Convex viewer; it loads nothing when
 // VITE_PUBLIC_POSTHOG_KEY is unset.
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL as string | undefined;

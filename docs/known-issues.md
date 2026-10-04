@@ -5,8 +5,6 @@ is fixed.
 
 ## Personal data and tracking
 
-- **No analytics opt-out.** posthog-js honours Do Not Track, but there is
-  no opt-out toggle in Settings.
 - **`volumeProgress.seriesId` goes stale after a Split.** The field is set
   when a row is inserted, and Split (`applySplit` in
   `convex/lib/sensitiveOps.ts`) reverts only the repoints its merge
@@ -40,6 +38,11 @@ is fixed.
   `npx convex run users:purgeUser '{"userId":"…"}'`. The deletion then
   finishes as one asked for on `/me` ([operations](operations.md#account-deletion));
   Clerk answers the identity's deletion with a 404, which counts as done.
+- **Account deletion leaves the PostHog person.** `users.purgeUser` makes
+  no PostHog call, so the person PostHog holds under the deleted user's
+  Clerk id, with its username, role and past events, stays until someone
+  deletes it in PostHog. Opting out of analytics in Settings stops new
+  events only.
 
 ## Catalog and imports
 

@@ -101,6 +101,20 @@ and sign-out resets the session. The Deploy workflow reads
 staging and production can use separate projects. A local deploy reads it
 from `.env.local` or the shell.
 
+**Opt-out.** Settings, Analytics on `/me` stores `users.analyticsOptOut`
+(`users.setAnalyticsOptOut`, absent until chosen). For a signed-in user
+who opted out, the browser never loads posthog-js, or opts it out if it is
+already running, and `capture` in `convex/lib/posthog.ts` sends none of
+their events, moderation included. While a signed-in user's choice is
+still loading, the client identifies no one and its `before_send` drops
+every event. A browser sending Do Not Track or Global Privacy Control sets
+the opt-out once on an account that has never chosen, so server events stop
+too; a browser without it never clears one. Signed-out visitors have no
+toggle: `respect_dnt` covers them. On sign-out the client calls `reset()`;
+for a user who had opted out nothing is sent before it, so nothing goes out
+under their id. Opting out stops future events; it deletes nothing PostHog
+already holds.
+
 **Proxy.** `src/server/posthogProxy.ts` forwards `/_s/*` from the site's
 own origin so ad blockers do not drop events. `/_s/static/*` and
 `/_s/array/*` go to `us-assets.i.posthog.com` and are edge cached;
@@ -128,9 +142,10 @@ Props are ids, enums and lengths, never free text or personal data.
 in `convex/convex.config.ts` and wrapped by `convex/lib/posthog.ts`
 (`capture`, `captureModeration`, `withExceptionCapture`). A capture from a
 mutation commits or rolls back with it. User events use the Clerk id as
-distinct id, the same id the browser identifies with. System events use
-`server` and create no person. Server events carry `$lib: posthog-convex`;
-filter on it where a name also exists in the browser (`favorite_toggled`).
+distinct id, the same id the browser identifies with, and are not sent for
+a user who opted out. System events use `server`, create no person and are
+always sent. Server events carry `$lib: posthog-convex`; filter on it where
+a name also exists in the browser (`favorite_toggled`).
 
 ```sh
 npx convex env set POSTHOG_PROJECT_TOKEN ""                                       # local dev (off)
