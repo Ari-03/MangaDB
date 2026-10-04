@@ -389,6 +389,19 @@ is fixed.
   rebase it (`rebaseProposal` needs the author). A Moderator can only
   reject it.
 
+## Interface
+
+- **A focused link can change target when a row above it goes away.** Five
+  lists key their rows by position: a Volume's ownership rows
+  (`VolumeOwnership` in `src/lib/collection.tsx`), a Proposal's evidence
+  rows (`src/routes/mod.proposal.$id.tsx`), and a profile's releases,
+  bundle members and reading passes (`src/routes/u.$username.tsx`). When a
+  live query or a background reload of the page removes a row above the
+  one whose link has keyboard focus, React keeps the focused element and
+  gives it the next row's content, so Enter opens another book or URL.
+  The fix is a stable key per row: ownership rows already carry Edition,
+  Release and bundle ids; the other rows need an id from their query.
+
 ## Tests
 
 - **Thirty-two tests leave scheduled functions pending when they end.**
