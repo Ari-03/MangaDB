@@ -5,17 +5,20 @@
 // - a source rates one of its books or the Series itself 18+: a Source
 //   Observation linked to the Series or to one of its Releases carries
 //   `mature: true` in its snapshot (the parsers set it from Kodansha's
-//   age_rating, Seven Seas' and Yen Press's age-rating labels, a Seven Seas
-//   page naming an adult-only imprint, and ANN's Objectionable-content
-//   rating and genres);
+//   age_rating, Seven Seas' and Yen Press's age-rating labels, and ANN's
+//   Objectionable-content rating and genres) or names an adult-only imprint
+//   in its `imprint` (PRH's and Seven Seas' snapshots), whatever Publisher
+//   the Edition is filed under (observationRatesMature);
 // - one of its Editions comes from an adult-only publisher or imprint
 //   (publishers.contentRating = "mature": FAKKU, 801 Media, Ghost Ship,
 //   Steamship).
 // The Series library rebuild derives `series.mature` from these
-// (seriesBrowse.upsertStats), so new evidence shows within one rebuild. A
-// Seven Seas book page rating its book mature applies at once
-// (seriesBrowse.applyMatureEvidence), as does an edit to a Series'
-// contentRating (moderation.applyUpdate).
+// (seriesBrowse.upsertStats). An import applies new evidence at once
+// (applyMatureEvidence, from lib/observations.ts): linking an observation
+// that is evidence, or one to a Release under an adult-only Publisher, and
+// a linked observation's snapshot turning into evidence. So does an edit to
+// a Series' contentRating (moderation.applyUpdate). Evidence that goes away,
+// and a Publisher row marked adult-only later, wait for the rebuild.
 //
 // Visibility: everyone can see a Mature Series' own pages, but discovery
 // (browse, search, the calendars, boards, author shelves, the sitemap)
@@ -24,7 +27,9 @@
 
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { QueryCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { canonicalPublisherFor } from "./publishers";
+import { patchPackEntry, seriesStatsRow } from "./seriesStats";
 
 /** The `showMature` argument every public discovery query accepts. */
 export const showMatureArg = { showMature: v.optional(v.boolean()) };
@@ -46,6 +51,23 @@ export function listed(series: Doc<"series">, showMature: boolean | undefined): 
   );
 }
 
+/**
+ * Whether a Source Observation is 18+ evidence: not withdrawn, and its
+ * snapshot rates the book or Series mature (`mature: true`) or names an
+ * adult-only imprint (`imprint` resolving to an `adultOnly` row in
+ * lib/publishers.ts: Ghost Ship, Steamship).
+ */
+export function observationRatesMature(observation: Doc<"sourceObservations">): boolean {
+  const snapshot: unknown = observation.snapshot;
+  if (observation.withdrawn || typeof snapshot !== "object" || snapshot === null) return false;
+  if ("mature" in snapshot && snapshot.mature === true) return true;
+  return (
+    "imprint" in snapshot &&
+    typeof snapshot.imprint === "string" &&
+    canonicalPublisherFor(snapshot.imprint)?.adultOnly === true
+  );
+}
+
 /** Does any Source Observation linked to this record rate it 18+? */
 export async function sourceRatesMature(
   ctx: QueryCtx,
@@ -55,9 +77,58 @@ export async function sourceRatesMature(
     .query("sourceObservations")
     .withIndex("by_record", (q) => q.eq("recordRef.type", ref.type).eq("recordRef.id", ref.id))
     .collect();
-  return observations.some(
-    (obs) => !obs.withdrawn && (obs.snapshot as { mature?: unknown } | null)?.mature === true,
-  );
+  return observations.some(observationRatesMature);
+}
+
+/**
+ * Make a linked observation's Series mature at once when it is evidence:
+ * the observation rates mature (observationRatesMature), or it links a
+ * Release whose Edition's Publisher is adult-only. lib/observations.ts calls
+ * this when it links an observation and when a linked one's snapshot
+ * changes, for every importer, so the home shelves and discovery leave the
+ * Series out from the import's own transaction. A Series the Data Team rated
+ * keeps its call. Nothing here clears the flag: a Series whose evidence went
+ * away is cleared by the next rebuild.
+ */
+export async function applyMatureEvidence(ctx: MutationCtx, observation: Doc<"sourceObservations">) {
+  const ref = observation.recordRef;
+  let seriesIds: Id<"series">[];
+  if (ref?.type === "series") {
+    if (!observationRatesMature(observation)) return;
+    seriesIds = [ref.id];
+  } else if (ref?.type === "release") {
+    const release = await ctx.db.get(ref.id);
+    if (release?.status !== "active") return;
+    if (!observationRatesMature(observation)) {
+      const publisher = await ctx.db.get(release.publisherId);
+      if (publisher?.contentRating !== "mature") return;
+    }
+    seriesIds = release.seriesIds;
+  } else {
+    return;
+  }
+  for (const seriesId of seriesIds) {
+    const series = await ctx.db.get(seriesId);
+    if (series?.status !== "active" || series.mature === true) continue;
+    if (ratedByDataTeam(series.contentRating) !== null) continue;
+    // Derived data, no Revision, as in the rebuild.
+    await ctx.db.patch(series._id, { mature: true });
+    await syncMatureProjection(ctx, series, true);
+  }
+}
+
+/**
+ * Carry a Series' new `mature` flag into its library row and pack entry at
+ * once (applyMatureEvidence, and a Data Team rating edit in
+ * moderation.applyUpdate), so the filtered library and its facets show it
+ * without waiting for the next rebuild. A Series without a row yet (never
+ * rebuilt, or bookless) has nothing to update.
+ */
+export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
+  const flag = mature ? { mature: true as const } : { mature: undefined };
+  const row = await seriesStatsRow(ctx, series._id);
+  if (row && (row.mature === true) !== mature) await ctx.db.patch(row._id, flag);
+  await patchPackEntry(ctx, series.publicId, (entry) => (entry.mature === true) === mature, flag);
 }
 
 /**

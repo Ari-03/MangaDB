@@ -315,16 +315,16 @@ Skips light novels and audiobooks. Covers are stored in Convex file
 storage. A run fetches at most 200 book pages, newest-modified first, so
 the first backfill takes several runs.
 
-The book page's age-rating badge (a text rating in its metadata when it has
-no badge) and the imprint block beside the cover decide the snapshot's
-`mature`. A Mature (18+) rating makes it true, and so does an adult-only
-imprint (Ghost Ship, Steamship) whatever its badge says; the Edition stays
-under Seven Seas. Teen and Older Teen alone do not. The snapshot keeps the
-rating and imprint as read and the version of the parser that read the
-page; a run re-reads pages an older version read, within its 200-page
-budget. A mature page makes its Series mature at once
-([product](product.md#mature-titles)). After a deploy that changes any of
-this, follow
+The parser reads the age-rating badge and the imprint block that sit
+between the book's cover and its metadata, and nothing elsewhere on the
+page. The snapshot's `mature` is the badge alone: true for Mature (18+),
+false for Teen and Older Teen. It keeps the badge's id as `ageRating`, the
+imprint as `imprint`, and the version of the parser that read the page; a
+run re-reads pages an older version read, within its 200-page budget. An
+adult-only imprint (Ghost Ship, Steamship) makes the Series mature
+whatever the badge says, as it does on a PRH title, while the Edition
+stays under Seven Seas ([product](product.md#mature-titles)). After a
+deploy that changes any of this, follow
 [Mature evidence after a deploy](operations.md#mature-evidence-after-a-deploy).
 
 ```sh

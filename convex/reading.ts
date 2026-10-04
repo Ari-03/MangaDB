@@ -18,7 +18,7 @@ import { requireUser, viewerOrNull } from "./lib/auth";
 import { releaseCover, statsCoverIsbns } from "./lib/covers";
 import { coverageOf } from "./lib/editionRows";
 import { releaseAnchor } from "./lib/titles";
-import { seriesStatsRow } from "./seriesBrowse";
+import { seriesStatsRow } from "./lib/seriesStats";
 
 // Mirrors the userSeriesStates.readingStatus union in schema.ts.
 const readingStatusValidator = v.union(

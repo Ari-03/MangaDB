@@ -120,6 +120,31 @@ is fixed.
   canonical list in `convex/lib/publishers.ts`). Outside Bootstrap Mode
   such a book stays held until an operator repair (`convex/lib/repair`)
   creates the Bundle or a deploy adds the Publisher.
+- **Some routes cannot tell that a book is for adults.** A Series is
+  mature only from evidence the catalog holds (`convex/lib/mature.ts`).
+  An ANN entry with no Objectionable-content rating and no erotica or
+  hentai genre carries none, so a Series ANN alone built under a parent
+  publisher stays listed. Open Library names only publishers, so a record
+  that names the parent ("Seven Seas Entertainment") and not the imprint
+  files its Release under the parent with no evidence. Either is mature
+  only once another source rates or names the imprint, an Edition sits
+  under an adult-only Publisher row, or the Data Team rates the Series.
+- **A Seven Seas book page that cannot be read is read again every run.**
+  A listed book whose stored snapshot predates the current parser, or
+  that was never read, is fetched on every run until a read succeeds. A
+  page that answers 404 (a notice), lacks its metadata block (an error
+  that fails the run) or now reads as prose (skipped with no error) never
+  succeeds, so it costs one unit of the 200-page budget on every run
+  while it stays listed.
+- **The Seven Seas listing answers the importer with HTTP 403 in
+  production.** The site serves a Cloudflare challenge to scripted
+  requests. Both Seven Seas runs in the 2026-10-02 production export
+  failed with HTTP 403 on the listing, and the export holds no Seven Seas
+  observation; requests made while saving the parser fixtures
+  (`convex/lib/__fixtures__/sevenSeas`) got the same challenge, which is
+  why those fixtures come from the Internet Archive. The source has
+  imported nothing in production and is disabled. No fix is proposed
+  here.
 - **Due covers are asked about again every hour during an outage.** While
   Open Library or another upstream does not answer, every viewed cover
   that is due for its 90-day check is asked about again roughly once an

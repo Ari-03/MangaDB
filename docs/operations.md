@@ -109,45 +109,66 @@ return after their first action and finish in scheduled continuations.
 ### Mature evidence after a deploy
 
 For a change to what makes a Series mature: the adult-only list
-(`adultOnly` in `convex/lib/publishers.ts`, Steamship among them) or the
-Seven Seas book-page parser (`BOOK_PAGE_VERSION` in
-`convex/lib/sevenSeas.ts`). It is an importer change, so let running
-imports finish, or disable the sources, before deploying (the "Any
-importer" row above). Then:
+(`adultOnly` in `convex/lib/publishers.ts`, Steamship among them), which
+an observation's imprint is also read against, or the Seven Seas
+book-page parser (`BOOK_PAGE_VERSION` in `convex/lib/sevenSeas.ts`). It
+is an importer change, so let running imports finish, or disable the
+sources, before deploying (the "Any importer" row above). New imports
+apply it at once from then on. For what the catalog already holds:
 
 1. Mark the adult-only rows: `npx convex run launch:seedPublishers '{}'`.
    An existing row is listed in `markedAdultOnly` (`["steamship"]`); a
    missing one is created already marked and listed in `created`. A rerun
    lists neither. The hourly import tick runs the same seed, so this only
-   saves waiting for it.
-2. Re-read the Seven Seas book pages stored under an older parser. Every
-   sync does this within its detail budget, after the books ahead of them
-   in the listing (newest-modified first), and a page read once with the
-   current parser is not read again for this reason. At the daily run's
-   200 pages, N books read before take about N / 200 runs, a few weeks for
-   the whole catalog. To finish sooner, repeat
-   `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'` until it
-   prints `"completeSweep": true`; a run whose budget ran out prints
-   `false`, and so does one with an invalid listing item, which its errors
-   name. At the 350 ms pace 1,000 pages take ten minutes or more, inside
-   the 30-minute action limit. While the backlog lasts, runs whose budget
-   runs out withdraw nothing. A page that rates its book Mature or
-   names an adult-only imprint (Ghost Ship, Steamship) makes the Series
-   mature at once, with its library row, so it leaves the home page and the
-   library without a rebuild. A Data Team rating on the Series stands.
-3. Rebuild the projections that are not updated at once:
-   `npx convex run seriesBrowse:rebuild` (Series with an Edition under an
-   adult-only Publisher row, such as the Steamship books PRH files under
-   Steamship, and Series whose evidence went away), then
-   `npx convex run publisher:rebuildBoards` (the Publishers board) and
-   `npx convex run people:rebuild` (the authors directory). The sitemaps
-   follow within their six-hour edge cache.
+   saves waiting for it. The seed alone changes no Series.
+2. Only where Seven Seas observations exist: re-read the Seven Seas book
+   pages stored under an older parser. Production has none (its listing
+   answers the importer with HTTP 403, and the source is disabled; see
+   [known issues](known-issues.md#catalog-and-imports)), so skip this step
+   there, and wherever the source is disabled or blocked. Every sync does
+   this within its detail budget, after the books ahead of them in the
+   listing (newest-modified first). At the daily run's 200 pages, N books
+   read before take about N / 200 runs. To finish sooner, repeat
+   `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'`. At the
+   350 ms pace 1,000 pages take ten minutes or more, inside the 30-minute
+   action limit. While the backlog lasts, runs whose budget runs out
+   withdraw nothing. A re-read page that rates its book Mature or names an
+   adult-only imprint makes the Series mature at once, with its library
+   row.
 
-A Series that is still not mature after these steps has no linked
-evidence: its Seven Seas book may be held or in review rather than linked
-to the Release (the Held Books list and the review queue on
-`/mod/imports`). A Data Team rating (`contentRating` "mature" on the
-Series) settles it at once.
+   `"completeSweep": true` does not mean the re-read finished. It means
+   the run's budget reached every page waiting for one; a page that could
+   not be read keeps its old snapshot, and every later run reads it again,
+   at one unit of the budget each time. A page that answers 404 is a
+   notice in the run's errors and the run still succeeds; a page without
+   its metadata block is an error and fails the run; a page that now reads
+   as prose is skipped with no error at all. The re-read is done when no
+   stored Seven Seas book snapshot lacks the current `parserVersion` apart
+   from such pages. To see that from the runs: two successive runs that
+   print `"completeSweep": true` name the same `book <slug>: …` entries in
+   their errors (`/mod/imports`, or the `importRuns` row) and nothing else.
+   Those pages stay as they are until the site fixes or delists them; a
+   delisted book is withdrawn by the next complete sweep.
+3. Rebuild: `npx convex run seriesBrowse:rebuild`. This is the step that
+   fixes the books PRH files. In the 2026-10-02 production export, 45
+   active Series had an adult-only imprint signal and no `mature` flag:
+   35 with Editions under the `steamship` row, made mature by the seed's
+   mark, and 10 filed under `seven-seas` (nine Ghost Ship, one Steamship)
+   whose only sign is the imprint on a linked PRH title, made mature by
+   the imprint rule. The rebuild also clears Series whose evidence went
+   away. Then `npx convex run publisher:rebuildBoards` (the Publishers
+   board) and `npx convex run people:rebuild` (the authors directory). The
+   sitemaps follow within their six-hour edge cache.
+
+A Series that is still not mature after these steps has no evidence the
+catalog can see: no linked observation rates it 18+ or names an adult-only
+imprint, and none of its Editions is under an adult-only Publisher row.
+Some routes cannot rate a book by themselves
+([known issues](known-issues.md#catalog-and-imports)). A Data Team rating
+settles it at once: `contentRating` "mature" on the Series. A Data Team
+`general` rating does the opposite: the Series stays non-mature whatever
+evidence it has, so check `contentRating` first on a Series that has
+evidence and is still listed.
 
 ## Account deletion
 

@@ -340,6 +340,36 @@ describe("openLibrary.sync — ISBN fill, never structure", () => {
     });
   });
 
+  it("a leaf Release under an adult-only publisher makes its Series mature in the same run", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    const seriesId = await t.run(async (ctx) => {
+      await insertPublisher(ctx, {
+        name: "Ghost Ship",
+        slug: "ghost-ship",
+        contentRating: "mature",
+      });
+      const seriesId = await insertSeries(ctx, { publicId: 1, title: "Peter Grill" });
+      await insertVolume(ctx, { seriesId, position: 15 });
+      return seriesId;
+    });
+    // The record names only the publisher: no rating, no imprint.
+    stubDump([
+      {
+        key: "/books/OL997M",
+        title: "Peter Grill, Vol. 15",
+        publishers: ["Ghost Ship"],
+        isbn_13: ["9798893739541"],
+        languages: [{ key: "/languages/eng" }],
+      },
+    ]);
+    await sync(t);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releases").collect()).toHaveLength(1);
+      expect((await ctx.db.get(seriesId))!.mature).toBe(true);
+    });
+  });
+
   it("creates nothing for an ISBN Yen Press holds out of scope", async () => {
     const t = makeT();
     await seedRegistry(t);

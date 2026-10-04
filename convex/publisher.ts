@@ -36,7 +36,7 @@ import {
 } from "./releases";
 import { showMatureArg, visibleTo } from "./lib/mature";
 import { withExceptionCapture } from "./lib/posthog";
-import { seriesStatsRow } from "./seriesBrowse";
+import { seriesStatsRow } from "./lib/seriesStats";
 
 // The Spotlight's months after this one are bounded: at most
 // LANE_CAP books within the horizon the route requests (~3 months), enough

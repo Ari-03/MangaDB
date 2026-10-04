@@ -254,7 +254,7 @@ function ratingOf(html: string) {
 }
 
 describe("age rating and imprint", () => {
-  it("reads the real pages: Steamship and Ghost Ship are mature whatever their badge", () => {
+  it("reads the real pages: the badge and the imprint beside it", () => {
     // Steamship, rated Mature.
     expect(ratingOf(fixture("his-sensual-whisper-vol-1"))).toEqual({
       mature: true,
@@ -263,8 +263,10 @@ describe("age rating and imprint", () => {
       parserVersion: BOOK_PAGE_VERSION,
     });
     // Ghost Ship's block wraps its name in a link; its book is badged 17+.
+    // The snapshot rates only the badge: the imprint makes the Series
+    // mature where maturity is decided (lib/mature.ts).
     expect(ratingOf(fixture("peter-grill-vol-15"))).toEqual({
-      mature: true,
+      mature: false,
       ageRating: "olderteen17",
       imprint: "Ghost Ship",
       parserVersion: BOOK_PAGE_VERSION,
@@ -330,30 +332,44 @@ describe("age rating and imprint", () => {
       mature: false,
       ageRating: undefined,
     });
-    // Placed after the metadata, it still counts.
-    expect(
-      ratingOf(`${pageWith("")}<div class="age-rating" id="mature"></div>`),
-    ).toMatchObject({ mature: true, ageRating: "mature" });
   });
 
-  it("reads a text rating in the metadata when there is no badge", () => {
-    const meta = (rating: string) => ratingOf(pageWith("", `<p><b>Age Rating:</b> ${rating}</p>`));
-    expect(meta("Mature")).toMatchObject({ mature: true, ageRating: "Mature" });
-    expect(meta("M (Mature)")).toMatchObject({ mature: true });
-    expect(meta("18+")).toMatchObject({ mature: true, ageRating: "18+" });
-    expect(meta("Older Teen (17+)")).toMatchObject({
+  it("reads only the blocks between the book's cover and its metadata", () => {
+    const teen = '<div class="age-rating" id="teen"></div>';
+    const ghostShip =
+      '<div id="GS-block" class="age-rating"><a href="http://www.ghostshipmanga.com/">Ghost Ship</a></div>';
+    const legend = '<div class="age-rating" id="mature"></div>';
+    // A strip of other books, or the ratings legend, below the metadata.
+    expect(ratingOf(`${pageWith(teen)}<div class="related">${ghostShip}${legend}</div>`)).toEqual({
       mature: false,
-      ageRating: "Older Teen (17+)",
+      ageRating: "teen",
+      imprint: undefined,
+      parserVersion: BOOK_PAGE_VERSION,
     });
-    expect(meta("Older Teen (15+)")).toMatchObject({ mature: false });
-    expect(meta("16+")).toMatchObject({ mature: false });
-    expect(meta("Teen")).toMatchObject({ mature: false });
-    // The badge, when present, is the rating.
-    const badged = pageWith(
-      '<div class="age-rating" id="teen"></div>',
-      "<p><b>Age Rating:</b> Mature</p>",
-    );
-    expect(ratingOf(badged)).toMatchObject({ mature: false, ageRating: "teen" });
+    // The same above the cover.
+    expect(ratingOf(`<header>${ghostShip}${legend}</header>${pageWith(teen)}`)).toMatchObject({
+      mature: false,
+      ageRating: "teen",
+      imprint: undefined,
+    });
+  });
+
+  it("lets a rating badge win over an empty block with another id", () => {
+    // An imprint block holding only its logo, then the badge.
+    const logo = '<div id="GS-block" class="age-rating"><img src="/gs-logo.png"></div>';
+    expect(ratingOf(pageWith(`${logo}<div class="age-rating" id="mature"></div>`))).toMatchObject({
+      mature: true,
+      ageRating: "mature",
+      imprint: undefined,
+    });
+    expect(ratingOf(pageWith(logo))).toMatchObject({ mature: false, ageRating: undefined });
+  });
+
+  it("does not read a text rating in the metadata", () => {
+    expect(ratingOf(pageWith("", "<p><b>Age Rating:</b> Mature</p>"))).toMatchObject({
+      mature: false,
+      ageRating: undefined,
+    });
   });
 
   it("tells a page with no rating from a rated one", () => {
@@ -365,16 +381,16 @@ describe("age rating and imprint", () => {
     });
   });
 
-  it("makes an adult-only imprint mature with no badge, and no other imprint", () => {
+  it("reads the imprint block with no badge", () => {
     const imprint = (block: string) => ratingOf(pageWith(block));
     expect(imprint('<div id="SS-block" class="age-rating">Steamship</div>')).toMatchObject({
-      mature: true,
+      mature: false,
       ageRating: undefined,
       imprint: "Steamship",
     });
     const ghostShip = '<a href="http://www.ghostshipmanga.com/">Ghost Ship</a>';
     expect(imprint(`<div id="GS-block" class="age-rating">${ghostShip}</div>`)).toMatchObject({
-      mature: true,
+      mature: false,
       imprint: "Ghost Ship",
     });
     expect(imprint('<div id="AS-block" class="age-rating">Airship</div>')).toMatchObject({

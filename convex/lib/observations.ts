@@ -13,11 +13,16 @@
 // (linkObservation), withdrawing it, or an import queuing a creation
 // Proposal for it clears both (clearHold). A member's placement Proposal
 // (placement.ts) leaves the book listed, marked by that Proposal's state.
+//
+// Linking an observation, and a new snapshot on a linked one, make its
+// Series mature at once when it is 18+ evidence (lib/mature.ts
+// applyMatureEvidence), for every importer.
 
 import type { Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { holdKind, recordRef } from "../schema";
+import { applyMatureEvidence } from "./mature";
 import { sameValue } from "./values";
 
 export type HoldKind = Infer<typeof holdKind>;
@@ -152,6 +157,7 @@ export async function upsertObservation(
     withdrawn: false,
   };
   if (existing.withdrawn) await retireLapsedCancellation(ctx, observation, args.now);
+  await applyMatureEvidence(ctx, observation);
   return { observation, changed: true };
 }
 
@@ -300,7 +306,8 @@ export async function clearHold(
 /**
  * Link the observation to a canonical record (matching rung ①), the one way
  * every importer and repair writes the link. A linked record is placed, so
- * its hold and `placement` note go (clearHold).
+ * its hold and `placement` note go (clearHold), and its Series becomes
+ * mature at once if the link is 18+ evidence (applyMatureEvidence).
  */
 export async function linkObservation(
   ctx: MutationCtx,
@@ -309,4 +316,6 @@ export async function linkObservation(
 ): Promise<void> {
   await ctx.db.patch(observationId, { recordRef: ref });
   await clearHold(ctx, observationId);
+  const observation = await ctx.db.get(observationId);
+  if (observation) await applyMatureEvidence(ctx, observation);
 }

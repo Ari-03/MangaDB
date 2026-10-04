@@ -70,7 +70,6 @@ import {
   type BookSnapshot,
 } from "./lib/sevenSeas";
 import { withExceptionCapture } from "./lib/posthog";
-import { applyMatureEvidence } from "./seriesBrowse";
 
 export const SOURCE_KEY = "sevenseas";
 const BASE_URL = "https://sevenseasentertainment.com";
@@ -330,9 +329,8 @@ export const noteListing = internalMutation({
     const stored = obs.snapshot as Partial<BookSnapshot> | null;
     if (force || stored?.modifiedGmt !== modifiedGmt) return { needsDetail: true };
     // A page read by an older parser is read again once, paced by the same
-    // budget: one read before the age-rating block was read by attribute
-    // and the imprint at all may hold a wrong `mature: false`
-    // (lib/sevenSeas.ts BOOK_PAGE_VERSION).
+    // budget, so its snapshot holds the rating and imprint as the current
+    // one reads them (lib/sevenSeas.ts BOOK_PAGE_VERSION).
     if ((stored?.parserVersion ?? 0) < BOOK_PAGE_VERSION) return { needsDetail: true };
     // A linked box's members arrive through other books, never through its
     // own page: the stored snapshot places them without a detail fetch.
@@ -525,11 +523,6 @@ export const applyBook = internalMutation({
       snapshot,
       now,
     });
-    // A page that rates the book for adults makes its Series mature now,
-    // not at the next library rebuild; the two linking paths below do too.
-    if (snapshot.mature === true && observation.recordRef?.type === "release") {
-      await applyMatureEvidence(ctx, observation.recordRef.id);
-    }
 
     // Rung ①: stored source-id link. A rename at the source is then a field
     // conflict on the linked record — reconciled under the authority rules —
@@ -645,7 +638,6 @@ export const applyBook = internalMutation({
       // observation, then reconcile the offered fields into it.
       const release = match.release;
       await linkObservation(ctx, observation._id, { type: "release", id: release._id });
-      if (snapshot.mature === true) await applyMatureEvidence(ctx, release._id);
       const firstSeriesId = release.seriesIds[0];
       if (firstSeriesId !== undefined) {
         await linkSeriesObservation(ctx, {
@@ -832,9 +824,6 @@ export const applyBook = internalMutation({
     // A Series an Editor hid: nothing was created, the reason is noted.
     if (creation.blocked !== undefined) {
       return { status: "recordOnly", changed: false, reason: "hidden series" };
-    }
-    if (snapshot.mature === true && creation.releaseId) {
-      await applyMatureEvidence(ctx, creation.releaseId);
     }
     const created = creation.releaseId && (await ctx.db.get(creation.releaseId));
     return {

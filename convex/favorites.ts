@@ -23,7 +23,7 @@ import {
   type TargetId,
 } from "./lib/ratings";
 import { volumeTitle } from "./lib/titles";
-import { seriesStatsRow } from "./seriesBrowse";
+import { seriesStatsRow } from "./lib/seriesStats";
 
 /**
  * Favorites the library view lists; older ones past this stay stored. Sized

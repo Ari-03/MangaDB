@@ -318,7 +318,8 @@ export const recordSeriesCrawl = internalMutation({
 /**
  * Write the listing's age ratings onto the series-link observations
  * (`series:{slug}`) of series already linked to the catalog, where the
- * Mature Series rebuild reads them (lib/mature.ts). Kodansha rates series,
+ * Mature Series rebuild reads them; a new 18+ rating also makes its Series
+ * mature at once (lib/mature.ts). Kodansha rates series,
  * not books, and the listing is fetched in full every run, so this costs no
  * page fetches. A series linked later this run gets its rating next run.
  */

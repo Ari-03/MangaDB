@@ -10,7 +10,13 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "./_generated/api";
-import { normalizeBook, parseBookListing, parseBookPage, type BookSnapshot } from "./lib/sevenSeas";
+import {
+  BOOK_PAGE_VERSION,
+  normalizeBook,
+  parseBookListing,
+  parseBookPage,
+  type BookSnapshot,
+} from "./lib/sevenSeas";
 import {
   type CatalogOverrides,
   insertObservation,
@@ -1908,7 +1914,7 @@ describe("sevenSeas.sync — mature evidence from the book page", () => {
         .unique())!;
       const stored: BookSnapshot = observation.snapshot;
       const { parserVersion, ageRating, imprint, ...older } = stored;
-      expect(parserVersion).toBe(1);
+      expect(parserVersion).toBe(BOOK_PAGE_VERSION);
       expect(imprint !== undefined || ageRating !== undefined).toBe(b.page !== undefined);
       await ctx.db.patch(observation._id, { snapshot: { ...older, mature } });
     });
@@ -1956,10 +1962,11 @@ describe("sevenSeas.sync — mature evidence from the book page", () => {
     );
     expect(release.publisherId).toBe(sevenSeas!._id);
     expect(series.mature).toBe(true);
+    // The page states no rating; the imprint is the evidence (lib/mature.ts).
     expect((await observationOf(t, WHISPER_1)).snapshot).toMatchObject({
-      mature: true,
+      mature: false,
       imprint: "Steamship",
-      parserVersion: 1,
+      parserVersion: BOOK_PAGE_VERSION,
     });
     expect((await observationOf(t, WHISPER_1)).snapshot.ageRating).toBeUndefined();
     await rebuild(t);
@@ -2020,10 +2027,10 @@ describe("sevenSeas.sync — mature evidence from the book page", () => {
     expect(await sync(t)).toMatchObject({ completeSweep: true, errorCount: 0 });
     expect(pages.count).toBe(1);
     expect((await observationOf(t, PETER_GRILL_15)).snapshot).toMatchObject({
-      mature: true,
+      mature: false,
       ageRating: "olderteen17",
       imprint: "Ghost Ship",
-      parserVersion: 1,
+      parserVersion: BOOK_PAGE_VERSION,
     });
     expect((await seriesOf(t, PETER_GRILL_15)).series.mature).toBe(true);
     expect(await shownTo(t, title, month)).toEqual({
@@ -2073,7 +2080,7 @@ describe("sevenSeas.sync — mature evidence from the book page", () => {
     expect(await read()).toMatchObject({ result: { completeSweep: true }, pages: [ALPHA_2.slug] });
     expect(await read()).toMatchObject({ result: { completeSweep: true }, pages: [] });
     for (const b of listed) {
-      expect((await observationOf(t, b)).snapshot.parserVersion).toBe(1);
+      expect((await observationOf(t, b)).snapshot.parserVersion).toBe(BOOK_PAGE_VERSION);
     }
   });
 

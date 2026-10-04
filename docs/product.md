@@ -368,20 +368,24 @@ change later in the Series filters, Settings, or the notice on a mature
 page, each behind an "I'm 18 or older" check. Your own library always
 shows your own books.
 
-The library rebuild derives `series.mature`, so it lags by up to one
-rebuild, except that a Data Team call and a Seven Seas book page rated
-mature apply at once. Evidence, strongest first:
+The library rebuild derives `series.mature`. A Data Team call applies at
+once, and so does an import that links a book which is evidence, or whose
+Edition is under an adult-only publisher, or that brings a linked book new
+evidence; other changes, such as a publisher marked adult-only later or
+evidence that went away, wait for the next rebuild. Evidence, strongest
+first:
 
 | Evidence | Source |
 |---|---|
 | Data Team call | `series.contentRating` ("mature" or "general") wins over everything |
 | Adult-only publisher | `publishers.contentRating = "mature"`, from `adultOnly` in `convex/lib/publishers.ts` |
+| Adult-only imprint | a PRH title or Seven Seas book page naming an `adultOnly` imprint (Ghost Ship, Steamship), whatever Publisher its Edition is filed under |
 | Kodansha | `age_rating` 18 or over on the backlist listing |
-| Seven Seas | the book page's Mature age rating, or an adult-only imprint named beside it (Ghost Ship, Steamship) even on a book filed under Seven Seas |
+| Seven Seas | the book page's Mature age-rating badge |
 | Yen Press | the "Age Rating" detail ("18+ M (Mature)", "18 & Up") |
 | ANN | objectionable content MA or AO, or an erotica or hentai genre |
 
-PRH and Open Library carry no age rating for manga.
+PRH and Open Library carry no age rating for manga; PRH names the imprint.
 
 ## SEO
 

@@ -42,6 +42,7 @@ import { releasesOf } from "./lib/editionRows";
 import { ratedByDataTeam, showMatureArg, sourceRatesMature, visibleTo } from "./lib/mature";
 import { ratingRankOf, ratingSummary, type RatingSummary } from "./lib/ratingStats";
 import { nicknameKeys, searchWords, seriesSearchText } from "./lib/searchMatch";
+import { PACK_SPAN, patchPackEntry, seriesStatsRow, type PackEntry as Entry } from "./lib/seriesStats";
 import { withExceptionCapture } from "./lib/posthog";
 
 export const SORTS = [
@@ -203,53 +204,6 @@ export const sweepStale = internalMutation({
 });
 
 /**
- * A Series' library row, or null before the rebuild has written one (or
- * while it is bookless). The rebuild keeps one row per Series.
- */
-export async function seriesStatsRow(ctx: QueryCtx, seriesId: Id<"series">) {
-  return await ctx.db
-    .query("seriesStats")
-    .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
-    .unique();
-}
-
-/**
- * Carry a Series' new `mature` flag into its library row and pack entry at
- * once, so a Data Team rating edit (moderation.applyUpdate) shows in the
- * filtered library and its facets without waiting for the next rebuild.
- * A Series without a row yet (never rebuilt, or bookless) has nothing to
- * update.
- */
-export async function syncMatureProjection(ctx: MutationCtx, series: Doc<"series">, mature: boolean) {
-  const flag = mature ? { mature: true as const } : { mature: undefined };
-  const row = await seriesStatsRow(ctx, series._id);
-  if (row && (row.mature === true) !== mature) await ctx.db.patch(row._id, flag);
-  await patchPackEntry(ctx, series.publicId, (entry) => (entry.mature === true) === mature, flag);
-}
-
-/**
- * New 18+ evidence on a book: a Source Observation linked to the Release
- * now rates it mature. Each of the Release's Series becomes mature at once,
- * its library row and pack entry with it (syncMatureProjection), so the home
- * shelves and discovery leave it out from the import's own transaction
- * rather than from the next rebuild. A Series the Data Team rated keeps its
- * call (lib/mature.ts). Nothing here clears the flag: a Series whose
- * evidence went away is cleared by the next rebuild.
- */
-export async function applyMatureEvidence(ctx: MutationCtx, releaseId: Id<"releases">) {
-  const release = await ctx.db.get(releaseId);
-  if (!release || release.status !== "active") return;
-  for (const seriesId of release.seriesIds) {
-    const series = await ctx.db.get(seriesId);
-    if (series?.status !== "active" || series.mature === true) continue;
-    if (ratedByDataTeam(series.contentRating) !== null) continue;
-    // Derived data, no Revision, as in upsertStats.
-    await ctx.db.patch(series._id, { mature: true });
-    await syncMatureProjection(ctx, series, true);
-  }
-}
-
-/**
  * Carry a Series' new rating aggregate into its library row and pack entry
  * at once (lib/ratings.ts calls this from every rating write), so "Top
  * rated" reorders without waiting for the next rebuild. The pack, a large
@@ -278,29 +232,6 @@ export async function syncRatingProjection(
   });
 }
 
-/**
- * Rewrite one Series' entry in its pack with `change`, unless the pack or
- * the entry is missing or `holds` says the entry already has it: a pack is
- * a large document many Series share.
- */
-async function patchPackEntry(
-  ctx: MutationCtx,
-  publicId: number,
-  holds: (entry: Entry) => boolean,
-  change: Partial<Entry>,
-) {
-  const pack = await ctx.db
-    .query("seriesStatsPacks")
-    .withIndex("by_block", (q) => q.eq("block", Math.floor(publicId / PACK_SPAN)))
-    .unique();
-  const at = pack?.entries.findIndex((entry) => entry.publicId === publicId) ?? -1;
-  if (!pack || at < 0 || holds(pack.entries[at]!)) return;
-  const entries = pack.entries.map((entry, i) => (i === at ? { ...entry, ...change } : entry));
-  await ctx.db.patch(pack._id, { entries });
-}
-
-/** Series per pack: block k covers publicIds [k * PACK_SPAN, (k + 1) * PACK_SPAN). */
-const PACK_SPAN = 1000;
 /** Packs a reader takes at most: room for 100k publicIds. */
 const MAX_PACKS = 100;
 
@@ -535,8 +466,6 @@ function isDayKey(key: number): boolean {
 // ---------- Browse (public) ----------
 
 type StatsRow = Doc<"seriesStats">;
-/** One Series' filter-and-sort facts, as packed in seriesStatsPacks. */
-type Entry = Doc<"seriesStatsPacks">["entries"][number];
 
 /**
  * A row's pack entry. Rows written before searchKey and lastReleasedSort

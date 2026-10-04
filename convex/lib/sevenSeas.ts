@@ -17,7 +17,6 @@
 import { v, type Infer } from "convex/values";
 import { outOfScopeReason, packagingValidator, parseBookTitle } from "./bookTitle";
 import { calendarDay, fullDateValidator, monthFromName, type FullDate } from "./dates";
-import { canonicalPublisherFor } from "./publishers";
 
 // ---------- the normalized snapshot ----------
 
@@ -49,21 +48,17 @@ export const bookSnapshotValidator = v.object({
   coverUrl: v.optional(v.string()),
   description: v.optional(v.string()),
   /**
-   * The book is for adults: the page rates it 18+ (`isMatureRating`) or
-   * names an adult-only imprint (`isAdultImprint`). False also when the page
-   * states no rating; `ageRating` tells the two apart. Absent on snapshots
-   * taken before ratings were read.
+   * The page rates the book 18+ (`isMatureRating`). False also when the
+   * page states no rating; `ageRating` tells the two apart. Absent on
+   * snapshots taken before ratings were read.
    */
   mature: v.optional(v.boolean()),
-  /**
-   * The page's age rating as it states it: the badge's id ("teen",
-   * "olderteen17", "mature"), else a text rating in its metadata. Absent
-   * when the page states none.
-   */
+  /** The badge's id as the page states it ("teen", "olderteen17", "mature"); absent without one. */
   ageRating: v.optional(v.string()),
   /**
    * The imprint the page names beside the rating ("Ghost Ship",
-   * "Steamship"). The Edition stays filed under Seven Seas.
+   * "Steamship"). The Edition stays filed under Seven Seas; an adult-only
+   * imprint makes its Series mature (lib/mature.ts observationRatesMature).
    */
   imprint: v.optional(v.string()),
   /** The BOOK_PAGE_VERSION that read the page; absent before versions. */
@@ -140,7 +135,7 @@ export type BookPageDetails = {
   coverUrl?: string;
   /**
    * The age-rating badge's id ("allages", "tenplus", "teen", "olderteen",
-   * "olderteen15", "olderteen17", "mature"), else the metadata's text rating.
+   * "olderteen15", "olderteen17", "mature").
    */
   ageRating?: string;
   /** The imprint named in the block beside the badge ("Ghost Ship"). */
@@ -152,22 +147,17 @@ export type BookPageDetails = {
  * it when the parser learns to read a page better: the sync re-reads each
  * book page stored under an older version once (sevenSeas.ts noteListing).
  * 1: the age rating read by attribute, the imprint, the metadata's rating.
+ * 2: the badge and imprint read only beside the cover; no metadata rating.
  */
-export const BOOK_PAGE_VERSION = 1;
+export const BOOK_PAGE_VERSION = 2;
 
 /**
  * Seven Seas' age ratings (sevenseasentertainment.com/about/age-ratings/):
  * only Mature is 18+. All Ages, 10+, Teen, and Older Teen at 15+ or 17+
- * (once one Older Teen at 16+) are not (CONTEXT.md, Mature Series). Reads
- * the badge id "mature" and a text rating naming Mature or 18+.
+ * (once one Older Teen at 16+) are not (CONTEXT.md, Mature Series).
  */
 export function isMatureRating(ageRating: string | undefined): boolean {
-  return ageRating !== undefined && /\bmature\b|\b18\s*\+/i.test(ageRating);
-}
-
-/** Whether the imprint is an adult-only one (lib/publishers.ts: Ghost Ship, Steamship). */
-export function isAdultImprint(imprint: string | undefined): boolean {
-  return imprint !== undefined && canonicalPublisherFor(imprint)?.adultOnly === true;
+  return ageRating === "mature";
 }
 
 /** "April 13, 2027" (full month name) → a full-precision date, or undefined. */
@@ -203,13 +193,12 @@ function tagAttributes(source: string): Map<string, string> {
 const RATING_ID = /^(?:allages|tenplus|teen|olderteen\d*|mature)$/;
 
 /**
- * The page's blocks whose class list holds "age-rating" (beside the cover),
- * read by attribute in any order, quoting or class list. The rating badge
- * is read by its id (`<div class="age-rating" id="mature"></div>`); a block
- * with text and no rating id names the book's imprint (`<div id="SS-block"
+ * The blocks in `html` whose class list holds "age-rating", read by
+ * attribute in any order, quoting or class list. The rating badge is read
+ * by its id (`<div class="age-rating" id="mature"></div>`); a block with
+ * text and no rating id names the book's imprint (`<div id="SS-block"
  * class="age-rating">Steamship</div>`; Ghost Ship's wraps its name in a
- * link). An empty block with another id is kept as the badge, as stated.
- * The first of each wins.
+ * link). Any other block is ignored. The first of each wins.
  */
 function ageRatingBlocks(html: string): { badge?: string; imprint?: string } {
   const found: { badge?: string; imprint?: string } = {};
@@ -223,7 +212,6 @@ function ageRatingBlocks(html: string): { badge?: string; imprint?: string } {
     const text = close < 0 ? "" : stripHtml(html.slice(from, from + close));
     if (RATING_ID.test(id)) found.badge ??= id;
     else if (text !== "") found.imprint ??= text;
-    else if (id !== "") found.badge ??= id;
   }
   return found;
 }
@@ -277,16 +265,17 @@ export function parseBookPage(html: string): BookPageDetails {
 
   // The cover is the last uploads image before the volume-meta block.
   const head = html.slice(0, meta.index);
-  let coverUrl: string | undefined;
+  let coverAt = 0;
   for (const m of head.matchAll(/<img[^>]+src="([^"]*\/wp-content\/uploads\/[^"]+)"/gi)) {
-    coverUrl = m[1]!;
+    details.coverUrl = m[1]!;
+    coverAt = m.index;
   }
-  details.coverUrl = coverUrl;
 
-  // The rating badge and imprint block beside the cover; a text rating in
-  // the metadata ("Age Rating: …") when there is no badge.
-  const { badge, imprint } = ageRatingBlocks(html);
-  details.ageRating = badge ?? metaLine(html, "Age Rating");
+  // The rating badge and imprint block sit between the cover and the
+  // metadata; blocks elsewhere on the page (a legend, a strip of other
+  // books) are not this book's.
+  const { badge, imprint } = ageRatingBlocks(head.slice(coverAt));
+  details.ageRating = badge;
   details.imprint = imprint;
 
   return details;
@@ -339,7 +328,7 @@ export function normalizeBook(listing: BookListing, page: BookPageDetails): Book
     isbn13: page.isbn13,
     coverUrl: page.coverUrl,
     description: listing.description,
-    mature: isMatureRating(page.ageRating) || isAdultImprint(page.imprint),
+    mature: isMatureRating(page.ageRating),
     ageRating: page.ageRating,
     imprint: page.imprint,
     parserVersion: BOOK_PAGE_VERSION,

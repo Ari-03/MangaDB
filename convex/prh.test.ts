@@ -13,8 +13,11 @@ import * as catalogTitle from "./lib/catalogTitle";
 import { parseTitle } from "./lib/prh";
 import {
   type CatalogOverrides,
+  insertCoverage,
+  insertEdition,
   insertObservation,
   insertPublisher,
+  insertRelease,
   insertSeries,
   insertSourceRevision,
   insertVolume,
@@ -1795,5 +1798,204 @@ describe("prh.applyTitle — a linked box keeps its canonical identity (W08)", (
     const after = await bundleState(t);
     expect(after.members).toEqual(["9781646519026:physical", "9781646519040:physical"]);
     expect(after.orders).toEqual([1, 2]);
+  });
+});
+
+// Mature Series (lib/mature.ts) from PRH's books of an adult-only imprint:
+// "His Sensual Whisper" as production holds it (Series 622: three Steamship
+// Editions, PRH titles naming the imprint, ANN's entry, no Seven Seas
+// page), and the same imprint on new imports, read where a viewer who has
+// not opted in looks: the home page's two shelves and the library.
+describe("prh — a book of an adult-only imprint makes its Series mature", () => {
+  const TITLE = "His Sensual Whisper: The Voice That Sets Me On Fire";
+  const ISBNS = ["9798893739404", "9798893739411", "9798893739428"];
+  const SEPTEMBER = { year: 2025, month: 9, day: 9, sort: 20250909 };
+
+  /** Volume `n` as PRH lists it, under the Steamship imprint. */
+  const steamshipBook = (n: number) =>
+    parseTitle({
+      isbn: ISBNS[n - 1],
+      title: `${TITLE}, Vol. ${n}`,
+      seriesNumber: n,
+      onsale: "2025-09-09",
+      format: { description: "Trade Paperback" },
+      imprint: { description: "Steamship" },
+    })!;
+  const apply = (t: TestT, n: number) =>
+    t.mutation(internal.prh.applyTitle, { snapshot: steamshipBook(n) });
+  const seed = (t: TestT) => t.mutation(internal.launch.seedPublishers, {});
+  const rebuild = (t: TestT) => t.action(internal.seriesBrowse.rebuild, {});
+
+  /**
+   * Three Editions under the publisher row `slug` (unmarked), each Release
+   * linked to its PRH title, and ANN's entry on the Series rating nothing.
+   */
+  const fileUnder = (
+    t: TestT,
+    slug: "steamship" | "seven-seas",
+    series: { contentRating?: "general" } = {},
+  ) =>
+    t.run(async (ctx) => {
+      const name = slug === "steamship" ? "Steamship" : "Seven Seas";
+      const publisherId = await insertPublisher(ctx, { name, slug });
+      const seriesId = await insertSeries(ctx, { title: TITLE, ...series });
+      for (const n of [1, 2, 3]) {
+        const volumeId = await insertVolume(ctx, { seriesId, position: n });
+        const editionId = await insertEdition(ctx, { publisherId });
+        await insertCoverage(ctx, { editionId, volumeId });
+        const book = steamshipBook(n);
+        const releaseId = await insertRelease(ctx, {
+          editionId,
+          publisherId,
+          seriesIds: [seriesId],
+          isbn13: book.isbn13,
+          pubDate: SEPTEMBER,
+        });
+        await insertObservation(ctx, {
+          sourceKey: "prh",
+          sourceRecordId: book.isbn13,
+          snapshot: book,
+          recordRef: { type: "release", id: releaseId },
+        });
+      }
+      await insertObservation(ctx, {
+        sourceKey: "ann",
+        sourceRecordId: "manga:31234",
+        snapshot: { title: TITLE },
+        recordRef: { type: "series", id: seriesId },
+      });
+    });
+
+  /** The Series' flag, and whether each place shows it to a viewer who has not opted in. */
+  async function shownTo(t: TestT) {
+    const titled = (items: Array<{ title: string }>) => items.some((item) => item.title === TITLE);
+    const series = await t.run(async (ctx) =>
+      (await ctx.db.query("series").collect()).find((s) => s.title === TITLE),
+    );
+    return {
+      mature: series?.mature,
+      newest: titled(await t.query(api.catalog.recentSeries, { limit: 28, showMature: false })),
+      month: (
+        await t.query(api.releases.monthBrowse, { year: 2025, month: 9, showMature: false })
+      ).releases.some((row) => titled(row.series)),
+      library: titled(
+        (await t.query(api.seriesBrowse.browse, { sort: "title", showMature: false })).items,
+      ),
+    };
+  }
+  const LISTED = { mature: undefined, newest: true, month: true };
+  const HIDDEN = { mature: true, newest: false, month: false, library: false };
+  /** Whether the library has a row for the Series at all (a viewer who opted in sees it). */
+  const inLibrary = async (t: TestT) =>
+    (await t.query(api.seriesBrowse.browse, { sort: "title", showMature: true })).items.some(
+      (item) => item.title === TITLE,
+    );
+
+  it("production's Series under an unmarked Steamship row: the seed and a rebuild flag it, the seed alone does not", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await fileUnder(t, "steamship");
+    expect(await shownTo(t)).toMatchObject(LISTED);
+
+    const seeded = await seed(t);
+    expect(seeded.markedAdultOnly).toContain("steamship");
+    expect(await shownTo(t)).toMatchObject(LISTED);
+
+    await rebuild(t);
+    expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await inLibrary(t)).toBe(true);
+  });
+
+  it("a Steamship title PRH imports after the seed is mature in the import's own transaction", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await seed(t);
+    expect(await apply(t, 1)).toMatchObject({ status: "created" });
+    const publisher = await t.run(async (ctx) => {
+      const [release] = await ctx.db.query("releases").collect();
+      return (await ctx.db.get(release!.publisherId))!;
+    });
+    expect(publisher).toMatchObject({ slug: "steamship", contentRating: "mature" });
+    // No rebuild: the Series has no library row yet.
+    expect(await shownTo(t)).toEqual(HIDDEN);
+    await rebuild(t);
+    expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await inLibrary(t)).toBe(true);
+  });
+
+  it("a Steamship title matching a Release filed under Seven Seas is mature in the import's own transaction", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await t.run((ctx) =>
+      seedCatalog(ctx, {
+        publisher: { name: "Seven Seas", slug: "seven-seas" },
+        series: { title: TITLE },
+        volume: { position: 1 },
+        release: { isbn13: ISBNS[0], pubDate: SEPTEMBER },
+      }),
+    );
+    await rebuild(t);
+    expect(await shownTo(t)).toEqual({ ...LISTED, library: true });
+
+    expect(await apply(t, 1)).toMatchObject({ status: "linked" });
+    expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await inLibrary(t)).toBe(true);
+  });
+
+  it("a Series filed under Seven Seas whose PRH titles name Steamship is mature at a rebuild alone", async () => {
+    const t = makeT();
+    await seedRegistry(t, true);
+    await fileUnder(t, "seven-seas");
+    expect(await shownTo(t)).toMatchObject(LISTED);
+    await rebuild(t);
+    expect(await shownTo(t)).toEqual(HIDDEN);
+    expect(await inLibrary(t)).toBe(true);
+  });
+
+  it("a Data Team general rating keeps the Series listed in each case", async () => {
+    const general = { mature: undefined, newest: true, month: true, library: true };
+
+    // Under Steamship, after the seed and a rebuild.
+    let t = makeT();
+    await seedRegistry(t, true);
+    await fileUnder(t, "steamship", { contentRating: "general" });
+    await seed(t);
+    await rebuild(t);
+    expect(await shownTo(t)).toEqual(general);
+
+    // A new Steamship title placed in the Series.
+    t = makeT();
+    await seedRegistry(t, true);
+    await seed(t);
+    await backbone(t, TITLE, ["1"]);
+    await t.run(async (ctx) => {
+      const series = (await ctx.db.query("series").collect())[0]!;
+      await ctx.db.patch(series._id, { contentRating: "general" });
+    });
+    expect(await apply(t, 1)).toMatchObject({ status: "created" });
+    await rebuild(t);
+    expect(await shownTo(t)).toEqual(general);
+
+    // A Steamship title linking a Release under Seven Seas.
+    t = makeT();
+    await seedRegistry(t, true);
+    await t.run((ctx) =>
+      seedCatalog(ctx, {
+        publisher: { name: "Seven Seas", slug: "seven-seas" },
+        series: { title: TITLE, contentRating: "general" },
+        volume: { position: 1 },
+        release: { isbn13: ISBNS[0], pubDate: SEPTEMBER },
+      }),
+    );
+    await rebuild(t);
+    expect(await apply(t, 1)).toMatchObject({ status: "linked" });
+    expect(await shownTo(t)).toEqual(general);
+
+    // Under Seven Seas, at a rebuild.
+    t = makeT();
+    await seedRegistry(t, true);
+    await fileUnder(t, "seven-seas", { contentRating: "general" });
+    await rebuild(t);
+    expect(await shownTo(t)).toEqual(general);
   });
 });

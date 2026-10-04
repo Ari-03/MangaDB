@@ -23,7 +23,7 @@ import { recordRef, recordType } from "./schema";
 import { liveUser } from "./lib/auth";
 import { latestTouch } from "./lib/authority";
 import { fail } from "./lib/errors";
-import { ratedByDataTeam } from "./lib/mature";
+import { ratedByDataTeam, syncMatureProjection } from "./lib/mature";
 import { anchoredOn, currentOps } from "./lib/observations";
 import { requireDataTeam, requireModerator } from "./lib/roles";
 import {
@@ -33,7 +33,6 @@ import {
   type RecordType,
 } from "./lib/moderationFields";
 import { seriesSearchText } from "./lib/searchMatch";
-import { syncMatureProjection } from "./seriesBrowse";
 import type { OpMeta } from "./lib/sensitiveOps";
 import { volumeTitle } from "./lib/titles";
 import { usernameLookup } from "./lib/usernameLookup";

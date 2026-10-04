@@ -14,7 +14,7 @@ import { getActive, requireActive } from "./lib/merges";
 import { seriesStateRow, writeSeriesState } from "./lib/seriesStates";
 import { requireUser, viewerOrNull } from "./lib/auth";
 import { joinBrowseRows } from "./releases";
-import { seriesStatsRow } from "./seriesBrowse";
+import { seriesStatsRow } from "./lib/seriesStats";
 
 // My Upcoming scans the uncapped future horizon (spec §7) over by_date; the
 // cap guards pathology and is surfaced as `capped` so the view can say so.
