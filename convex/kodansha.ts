@@ -665,13 +665,21 @@ async function withPageFacts(
  * title states, read with the shared title parser, else the size its line's
  * name declares (lib/coverage.ts). The snapshot's `packaging` comes from
  * the series name, which every member of the line shares, so its range is
- * never quoted.
+ * never quoted. The calendar titles each book "{series name} Volume N",
+ * so a title range equal to the series name's is taken for the series
+ * name's and not quoted either, also on a volume page whose own title
+ * repeats it.
  */
 function packagingHold(snapshot: KodanshaSnapshot, packaging: Packaging): string {
   const own = parseBookTitle(snapshot.title).packaging;
+  const named = packaging.coverRange;
+  const titled =
+    own?.coverRange && !(own.coverRange.from === named?.from && own.coverRange.to === named?.to)
+      ? own.coverRange
+      : null;
   const fromLine = coverageFromLine(packaging.lineName, packaging.linePosition);
-  const stated = own?.coverRange
-    ? { range: own.coverRange, by: "in its title" }
+  const stated = titled
+    ? { range: titled, by: "in its title" }
     : fromLine && !own?.coverageGapped
       ? { range: fromLine, by: "by its line's size" }
       : null;

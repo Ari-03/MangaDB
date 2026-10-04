@@ -146,8 +146,10 @@ npx convex run importSources:setBootstrapModeInternal '{"on":true}'
 of the base Series only with known coverage: the title's own range first,
 then the publisher blurb (`convex/lib/coverage.ts`), then a line name with
 a fixed size (`FIXED_LINE_SIZES`, such as VIZBIG). Box sets become Release
-Bundles. In Bootstrap Mode a named line's member with no usable coverage is
-created as Unmapped Packaging, which a Moderator maps at `/mod/packaging`.
+Bundles under the same rule, in Bootstrap Mode only; any other box set is
+held, and Kodansha places none. In Bootstrap Mode a named line's member
+with no usable coverage is created as Unmapped Packaging, which a
+Moderator maps at `/mod/packaging`.
 Outside Bootstrap Mode such a book stays on its observation for an Editor,
 as a Held Book (below).
 
@@ -174,15 +176,22 @@ with. Two differences are options of the function:
   so every such book is held, with a note that says so and quotes the
   coverage the book's own title states, else its line's size. Kodansha reads
   a book's packaging from its series name, which every member of the line
-  shares, so the note never quotes a range from it.
+  shares, so the note never quotes a range from it. The calendar titles a
+  book "{series name} Volume N", so a title range equal to the series
+  name's is not quoted either, even from a volume page whose own title
+  repeats it.
 - A queued ambiguity quotes the book's title with the reason "ambiguous
   series" (PRH, Yen Press), or the Series title with the count (Seven Seas,
   Kodansha).
 
-An apply that does not hold the book for a lock removes a lock hold an
-earlier apply left, whichever way it ends, so the hold goes with the lock
-the next time the importer applies the book (`holdUnderLock`). Seven Seas,
-PRH and Yen Press hold a box set the same way, with the same note, where
+An apply that reaches this function, or a box set's placement, and does
+not hold the book for a lock removes a lock hold an earlier apply left,
+whichever way it ends from there (`holdUnderLock`), so the hold goes with
+the lock the next time the importer places the book. An apply its adapter
+ends earlier, at a scope gate, keeps the hold, and so does a record its
+sync drops before any apply
+([known issues](known-issues.md#catalog-and-imports)). Seven Seas, PRH
+and Yen Press hold a box set the same way, with the same note, where
 Bootstrap Mode would otherwise make it a Release Bundle under a locked
 Series. A box set already placed as a Release Bundle still takes members
 that arrive later when its Series is locked: like a linked Release, only the
@@ -244,10 +253,11 @@ observation to a record (`linkObservation` in
 the hold and its note, and so does withdrawal; a withdrawn book that
 returns is held again at its next placement. A linked box set whose
 Release Bundle names another Series keeps its note but is not held. A
-lock hold goes at the importer's next apply of the book after the
+lock hold goes at the importer's next placement of the book after the
 unlock, not at the unlock itself, and until then the book stays listed
-under a lock that no longer exists; for Seven Seas that can be
-indefinitely ([known issues](known-issues.md#catalog-and-imports)).
+under a lock that no longer exists; for Seven Seas, or a book that has
+since gone out of scope, that can be indefinitely
+([known issues](known-issues.md#catalog-and-imports)).
 
 `/mod/imports` lists Held Books newest first (`imports.heldBooks`, Data
 Team), filtered by kind and source, with the source's title, link and

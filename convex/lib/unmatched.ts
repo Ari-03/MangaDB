@@ -20,8 +20,9 @@
 //
 // Queueing is deduplicated per observation (lib/pipeline.ts alreadyHandled)
 // and first ensures the publisher row, so approval finds it. An apply that
-// does not hold the book for a lock leaves no lock hold behind, whichever
-// step it ends at (`holdUnderLock`).
+// reaches this tail and does not hold the book for a lock leaves no lock
+// hold behind, whichever step it ends at (`holdUnderLock`); one its adapter
+// ends earlier, at a scope gate, keeps a lock hold it had.
 // Bootstrap Mode is read only at a step that uses it (1 and 6), unless the
 // adapter already read it, so a book held or queued before those steps
 // leaves app config out of its transaction's reads.
@@ -125,9 +126,9 @@ export type UnmatchedOptions = {
  * The note a book under a locked Series is held with. It tells a lock hold
  * from the tail's other `series` hold (a hidden work's) and from an
  * adapter's (a box set with no unique base Series); imports.ts
- * storedHoldKind lists it.
+ * storedHoldKind lists a note it matches as a `series` hold.
  */
-const LOCK_NOTE = /^Series \d+ is locked\.$/;
+export const LOCK_NOTE = /^Series \d+ is locked\.$/;
 
 /**
  * Hold a book under a locked Series, in Bootstrap Mode or out of it: a lock
@@ -135,9 +136,11 @@ const LOCK_NOTE = /^Series \d+ is locked\.$/;
  * Library and ANN hold the same way). The hold names the Series, for
  * whoever lifts the lock. Returns the result to answer with, or null when
  * `seriesId` is not locked; then a lock hold an earlier apply left (row and
- * note) goes, so it never outlives the lock, whichever way this apply ends.
- * The tail calls it for every book with a publisher; Seven Seas, PRH and
- * Yen Press for a box set they would place as a Release Bundle.
+ * note) goes, so an apply that reaches the tail or a box set's branch
+ * leaves none behind, whichever way it ends from there. The tail calls it
+ * for every book with a publisher; Seven Seas, PRH and Yen Press for a box
+ * set they would place as a Release Bundle (the branch's other exits
+ * replace the note with their own).
  */
 export async function holdUnderLock(
   ctx: MutationCtx,

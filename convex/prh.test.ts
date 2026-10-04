@@ -1685,12 +1685,10 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     expect((await placed(t)).covered).toEqual(["1", "2", "3"]);
   });
 
-  // N04 follow-up: a box whose subtitle lists other Volumes links no
-  // members; one whose title agrees links them.
-  it.each([
-    ["Alpha Vol. 4-6 Omnibus 1-3 Box Set", 0],
-    ["Alpha Vol. 4-6 Box Set", 3],
-  ])("a box set (%s) links only the members its title agrees on", async (title, members) => {
+  // N04 follow-up: a box whose title agrees links its members; one whose
+  // subtitle lists other Volumes states no coverage, so it is held rather
+  // than made an empty bundle.
+  const syncBox = async (title: string) => {
     const t = makeT();
     await seedRegistry(t, true);
     stubApi([
@@ -1700,7 +1698,19 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
       { isbn: "9798888772607", title },
     ]);
     await sync(t);
-    expect(await bundleMembers(t)).toHaveLength(members);
+    return t;
+  };
+
+  it("a box set (Alpha Vol. 4-6 Box Set) links the members its title states", async () => {
+    expect(await bundleMembers(await syncBox("Alpha Vol. 4-6 Box Set"))).toHaveLength(3);
+  });
+
+  it("a box set (Alpha Vol. 4-6 Omnibus 1-3 Box Set) whose title disagrees with itself is held, not bundled", async () => {
+    const t = await syncBox("Alpha Vol. 4-6 Omnibus 1-3 Box Set");
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("releaseBundles").collect()).toHaveLength(0);
+      expect((await ctx.db.query("placementHolds").collect()).map((hold) => hold.kind)).toEqual(["packaging"]);
+    });
   });
 });
 

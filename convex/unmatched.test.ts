@@ -17,7 +17,7 @@ import { api, internal } from "./_generated/api";
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import type { Packaging } from "./lib/bookTitle";
-import { parseSeriesName } from "./lib/kodansha";
+import { parseCalendar, parseSeriesName, sourceRecordId, toSnapshots } from "./lib/kodansha";
 import { linkSeriesObservation } from "./lib/pipeline";
 import { BOOK_PAGE_VERSION } from "./lib/sevenSeas";
 import type { ApplyResult } from "./lib/unmatched";
@@ -64,6 +64,18 @@ const releaseDate = { year: 2026, month: 5, day: 12 };
 const volume3: Book = { title: "Gamma Quest Vol. 3", seriesTitle: SERIES, volumeLabel: "3", isbn13: ISBN };
 
 const packaged = (title: string, packaging: Packaging): Book => ({ title, seriesTitle: SERIES, packaging, isbn13: ISBN });
+
+/** A box set whose title states the Volumes it collects, as every parser reads it. */
+const boxSet: Book = {
+  ...packaged("Gamma Quest Box Set 1 (Vol. 1-2)", { lineName: "Box Set", linePosition: "1", coverRange: { from: "1", to: "2" } }),
+  isBox: true,
+};
+
+/** A box set whose title states no coverage ("Gamma Quest Box Set"), as every parser reads it. */
+const unstatedBoxSet: Book = {
+  ...packaged("Gamma Quest Box Set", { lineName: "Box Set", linePosition: null, coverRange: null }),
+  isBox: true,
+};
 
 /**
  * The packaging Kodansha's snapshot carries for the book: its series name's
@@ -465,19 +477,13 @@ const CASES: Case[] = [
     // Bootstrap Mode would make a Release Bundle under the locked Series.
     name: "box set, Series locked, Bootstrap Mode",
     bootstrap: true,
-    book: {
-      ...packaged("Gamma Quest Box Set 1", { lineName: "Box Set", linePosition: "1", coverRange: { from: "1", to: "2" } }),
-      isBox: true,
-    },
+    book: boxSet,
     seed: (ctx) => gammaQuest(ctx, { locked: true }),
   },
   {
     name: "box set, Series locked, then unlocked, Bootstrap Mode",
     bootstrap: true,
-    book: {
-      ...packaged("Gamma Quest Box Set 1", { lineName: "Box Set", linePosition: "1", coverRange: { from: "1", to: "2" } }),
-      isBox: true,
-    },
+    book: boxSet,
     seed: (ctx) => gammaQuest(ctx, { locked: true }),
     between: unlock,
   },
@@ -565,11 +571,17 @@ const CASES: Case[] = [
     seed: (ctx) => gammaQuest(ctx),
   },
   {
-    // Kodansha's series name states a range its members' titles do not.
-    name: "packaging with unknown coverage under a series name stating a range, steady state",
+    // Kodansha's calendar titles a member "{series name} Volume N", here
+    // under a series name stating a range: the range is the series name's,
+    // where the other sources read it as the book's own.
+    name: "packaging titled as the calendar titles it, under a series name stating a range, steady state",
     bootstrap: false,
     book: {
-      ...packaged("Gamma Quest Omnibus 2", { lineName: "Omnibus", linePosition: "2", coverRange: null }),
+      ...packaged("Gamma Quest Omnibus (Vol. 1-3) Volume 2", {
+        lineName: "Omnibus",
+        linePosition: "2",
+        coverRange: { from: "1", to: "3" },
+      }),
       kodanshaSeries: "Gamma Quest Omnibus (Vol. 1-3)",
     },
     seed: (ctx) => gammaQuest(ctx),
@@ -591,6 +603,18 @@ const CASES: Case[] = [
       lineName: "3-in-1 Edition",
       linePosition: "2",
       coverRange: null,
+    }),
+    seed: (ctx) => gammaQuest(ctx),
+  },
+  {
+    // The title's gapped list rules out the line's size (lib/coverage.ts).
+    name: "packaging with a gapped Volume list on a sized line, steady state",
+    bootstrap: false,
+    book: packaged("Gamma Quest 3-in-1 Edition 2 (Vol. 4 & 6)", {
+      lineName: "3-in-1 Edition",
+      linePosition: "2",
+      coverRange: null,
+      coverageGapped: true,
     }),
     seed: (ctx) => gammaQuest(ctx),
   },
@@ -624,19 +648,26 @@ const CASES: Case[] = [
   {
     name: "box set, Bootstrap Mode",
     bootstrap: true,
-    book: {
-      ...packaged("Gamma Quest Box Set 1", { lineName: "Box Set", linePosition: "1", coverRange: { from: "1", to: "2" } }),
-      isBox: true,
-    },
+    book: boxSet,
     seed: (ctx) => gammaQuest(ctx),
   },
   {
     name: "box set, steady state",
     bootstrap: false,
-    book: {
-      ...packaged("Gamma Quest Box Set 1", { lineName: "Box Set", linePosition: "1", coverRange: { from: "1", to: "2" } }),
-      isBox: true,
-    },
+    book: boxSet,
+    seed: (ctx) => gammaQuest(ctx),
+  },
+  {
+    // Bootstrap Mode would make a Release Bundle with no members.
+    name: "box set with no stated coverage, Bootstrap Mode",
+    bootstrap: true,
+    book: unstatedBoxSet,
+    seed: (ctx) => gammaQuest(ctx),
+  },
+  {
+    name: "box set with no stated coverage, steady state",
+    bootstrap: false,
+    book: unstatedBoxSet,
     seed: (ctx) => gammaQuest(ctx),
   },
   {
@@ -1084,6 +1115,55 @@ describe("an apply that finds the Series unlocked leaves no lock hold, through e
   });
 });
 
+/**
+ * Kodansha's note for a calendar entry ("Volume 2") under `seriesName`,
+ * through the path the calendar sync takes: parseCalendar, toSnapshots,
+ * then applyVolume, with "Gamma Quest" in the catalog.
+ */
+async function calendarNote(seriesName: string) {
+  const t = makeT();
+  tickingClock();
+  await seedRegistry(t, false);
+  await t.run((ctx) => gammaQuest(ctx));
+  const [item] = parseCalendar({
+    data: [
+      {
+        tue_key: "2026-05-12",
+        items: [
+          {
+            series_name: seriesName,
+            title: "Volume 2",
+            volume_url: `https://kodansha.us/series/${SLUG}/${SLUG}-2/`,
+            formats: ["print"],
+            creators: [],
+          },
+        ],
+      },
+    ],
+  });
+  for (const snapshot of toSnapshots(item!)) {
+    await t.mutation(internal.kodansha.applyVolume, {
+      sourceRecordId: sourceRecordId(item!, snapshot.format),
+      snapshot,
+    });
+  }
+  return (await holdState(t, "kodansha")).note;
+}
+
+describe("Kodansha's packaging note, through the calendar", () => {
+  it("quotes no range the title takes from its series name", async () => {
+    expect(await calendarNote("Gamma Quest Omnibus (Vol. 1-3)")).toBe(
+      `"Gamma Quest Omnibus (Vol. 1-3) Volume 2" is Omnibus of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
+
+  it("quotes its line's size", async () => {
+    expect(await calendarNote("Gamma Quest 3-in-1 Edition")).toBe(
+      `"Gamma Quest 3-in-1 Edition Volume 2" is 3-in-1 Edition of "Gamma Quest", stating Volumes 4-6 by its line's size. The Kodansha importer does not place packaging — an Editor maps it.`,
+    );
+  });
+});
+
 // ---------- what each case does today ----------
 
 /** What a source is called, the publisher it files books under, and whether it keeps series links. */
@@ -1135,7 +1215,7 @@ const locked = (s: Identity): Outcome => ({
 /** Kodansha's hold for the box set, which it reads as packaging and never places. */
 const kodanshaBox = () => ({
   result: `recordOnly, unchanged, reason "packaging without coverage"`,
-  hold: `packaging under series "Gamma Quest": "Gamma Quest Box Set 1" is Box Set of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+  hold: `packaging under series "Gamma Quest": "Gamma Quest Box Set 1 (Vol. 1-2)" is Box Set of "Gamma Quest", stating Volumes 1-2 in its title. The Kodansha importer does not place packaging — an Editor maps it.`,
   second: {
     result: `recordOnly, unchanged, reason "packaging without coverage"`,
     writes: ["~ sourceObservations lastSeenAt"],
@@ -1149,6 +1229,36 @@ const noImprint = () => ({
   created: [],
   second: { result: "recordOnly, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
 });
+
+/** A box set stating no coverage: held for an Editor in either mode, never an empty Release Bundle. */
+const unstatedBox = each(
+  () => ({
+    result: `recordOnly, unchanged, reason "box set"`,
+    hold: `packaging under series "Gamma Quest": Box set "Gamma Quest Box Set": the import reads no range of Volumes it collects from its title, its blurbs or its line's size — an Editor places it.`,
+    created: ["placementHold"],
+    seriesLink: null,
+    proposal: null,
+    second: {
+      result: `recordOnly, unchanged, reason "box set"`,
+      writes: ["~ sourceObservations lastSeenAt"],
+    },
+  }),
+  {
+    sevenSeas: (s) => ({
+      hold: `packaging under series "Gamma Quest": Box set "Gamma Quest Box Set" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.`,
+      seriesLink: link(s, `series "Gamma Quest"`),
+    }),
+    kodansha: (s) => ({
+      result: `recordOnly, unchanged, reason "packaging without coverage"`,
+      hold: `packaging under series "Gamma Quest": "Gamma Quest Box Set" is Box Set of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+      seriesLink: link(s, `series "Gamma Quest"`),
+      second: {
+        result: `recordOnly, unchanged, reason "packaging without coverage"`,
+        writes: ["~ sourceObservations lastSeenAt"],
+      },
+    }),
+  },
+);
 
 const EXPECTED: Record<string, Record<Source, Outcome>> = {
   "Series missing, Bootstrap Mode: ordinary creation": each((s) => ({
@@ -1266,7 +1376,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       second: {
         result: "created, changed",
         writes: [
-          `+ bundle "Gamma Quest Box Set 1" (unreviewed)`,
+          `+ bundle "Gamma Quest Box Set 1 (Vol. 1-2)" (unreviewed)`,
           "+ proposal approved",
           "+ proposalVersion",
           `+ publisher ${s.publisher}`,
@@ -1585,26 +1695,35 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       }),
     },
   ),
-  "packaging with unknown coverage under a series name stating a range, steady state": each(
+  "packaging titled as the calendar titles it, under a series name stating a range, steady state": each(
     (s) => ({
-      result: `recordOnly, unchanged, reason "packaging without coverage"`,
-      hold: `packaging under series "Gamma Quest": "Gamma Quest Omnibus 2" is packaging (Omnibus) whose covered Volumes the title does not state — an Editor maps it.`,
-      created: ["placementHold"],
+      result: "queued, changed",
+      hold: null,
+      created: ["proposal inReview", "proposalVersion", `publisher ${s.publisher}`],
       seriesLink: null,
-      proposal: null,
-      second: {
-        result: `recordOnly, unchanged, reason "packaging without coverage"`,
-        writes: ["~ sourceObservations lastSeenAt"],
+      proposal: {
+        comment: `"Gamma Quest Omnibus (Vol. 1-3) Volume 2" observed at ${s.name} needs multi-Volume Coverage and an Edition Line (deluxe/omnibus/box-set packaging) — steady-state creation gate. Edition Line: Omnibus.`,
+        ops: [
+          `volumes volume-3 {"label":"3","seriesId":"series \\"Gamma Quest\\""}`,
+          `editionLines edition-line {"joinExisting":true,"name":"Omnibus","publisherSlug":"${s.publisher}","seriesId":"series \\"Gamma Quest\\""}`,
+          `editions edition {"editionLineId":"edition-line","linePosition":"2","publisherSlug":"${s.publisher}","volumeCoverage":[{"extent":"complete","order":1,"volume":"volume 1 of series \\"Gamma Quest\\""},{"extent":"complete","order":2,"volume":"volume 2 of series \\"Gamma Quest\\""},{"extent":"complete","order":3,"volume":"volume-3"}]}`,
+          RELEASE_OP,
+        ],
       },
+      second: { result: "alreadyQueued, unchanged", writes: ["~ sourceObservations lastSeenAt"] },
     }),
     {
-      sevenSeas: (s) => ({
-        hold: `packaging under series "Gamma Quest": "Gamma Quest Omnibus 2" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.`,
-        seriesLink: link(s, `series "Gamma Quest"`),
-      }),
+      sevenSeas: (s) => ({ seriesLink: link(s, `series "Gamma Quest"`) }),
       kodansha: (s) => ({
-        hold: `packaging under series "Gamma Quest": "Gamma Quest Omnibus 2" is Omnibus of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+        result: `recordOnly, unchanged, reason "packaging without coverage"`,
+        hold: `packaging under series "Gamma Quest": "Gamma Quest Omnibus (Vol. 1-3) Volume 2" is Omnibus of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+        created: ["placementHold"],
         seriesLink: link(s, `series "Gamma Quest"`),
+        proposal: null,
+        second: {
+          result: `recordOnly, unchanged, reason "packaging without coverage"`,
+          writes: ["~ sourceObservations lastSeenAt"],
+        },
       }),
     },
   ),
@@ -1674,6 +1793,29 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
           result: `recordOnly, unchanged, reason "packaging without coverage"`,
           writes: ["~ sourceObservations lastSeenAt"],
         },
+      }),
+    },
+  ),
+  "packaging with a gapped Volume list on a sized line, steady state": each(
+    (s) => ({
+      result: `recordOnly, unchanged, reason "packaging without coverage"`,
+      hold: `packaging under series "Gamma Quest": "Gamma Quest 3-in-1 Edition 2 (Vol. 4 & 6)" is packaging (3-in-1 Edition) whose covered Volumes the title does not state — an Editor maps it.`,
+      created: ["placementHold"],
+      seriesLink: null,
+      proposal: null,
+      second: {
+        result: `recordOnly, unchanged, reason "packaging without coverage"`,
+        writes: ["~ sourceObservations lastSeenAt"],
+      },
+    }),
+    {
+      sevenSeas: (s) => ({
+        hold: `packaging under series "Gamma Quest": "Gamma Quest 3-in-1 Edition 2 (Vol. 4 & 6)" is packaging whose covered Volumes neither the title, the blurb, nor the line name states — an Editor maps it.`,
+        seriesLink: link(s, `series "Gamma Quest"`),
+      }),
+      kodansha: (s) => ({
+        hold: `packaging under series "Gamma Quest": "Gamma Quest 3-in-1 Edition 2 (Vol. 4 & 6)" is 3-in-1 Edition of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+        seriesLink: link(s, `series "Gamma Quest"`),
       }),
     },
   ),
@@ -1778,7 +1920,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       result: "created, changed",
       hold: null,
       created: [
-        `bundle "Gamma Quest Box Set 1" (unreviewed)`,
+        `bundle "Gamma Quest Box Set 1 (Vol. 1-2)" (unreviewed)`,
         "proposal approved",
         "proposalVersion",
         `publisher ${s.publisher}`,
@@ -1791,7 +1933,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     {
       kodansha: () => ({
         result: `recordOnly, unchanged, reason "packaging without coverage"`,
-        hold: `packaging under series "Gamma Quest": "Gamma Quest Box Set 1" is Box Set of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+        hold: `packaging under series "Gamma Quest": "Gamma Quest Box Set 1 (Vol. 1-2)" is Box Set of "Gamma Quest", stating Volumes 1-2 in its title. The Kodansha importer does not place packaging — an Editor maps it.`,
         created: ["placementHold"],
         second: {
           result: `recordOnly, unchanged, reason "packaging without coverage"`,
@@ -1803,7 +1945,7 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
   "box set, steady state": each(
     (s) => ({
       result: `recordOnly, unchanged, reason "box set"`,
-      hold: `packaging under series "Gamma Quest": Box set "Gamma Quest Box Set 1" is a Release Bundle — steady state leaves bundles to review.`,
+      hold: `packaging under series "Gamma Quest": Box set "Gamma Quest Box Set 1 (Vol. 1-2)" is a Release Bundle — steady state leaves bundles to review.`,
       created: ["placementHold"],
       seriesLink: null,
       proposal: null,
@@ -1814,12 +1956,12 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
     }),
     {
       sevenSeas: (s) => ({
-        hold: `packaging under series "Gamma Quest": Box set "Gamma Quest Box Set 1" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.`,
+        hold: `packaging under series "Gamma Quest": Box set "Gamma Quest Box Set 1 (Vol. 1-2)" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.`,
         seriesLink: link(s, `series "Gamma Quest"`),
       }),
       kodansha: (s) => ({
         result: `recordOnly, unchanged, reason "packaging without coverage"`,
-        hold: `packaging under series "Gamma Quest": "Gamma Quest Box Set 1" is Box Set of "Gamma Quest". The Kodansha importer does not place packaging — an Editor maps it.`,
+        hold: `packaging under series "Gamma Quest": "Gamma Quest Box Set 1 (Vol. 1-2)" is Box Set of "Gamma Quest", stating Volumes 1-2 in its title. The Kodansha importer does not place packaging — an Editor maps it.`,
         seriesLink: link(s, `series "Gamma Quest"`),
         second: {
           result: `recordOnly, unchanged, reason "packaging without coverage"`,
@@ -1828,6 +1970,8 @@ const EXPECTED: Record<string, Record<Source, Outcome>> = {
       }),
     },
   ),
+  "box set with no stated coverage, Bootstrap Mode": unstatedBox,
+  "box set with no stated coverage, steady state": unstatedBox,
   "packaging with unknown coverage on an ISBN a hidden Release holds": each(
     (s) => ({
       result: `recordOnly, unchanged, reason "packaging without coverage"`,

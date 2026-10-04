@@ -28,6 +28,7 @@ import { alreadyHandled } from "./lib/pipeline";
 import { capture, withExceptionCapture } from "./lib/posthog";
 import { insertSourceProposal } from "./lib/reconcile";
 import { requireDataTeam, requireModerator } from "./lib/roles";
+import { LOCK_NOTE } from "./lib/unmatched";
 import { revisionsOf } from "./moderation";
 import { type AnnReleaseSnapshot, lineOutOfScope, SOURCE_KEY as ANN } from "./ann";
 import { placeEdition, SOURCE_KEY as OPEN_LIBRARY } from "./openLibrary";
@@ -749,14 +750,14 @@ async function heldBook(ctx: QueryCtx, hold: Doc<"placementHolds">, viewerId: Id
  * never listed. The texts are those of every importer but Open Library,
  * whose editions the backfill classifies afresh: ann.ts applyReleasePage,
  * lib/catalogTitle.ts (PRH and Yen Press), sevenSeas.ts, kodansha.ts, the
- * locked-Series note of lib/unmatched.ts and the hidden-Series note of
- * lib/pipeline.ts removedSeriesFor.
+ * locked-Series note of lib/unmatched.ts (`LOCK_NOTE`) and the hidden-Series
+ * note of lib/pipeline.ts removedSeriesFor.
  */
 export function storedHoldKind(reason: string): HoldKind | null {
   if (/^ANN lists no ISBN|^A store-exclusive or variant cover|" is a prose imprint:|" publishes in another language:/.test(reason)) {
     return null;
   }
-  if (/which an Editor hid|has no unique base Series|no linked active Series|^The Series is locked|^Series \d+ is locked\.$/.test(reason)) {
+  if (LOCK_NOTE.test(reason) || /which an Editor hid|has no unique base Series|no linked active Series|^The Series is locked/.test(reason)) {
     return "series";
   }
   if (/^ISBN \d+ is |already has a \w+ .* Release \(ISBN/.test(reason)) return "isbn";

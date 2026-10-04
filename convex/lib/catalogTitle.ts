@@ -371,19 +371,26 @@ export async function applyCatalogTitle(
   };
   const bootstrap = await getBootstrapMode(ctx);
 
-  // Box sets are Release Bundles of the base Series' existing Releases.
+  // Box sets are Release Bundles of the base Series' existing Releases of
+  // the covered Volumes (`coveredLabels`); a box covering none is held.
   if (snapshot.isBox) {
-    if (seriesId === null || publisherRow === undefined || !bootstrap) {
+    if (seriesId === null || labels.length === 0 || publisherRow === undefined || !bootstrap) {
       await recordUnplaced(
         ctx,
         observation,
         seriesId === null
           ? { kind: "series", reason: `Box set "${snapshot.title}" has no unique base Series.` }
-          : {
-              kind: "packaging",
-              reason: `Box set "${snapshot.title}" is a Release Bundle — steady state leaves bundles to review.`,
-              seriesId,
-            },
+          : labels.length === 0
+            ? {
+                kind: "packaging",
+                reason: `Box set "${snapshot.title}": the import reads no range of Volumes it collects from its title, its blurbs or its line's size — an Editor places it.`,
+                seriesId,
+              }
+            : {
+                kind: "packaging",
+                reason: `Box set "${snapshot.title}" is a Release Bundle — steady state leaves bundles to review.`,
+                seriesId,
+              },
         now,
       );
       return { status: "recordOnly", changed: false, reason: "box set" };

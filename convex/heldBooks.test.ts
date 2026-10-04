@@ -894,6 +894,7 @@ describe("storedHoldKind", () => {
       // lib/catalogTitle.ts (PRH, Yen Press)
       ['Box set "Alpha Box Set" has no unique base Series.', "series"],
       ['Box set "Alpha Box Set" is a Release Bundle — steady state leaves bundles to review.', "packaging"],
+      [`Box set "Alpha Box Set": the import reads no range of Volumes it collects from its title, its blurbs or its line's size — an Editor places it.`, "packaging"],
       ['"Alpha Omnibus 1" is packaging (Omnibus) whose covered Volumes the title does not state — an Editor maps it.', "packaging"],
       // sevenSeas.ts
       ['Box set "Alpha Box Set" becomes a Release Bundle only in Bootstrap Mode, under one base Series, covering the Volumes its title or blurb states — otherwise an Editor places it.', "packaging"],
