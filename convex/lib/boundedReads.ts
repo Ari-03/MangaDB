@@ -46,7 +46,8 @@ export function boundedReads<Ctx extends { db: object; storage: object }>(ctx: C
       get(on, prop) {
         const value: unknown = Reflect.get(on, prop, on);
         if (typeof value !== "function") return boundIfBuilder(value);
-        if (READS.has(prop)) return (...args: unknown[]) => slot((): unknown => value.apply(on, args));
+        if (READS.has(prop))
+          return (...args: unknown[]) => slot((): unknown => value.apply(on, args));
         return (...args: unknown[]) => boundIfBuilder(value.apply(on, args));
       },
     });

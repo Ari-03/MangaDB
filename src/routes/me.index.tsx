@@ -57,9 +57,7 @@ function viewHref(tab: Tab, shelf: EntryState): string {
  * shows a count, read from the query its panel already runs.
  */
 export const Route = createFileRoute("/me/")({
-  validateSearch: (
-    search: Record<string, unknown>,
-  ): { tab?: Tab; shelf?: EntryState } => ({
+  validateSearch: (search: Record<string, unknown>): { tab?: Tab; shelf?: EntryState } => ({
     ...(isTab(search.tab) ? { tab: search.tab } : {}),
     ...(isShelf(search.shelf) ? { shelf: search.shelf } : {}),
   }),
@@ -90,7 +88,11 @@ function MePage() {
     // device, say): say so and end it.
     return (
       <main>
-        {clerkEnabled ? <SignOutDeleted /> : <p className="notice">Your account is being deleted.</p>}
+        {clerkEnabled ? (
+          <SignOutDeleted />
+        ) : (
+          <p className="notice">Your account is being deleted.</p>
+        )}
       </main>
     );
   }
@@ -100,8 +102,8 @@ function MePage() {
     return (
       <main>
         <p className="notice">
-          Accounts are not configured. Set the Clerk environment variables (see
-          the README) to enable sign-in and personal tracking.
+          Accounts are not configured. Set the Clerk environment variables (see the README) to
+          enable sign-in and personal tracking.
         </p>
       </main>
     );
@@ -205,8 +207,7 @@ function MePage() {
           <div className="acct-panel">
             <h2 className="lib-group-title">Account</h2>
             <p className="acct-account-row">
-              Signed in as{" "}
-              <span className="acct-handle">@{viewer.username}</span>
+              Signed in as <span className="acct-handle">@{viewer.username}</span>
               <Link to="/claim-username">Change username</Link>
             </p>
             <DeleteAccount />
@@ -230,10 +231,7 @@ function TabCount({ tab, todaySort }: { tab: Tab; todaySort: number }) {
 function TabCountInner({ tab, todaySort }: { tab: Tab; todaySort: number }) {
   const library = useQuery(api.collection.myLibrary, tab === "collection" ? {} : "skip");
   const reading = useQuery(api.reading.myReading, tab === "reading" ? {} : "skip");
-  const upcoming = useQuery(
-    api.follows.myUpcoming,
-    tab === "upcoming" ? { todaySort } : "skip",
-  );
+  const upcoming = useQuery(api.follows.myUpcoming, tab === "upcoming" ? { todaySort } : "skip");
   const favorites = useQuery(api.favorites.mine, tab === "favorites" ? {} : "skip");
   const count =
     tab === "collection" && library
@@ -297,18 +295,14 @@ function DeleteAccount() {
       {confirming ? (
         <>
           <p>
-            This permanently deletes your sign-in and everything MangaDB knows
-            about you — collection, reading history, follows. There is no undo.
+            This permanently deletes your sign-in and everything MangaDB knows about you —
+            collection, reading history, follows. There is no undo.
           </p>
           <div className="danger-actions">
             <button type="button" disabled={busy} onClick={() => void run()}>
               {busy ? "Deleting…" : "Yes, delete everything"}
             </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setConfirming(false)}
-            >
+            <button type="button" disabled={busy} onClick={() => setConfirming(false)}>
               Keep my account
             </button>
           </div>
@@ -375,9 +369,8 @@ function SignOutDeleted() {
   return (
     <div className="danger-zone">
       <p>
-        Your account is being deleted; that goes ahead on its own. Signing you
-        out of this browser failed, though. Check your connection and try
-        again, or leave this page.
+        Your account is being deleted; that goes ahead on its own. Signing you out of this browser
+        failed, though. Check your connection and try again, or leave this page.
       </p>
       <div className="danger-actions">
         {clerkFailed ? null : (

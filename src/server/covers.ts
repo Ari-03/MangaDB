@@ -303,7 +303,10 @@ function refreshInBackground(
 ): void {
   if (refreshing.has(isbn13) || refreshing.size >= REFRESH_LIMIT) return;
   refreshing.add(isbn13);
-  inBackground("refresh", refresh(bucket, isbn13, stored).finally(() => refreshing.delete(isbn13)));
+  inBackground(
+    "refresh",
+    refresh(bucket, isbn13, stored).finally(() => refreshing.delete(isbn13)),
+  );
 }
 
 async function refresh(

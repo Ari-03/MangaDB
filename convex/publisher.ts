@@ -63,7 +63,8 @@ export type SpotlightBook = BrowseRow & {
  */
 export function foldFormats(rows: ReadonlyArray<BrowseRow>): SpotlightBook[] {
   const ordered = [...rows].sort(
-    (a, b) => a.sort - b.sort || (a.format === "physical" ? 0 : 1) - (b.format === "physical" ? 0 : 1),
+    (a, b) =>
+      a.sort - b.sort || (a.format === "physical" ? 0 : 1) - (b.format === "physical" ? 0 : 1),
   );
   const books = new Map<string, SpotlightBook>();
   for (const row of ordered) {
@@ -71,9 +72,13 @@ export function foldFormats(rows: ReadonlyArray<BrowseRow>): SpotlightBook[] {
     const format = { format: row.format, binding: row.binding };
     const book = books.get(key);
     if (!book) books.set(key, { ...row, formats: [format] });
-    else if (!book.formats.some((f) => f.format === format.format && f.binding === format.binding)) {
+    else if (
+      !book.formats.some((f) => f.format === format.format && f.binding === format.binding)
+    ) {
       book.formats.push(format);
-      book.formats.sort((a, b) => (a.format === "physical" ? 0 : 1) - (b.format === "physical" ? 0 : 1));
+      book.formats.sort(
+        (a, b) => (a.format === "physical" ? 0 : 1) - (b.format === "physical" ? 0 : 1),
+      );
     }
   }
   return [...books.values()];
@@ -142,7 +147,10 @@ export const publisherPage = query({
           window(monthStart, monthStart + 99, MONTH_SCAN_CAP),
           window(monthStart + 100, horizonSort, LANE_SCAN_CAP),
         ])
-      : [{ rows: [], full: false }, { rows: [], full: false }];
+      : [
+          { rows: [], full: false },
+          { rows: [], full: false },
+        ];
     const upcoming = foldFormats(later.rows);
     const next = [...month.rows, ...later.rows].find(
       (row) => row.sort >= todaySort || row.day === null,
@@ -158,8 +166,7 @@ export const publisherPage = query({
       .collect();
     const imprints = imprintDocs
       .filter(
-        (doc) =>
-          doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
+        (doc) => doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
       )
       .map((doc) => ({ name: doc.name, slug: doc.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -169,9 +176,7 @@ export const publisherPage = query({
       .query("editions")
       .withIndex("by_publisher", (q) => q.eq("publisherId", publisher._id))
       .take(COUNT_CAP + 1);
-    const activeEditions = editionDocs.filter(
-      (doc) => doc.status === "active",
-    ).length;
+    const activeEditions = editionDocs.filter((doc) => doc.status === "active").length;
 
     return {
       publisher: {
@@ -239,7 +244,10 @@ async function visibleMonth(
       : await ctx.db
           .query("releases")
           .withIndex("by_status_date", (q) =>
-            q.eq("status", "active").gte("pubDate.sort", fromSort).lte("pubDate.sort", fromSort + 99),
+            q
+              .eq("status", "active")
+              .gte("pubDate.sort", fromSort)
+              .lte("pubDate.sort", fromSort + 99),
           )
           .take(WINDOW_CAP);
 
@@ -247,8 +255,8 @@ async function visibleMonth(
     windowDocs.map(async (release): Promise<BoardRow | null> => {
       const edition = await cache.edition(release.editionId);
       if (!edition || edition.status !== "active") return null;
-      const series = (await Promise.all(release.seriesIds.map(cache.series))).flatMap(
-        (doc) => (doc?.status === "active" ? [doc] : []),
+      const series = (await Promise.all(release.seriesIds.map(cache.series))).flatMap((doc) =>
+        doc?.status === "active" ? [doc] : [],
       );
       if (!showMature && series.some((doc) => doc.mature)) return null;
       return series.length > 0 ? { release, series } : null;
@@ -307,8 +315,7 @@ async function buildMonthBoard(
   const active = new Map(
     publisherDocs
       .filter(
-        (doc) =>
-          doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
+        (doc) => doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
       )
       .map((doc) => [doc._id, doc]),
   );
@@ -403,7 +410,10 @@ async function buildMonthBoard(
       while (withArt.length < BOARD_COVER_CAP && next < ranked.length) {
         const batch: Array<{ release: Doc<"releases">; lead: Id<"series"> }> = [];
         while (batch.length < BOARD_COVER_CAP && next < ranked.length) {
-          const { release, series: [lead] } = ranked[next]!;
+          const {
+            release,
+            series: [lead],
+          } = ranked[next]!;
           if (lead && batch.some((entry) => entry.lead === lead._id)) break;
           next++;
           if (lead && !artSeries.has(lead._id)) batch.push({ release, lead: lead._id });
@@ -426,9 +436,7 @@ async function buildMonthBoard(
         ),
       ].slice(0, BOARD_COVER_CAP);
       // Joined exactly as the browser joins them, kept in pick order.
-      const joined = new Map(
-        (await joinBrowseRows(ctx, picks, cache)).map((row) => [row.id, row]),
-      );
+      const joined = new Map((await joinBrowseRows(ctx, picks, cache)).map((row) => [row.id, row]));
       const covers = picks.flatMap((release) => joined.get(release._id) ?? []);
 
       const parent = parentOf(publisher);
@@ -449,11 +457,7 @@ async function buildMonthBoard(
     }),
   );
   const board = cards.flatMap((card) => (card ? [card] : []));
-  board.sort(
-    (a, b) =>
-      b.releases - a.releases ||
-      a.publisher.name.localeCompare(b.publisher.name),
-  );
+  board.sort((a, b) => b.releases - a.releases || a.publisher.name.localeCompare(b.publisher.name));
 
   // The directory: top-level Publishers A–Z, each with its imprints.
   const entry = (doc: Doc<"publishers">) => ({
@@ -462,8 +466,7 @@ async function buildMonthBoard(
     defunct: doc.defunct === true,
     releases: current.get(doc._id)?.length ?? 0,
   });
-  const byName = (a: { name: string }, b: { name: string }) =>
-    a.name.localeCompare(b.name);
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
   const docs = [...active.values()];
   const directory = docs
     .filter((doc) => parentOf(doc) === null)
@@ -608,7 +611,10 @@ export const rebuildBoards = internalAction({
  */
 export const computeBoard = internalQuery({
   args: { year: v.number(), month: v.number() },
-  handler: async (unbounded, { year, month }): Promise<{ general: MonthBoard; mature: MonthBoard }> => {
+  handler: async (
+    unbounded,
+    { year, month },
+  ): Promise<{ general: MonthBoard; mature: MonthBoard }> => {
     const ctx = boundedReads(unbounded);
     const cache = browseCache(ctx);
     return {

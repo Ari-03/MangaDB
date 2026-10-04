@@ -33,13 +33,7 @@ const STATUS_LABELS = {
 
 export type ReadingStatus = keyof typeof STATUS_LABELS;
 
-const STATUS_ORDER: ReadingStatus[] = [
-  "reading",
-  "planToRead",
-  "paused",
-  "completed",
-  "dropped",
-];
+const STATUS_ORDER: ReadingStatus[] = ["reading", "planToRead", "paused", "completed", "dropped"];
 
 /** What reading.completePass did: what Undo sends back, and its suggestions. */
 type Completion = FunctionReturnType<typeof api.reading.completePass>;
@@ -66,8 +60,7 @@ export function CompletedPrompt({
     <span className="prompt" role="status">
       {suggestions.map((suggestion) => (
         <span key={suggestion.seriesId} className="prompt-line">
-          You have now read every volume of “{suggestion.title}”. Mark the
-          series Completed?{" "}
+          You have now read every volume of “{suggestion.title}”. Mark the series Completed?{" "}
           <button
             type="button"
             onClick={() => {
@@ -100,11 +93,7 @@ export function CompletedPrompt({
  * is one of exactly two writers of the status (the other being a confirmed
  * prompt); nothing here changes it as a side effect of anything.
  */
-export function SeriesReadingControls({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
+export function SeriesReadingControls({ seriesPublicId }: { seriesPublicId: number }) {
   const tracking = useViewerQuery(api.reading.seriesTracking, { seriesPublicId });
   const setStatus = useMutation(api.reading.setSeriesReadingStatus);
   if (!tracking) return null;
@@ -134,9 +123,7 @@ export function SeriesReadingControls({
           </option>
         ))}
       </select>
-      <span className="track-hint">
-        Where you are in the story — separate from following.
-      </span>
+      <span className="track-hint">Where you are in the story — separate from following.</span>
     </>
   );
 }
@@ -157,12 +144,7 @@ export function SeriesReadingProgress({
   volumeCount: number;
 }) {
   if (volumeCount === 0) return null;
-  return (
-    <SeriesReadingProgressInner
-      seriesPublicId={seriesPublicId}
-      volumeCount={volumeCount}
-    />
-  );
+  return <SeriesReadingProgressInner seriesPublicId={seriesPublicId} volumeCount={volumeCount} />;
 }
 
 function SeriesReadingProgressInner({
@@ -315,7 +297,9 @@ export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }
       setUndoError(null);
       setCompletion(result);
     } catch (err) {
-      setCompleteError(mutationErrorMessage(err, "Completing the pass didn't go through. Try again."));
+      setCompleteError(
+        mutationErrorMessage(err, "Completing the pass didn't go through. Try again."),
+      );
     } finally {
       setCompleting(false);
       setConfirming(false);
@@ -381,8 +365,7 @@ export function ReleasePassControls({ releaseId }: { releaseId: Id<"releases"> }
           </button>
           {confirming ? (
             <span className="prompt" role="status">
-              Mark this pass complete? Every volume this release covers
-              completely gets +1 read.{" "}
+              Mark this pass complete? Every volume this release covers completely gets +1 read.{" "}
               <button
                 type="button"
                 disabled={lock.locked || completing}
@@ -479,8 +462,8 @@ export function LibraryReading() {
   if (overview.series.length === 0) {
     return (
       <p className="placeholder">
-        Pick a reading status on any series page, mark a book read from its
-        cover, or start a reading pass on a release, and it will appear here.
+        Pick a reading status on any series page, mark a book read from its cover, or start a
+        reading pass on a release, and it will appear here.
       </p>
     );
   }
@@ -512,8 +495,7 @@ export function LibraryReading() {
               aria-pressed={filter === status}
               onClick={() => setFilter(status)}
             >
-              {STATUS_LABELS[status]}{" "}
-              <span className="lib-chip-count">{count(status)}</span>
+              {STATUS_LABELS[status]} <span className="lib-chip-count">{count(status)}</span>
             </button>
           ) : null,
         )}
@@ -521,9 +503,7 @@ export function LibraryReading() {
       <ul className="reading-list">
         {rows.map((row) => {
           const percent =
-            row.totalVolumes === 0
-              ? 0
-              : Math.round((row.volumesRead / row.totalVolumes) * 100);
+            row.totalVolumes === 0 ? 0 : Math.round((row.volumesRead / row.totalVolumes) * 100);
           return (
             <li key={row.seriesPublicId} className="reading-row">
               <Link

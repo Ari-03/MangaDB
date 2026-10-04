@@ -3,7 +3,9 @@
    only the hero's own furniture lives here. */
 
 /* The hero sets its own top rhythm, so the default page frame stands down. */
-.home { padding-top: 0; }
+.home {
+  padding-top: 0;
+}
 
 /* --- Hero ---------------------------------------------------------------- */
 
@@ -19,11 +21,16 @@
   grid-template-columns: minmax(0, 1fr);
   padding-block: 58px 22px;
 }
-.hero--solo .hero-copy { max-width: 60ch; }
+.hero--solo .hero-copy {
+  max-width: 60ch;
+}
 
 .hero-title {
   font-size: clamp(2.5rem, 1.6rem + 3vw, 4rem);
-  font-variation-settings: "SOFT" 55, "WONK" 1, "opsz" 130;
+  font-variation-settings:
+    "SOFT" 55,
+    "WONK" 1,
+    "opsz" 130;
   letter-spacing: -0.025em;
   line-height: 1.02;
 }
@@ -58,18 +65,31 @@
   padding-inline: 22px;
   border-left: 1px solid var(--line);
 }
-.stat:first-child { border-left: 0; padding-left: 0; }
-.stat:last-child { padding-right: 0; }
+.stat:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+.stat:last-child {
+  padding-right: 0;
+}
 .stat-num {
   font-family: var(--display);
-  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 96;
+  font-variation-settings:
+    "SOFT" 40,
+    "WONK" 1,
+    "opsz" 96;
   font-weight: 700;
   font-size: clamp(2.2rem, 1.3rem + 1.7vw, 3rem);
   letter-spacing: -0.02em;
   line-height: 1.05;
   color: var(--gold);
 }
-.stat-label { margin-top: 4px; font-size: 0.92rem; font-weight: 600; color: var(--text-mute); }
+.stat-label {
+  margin-top: 4px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-mute);
+}
 
 /* --- Hero shelf: short ledges of this month's covers --------------------- */
 
@@ -100,7 +120,9 @@
 .hero-row::after {
   content: "";
   position: absolute;
-  left: 0; right: 0; bottom: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   height: 9px;
   background: var(--ledge);
   border-top: 1px solid var(--ledge-edge);
@@ -112,22 +134,46 @@
   max-width: 152px;
   padding: 0 6px;
 }
-.hero-row .cover { border-radius: 2px 4px 4px 2px; }
+.hero-row .cover {
+  border-radius: 2px 4px 4px 2px;
+}
 
 /* One orchestrated page-load moment: the books are shelved, row by row. */
 @media (prefers-reduced-motion: no-preference) {
-  .hero-row .cover-link { animation: shelve 620ms cubic-bezier(.2,.75,.3,1) backwards; }
-  .hero-row .cover-link:nth-child(1) { animation-delay: 40ms; }
-  .hero-row .cover-link:nth-child(2) { animation-delay: 100ms; }
-  .hero-row .cover-link:nth-child(3) { animation-delay: 160ms; }
-  .hero-row .cover-link:nth-child(4) { animation-delay: 220ms; }
-  .hero-row .cover-link:nth-child(5) { animation-delay: 280ms; }
-  .hero-row:nth-child(2) .cover-link { animation-delay: 200ms; }
-  .hero-row:nth-child(3) .cover-link { animation-delay: 320ms; }
+  .hero-row .cover-link {
+    animation: shelve 620ms cubic-bezier(0.2, 0.75, 0.3, 1) backwards;
+  }
+  .hero-row .cover-link:nth-child(1) {
+    animation-delay: 40ms;
+  }
+  .hero-row .cover-link:nth-child(2) {
+    animation-delay: 100ms;
+  }
+  .hero-row .cover-link:nth-child(3) {
+    animation-delay: 160ms;
+  }
+  .hero-row .cover-link:nth-child(4) {
+    animation-delay: 220ms;
+  }
+  .hero-row .cover-link:nth-child(5) {
+    animation-delay: 280ms;
+  }
+  .hero-row:nth-child(2) .cover-link {
+    animation-delay: 200ms;
+  }
+  .hero-row:nth-child(3) .cover-link {
+    animation-delay: 320ms;
+  }
 }
 @keyframes shelve {
-  from { transform: translateY(16px); opacity: 0; }
-  to   { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* --- Series link list (the fallback under four series) ------------------- */
@@ -148,9 +194,14 @@
   background: var(--surface-2);
   font-weight: 700;
   font-size: 0.94rem;
-  transition: border-color 130ms ease, color 130ms ease;
+  transition:
+    border-color 130ms ease,
+    color 130ms ease;
 }
-.series-links a:hover { border-color: var(--accent); color: var(--accent); }
+.series-links a:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 /* --- Responsive ---------------------------------------------------------- */
 
@@ -159,22 +210,46 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 36px;
   }
-  .hero-shelf { order: 2; }
+  .hero-shelf {
+    order: 2;
+  }
 }
 
 @media (max-width: 720px) {
-  .hero { padding-block: 30px 6px; }
-  .hero-shelf { padding: 20px 14px 8px; gap: 20px; }
+  .hero {
+    padding-block: 30px 6px;
+  }
+  .hero-shelf {
+    padding: 20px 14px 8px;
+    gap: 20px;
+  }
   /* Three books read at phone width; the rest of the row stands down. */
-  .hero-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .hero-row .cover-link:nth-child(n + 4) { display: none; }
+  .hero-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .hero-row .cover-link:nth-child(n + 4) {
+    display: none;
+  }
   /* Too narrow for a title (covers.css): the cloth carries its volume
      numeral instead, and the shelf below still spells every book out. */
   .hero-row .cover-ph-title,
-  .hero-row .cover-ph-foot { display: none; }
-  .hero-row .cover-ph { justify-content: center; padding: 6px 4px 6px 9px; }
-  .hero-row .cover-ph-mark { display: block; }
-  .stat { padding-inline: 14px; }
-  .stat-num { font-size: clamp(1.5rem, 0.9rem + 2.4vw, 2.2rem); }
-  .stat-label { font-size: 0.82rem; }
+  .hero-row .cover-ph-foot {
+    display: none;
+  }
+  .hero-row .cover-ph {
+    justify-content: center;
+    padding: 6px 4px 6px 9px;
+  }
+  .hero-row .cover-ph-mark {
+    display: block;
+  }
+  .stat {
+    padding-inline: 14px;
+  }
+  .stat-num {
+    font-size: clamp(1.5rem, 0.9rem + 2.4vw, 2.2rem);
+  }
+  .stat-label {
+    font-size: 0.82rem;
+  }
 }

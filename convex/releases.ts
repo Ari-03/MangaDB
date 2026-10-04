@@ -279,8 +279,7 @@ export const monthBrowse = query({
     ]);
     const publishers = publisherDocs
       .filter(
-        (doc) =>
-          doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
+        (doc) => doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
       )
       .map((doc) => ({ name: doc.name, slug: doc.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));

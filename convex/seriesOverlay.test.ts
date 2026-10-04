@@ -204,14 +204,26 @@ async function overlayCatalog(t: ReturnType<typeof makeT>, volumes = 3) {
     const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
     const s1 = await insertSeries(ctx, { publicId: 1, title: "Blue Period" });
     const s2 = await insertSeries(ctx, { publicId: 2, title: "Blue Period Side Stories" });
-    const s3 = await insertSeries(ctx, { publicId: 3, title: "Blue Period (dup)", status: "merged", mergedIntoId: s1 });
-    const edition = async (covered: Array<Id<"volumes">>, fields: { editionLineId?: Id<"editionLines"> } = {}) => {
+    const s3 = await insertSeries(ctx, {
+      publicId: 3,
+      title: "Blue Period (dup)",
+      status: "merged",
+      mergedIntoId: s1,
+    });
+    const edition = async (
+      covered: Array<Id<"volumes">>,
+      fields: { editionLineId?: Id<"editionLines"> } = {},
+    ) => {
       const editionId = await insertEdition(ctx, { publisherId, ...fields });
-      for (const [order, volumeId] of covered.entries()) await insertCoverage(ctx, { editionId, volumeId, order });
+      for (const [order, volumeId] of covered.entries())
+        await insertCoverage(ctx, { editionId, volumeId, order });
       return editionId;
     };
-    const release = async (editionId: Id<"editions">, seriesIds: Array<Id<"series">>, fields: Partial<Doc<"releases">> = {}) =>
-      await insertRelease(ctx, { editionId, publisherId, seriesIds, ...fields });
+    const release = async (
+      editionId: Id<"editions">,
+      seriesIds: Array<Id<"series">>,
+      fields: Partial<Doc<"releases">> = {},
+    ) => await insertRelease(ctx, { editionId, publisherId, seriesIds, ...fields });
 
     const print: Array<Id<"releases">> = [];
     const digital: Array<Id<"releases">> = [];
@@ -236,7 +248,10 @@ async function overlayCatalog(t: ReturnType<typeof makeT>, volumes = 3) {
     const merged = await release(editions[2]!, [s1], { status: "merged", mergedIntoId: print[1]! });
     const hidden = await release(editions[0]!, [s1], { status: "hidden" });
 
-    const bundle = async (members: Array<Id<"releases">>, fields: Partial<Doc<"releaseBundles">> = {}) => {
+    const bundle = async (
+      members: Array<Id<"releases">>,
+      fields: Partial<Doc<"releaseBundles">> = {},
+    ) => {
       const bundleId = await insertBundle(ctx, { publisherId, ...fields });
       for (const releaseId of members) await insertBundleMember(ctx, { bundleId, releaseId });
       return bundleId;
@@ -277,8 +292,10 @@ async function collect(t: ReturnType<typeof makeT>, c: Awaited<ReturnType<typeof
       .unique();
     if (!user) throw new Error("no collector");
     const userId = user._id;
-    const entry = (fields: { releaseId?: Id<"releases">; bundleId?: Id<"releaseBundles"> }, state: Doc<"collectionEntries">["state"]) =>
-      ctx.db.insert("collectionEntries", { userId, state, ...fields });
+    const entry = (
+      fields: { releaseId?: Id<"releases">; bundleId?: Id<"releaseBundles"> },
+      state: Doc<"collectionEntries">["state"],
+    ) => ctx.db.insert("collectionEntries", { userId, state, ...fields });
     await entry({ bundleId: c.loserBox }, "owned");
     await entry({ releaseId: c.lineMember }, "wanted");
     await entry({ releaseId: c.crossover }, "owned");
@@ -364,7 +381,12 @@ describe("collection.seriesEntries answers as before", () => {
 
 describe("collection.seriesEntries cost", () => {
   /** Legacy and current cost of the overlay of a 20-Volume Series 1. */
-  async function costs(setup: (t: ReturnType<typeof makeT>, c: Awaited<ReturnType<typeof overlayCatalog>>) => Promise<void>) {
+  async function costs(
+    setup: (
+      t: ReturnType<typeof makeT>,
+      c: Awaited<ReturnType<typeof overlayCatalog>>,
+    ) => Promise<void>,
+  ) {
     const t = makeT();
     const c = await overlayCatalog(t, 20);
     await setup(t, c);
@@ -450,9 +472,16 @@ describe("collection.seriesEntries inside Convex's limits", () => {
     expect(after.docs).toBeLessThanOrEqual(before.docs);
     expect(after.ranges).toBeLessThanOrEqual(before.ranges);
     expect(after.bytes).toBeLessThanOrEqual(before.bytes);
-    await expect(as.query(api.collection.seriesEntries, { seriesPublicId: 1 })).resolves.toEqual(before.result);
-    const counts = ({ docs, ranges, bytes }: { docs: number; ranges: number; bytes: number }) => ({ docs, ranges, bytes });
-    if (process.env.OVERLAY_LOG) console.log(expect.getState().currentTestName, counts(before), counts(after));
+    await expect(as.query(api.collection.seriesEntries, { seriesPublicId: 1 })).resolves.toEqual(
+      before.result,
+    );
+    const counts = ({ docs, ranges, bytes }: { docs: number; ranges: number; bytes: number }) => ({
+      docs,
+      ranges,
+      bytes,
+    });
+    if (process.env.OVERLAY_LOG)
+      console.log(expect.getState().currentTestName, counts(before), counts(after));
     return { before: counts(before), after: counts(after) };
   }
 
@@ -496,7 +525,11 @@ describe("collection.seriesEntries inside Convex's limits", () => {
      * `editions` Editions of it holding the Releases `releases(n)` lists
      * for the nth Edition. Returns the Editions.
      */
-    const volumes = async (count: number, editions: number, releases: (n: number) => Array<Partial<Doc<"releases">>>) => {
+    const volumes = async (
+      count: number,
+      editions: number,
+      releases: (n: number) => Array<Partial<Doc<"releases">>>,
+    ) => {
       const editionIds: Array<Id<"editions">> = [];
       for (let position = 1; position <= count; position++) {
         await t.run(async (ctx) => {
@@ -506,7 +539,12 @@ describe("collection.seriesEntries inside Convex's limits", () => {
             editionIds.push(editionId);
             await insertCoverage(ctx, { volumeId, editionId });
             for (const fields of releases(n)) {
-              await insertRelease(ctx, { editionId, publisherId: ids.publisherId, seriesIds: [ids.seriesId], ...fields });
+              await insertRelease(ctx, {
+                editionId,
+                publisherId: ids.publisherId,
+                seriesIds: [ids.seriesId],
+                ...fields,
+              });
             }
           }
         });
@@ -518,7 +556,13 @@ describe("collection.seriesEntries inside Convex's limits", () => {
       t.run(async (ctx) => {
         await ctx.db.insert(
           "seriesStats",
-          seriesStatsRow({ seriesId: ids.seriesId, publicId: 1, title: "One Piece", volumeCount, releaseCount }),
+          seriesStatsRow({
+            seriesId: ids.seriesId,
+            publicId: 1,
+            title: "One Piece",
+            volumeCount,
+            releaseCount,
+          }),
         );
       });
     return { t, as, ...ids, volumes, stats };
@@ -541,7 +585,11 @@ describe("collection.seriesEntries inside Convex's limits", () => {
         const release = await ctx.db.get(releaseId);
         if (!release) throw new Error("fixture missing");
         for (let n = 0; n < 36; n++) {
-          await insertRelease(ctx, { editionId: release.editionId, publisherId: release.publisherId, seriesIds: release.seriesIds });
+          await insertRelease(ctx, {
+            editionId: release.editionId,
+            publisherId: release.publisherId,
+            seriesIds: release.seriesIds,
+          });
         }
       });
     }
@@ -580,7 +628,12 @@ describe("collection.seriesEntries inside Convex's limits", () => {
     for (let batch = 0; batch < 8; batch++) {
       await f.t.run(async (ctx) => {
         for (let n = 0; n < 100; n++) {
-          await insertRelease(ctx, { editionId, publisherId: f.publisherId, seriesIds: [f.seriesId], description: "x".repeat(22_000) });
+          await insertRelease(ctx, {
+            editionId,
+            publisherId: f.publisherId,
+            seriesIds: [f.seriesId],
+            description: "x".repeat(22_000),
+          });
         }
       });
     }
@@ -603,7 +656,12 @@ describe("collection.seriesEntries inside Convex's limits", () => {
     for (let start = 0; start < 33_000; start += 500) {
       await f.t.run(async (ctx) => {
         for (let n = 0; n < 500; n++) {
-          await insertRelease(ctx, { editionId, publisherId: f.publisherId, seriesIds: [f.seriesId], status: "hidden" });
+          await insertRelease(ctx, {
+            editionId,
+            publisherId: f.publisherId,
+            seriesIds: [f.seriesId],
+            status: "hidden",
+          });
         }
       });
     }
@@ -629,13 +687,27 @@ describe("reading.seriesTracking", () => {
       for (let position = 1; position <= 100; position++) {
         const volumeId = await insertVolume(ctx, { seriesId, position });
         if (position % 3 === 0) {
-          await ctx.db.insert("volumeProgress", { userId: user._id, volumeId, readCount: position % 2 ? 1 : 2, lastCompletedAt: position });
+          await ctx.db.insert("volumeProgress", {
+            userId: user._id,
+            volumeId,
+            readCount: position % 2 ? 1 : 2,
+            lastCompletedAt: position,
+          });
         }
         if (position === 50) {
           const editionId = await insertEdition(ctx, { publisherId });
           await insertCoverage(ctx, { editionId, volumeId });
-          const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] });
-          await ctx.db.insert("releaseProgress", { userId: user._id, releaseId, seriesId, percent: 40 });
+          const releaseId = await insertRelease(ctx, {
+            editionId,
+            publisherId,
+            seriesIds: [seriesId],
+          });
+          await ctx.db.insert("releaseProgress", {
+            userId: user._id,
+            releaseId,
+            seriesId,
+            percent: 40,
+          });
         }
       }
       // A merged and a hidden Volume stay out of the overlay.
@@ -654,10 +726,16 @@ describe("reading.seriesTracking", () => {
 
   it("answers as before, every active Volume in order, in a few rounds", async () => {
     const as = await longSeries();
-    const before = await measure(as, (ctx, user, series) => legacySeriesTracking(ctx, user._id, series._id));
-    const after = await measure(as, (ctx, user, series) => seriesTrackingOf(ctx, user._id, series._id));
+    const before = await measure(as, (ctx, user, series) =>
+      legacySeriesTracking(ctx, user._id, series._id),
+    );
+    const after = await measure(as, (ctx, user, series) =>
+      seriesTrackingOf(ctx, user._id, series._id),
+    );
     expect(after.result).toEqual(before.result);
-    expect(await as.query(api.reading.seriesTracking, { seriesPublicId: 1 })).toEqual(before.result);
+    expect(await as.query(api.reading.seriesTracking, { seriesPublicId: 1 })).toEqual(
+      before.result,
+    );
     expect(after.result.volumes).toHaveLength(100);
     expect(after.result.volumes.filter((volume) => volume.readCount > 0)).toHaveLength(33);
     expect(after.result).toMatchObject({ readingStatus: "reading", passes: [{ percent: 40 }] });

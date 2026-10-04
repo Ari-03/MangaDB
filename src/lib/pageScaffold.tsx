@@ -16,7 +16,10 @@ export function Breadcrumbs({ trail }: { trail: Array<string | ReactElement> }) 
     <nav className="breadcrumbs" aria-label="Breadcrumb">
       <Link to="/">MangaDB</Link>
       {trail.map((crumb, i) => (
-        <Fragment key={i}>
+        <Fragment
+          // biome-ignore lint/suspicious/noArrayIndexKey: a page passes a fixed trail; a crumb's position is its identity
+          key={i}
+        >
           {" "}
           <span aria-hidden="true">/</span>{" "}
           {typeof crumb === "string" ? <span>{crumb}</span> : crumb}

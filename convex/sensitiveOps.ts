@@ -76,8 +76,7 @@ export const manageForm = query({
       locked: doc.locked ?? false,
       impact: await impactOf(ctx, ref),
       mergedInto,
-      splitAvailable:
-        doc.status === "merged" && (await reversibleManifestOf(ctx, ref)) !== null,
+      splitAvailable: doc.status === "merged" && (await reversibleManifestOf(ctx, ref)) !== null,
       mergeRefusal,
       backLink,
     };
@@ -116,7 +115,11 @@ async function beginOperation(
     roleAtAuthorship: user.role,
   };
   const proposalId = await insertApprovedProposal(ctx, author, user._id);
-  await insertFirstVersion(ctx, proposalId, { ops: [storedOp], evidence: [], changeComment: reason });
+  await insertFirstVersion(ctx, proposalId, {
+    ops: [storedOp],
+    evidence: [],
+    changeComment: reason,
+  });
   return { proposalId, author, approvedBy: user._id, comment: reason };
 }
 
@@ -139,7 +142,9 @@ function singleRecordMutation(kind: SingleRecordOp) {
       const meta = await beginOperation(ctx, args, async (baseOf): Promise<StoredOp> => {
         if (kind === "lock" || kind === "unlock") return { kind, ref };
         const baseRevisionId = await baseOf(ref);
-        return kind === "split" ? { kind, ref, baseRevisionId, details: {} } : { kind, ref, baseRevisionId };
+        return kind === "split"
+          ? { kind, ref, baseRevisionId, details: {} }
+          : { kind, ref, baseRevisionId };
       });
       const revisionIds = await SINGLE_RECORD_OPS[kind](ctx, ref, meta);
       return { proposalId: meta.proposalId, revisionIds };

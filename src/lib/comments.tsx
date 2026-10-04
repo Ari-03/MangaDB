@@ -124,16 +124,25 @@ function LiveComments({
           <CommentActions item={item} isReply={isReply} onReply={openReply} />
         )}
         renderReply={(thread, close) => (
-          <CommentForm targetId={page.target} parentId={thread.commentId} onDone={close} onCancel={close} />
+          <CommentForm
+            targetId={page.target}
+            parentId={thread.commentId}
+            onDone={close}
+            onCancel={close}
+          />
         )}
-        renderMoreReplies={(thread, fallback) => <AllReplies target={target} thread={thread} fallback={fallback} />}
+        renderMoreReplies={(thread, fallback) => (
+          <AllReplies target={target} thread={thread} fallback={fallback} />
+        )}
       />
       {page.hasMore && limit < COMMENT_POLICY.maxThreads ? (
         <p className="comments-more">
           <button
             type="button"
             className="btn btn-sm"
-            onClick={() => setLimit(Math.min(limit + COMMENT_POLICY.page, COMMENT_POLICY.maxThreads))}
+            onClick={() =>
+              setLimit(Math.min(limit + COMMENT_POLICY.page, COMMENT_POLICY.maxThreads))
+            }
           >
             More comments
           </button>
@@ -149,10 +158,17 @@ type ListRenderers = {
   renderActions?: (item: CommentData, isReply: boolean, openReply: () => void) => ReactNode;
   renderReply?: (thread: Thread, close: () => void) => ReactNode;
   /** A thread's full reply list once "N more replies" is pressed; `fallback` renders a reply list. */
-  renderMoreReplies?: (thread: Thread, fallback: (replies: Thread["replies"]) => ReactNode) => ReactNode;
+  renderMoreReplies?: (
+    thread: Thread,
+    fallback: (replies: Thread["replies"]) => ReactNode,
+  ) => ReactNode;
 };
 
-function ThreadList({ items, noun, ...renderers }: { items: ReadonlyArray<Thread>; noun: string } & ListRenderers) {
+function ThreadList({
+  items,
+  noun,
+  ...renderers
+}: { items: ReadonlyArray<Thread>; noun: string } & ListRenderers) {
   if (items.length === 0) {
     return <p className="comments-empty">No comments on this {noun} yet.</p>;
   }
@@ -165,7 +181,12 @@ function ThreadList({ items, noun, ...renderers }: { items: ReadonlyArray<Thread
   );
 }
 
-function ThreadItem({ thread, renderActions, renderReply, renderMoreReplies }: { thread: Thread } & ListRenderers) {
+function ThreadItem({
+  thread,
+  renderActions,
+  renderReply,
+  renderMoreReplies,
+}: { thread: Thread } & ListRenderers) {
   const [replying, setReplying] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const openReply = () => setReplying(true);
@@ -181,7 +202,9 @@ function ThreadItem({ thread, renderActions, renderReply, renderMoreReplies }: {
       <CommentCard item={thread}>{renderActions?.(thread, false, openReply)}</CommentCard>
       {thread.replies.length > 0 || canExpand || replying ? (
         <ol className="comment-replies">
-          {expanded && renderMoreReplies ? renderMoreReplies(thread, replyItems) : replyItems(thread.replies)}
+          {expanded && renderMoreReplies
+            ? renderMoreReplies(thread, replyItems)
+            : replyItems(thread.replies)}
           {canExpand && !expanded ? (
             <li>
               <button type="button" className="comment-action" onClick={() => setExpanded(true)}>
@@ -189,7 +212,9 @@ function ThreadItem({ thread, renderActions, renderReply, renderMoreReplies }: {
               </button>
             </li>
           ) : null}
-          {replying && renderReply ? <li>{renderReply(thread, () => setReplying(false))}</li> : null}
+          {replying && renderReply ? (
+            <li>{renderReply(thread, () => setReplying(false))}</li>
+          ) : null}
         </ol>
       ) : null}
     </li>
@@ -241,12 +266,18 @@ function CommentCard({ item, children }: { item: CommentData; children?: ReactNo
           {item.edited ? " · edited" : ""}
         </span>
         {item.spoiler ? <span className="chip chip--spoiler">Spoilers</span> : null}
-        {item.state === "pending" ? <span className="chip chip--pending">Awaiting review</span> : null}
+        {item.state === "pending" ? (
+          <span className="chip chip--pending">Awaiting review</span>
+        ) : null}
       </header>
       {item.state === "hidden" ? (
         <p className="comment-note">Hidden by moderators. Only you can see that it is here.</p>
       ) : folded ? (
-        <button type="button" className="btn btn-sm comment-reveal" onClick={() => setRevealed(true)}>
+        <button
+          type="button"
+          className="btn btn-sm comment-reveal"
+          onClick={() => setRevealed(true)}
+        >
           Show spoiler
         </button>
       ) : (
@@ -316,7 +347,12 @@ function CommentForm({
       await edit({ commentId: existing.commentId, body, spoiler });
       return;
     }
-    const result = await post({ target: targetId, body, spoiler, ...(parentId ? { parentId } : {}) });
+    const result = await post({
+      target: targetId,
+      body,
+      spoiler,
+      ...(parentId ? { parentId } : {}),
+    });
     track("comment_posted", {
       target: targetId.kind,
       seriesId: result.seriesId,
@@ -327,7 +363,11 @@ function CommentForm({
     setSpoiler(false);
   };
 
-  const label = existing ? "Edit your comment" : parentId ? "Reply" : `Comment on this ${noun ?? "page"}`;
+  const label = existing
+    ? "Edit your comment"
+    : parentId
+      ? "Reply"
+      : `Comment on this ${noun ?? "page"}`;
   return (
     <form
       className={`comment-form${parentId || existing ? " is-inline" : ""}`}
@@ -354,7 +394,11 @@ function CommentForm({
       </label>
       <div className="review-form-row">
         <label className="review-spoiler">
-          <input type="checkbox" checked={spoiler} onChange={(event) => setSpoiler(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={spoiler}
+            onChange={(event) => setSpoiler(event.target.checked)}
+          />
           Contains spoilers
         </label>
         <span className="review-count">
@@ -403,14 +447,20 @@ function CommentActions({
 
   const editable = item.own && (item.state === "approved" || item.state === "pending");
   const buttons = [
-    !isReply && item.state === "approved" ? { key: "reply", label: "Reply", onClick: onReply } : null,
+    !isReply && item.state === "approved"
+      ? { key: "reply", label: "Reply", onClick: onReply }
+      : null,
     editable ? { key: "edit", label: "Edit", onClick: () => setPanel("edit") } : null,
     item.own ? { key: "delete", label: "Delete", onClick: () => setPanel("delete") } : null,
-    !item.own && item.state === "approved" ? { key: "report", label: "Report", onClick: () => setPanel("report") } : null,
+    !item.own && item.state === "approved"
+      ? { key: "report", label: "Report", onClick: () => setPanel("report") }
+      : null,
     isModerator && !item.own && item.state === "approved"
       ? { key: "hide", label: "Hide", onClick: () => setPanel("hide") }
       : null,
-    isModerator && !item.own ? { key: "remove", label: "Remove", onClick: () => setPanel("remove") } : null,
+    isModerator && !item.own
+      ? { key: "remove", label: "Remove", onClick: () => setPanel("remove") }
+      : null,
   ].filter((button) => button !== null);
 
   return (
@@ -418,16 +468,19 @@ function CommentActions({
       {panel === null ? (
         <div className="comment-buttons">
           {buttons.map((button) => (
-            <button key={button.key} type="button" className="comment-action" onClick={button.onClick}>
+            <button
+              key={button.key}
+              type="button"
+              className="comment-action"
+              onClick={button.onClick}
+            >
               {button.label}
             </button>
           ))}
           {notice ? <span className="comment-notice">{notice}</span> : null}
         </div>
       ) : null}
-      {panel === "edit" ? (
-        <CommentForm existing={item} onDone={close} onCancel={close} />
-      ) : null}
+      {panel === "edit" ? <CommentForm existing={item} onDone={close} onCancel={close} /> : null}
       {panel === "delete" ? <DeleteOwn commentId={item.commentId} onCancel={close} /> : null}
       {panel === "report" ? (
         <ReportForm
@@ -552,8 +605,8 @@ function ModerateComment({
         className="btn btn-sm btn-danger"
         onClick={() => {
           setError(null);
-          moderate({ commentId, action, reason: reason.trim() || undefined }).catch((err: unknown) =>
-            setError(writeErrorMessage(err)),
+          moderate({ commentId, action, reason: reason.trim() || undefined }).catch(
+            (err: unknown) => setError(writeErrorMessage(err)),
           );
         }}
       >

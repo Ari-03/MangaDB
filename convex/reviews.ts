@@ -47,9 +47,7 @@ export const REVIEW_RATE_LIMIT = {
 const rateLimiter = new RateLimiter(components.rateLimiter, REVIEW_RATE_LIMIT);
 
 const isModerator = (user: Doc<"users"> | null) =>
-  Boolean(
-    user && !user.suspended && (user.role === "moderator" || user.role === "administrator"),
-  );
+  Boolean(user && !user.suspended && (user.role === "moderator" || user.role === "administrator"));
 
 /** Trim, unify line endings, and hold a Review body to its length bounds. */
 function cleanBody(raw: string): string {

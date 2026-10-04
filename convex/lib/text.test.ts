@@ -16,29 +16,21 @@ import {
 
 describe("decodeEntities", () => {
   it("decodes ANN's double-escaped numeric entities to a fixpoint", () => {
-    expect(
-      decodeEntities(
-        "Marrying the Dark Knight &amp;#40;For Her Money&amp;#41;",
-      ),
-    ).toBe("Marrying the Dark Knight (For Her Money)");
-    expect(
-      decodeEntities("Marrying the Dark Knight &#40;For Her Money&#41;"),
-    ).toBe("Marrying the Dark Knight (For Her Money)");
-    expect(decodeEntities("Betrothed to My Sister&#8217;s Ex")).toBe(
-      "Betrothed to My Sister’s Ex",
+    expect(decodeEntities("Marrying the Dark Knight &amp;#40;For Her Money&amp;#41;")).toBe(
+      "Marrying the Dark Knight (For Her Money)",
     );
+    expect(decodeEntities("Marrying the Dark Knight &#40;For Her Money&#41;")).toBe(
+      "Marrying the Dark Knight (For Her Money)",
+    );
+    expect(decodeEntities("Betrothed to My Sister&#8217;s Ex")).toBe("Betrothed to My Sister’s Ex");
     expect(decodeEntities("SPY&#x00D7;FAMILY")).toBe("SPY×FAMILY");
   });
 
   it("knows the named entities titles actually carry", () => {
     expect(
-      decodeEntities(
-        "Let's Run an Inn on Dungeon Island! &lpar;In a World Ruled by Women&rpar;",
-      ),
+      decodeEntities("Let's Run an Inn on Dungeon Island! &lpar;In a World Ruled by Women&rpar;"),
     ).toBe("Let's Run an Inn on Dungeon Island! (In a World Ruled by Women)");
-    expect(decodeEntities("Pompo: The Cin&eacute;phile")).toBe(
-      "Pompo: The Cinéphile",
-    );
+    expect(decodeEntities("Pompo: The Cin&eacute;phile")).toBe("Pompo: The Cinéphile");
     expect(decodeEntities("Fushigi Y&ucirc;gi")).toBe("Fushigi Yûgi");
     expect(decodeEntities("Bad&infin;End&infin;Night")).toBe("Bad∞End∞Night");
     expect(decodeEntities("Candy &amp; Cigarettes")).toBe("Candy & Cigarettes");
@@ -53,21 +45,15 @@ describe("decodeEntities", () => {
 describe("cleanTitleText", () => {
   it("drops ruby annotations, unwraps inline tags, collapses whitespace", () => {
     expect(
-      cleanTitleText(
-        "<ruby><rb>魔法</rb><rp>(</rp><rt>まほう</rt><rp>)</rp></ruby>少女",
-      ),
+      cleanTitleText("<ruby><rb>魔法</rb><rp>(</rp><rt>まほう</rt><rp>)</rp></ruby>少女"),
     ).toBe("魔法少女");
     expect(cleanTitleText("Level E<sup>2</sup>")).toBe("Level E2");
     expect(cleanTitleText("&lt;sup&gt;x&lt;/sup&gt;")).toBe("x");
-    expect(cleanTitleText("A  Century of Temptation ")).toBe(
-      "A Century of Temptation",
-    );
+    expect(cleanTitleText("A  Century of Temptation ")).toBe("A Century of Temptation");
   });
 
   it("keeps a real title's angle brackets", () => {
-    expect(cleanTitleText("&lt;Infinite Dendrogram&gt;")).toBe(
-      "<Infinite Dendrogram>",
-    );
+    expect(cleanTitleText("&lt;Infinite Dendrogram&gt;")).toBe("<Infinite Dendrogram>");
   });
 });
 
@@ -122,12 +108,15 @@ describe("repairMojibake", () => {
 
   // Each is valid UTF-8 when read as bytes, decoding to CJK, NKo, IPA or
   // Hebrew: real text, never mojibake.
-  it.each(["a quiet café…” she said", "her fiancé”—she paused", "Spaß“ in German", "CLICHÉ”", "3 ×\u00a04"])(
-    "leaves an accented letter before typographic punctuation alone: %j",
-    (clean) => {
-      expect(repairMojibake(clean)).toBe(clean);
-    },
-  );
+  it.each([
+    "a quiet café…” she said",
+    "her fiancé”—she paused",
+    "Spaß“ in German",
+    "CLICHÉ”",
+    "3 ×\u00a04",
+  ])("leaves an accented letter before typographic punctuation alone: %j", (clean) => {
+    expect(repairMojibake(clean)).toBe(clean);
+  });
 
   it("is not part of cleanBlurb, which every source shares", () => {
     expect(cleanBlurb("<p>a quiet café…” she said</p>")).toBe("a quiet café…” she said");
@@ -137,7 +126,9 @@ describe("repairMojibake", () => {
 
 describe("mapC1Controls", () => {
   it("reads C1 code points as the Windows-1252 characters of their byte", () => {
-    expect(mapC1Controls("Schneider\u0092s \u0093quote\u0094 \u0085 \u0080")).toBe("Schneider’s “quote” … €");
+    expect(mapC1Controls("Schneider\u0092s \u0093quote\u0094 \u0085 \u0080")).toBe(
+      "Schneider’s “quote” … €",
+    );
     // Windows-1252's undefined slots carry nothing.
     expect(mapC1Controls("a\u0081b\u008Dc")).toBe("abc");
     expect(mapC1Controls("plain — text’s fine")).toBe("plain — text’s fine");
@@ -146,7 +137,9 @@ describe("mapC1Controls", () => {
 
 describe("decodeUtf8OrWindows1252", () => {
   const bytes = (...parts: Array<string | number[]>) =>
-    new Uint8Array(parts.flatMap((p) => (typeof p === "string" ? [...new TextEncoder().encode(p)] : p)));
+    new Uint8Array(
+      parts.flatMap((p) => (typeof p === "string" ? [...new TextEncoder().encode(p)] : p)),
+    );
 
   it("decodes well-formed UTF-8 as UTF-8", () => {
     const text = "Berühren — Pokémon’s café …";

@@ -113,9 +113,8 @@ function Home() {
         <div className="hero-copy">
           <h1 className="hero-title">Know what lands on the shelf this week.</h1>
           <p className="hero-sub">
-            MangaDB tracks every English manga volume, every edition that
-            collects it, and every release date — so you always know what to buy
-            next and what you already own.
+            MangaDB tracks every English manga volume, every edition that collects it, and every
+            release date — so you always know what to buy next and what you already own.
           </p>
           <div className="hero-cta">
             <Link className="btn btn-primary" to="/releases">
@@ -150,9 +149,7 @@ function Home() {
         <section className="section">
           <div className="section-head">
             <h2 className="section-title">Recently added series</h2>
-            <p className="section-note">
-              The newest additions to the catalog
-            </p>
+            <p className="section-note">The newest additions to the catalog</p>
             <Link className="section-link" to="/search" search={{ q: "" }}>
               Search all series
             </Link>
@@ -208,7 +205,11 @@ function HeroShelf({ releases }: { releases: Array<BrowseRelease> }) {
       aria-label="Covers publishing soon"
     >
       {rows.map((row, index) => (
-        <div className="hero-row" key={index}>
+        <div
+          className="hero-row"
+          // biome-ignore lint/suspicious/noArrayIndexKey: a row is its position in the grid; the covers inside it are keyed by Release
+          key={index}
+        >
           {row.map((release, column) => (
             <EditionLink className="cover-link" release={release} key={release.id}>
               <Cover
@@ -287,9 +288,7 @@ function ReleaseShelves({
     <>
       <section className="section">
         <div className="section-head">
-          <h2 className="section-title">
-            {primaryHeading(primary.day, todaySort)}
-          </h2>
+          <h2 className="section-title">{primaryHeading(primary.day, todaySort)}</h2>
           <p className="section-note">
             {fullDate(month, primary.day)} — {plural(primary.count, "book")}
           </p>
@@ -307,9 +306,7 @@ function ReleaseShelves({
               Next {weekdayFullName(month, secondary.day)}, {secondary.day}{" "}
               {MONTH_NAMES[month.month - 1]}
             </h2>
-            <p className="section-note">
-              {plural(secondary.count, "book")} already dated
-            </p>
+            <p className="section-note">{plural(secondary.count, "book")} already dated</p>
             <Link
               className="section-link"
               to="/releases/$month"
@@ -330,13 +327,7 @@ function ReleaseShelves({
  * A row of Releases as shelved books: cover, then the ledge and its label.
  * The first `eager` covers load at once, the rest lazily.
  */
-function Shelf({
-  releases,
-  eager = 0,
-}: {
-  releases: Array<BrowseRelease>;
-  eager?: number;
-}) {
+function Shelf({ releases, eager = 0 }: { releases: Array<BrowseRelease>; eager?: number }) {
   return (
     <div className="shelf">
       {releases.map((release, index) => {
@@ -368,9 +359,7 @@ function Shelf({
               )}
               <div className="caption-meta">
                 {release.volumeLabel ? <span>{release.volumeLabel}</span> : null}
-                {release.volumeLabel && release.publisher ? (
-                  <span className="dot" />
-                ) : null}
+                {release.volumeLabel && release.publisher ? <span className="dot" /> : null}
                 {release.publisher ? <span>{release.publisher.name}</span> : null}
               </div>
             </div>
@@ -416,18 +405,15 @@ function EmptyMonth({ month }: { month: YearMonth }) {
         {["plank-a", "plank-b", "plank-c"].map((seed) => (
           <div className="ghost-spine" key={seed}>
             <span className="cover">
-              <span
-                className="cover-ph"
-                style={{ "--cloth": clothColor(seed) } as CSSProperties}
-              />
+              <span className="cover-ph" style={{ "--cloth": clothColor(seed) } as CSSProperties} />
             </span>
           </div>
         ))}
       </div>
       <div className="empty-note">
         <p>
-          No release in {monthTitle(month)} has a date on file yet. Dates land
-          here as publishers announce them — the agenda keeps every other month.
+          No release in {monthTitle(month)} has a date on file yet. Dates land here as publishers
+          announce them — the agenda keeps every other month.
         </p>
         <Link className="btn btn-primary" to="/releases">
           Open the release agenda

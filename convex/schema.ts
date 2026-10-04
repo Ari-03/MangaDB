@@ -804,11 +804,7 @@ export default defineSchema({
     proposalId: v.id("proposals"),
     versionNo: v.number(),
     authorId: v.id("users"),
-    kind: v.union(
-      v.literal("comment"),
-      v.literal("requestChanges"),
-      v.literal("reject"),
-    ),
+    kind: v.union(v.literal("comment"), v.literal("requestChanges"), v.literal("reject")),
     text: v.string(),
   }).index("by_proposal", ["proposalId"]),
 
@@ -897,7 +893,12 @@ export default defineSchema({
     sourceKey: v.string(),
     // "stopped": an automatic run closed early because its source was
     // disabled. It never counts toward the source's health.
-    status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed"), v.literal("stopped")),
+    status: v.union(
+      v.literal("running"),
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("stopped"),
+    ),
     // Set on a run a sync opens itself (the cadence dispatcher, or an
     // operator's bare `sync '{}'`): once its source is disabled, it stops at
     // the next link, page, batch or withdrawal boundary (lib/importRuns.ts).
@@ -992,11 +993,7 @@ export default defineSchema({
     seriesId: v.id("series"),
     publicId: v.number(),
     title: v.string(),
-    status: v.union(
-      v.literal("pending"),
-      v.literal("verified"),
-      v.literal("failed"),
-    ),
+    status: v.union(v.literal("pending"), v.literal("verified"), v.literal("failed")),
     note: v.optional(v.string()),
     checkedBy: v.optional(v.id("users")),
     checkedAt: v.optional(v.number()),
@@ -1033,11 +1030,7 @@ export default defineSchema({
     usernameNormalized: v.string(),
     role: v.optional(dataRole),
     suspended: v.optional(v.boolean()),
-    formatPreference: v.union(
-      v.literal("physical"),
-      v.literal("digital"),
-      v.literal("both"),
-    ),
+    formatPreference: v.union(v.literal("physical"), v.literal("digital"), v.literal("both")),
     // Private by default; per-Series overrides live on userSeriesStates.
     ownershipVisibility: visibility,
     readingVisibility: visibility,

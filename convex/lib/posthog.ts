@@ -111,7 +111,11 @@ export async function captureModeration(
  * handler's own annotations keep typing its args. An action's scheduling is
  * not transactional, so the capture survives the rethrow.
  */
-export async function withExceptionCapture<R>(name: string, ctx: CaptureCtx, run: () => Promise<R>): Promise<R> {
+export async function withExceptionCapture<R>(
+  name: string,
+  ctx: CaptureCtx,
+  run: () => Promise<R>,
+): Promise<R> {
   try {
     return await run();
   } catch (error) {

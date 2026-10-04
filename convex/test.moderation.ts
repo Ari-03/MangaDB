@@ -36,11 +36,20 @@ export async function mergeAs(
   });
 }
 
-type SingleRecordOp = "hideRecord" | "restoreRecord" | "lockRecord" | "unlockRecord" | "splitRecord";
+type SingleRecordOp =
+  | "hideRecord"
+  | "restoreRecord"
+  | "lockRecord"
+  | "unlockRecord"
+  | "splitRecord";
 
 /** One single-record sensitive operation on `ref` as the Moderator bob, impact confirmed. */
 export async function moderate(t: TestT, op: SingleRecordOp, ref: RecordRef, reason: string) {
-  return await signedIn(t, bob).mutation(api.sensitiveOps[op], { ref, reason, confirmImpact: true });
+  return await signedIn(t, bob).mutation(api.sensitiveOps[op], {
+    ref,
+    reason,
+    confirmImpact: true,
+  });
 }
 
 /** Splits a merged record back out as the Moderator bob. */
@@ -73,7 +82,12 @@ export async function insertBook(
   const { publisherId, seriesId, volumeId } = args;
   const editionId = await insertEdition(ctx, { publisherId, ...args.edition });
   await insertCoverage(ctx, { editionId, volumeId });
-  const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], ...args.release });
+  const releaseId = await insertRelease(ctx, {
+    editionId,
+    publisherId,
+    seriesIds: [seriesId],
+    ...args.release,
+  });
   return { editionId, releaseId };
 }
 
@@ -83,7 +97,11 @@ export async function insertBook(
  * and an unlabeled Volume is wholly the moved work's vol 1. One book on each.
  */
 export async function insertDoubt(ctx: MutationCtx, publisherId: Id<"publishers">) {
-  const source = await insertSeries(ctx, { publicId: 500, title: "Doubt!!", altTitles: ["Rabbit Doubt"] });
+  const source = await insertSeries(ctx, {
+    publicId: 500,
+    title: "Doubt!!",
+    altTitles: ["Rabbit Doubt"],
+  });
   const book = (volumeId: Id<"volumes">, isbn13: string) =>
     insertBook(ctx, { publisherId, seriesId: source, volumeId, release: { isbn13 } });
   const a1 = await insertVolume(ctx, { seriesId: source, label: "1", position: 1 });
@@ -102,7 +120,10 @@ type Doubt = Awaited<ReturnType<typeof insertDoubt>>;
  * the unlabeled Volume becomes its vol 1 and the shared-label book moves
  * to its vol "2".
  */
-export function doubtSplit(d: Doubt, overrides: Partial<EntryOf<"splitSeries">> = {}): EntryOf<"splitSeries"> {
+export function doubtSplit(
+  d: Doubt,
+  overrides: Partial<EntryOf<"splitSeries">> = {},
+): EntryOf<"splitSeries"> {
   return {
     kind: "splitSeries",
     key: "split:doubt",
@@ -111,7 +132,9 @@ export function doubtSplit(d: Doubt, overrides: Partial<EntryOf<"splitSeries">> 
     sourceTitle: "Doubt!!",
     title: "Doubt",
     altTitles: [],
-    volumes: [{ volumeId: d.unlabeled, label: null, newLabel: "1", editionIds: [d.b1Edition.editionId] }],
+    volumes: [
+      { volumeId: d.unlabeled, label: null, newLabel: "1", editionIds: [d.b1Edition.editionId] },
+    ],
     editions: [
       {
         editionId: d.b2Edition.editionId,

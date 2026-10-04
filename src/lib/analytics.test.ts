@@ -9,7 +9,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../convex/_generated/api";
 import { makeT, reader, withUser, type Accessor } from "../../convex/test.helpers";
-import { harness, mount, mountAside, resetHarness, setQuery, settle, text, type Host } from "./test.react";
+import {
+  harness,
+  mount,
+  mountAside,
+  resetHarness,
+  setQuery,
+  settle,
+  text,
+  type Host,
+} from "./test.react";
 
 const auth = vi.hoisted(() => ({
   isLoaded: false,
@@ -65,7 +74,9 @@ async function storedOptOut(as: Accessor) {
 
 /** The Settings radio reading `label`, by its onChange. */
 function choose(tree: Host[], label: "On" | "Off") {
-  const option = tree.find((host) => host.type === "label" && text(host.props.children).endsWith(label));
+  const option = tree.find(
+    (host) => host.type === "label" && text(host.props.children).endsWith(label),
+  );
   const children = option?.props.children;
   const input = Array.isArray(children) ? children[0] : undefined;
   if (!isValidElement<{ onChange: () => void }>(input)) throw new Error(`No option "${label}"`);
@@ -91,7 +102,12 @@ describe("ViewerAnalytics", () => {
     expect(gate()).toBeNull();
 
     await refreshViewer(as);
-    expect(gate()).toEqual({ status: "identified", userId: reader.subject, username: "reader", role: null });
+    expect(gate()).toEqual({
+      status: "identified",
+      userId: reader.subject,
+      username: "reader",
+      role: null,
+    });
   });
 
   it("never loads the client for a viewer who opted out", async () => {
@@ -189,7 +205,12 @@ describe("Signing in and out on one page", () => {
     setQuery(api.users.viewer, null);
     expect(gate()).toEqual({ status: "pending" });
     await refreshViewer(as);
-    expect(gate()).toEqual({ status: "identified", userId: reader.subject, username: "reader", role: null });
+    expect(gate()).toEqual({
+      status: "identified",
+      userId: reader.subject,
+      username: "reader",
+      role: null,
+    });
   });
 
   it("keeps the client for an opted-out viewer's sign-out, which captures anonymously again", async () => {
@@ -229,7 +250,12 @@ describe("AnalyticsSettings", () => {
     await settle();
     expect(await storedOptOut(as)).toBe(false);
     await refreshViewer(as);
-    expect(gate()).toEqual({ status: "identified", userId: reader.subject, username: "reader", role: null });
+    expect(gate()).toEqual({
+      status: "identified",
+      userId: reader.subject,
+      username: "reader",
+      role: null,
+    });
   });
 
   it("says that PostHog receives the IP address and that earlier events may still be delivered", async () => {
@@ -237,9 +263,13 @@ describe("AnalyticsSettings", () => {
     signIn(reader.subject);
     const as = await withUser(t, reader);
     await refreshViewer(as);
-    const panel = mount(() => AnalyticsSettings()).map((host) => text(host.props.children)).join(" ");
+    const panel = mount(() => AnalyticsSettings())
+      .map((host) => text(host.props.children))
+      .join(" ");
     expect(panel).toContain("PostHog also receives your IP address and browser details.");
-    expect(panel).toContain("may still be delivered later, including after a lost connection is restored");
+    expect(panel).toContain(
+      "may still be delivered later, including after a lost connection is restored",
+    );
     expect(panel).not.toContain("few seconds");
   });
 
@@ -248,7 +278,10 @@ describe("AnalyticsSettings", () => {
     signIn(reader.subject);
     const as = await withUser(t, reader);
     await refreshViewer(as);
-    const panel = () => mount(() => AnalyticsSettings()).map((host) => text(host.props.children)).join(" ");
+    const panel = () =>
+      mount(() => AnalyticsSettings())
+        .map((host) => text(host.props.children))
+        .join(" ");
     expect(panel()).toContain("If a browser you sign in with sends Do Not Track");
     expect(panel()).not.toContain("This browser asks not to be tracked");
     vi.stubGlobal("navigator", { doNotTrack: "1" });

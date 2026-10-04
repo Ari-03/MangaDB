@@ -60,10 +60,7 @@ function Queue() {
   const rows = useQuery(api.proposals.reviewQueue, {
     operation: operation || undefined,
     recordType: recordType || undefined,
-    authorKind:
-      authorKind === "imports" || authorKind === "humans"
-        ? authorKind
-        : undefined,
+    authorKind: authorKind === "imports" || authorKind === "humans" ? authorKind : undefined,
     author: author.trim() || undefined,
     staleOnly: staleOnly || undefined,
     warningsOnly: warningsOnly || undefined,
@@ -78,8 +75,8 @@ function Queue() {
       <Breadcrumbs trail={["Review queue"]} />
       <h1>Review queue</h1>
       <p className="section-hint">
-        In-Review proposals, oldest first. Claiming signals who is looking; it
-        never locks — any Moderator can decide.
+        In-Review proposals, oldest first. Claiming signals who is looking; it never locks — any
+        Moderator can decide.
       </p>
       <nav className="mod-tools" aria-label="Data team tools">
         <Link to="/mod/proposals">My proposals</Link>
@@ -159,10 +156,7 @@ function Queue() {
       ) : (
         <ol className="queue-list">
           {rows.map((row) => (
-            <li
-              key={row.proposalId}
-              className={row.stale ? "queue-row mod-flagged" : "queue-row"}
-            >
+            <li key={row.proposalId} className={row.stale ? "queue-row mod-flagged" : "queue-row"}>
               <Link to="/mod/proposal/$id" params={{ id: row.proposalId }}>
                 {row.comment || "(no comment)"}
               </Link>
@@ -179,13 +173,10 @@ function Queue() {
                 <span>{row.recordTypes.join(", ")}</span>
                 <span>waiting {formatAge(row.ageMs)}</span>
                 {row.claimedBy ? <span>claimed by @{row.claimedBy}</span> : null}
-                {row.stale ? (
-                  <span className="chip mod-chip mod-chip--bad">stale</span>
-                ) : null}
+                {row.stale ? <span className="chip mod-chip mod-chip--bad">stale</span> : null}
                 {row.warnings.length > 0 ? (
                   <span className="queue-warnings">
-                    warnings:{" "}
-                    {row.warnings.map(warningLabel).join("; ")}
+                    warnings: {row.warnings.map(warningLabel).join("; ")}
                   </span>
                 ) : null}
               </div>

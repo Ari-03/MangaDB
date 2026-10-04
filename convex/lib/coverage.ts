@@ -54,7 +54,8 @@ const NUM = String.raw`\d{1,3}(?:\.\d+)?(?!\.?\d)`;
 // (minus), "1~3", "1 through 3".
 const DASH_MARK = "[-‐‑‒–—−~]";
 const DASH = String.raw`\s*(?:${DASH_MARK}|to|through|thru)\s*`;
-const VERB = /\b(?:collect(?:s|ing|ed)?|contain(?:s|ing)?|includ(?:es|ing)|compil(?:es|ing)|gather(?:s|ing))\b/gi;
+const VERB =
+  /\b(?:collect(?:s|ing|ed)?|contain(?:s|ing)?|includ(?:es|ing)|compil(?:es|ing)|gather(?:s|ing))\b/gi;
 
 // An item with its own marker: "#5", "volume 3" (as in "volume 1 and volume
 // 3"), "vols. 4-6".
@@ -109,8 +110,18 @@ const NAMED = new RegExp(String.raw`\b${VOL}\s*#?(\d{1,3})`, "gi");
 
 // "Collects volumes one and three": number words in a Volume list read as digits.
 const NUMBER_WORDS = [
-  "one", "two", "three", "four", "five", "six",
-  "seven", "eight", "nine", "ten", "eleven", "twelve",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "eleven",
+  "twelve",
 ];
 const WORD = `(?:${NUMBER_WORDS.join("|")})`;
 const WORD_ITEM = String.raw`(?:${WORD}|\d{1,3})(?:${DASH}(?:${WORD}|\d{1,3}))?`;
@@ -218,7 +229,10 @@ function namesMore(all: Item[], rest: string): boolean {
 function standing(before: string): Listed["kind"] {
   const verb = Array.from(before.matchAll(VERB)).at(-1);
   if (!verb) return /^[^\p{L}\p{N}]*$/u.test(before) ? "opening" : "mention";
-  const lead = before.slice(verb.index + verb[0].length).trim().replace(/^the\b\s*/i, "");
+  const lead = before
+    .slice(verb.index + verb[0].length)
+    .trim()
+    .replace(/^the\b\s*/i, "");
   return OPENER.test(lead) ? "mention" : "stated";
 }
 
@@ -240,7 +254,8 @@ function listsIn(sentence: string): Listed[] {
 
 /** The reading that agrees with the line's declared size, if one does. */
 function agreeing(found: Readings, size: CoverRange | null): CoverRange | null {
-  const agrees = (reading: CoverRange | null) => reading?.from === size?.from && reading?.to === size?.to;
+  const agrees = (reading: CoverRange | null) =>
+    reading?.from === size?.from && reading?.to === size?.to;
   return size === null ? null : (found.find(agrees) ?? null);
 }
 
@@ -249,7 +264,10 @@ function agreeing(found: Readings, size: CoverRange | null): CoverRange | null {
  * (null without one): a range; null for evidence no range can hold, which
  * blocks every weaker signal; undefined for silence (see the header).
  */
-function blurbCoverage(text: string | undefined, size: CoverRange | null): CoverRange | null | undefined {
+function blurbCoverage(
+  text: string | undefined,
+  size: CoverRange | null,
+): CoverRange | null | undefined {
   if (!text) return undefined;
   const lists = plain(text).split(SENTENCE_END).flatMap(listsIn);
   const statement =

@@ -63,7 +63,8 @@ export function roundTrips<Ctx extends { db: object }>(ctx: Ctx) {
         const value: unknown = Reflect.get(on, prop, on);
         if (typeof value !== "function") return value;
         return (...args: unknown[]) => {
-          if (on === ctx.db && prop === "get") gets.set(args.at(-1), (gets.get(args.at(-1)) ?? 0) + 1);
+          if (on === ctx.db && prop === "get")
+            gets.set(args.at(-1), (gets.get(args.at(-1)) ?? 0) + 1);
           const out: unknown = value.apply(on, args);
           if (out instanceof Promise) return nextRound().then(() => out);
           return out !== null && typeof out === "object" ? charged(out) : out;

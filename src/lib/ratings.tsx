@@ -90,7 +90,13 @@ export function RatingAggregate({
   return <AggregateChip summary={live === undefined ? initial : live} format={format} />;
 }
 
-function AggregateChip({ summary, format }: { summary: RatingSummary | null; format: ScoreFormat | null }) {
+function AggregateChip({
+  summary,
+  format,
+}: {
+  summary: RatingSummary | null;
+  format: ScoreFormat | null;
+}) {
   const line = summary ? ratingLine(summary, format) : null;
   if (!line) return null;
   return (
@@ -286,7 +292,8 @@ function ScoreStepper({ format, current, onSave }: ControlProps & { format: Nume
     if (String(step) !== shown) onSave(fromFormat(step, format));
   };
   const nudge = (delta: number) => {
-    const base = Number(draft) || (current === null ? Math.ceil(steps / 2) : toFormat(current, format));
+    const base =
+      Number(draft) || (current === null ? Math.ceil(steps / 2) : toFormat(current, format));
     commit(String(clampStep(base + delta, format)));
   };
   const { field, unit } = STEPPER_TEXT[format];
@@ -299,7 +306,12 @@ function ScoreStepper({ format, current, onSave }: ControlProps & { format: Nume
         commit(draft);
       }}
     >
-      <button type="button" className="rating-stepper-btn" aria-label={`One ${unit} lower`} onClick={() => nudge(-1)}>
+      <button
+        type="button"
+        className="rating-stepper-btn"
+        aria-label={`One ${unit} lower`}
+        onClick={() => nudge(-1)}
+      >
         {"\u2212"}
       </button>
       <input
@@ -318,7 +330,12 @@ function ScoreStepper({ format, current, onSave }: ControlProps & { format: Nume
       <span className="rating-stepper-of" aria-hidden="true">
         /{steps}
       </span>
-      <button type="button" className="rating-stepper-btn" aria-label={`One ${unit} higher`} onClick={() => nudge(1)}>
+      <button
+        type="button"
+        className="rating-stepper-btn"
+        aria-label={`One ${unit} higher`}
+        onClick={() => nudge(1)}
+      >
         +
       </button>
     </form>
@@ -375,8 +392,8 @@ export function ScoreFormatSettings() {
   return (
     <div className="sharing-settings">
       <p className="sharing-lede">
-        How you rate series, volumes and omnibuses, and how scores read to you. Switching keeps every rating
-        you have made; it only changes how they show.
+        How you rate series, volumes and omnibuses, and how scores read to you. Switching keeps
+        every rating you have made; it only changes how they show.
       </p>
       <div className="vis-field">
         <span className="vis-legend" id="score-format-label">

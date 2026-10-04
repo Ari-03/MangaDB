@@ -112,7 +112,10 @@ describe("nicknameKeys", () => {
   };
 
   it("takes the initials of every multi-word name, and the name run together", () => {
-    expect(nicknameKeys(["Attack on Titan"])).toEqual({ initials: ["aot"], runs: ["attackontitan"] });
+    expect(nicknameKeys(["Attack on Titan"])).toEqual({
+      initials: ["aot"],
+      runs: ["attackontitan"],
+    });
     expect(keys("Spy x Family")).toContain("sxf");
     expect(keys("Hunter x Hunter")).toContain("hxh");
     expect(keys("Hunter × Hunter", "SPY×FAMILY")).toEqual(
@@ -164,9 +167,7 @@ describe("matchesSeries", () => {
 
 describe("seriesSearchText", () => {
   it("is the names, then their keys", () => {
-    expect(seriesSearchText("Jujutsu Kaisen", ["JJK"])).toBe(
-      "Jujutsu Kaisen JJK jk jujutsukaisen",
-    );
+    expect(seriesSearchText("Jujutsu Kaisen", ["JJK"])).toBe("Jujutsu Kaisen JJK jk jujutsukaisen");
   });
 });
 
@@ -286,8 +287,7 @@ describe("rankNearMisses", () => {
     { title: "Chainsmoker Cat", altTitles: [] },
     { title: "Attack on Titan", altTitles: ["Shingeki no Kyojin"] },
   ];
-  const titles = (query: string) =>
-    rankNearMisses(query, catalog, 3).map((m) => m.item.title);
+  const titles = (query: string) => rankNearMisses(query, catalog, 3).map((m) => m.item.title);
 
   it("finds the titles the typical typos meant", () => {
     expect(titles("berzerk")).toEqual(["Berserk", "Berserk of Gluttony"]);

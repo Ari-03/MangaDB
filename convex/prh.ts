@@ -159,11 +159,15 @@ export const sync = internalAction({
         await closeRun(ctx, runId, "failed", {
           seen: args.seen ?? 0,
           changed: args.changed ?? 0,
-          errors: [...(args.errors ?? []), "Stopped mid-run: PRH_API_KEY / PRH_IMPRINT_CODES were removed."],
+          errors: [
+            ...(args.errors ?? []),
+            "Stopped mid-run: PRH_API_KEY / PRH_IMPRINT_CODES were removed.",
+          ],
         });
         return { skipped: "unconfigured" as const };
       }
-      const mode: "future" | "full" = args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
+      const mode: "future" | "full" =
+        args.mode ?? (new Date().getUTCDay() === 0 ? "full" : "future");
       const runStartedAt = args.runStartedAt ?? linkStartedAt;
       const delay = args.politeDelayMs ?? 350;
       const maxPages = args.maxPages ?? 50;
@@ -175,15 +179,21 @@ export const sync = internalAction({
       // A subset sweep can't prove absence, so it never withdraws; nor can a
       // continuation without `observedEveryPage` (every continuation carries
       // runStartedAt).
-      const unmarkedContinuation = args.runStartedAt !== undefined && args.observedEveryPage !== true;
+      const unmarkedContinuation =
+        args.runStartedAt !== undefined && args.observedEveryPage !== true;
       let completeSweep =
-        !unmarkedContinuation && (args.completeSweep ?? (mode === "full" && args.imprints === undefined));
+        !unmarkedContinuation &&
+        (args.completeSweep ?? (mode === "full" && args.imprints === undefined));
       const todayKey = todaySortKey();
       const firstImprint = args.imprintIndex ?? 0;
       // Schedule the next link with the run state. The EFFECTIVE imprint list
       // travels with it: a configured list re-read from the environment could
       // change between links and shift imprintIndex onto another imprint.
-      const handOff = async (imprintIndex: number, start: number, pages: number): Promise<SyncResult> => {
+      const handOff = async (
+        imprintIndex: number,
+        start: number,
+        pages: number,
+      ): Promise<SyncResult> => {
         await stampHandOff(ctx, runId, { seen, changed, errors });
         await ctx.scheduler.runAfter(0, internal.prh.sync, {
           mode,
@@ -270,7 +280,9 @@ export const sync = internalAction({
               titles.some((t) => t.onsale !== undefined && toPartialDate(t.onsale).sort < todayKey);
             const toApply =
               mode === "future"
-                ? titles.filter((t) => t.onsale !== undefined && toPartialDate(t.onsale).sort >= todayKey)
+                ? titles.filter(
+                    (t) => t.onsale !== undefined && toPartialDate(t.onsale).sort >= todayKey,
+                  )
                 : titles;
 
             for (const snapshot of toApply) {
@@ -294,7 +306,8 @@ export const sync = internalAction({
             const exhausted =
               rawCount === 0 || (recordCount !== undefined && start >= recordCount) || pastReached;
             if (exhausted) break;
-            if (Date.now() - linkStartedAt >= linkBudgetMs) return await handOff(index, start, pages);
+            if (Date.now() - linkStartedAt >= linkBudgetMs)
+              return await handOff(index, start, pages);
           }
           // An imprint that fits on one page never reaches the check above; a
           // sweep of many small imprints would run past the action limit.

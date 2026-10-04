@@ -5,7 +5,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { Id } from "../_generated/dataModel";
-import { insertPublisher, insertSeries, seedCatalog, type CatalogOverrides } from "../test.factories";
+import {
+  insertPublisher,
+  insertSeries,
+  seedCatalog,
+  type CatalogOverrides,
+} from "../test.factories";
 import { makeT, type TestT } from "../test.helpers";
 import {
   candidateSeries,
@@ -45,7 +50,9 @@ describe("normalizeTitle", () => {
 
   it("keeps brackets inside a title: a spinoff is not its parent", () => {
     expect(normalizeTitle("Rent-A-(Really Shy!)-Girlfriend")).toBe("rent a really shy girlfriend");
-    expect(normalizeTitle("Rent-A-(Really Shy!)-Girlfriend")).not.toBe(normalizeTitle("Rent-A-Girlfriend"));
+    expect(normalizeTitle("Rent-A-(Really Shy!)-Girlfriend")).not.toBe(
+      normalizeTitle("Rent-A-Girlfriend"),
+    );
     expect(normalizeTitle("Dekoboko Sugar Days [Mou Ikkai!] (Manga)")).toBe("dekoboko sugar days");
   });
 
@@ -258,13 +265,16 @@ describe("matchRelease — rung ③ (publisher + title + label + format)", () =>
     const t = makeT();
     const paperback = await buildCatalog(t, { release: { binding: "paperback" } });
     // Another Binding of the same Edition is a sibling: the creation path.
-    expect(
-      await match(t, fact(paperback.publisherId, { binding: "Hardcover" })),
-    ).toMatchObject({ kind: "create", rung: 5 });
+    expect(await match(t, fact(paperback.publisherId, { binding: "Hardcover" }))).toMatchObject({
+      kind: "create",
+      rung: 5,
+    });
     // Same Binding (any case), or a fact that does not know it, still links.
-    expect(
-      await match(t, fact(paperback.publisherId, { binding: "Paperback" })),
-    ).toMatchObject({ kind: "match", rung: 3, release: { _id: paperback.releaseId } });
+    expect(await match(t, fact(paperback.publisherId, { binding: "Paperback" }))).toMatchObject({
+      kind: "match",
+      rung: 3,
+      release: { _id: paperback.releaseId },
+    });
     expect(await match(t, fact(paperback.publisherId))).toMatchObject({ kind: "match", rung: 3 });
 
     // Another language is another Release by definition.
@@ -309,7 +319,9 @@ describe("matchRelease — rungs ④ and ⑤", () => {
   it("a title-only candidate (wrong publisher) always reviews", async () => {
     const t = makeT();
     await buildCatalog(t, { publisher: { slug: "other-pub" } });
-    const sevenSeas = await t.run((ctx) => insertPublisher(ctx, { name: "Seven Seas", slug: "seven-seas" }));
+    const sevenSeas = await t.run((ctx) =>
+      insertPublisher(ctx, { name: "Seven Seas", slug: "seven-seas" }),
+    );
     const outcome = await match(t, fact(sevenSeas));
     expect(outcome).toMatchObject({ kind: "review", rung: 4 });
   });

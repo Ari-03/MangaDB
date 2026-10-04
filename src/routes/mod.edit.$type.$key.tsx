@@ -171,8 +171,8 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
       <Breadcrumbs trail={["Edit"]} />
       <h1>Edit: {form.title}</h1>
       <p className="section-hint">
-        Saving applies immediately as an approved proposal and adds a public
-        revision to this record's history.
+        Saving applies immediately as an approved proposal and adds a public revision to this
+        record's history.
       </p>
       {form.overriddenFields.length > 0 ? (
         <HumanOverrides form={form} editable={editable} setCleared={setCleared} />
@@ -184,8 +184,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
       ) : null}
       {!editable ? (
         <p className="notice">
-          This record is {form.locked ? "locked" : form.status} and cannot be
-          edited directly.
+          This record is {form.locked ? "locked" : form.status} and cannot be edited directly.
         </p>
       ) : (
         <form
@@ -198,9 +197,8 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
           {stale ? (
             <div className="notice" role="alert">
               <p>
-                This record was changed by someone else after you started
-                editing. Reload the latest version to continue; your unsaved
-                edits will be discarded.
+                This record was changed by someone else after you started editing. Reload the latest
+                version to continue; your unsaved edits will be discarded.
               </p>
               <button
                 type="button"
@@ -241,9 +239,7 @@ function ModEditForm({ type, editKey }: { type: RecordType; editKey: string }) {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={
-                busy || stale || current.dirty.size === 0 || comment.trim() === ""
-              }
+              disabled={busy || stale || current.dirty.size === 0 || comment.trim() === ""}
             >
               {busy ? "Saving…" : "Save as approved change"}
             </button>
@@ -346,7 +342,9 @@ function HumanOverrides({
       <h2>Human Overrides</h2>
       <p className="section-hint">
         Imports never overwrite these fields. {CLEAR_OVERRIDE_HINT}
-        {others.length > 0 ? ` Also overridden, and not editable here: ${others.join(", ")}.` : null}
+        {others.length > 0
+          ? ` Also overridden, and not editable here: ${others.join(", ")}.`
+          : null}
       </p>
       <ol className="revision-list">
         {form.overrides.map((override) => (
@@ -387,8 +385,8 @@ function HumanOverrides({
           ) : changed ? (
             <div className="notice" role="alert">
               <p>
-                This record was changed by someone else after you opened Clear. Review its
-                current state before clearing; your reason is kept.
+                This record was changed by someone else after you opened Clear. Review its current
+                state before clearing; your reason is kept.
               </p>
               <button
                 type="button"

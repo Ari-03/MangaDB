@@ -53,9 +53,17 @@ export const MOD = "user_mod";
 export const EDITOR = "user_editor";
 export const PLAIN = "user_plain";
 export const READER = "user_reader";
-export const alice = { subject: ADMIN, username: "alice", role: "administrator" } as const satisfies TestUser;
+export const alice = {
+  subject: ADMIN,
+  username: "alice",
+  role: "administrator",
+} as const satisfies TestUser;
 export const bob = { subject: MOD, username: "bob", role: "moderator" } as const satisfies TestUser;
-export const carol = { subject: EDITOR, username: "carol", role: "editor" } as const satisfies TestUser;
+export const carol = {
+  subject: EDITOR,
+  username: "carol",
+  role: "editor",
+} as const satisfies TestUser;
 export const dave = { subject: PLAIN, username: "dave" } as const satisfies TestUser;
 export const reader = { subject: READER, username: "reader" } as const satisfies TestUser;
 
@@ -85,7 +93,8 @@ export async function seedTeam(t: TestT, users: readonly TestUser[]) {
   await seedUsers(t, users);
   const admin = users.find((user) => user.role === "administrator");
   if (!admin) {
-    if (users.some((user) => user.role)) throw new Error("seedTeam: roles need an administrator to appoint them");
+    if (users.some((user) => user.role))
+      throw new Error("seedTeam: roles need an administrator to appoint them");
     return;
   }
   await t.mutation(internal.roles.bootstrapAdministrator, { username: admin.username });
@@ -120,7 +129,8 @@ export async function purgeAccount(t: TestT, subject: string) {
   }
   await t.run(async (ctx) => {
     for (const job of await ctx.db.system.query("_scheduled_functions").collect()) {
-      if (job.name.endsWith("deleteClerkIdentity") && job.state.kind === "pending") await ctx.scheduler.cancel(job._id);
+      if (job.name.endsWith("deleteClerkIdentity") && job.state.kind === "pending")
+        await ctx.scheduler.cancel(job._id);
     }
   });
   await t.mutation(internal.users.removePurgedUser, { clerkSubject: subject });

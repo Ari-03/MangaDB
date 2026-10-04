@@ -52,15 +52,17 @@ describe("editionTitle", () => {
   ];
 
   it.each(cases)("%s", (_, edition, expected) => {
-    expect(editionTitle({ seriesTitle: null, lineName: null, linePosition: null, ...edition })).toBe(expected);
+    expect(
+      editionTitle({ seriesTitle: null, lineName: null, linePosition: null, ...edition }),
+    ).toBe(expected);
   });
 });
 
 describe("releaseAnchor", () => {
   it("prefers ISBN-13, then ISBN-10, then the document ID (spec §8)", () => {
-    expect(
-      releaseAnchor({ isbn13: "9781999000103", isbn10: "1999000101", _id: "d" }),
-    ).toBe("9781999000103");
+    expect(releaseAnchor({ isbn13: "9781999000103", isbn10: "1999000101", _id: "d" })).toBe(
+      "9781999000103",
+    );
     expect(releaseAnchor({ isbn10: "1999000101", _id: "d" })).toBe("1999000101");
     expect(releaseAnchor({ _id: "doc123" })).toBe("doc123");
   });

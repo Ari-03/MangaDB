@@ -11,11 +11,7 @@ import type { MutationCtx } from "../../_generated/server";
 import { followMerges } from "../merges";
 import { linkObservation } from "../observations";
 import { allocatePublicId } from "../publicIds";
-import {
-  DUPLICATE_SLUGS,
-  IMPRINT_PARENTS,
-  canonicalPublisherFor,
-} from "../publishers";
+import { DUPLICATE_SLUGS, IMPRINT_PARENTS, canonicalPublisherFor } from "../publishers";
 import { seriesSearchText } from "../searchMatch";
 import {
   OWNERSHIP,
@@ -61,7 +57,11 @@ const applied: Result = { status: "applied" };
 const already: Result = { status: "alreadyApplied" };
 
 /** Dispatch one plan entry to its operation. */
-export async function applyEntry(ctx: MutationCtx, audit: Audit, entry: RepairEntry): Promise<Result> {
+export async function applyEntry(
+  ctx: MutationCtx,
+  audit: Audit,
+  entry: RepairEntry,
+): Promise<Result> {
   switch (entry.kind) {
     case "publisherMerge":
       return await publisherMerge(ctx, audit, entry);
@@ -107,7 +107,10 @@ export async function applyEntry(ctx: MutationCtx, audit: Audit, entry: RepairEn
  * and unlink it from its observation. No catalog record changes, so there is
  * no Revision; the Proposal's own state is the audit trail.
  */
-async function withdrawProposal(ctx: MutationCtx, entry: EntryOf<"withdrawProposal">): Promise<Result> {
+async function withdrawProposal(
+  ctx: MutationCtx,
+  entry: EntryOf<"withdrawProposal">,
+): Promise<Result> {
   const proposal = await ctx.db.get(entry.proposalId);
   const observation = await ctx.db.get(entry.observationId);
   if (!proposal || !observation) return skip("proposal or observation missing");
@@ -134,7 +137,12 @@ async function withdrawProposal(ctx: MutationCtx, entry: EntryOf<"withdrawPropos
 }
 
 /** Hide a record through the stock Hide unless it already is hidden. */
-async function hide(ctx: MutationCtx, audit: Audit, ref: Ref, doc: { status: string; locked?: boolean }) {
+async function hide(
+  ctx: MutationCtx,
+  audit: Audit,
+  ref: Ref,
+  doc: { status: string; locked?: boolean },
+) {
   if (doc.status !== "active") return false;
   if (doc.locked) skip(`${ref.type} ${ref.id} is locked`);
   audit.op({ kind: "hide", ref });
@@ -143,7 +151,12 @@ async function hide(ctx: MutationCtx, audit: Audit, ref: Ref, doc: { status: str
 }
 
 /** Restore a record through the stock Restore unless it already is active. */
-async function restore(ctx: MutationCtx, audit: Audit, ref: Ref, doc: { status: string; locked?: boolean }) {
+async function restore(
+  ctx: MutationCtx,
+  audit: Audit,
+  ref: Ref,
+  doc: { status: string; locked?: boolean },
+) {
   if (doc.status === "active") return false;
   if (doc.locked) skip(`${ref.type} ${ref.id} is locked`);
   audit.op({ kind: "restore", ref });
@@ -188,27 +201,52 @@ async function publisherMerge(
     .query("editions")
     .withIndex("by_publisher", (q) => q.eq("publisherId", loser._id))
     .take(PUBLISHER_CHUNK);
-  const straysLeft = editions.length === 0
-    ? await ctx.db
-        .query("releases")
-        .withIndex("by_publisher_date", (q) => q.eq("publisherId", loser._id))
-        .take(PUBLISHER_CHUNK)
-    : [];
+  const straysLeft =
+    editions.length === 0
+      ? await ctx.db
+          .query("releases")
+          .withIndex("by_publisher_date", (q) => q.eq("publisherId", loser._id))
+          .take(PUBLISHER_CHUNK)
+      : [];
   if (editions.length > 0 || straysLeft.length > 0) {
     const { proposalId } = await audit.meta();
-    const repointed: Array<{ table: string; docId: string; field: string; before: Id<"publishers">; after: Id<"publishers"> }> = [];
+    const repointed: Array<{
+      table: string;
+      docId: string;
+      field: string;
+      before: Id<"publishers">;
+      after: Id<"publishers">;
+    }> = [];
     for (const edition of editions) {
       await ctx.db.patch(edition._id, { publisherId: survivor._id });
-      repointed.push({ table: "editions", docId: edition._id, field: "publisherId", before: loser._id, after: survivor._id });
+      repointed.push({
+        table: "editions",
+        docId: edition._id,
+        field: "publisherId",
+        before: loser._id,
+        after: survivor._id,
+      });
       for (const release of await releasesOf(ctx, edition._id)) {
         if (release.publisherId !== loser._id) continue;
         await ctx.db.patch(release._id, { publisherId: survivor._id });
-        repointed.push({ table: "releases", docId: release._id, field: "publisherId", before: loser._id, after: survivor._id });
+        repointed.push({
+          table: "releases",
+          docId: release._id,
+          field: "publisherId",
+          before: loser._id,
+          after: survivor._id,
+        });
       }
     }
     for (const release of straysLeft) {
       await ctx.db.patch(release._id, { publisherId: survivor._id });
-      repointed.push({ table: "releases", docId: release._id, field: "publisherId", before: loser._id, after: survivor._id });
+      repointed.push({
+        table: "releases",
+        docId: release._id,
+        field: "publisherId",
+        before: loser._id,
+        after: survivor._id,
+      });
     }
     await ctx.db.insert("mergeManifests", {
       loserRef: { type: "publisher", id: loser._id },
@@ -223,9 +261,17 @@ async function publisherMerge(
       ref: { type: "publisher", id: loser._id },
       changes: [{ field: "editionsRepointed", after: editions.length }],
     });
-    return { status: "partial", reason: `repointed ${editions.length} editions, ${repointed.length - editions.length} releases` };
+    return {
+      status: "partial",
+      reason: `repointed ${editions.length} editions, ${repointed.length - editions.length} releases`,
+    };
   }
-  await merge(ctx, audit, { type: "publisher", id: survivor._id }, { type: "publisher", id: loser._id });
+  await merge(
+    ctx,
+    audit,
+    { type: "publisher", id: survivor._id },
+    { type: "publisher", id: loser._id },
+  );
   return applied;
 }
 
@@ -283,8 +329,10 @@ async function editionPublisher(
     // Owner rule: PRH's imprint outranks Seven Seas/OpenLibrary attribution
     // to the parent, but only toward a known imprint of the same company.
     const resolved = canonicalPublisherFor(entry.imprint);
-    if (!resolved || resolved.parentSlug === undefined) skip(`"${entry.imprint}" is not a known imprint`);
-    if (companySlug(resolved!.slug) !== to.slug) skip(`"${entry.imprint}" resolves to ${resolved!.slug}, not ${to.slug}`);
+    if (!resolved || resolved.parentSlug === undefined)
+      skip(`"${entry.imprint}" is not a known imprint`);
+    if (companySlug(resolved!.slug) !== to.slug)
+      skip(`"${entry.imprint}" resolves to ${resolved!.slug}, not ${to.slug}`);
     if (resolved!.parentSlug !== companySlug(from.slug)) {
       skip(`${resolved!.slug} is not an imprint of ${companySlug(from.slug)}`);
     }
@@ -294,7 +342,11 @@ async function editionPublisher(
       const observation = await ctx.db.get(observationId);
       const ref = observation?.recordRef;
       const snapshot: { imprint?: unknown } | undefined = observation?.snapshot;
-      if (ref?.type === "release" && releaseIds.has(ref.id) && snapshot?.imprint === entry.imprint) {
+      if (
+        ref?.type === "release" &&
+        releaseIds.has(ref.id) &&
+        snapshot?.imprint === entry.imprint
+      ) {
         stillEvidenced = true;
       }
     }
@@ -302,9 +354,12 @@ async function editionPublisher(
   }
   if (edition.editionLineId) {
     const line = await ctx.db.get(edition.editionLineId);
-    if (line && line.publisherId !== to._id) skip("edition sits in another publisher's edition line");
+    if (line && line.publisherId !== to._id)
+      skip("edition sits in another publisher's edition line");
   }
-  await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, { publisherId: to._id });
+  await updateRecord(ctx, audit, { type: "edition", id: edition._id }, edition, {
+    publisherId: to._id,
+  });
   await refreshReleaseDenorms(ctx, edition._id);
   return applied;
 }
@@ -343,7 +398,8 @@ async function hideSeries(
     if (!edition) skip(`edition ${id} missing`);
     editions.push(edition!);
     for (const release of await releasesOf(ctx, id)) {
-      if (release.status === "active" && !releaseIds.has(release._id)) skip("edition gained a release");
+      if (release.status === "active" && !releaseIds.has(release._id))
+        skip("edition gained a release");
     }
   }
   const releases = [];
@@ -354,9 +410,12 @@ async function hideSeries(
   }
 
   let changed = false;
-  for (const release of releases) changed = (await hide(ctx, audit, { type: "release", id: release._id }, release)) || changed;
-  for (const edition of editions) changed = (await hide(ctx, audit, { type: "edition", id: edition._id }, edition)) || changed;
-  for (const volume of volumes) changed = (await hide(ctx, audit, { type: "volume", id: volume._id }, volume)) || changed;
+  for (const release of releases)
+    changed = (await hide(ctx, audit, { type: "release", id: release._id }, release)) || changed;
+  for (const edition of editions)
+    changed = (await hide(ctx, audit, { type: "edition", id: edition._id }, edition)) || changed;
+  for (const volume of volumes)
+    changed = (await hide(ctx, audit, { type: "volume", id: volume._id }, volume)) || changed;
   changed = (await hide(ctx, audit, { type: "series", id: series._id }, series)) || changed;
   return changed ? applied : already;
 }
@@ -369,14 +428,17 @@ async function hideRelease(
   const release = await ctx.db.get(entry.releaseId);
   if (!release) return skip("release missing");
   if (release.status === "merged") skip("release was merged");
-  if (entry.editionId !== null && release.editionId !== entry.editionId) skip("release moved to another edition");
+  if (entry.editionId !== null && release.editionId !== entry.editionId)
+    skip("release moved to another edition");
   let changed = await hide(ctx, audit, { type: "release", id: release._id }, release);
 
   // The Edition and Volumes follow only once nothing active is left under
   // them, so entries sharing an Edition converge in any order.
   if (entry.editionId !== null) {
     const edition = await ctx.db.get(entry.editionId);
-    const liveReleases = (await releasesOf(ctx, entry.editionId)).filter((r) => r.status === "active");
+    const liveReleases = (await releasesOf(ctx, entry.editionId)).filter(
+      (r) => r.status === "active",
+    );
     if (edition && liveReleases.length === 0) {
       changed = (await hide(ctx, audit, { type: "edition", id: edition._id }, edition)) || changed;
     } else if (edition?.status === "active") {
@@ -410,9 +472,15 @@ async function restoreRecord(
   const { target } = entry;
   const unique = <T>(list: T[]) => [...new Set(list)];
   const seriesIds = target.type === "series" ? [target.id] : [];
-  const volumeIds = unique(target.type === "volume" ? [target.id, ...entry.volumeIds] : entry.volumeIds);
-  const editionIds = unique(target.type === "edition" ? [target.id, ...entry.editionIds] : entry.editionIds);
-  const releaseIds = unique(target.type === "release" ? [target.id, ...entry.releaseIds] : entry.releaseIds);
+  const volumeIds = unique(
+    target.type === "volume" ? [target.id, ...entry.volumeIds] : entry.volumeIds,
+  );
+  const editionIds = unique(
+    target.type === "edition" ? [target.id, ...entry.editionIds] : entry.editionIds,
+  );
+  const releaseIds = unique(
+    target.type === "release" ? [target.id, ...entry.releaseIds] : entry.releaseIds,
+  );
 
   const usable = <D extends { status: string }>(label: string, doc: D | null): D => {
     if (!doc) return skip(`${label} missing`);
@@ -435,27 +503,36 @@ async function restoreRecord(
   const liveAfter = async (id: Id<"series"> | Id<"volumes"> | Id<"editions">) =>
     restoring.has(id) || (await ctx.db.get(id))?.status === "active";
   for (const volume of volumes) {
-    if (target.type === "series" && volume.seriesId !== target.id) skip(`volume ${volume.publicId} left the series`);
-    if (!(await liveAfter(volume.seriesId))) skip(`volume ${volume.publicId}'s series stays hidden`);
+    if (target.type === "series" && volume.seriesId !== target.id)
+      skip(`volume ${volume.publicId} left the series`);
+    if (!(await liveAfter(volume.seriesId)))
+      skip(`volume ${volume.publicId}'s series stays hidden`);
   }
   for (const edition of editions) {
     const coverage = await coverageOf(ctx, edition._id);
     if (coverage.length === 0) skip(`edition ${edition.publicId} covers no volume`);
     for (const cover of coverage) {
-      if (!(await liveAfter(cover.volumeId))) skip(`edition ${edition.publicId} covers a volume that stays hidden`);
+      if (!(await liveAfter(cover.volumeId)))
+        skip(`edition ${edition.publicId} covers a volume that stays hidden`);
       const volume = await ctx.db.get(cover.volumeId);
-      if (volume && !(await liveAfter(volume.seriesId))) skip(`edition ${edition.publicId}'s series stays hidden`);
+      if (volume && !(await liveAfter(volume.seriesId)))
+        skip(`edition ${edition.publicId}'s series stays hidden`);
     }
   }
   for (const release of releases) {
-    if (!(await liveAfter(release.editionId))) skip(`release ${release._id} sits on an edition that stays hidden`);
+    if (!(await liveAfter(release.editionId)))
+      skip(`release ${release._id} sits on an edition that stays hidden`);
   }
 
   let changed = false;
-  for (const doc of series) changed = (await restore(ctx, audit, { type: "series", id: doc._id }, doc)) || changed;
-  for (const doc of volumes) changed = (await restore(ctx, audit, { type: "volume", id: doc._id }, doc)) || changed;
-  for (const doc of editions) changed = (await restore(ctx, audit, { type: "edition", id: doc._id }, doc)) || changed;
-  for (const doc of releases) changed = (await restore(ctx, audit, { type: "release", id: doc._id }, doc)) || changed;
+  for (const doc of series)
+    changed = (await restore(ctx, audit, { type: "series", id: doc._id }, doc)) || changed;
+  for (const doc of volumes)
+    changed = (await restore(ctx, audit, { type: "volume", id: doc._id }, doc)) || changed;
+  for (const doc of editions)
+    changed = (await restore(ctx, audit, { type: "edition", id: doc._id }, doc)) || changed;
+  for (const doc of releases)
+    changed = (await restore(ctx, audit, { type: "release", id: doc._id }, doc)) || changed;
   return changed ? applied : already;
 }
 
@@ -484,7 +561,11 @@ async function unlinkObservation(
 /** Follow a Volume's merge pointers to the active Volume it now lives on. */
 async function liveVolume(ctx: MutationCtx, id: Id<"volumes"> | null) {
   let volume = id ? await ctx.db.get(id) : null;
-  for (let hops = 0; volume && volume.status === "merged" && volume.mergedIntoId && hops < 5; hops++) {
+  for (
+    let hops = 0;
+    volume && volume.status === "merged" && volume.mergedIntoId && hops < 5;
+    hops++
+  ) {
     volume = await ctx.db.get(volume.mergedIntoId);
   }
   return volume && volume.status === "active" ? volume : null;
@@ -508,7 +589,11 @@ async function lockTitleIfContested(ctx: MutationCtx, audit: Audit, seriesId: Id
     .collect();
   const contested = observations.some((observation) => {
     const snapshot: { title?: unknown } = observation.snapshot ?? {};
-    return TITLE_AUTHORITIES.has(observation.sourceKey) && typeof snapshot.title === "string" && snapshot.title !== series.title;
+    return (
+      TITLE_AUTHORITIES.has(observation.sourceKey) &&
+      typeof snapshot.title === "string" &&
+      snapshot.title !== series.title
+    );
   });
   if (!contested) return;
   await updateRecord(ctx, audit, { type: "series", id: seriesId }, series, {
@@ -516,7 +601,12 @@ async function lockTitleIfContested(ctx: MutationCtx, audit: Audit, seriesId: Id
   });
 }
 
-async function retitleSeries(ctx: MutationCtx, audit: Audit, seriesId: Id<"series">, title: string) {
+async function retitleSeries(
+  ctx: MutationCtx,
+  audit: Audit,
+  seriesId: Id<"series">,
+  title: string,
+) {
   const series = await ctx.db.get(seriesId);
   if (!series || series.title === title) return;
   await updateRecord(ctx, audit, { type: "series", id: seriesId }, series, {
@@ -570,7 +660,8 @@ async function mergeSeries(
     if (!volume) skip(`volume ${placement.volumeId} missing`);
     if (volume!.status === "merged") {
       const home = await liveVolume(ctx, volume!._id);
-      if (home?.seriesId !== survivor._id) skip(`volume ${volume!.publicId} merged outside the survivor`);
+      if (home?.seriesId !== survivor._id)
+        skip(`volume ${volume!.publicId} merged outside the survivor`);
       await followVolume(ctx, audit, moves, home!);
       continue;
     }
@@ -629,7 +720,8 @@ async function placeVolume(
   if (target && target.seriesId !== survivorId) target = null;
   if (!target && placement.label !== null) {
     const matches = survivorVolumes.filter((v) => sameLabel(v.label, placement.label));
-    if (matches.length > 1) skip(`survivor has ${matches.length} volumes labelled "${placement.label}"`);
+    if (matches.length > 1)
+      skip(`survivor has ${matches.length} volumes labelled "${placement.label}"`);
     target = matches[0] ?? null;
   }
   if (target) {
@@ -670,10 +762,19 @@ async function findOrCreateLine(
   );
   if (existing) return existing._id;
   await audit.meta();
-  const fields = { status: "active" as const, seriesId, publisherId, name, bootstrapUnreviewed: true };
+  const fields = {
+    status: "active" as const,
+    seriesId,
+    publisherId,
+    name,
+    bootstrapUnreviewed: true,
+  };
   const id = await ctx.db.insert("editionLines", fields);
   audit.op({ kind: "create", table: "editionLines", tempId: id, fields });
-  await audit.revise({ type: "editionLine", id }, Object.entries(fields).map(([field, after]) => ({ field, after })));
+  await audit.revise(
+    { type: "editionLine", id },
+    Object.entries(fields).map(([field, after]) => ({ field, after })),
+  );
   return id;
 }
 
@@ -738,7 +839,9 @@ async function remodelEdition(
       expected.length > 0 &&
       coverage.length === expected.length &&
       coverage.every((row, i) =>
-        expected[i]?.volumeId ? row.volumeId === expected[i]?.volumeId : sameLabel(labels[i], expected[i]?.label),
+        expected[i]?.volumeId
+          ? row.volumeId === expected[i]?.volumeId
+          : sameLabel(labels[i], expected[i]?.label),
       );
     if (!done) skip("edition no longer covers the planned volume");
   }
@@ -788,13 +891,18 @@ async function remodelEdition(
             bootstrapUnreviewed: true,
           });
           for (const release of releases) {
-            await updateRecord(ctx, audit, { type: "release", id: release._id }, release, { editionId });
+            await updateRecord(ctx, audit, { type: "release", id: release._id }, release, {
+              editionId,
+            });
           }
         } else continue;
       }
       const rows = [];
       for (const cover of group.coverage) {
-        rows.push({ volumeId: (await coveredVolume(ctx, audit, target._id, cover))._id, extent: cover.extent });
+        rows.push({
+          volumeId: (await coveredVolume(ctx, audit, target._id, cover))._id,
+          extent: cover.extent,
+        });
       }
       if (rows.length > 0) await replaceCoverage(ctx, audit, editionId, rows);
       await placeInLine(editionId, group.linePosition);
@@ -926,7 +1034,11 @@ async function entriesToBundle(
       await carryVisibility(ctx, sink, entry.userId, OWNERSHIP, box.seriesIds, bundleSeriesIds);
     }
     if (!kept) {
-      await refile(ctx, audit, moves, "collectionEntries", entry, { releaseId: undefined, bundleId, variantId: undefined });
+      await refile(ctx, audit, moves, "collectionEntries", entry, {
+        releaseId: undefined,
+        bundleId,
+        variantId: undefined,
+      });
       continue;
     }
     if (STATE_RANK[entry.state] > STATE_RANK[kept.state]) {
@@ -935,13 +1047,24 @@ async function entriesToBundle(
     await audit.meta();
     await ctx.db.delete(entry._id);
     const { releaseId, state, variantId } = entry;
-    moves.trail.push({ table: "collectionEntries", docId: entry._id, field: "(removed)", before: { releaseId, state, variantId }, into: kept._id });
+    moves.trail.push({
+      table: "collectionEntries",
+      docId: entry._id,
+      field: "(removed)",
+      before: { releaseId, state, variantId },
+      into: kept._id,
+    });
   }
   return !more;
 }
 
 /** An existing bundle for this box-set Release: same ISBN, else same name/publisher/format. */
-async function existingBundle(ctx: MutationCtx, release: Doc<"releases">, name: string, publisherId: Id<"publishers">) {
+async function existingBundle(
+  ctx: MutationCtx,
+  release: Doc<"releases">,
+  name: string,
+  publisherId: Id<"publishers">,
+) {
   if (release.isbn13) {
     return await ctx.db
       .query("releaseBundles")
@@ -949,9 +1072,11 @@ async function existingBundle(ctx: MutationCtx, release: Doc<"releases">, name: 
       .first();
   }
   // Bundles are few (box sets only); a scan is fine for a one-time repair.
-  return (await ctx.db.query("releaseBundles").collect()).find(
-    (b) => b.name === name && b.publisherId === publisherId && b.format === release.format,
-  ) ?? null;
+  return (
+    (await ctx.db.query("releaseBundles").collect()).find(
+      (b) => b.name === name && b.publisherId === publisherId && b.format === release.format,
+    ) ?? null
+  );
 }
 
 /**
@@ -969,10 +1094,15 @@ async function toBundle(
 ): Promise<Result> {
   const boxes = (await releasesOf(ctx, edition._id)).filter((r) => r.status !== "merged");
   if (boxes.length === 0) return skip("box set has no release");
-  if (edition.status !== "active" && !(await existingBundle(ctx, boxes[0]!, name, edition.publisherId))) {
+  if (
+    edition.status !== "active" &&
+    !(await existingBundle(ctx, boxes[0]!, name, edition.publisherId))
+  ) {
     return skip(`edition is ${edition.status}`);
   }
-  const labels = (entry.groups[0]?.coverage ?? []).flatMap((c) => (c.label === null ? [] : [c.label]));
+  const labels = (entry.groups[0]?.coverage ?? []).flatMap((c) =>
+    c.label === null ? [] : [c.label],
+  );
   const company = await companyRows(ctx, edition.publisherId);
   let firstMemberVolume: Id<"volumes"> | null = null;
   const moves = newMoves(entry.key);
@@ -1029,7 +1159,8 @@ async function toBundle(
         { field: "member", after: `release ${member.isbn13 ?? member._id} (vol ${label})` },
       ]);
     }
-    if (missing.length > 0) audit.note(`bundle ${bundle.publicId}: no member release for vol ${missing.join(", ")}`);
+    if (missing.length > 0)
+      audit.note(`bundle ${bundle.publicId}: no member release for vol ${missing.join(", ")}`);
     await carryBundleOwners(ctx, trailSink(ctx, audit, moves), bundleId, seriesBefore);
     if (!(await entriesToBundle(ctx, audit, moves, box, bundleId))) continue;
     if (await hide(ctx, audit, { type: "release", id: box._id }, box)) {
@@ -1080,7 +1211,12 @@ async function foldEdition(
     const survivor = withIsbn[0];
     if (withIsbn.length !== 1 || !survivor) continue;
     for (const twin of ofFormat.filter((r) => !r.isbn13)) {
-      await merge(ctx, audit, { type: "release", id: survivor._id }, { type: "release", id: twin._id });
+      await merge(
+        ctx,
+        audit,
+        { type: "release", id: survivor._id },
+        { type: "release", id: twin._id },
+      );
     }
   }
   return applied;
@@ -1163,7 +1299,8 @@ async function updateFields(
       .first();
     if (clash && clash._id !== release._id) skip(`ISBN ${isbn13} already on another release`);
   }
-  if (release.format === "digital" && patch.binding !== undefined) skip("binding on a digital release");
+  if (release.format === "digital" && patch.binding !== undefined)
+    skip("binding on a digital release");
   await updateRecord(ctx, audit, { type: "release", id: release._id }, release, patch);
   return applied;
 }
@@ -1182,9 +1319,11 @@ async function normalizeVolumes(
     if (!volume || !into) skip("duplicate volume pair missing");
     if (volume!.status === "merged") continue;
     if (volume!.status !== "active") continue;
-    if (volume!.seriesId !== series._id || into!.seriesId !== series._id) skip("duplicate volume left the series");
+    if (volume!.seriesId !== series._id || into!.seriesId !== series._id)
+      skip("duplicate volume left the series");
     if (label !== undefined) {
-      if (!sameLabel(volume!.label, label)) skip(`duplicate volume ${volume!.publicId} label drifted`);
+      if (!sameLabel(volume!.label, label))
+        skip(`duplicate volume ${volume!.publicId} label drifted`);
     } else if (!sameLabel(volume!.label, into!.label)) {
       skip("duplicate volumes no longer share a label");
     }
@@ -1221,7 +1360,6 @@ async function normalizeVolumes(
   return audit.wrote ? applied : already;
 }
 
-
 // ---------- personal tracking that follows a move ----------
 
 /**
@@ -1247,12 +1385,26 @@ type Moves = {
   sweeps: Map<string, SweepState>;
 };
 
-const newMoves = (key: string): Moves => ({ key, trail: [], left: SWEEP_BUDGET, unfinished: false, sweeps: new Map() });
+const newMoves = (key: string): Moves => ({
+  key,
+  trail: [],
+  left: SWEEP_BUDGET,
+  unfinished: false,
+  sweeps: new Map(),
+});
 
 /** The status of an entry that left personal work for its next leg. */
-const partial: Result = { status: "partial", reason: "personal tracking continues on the next call" };
+const partial: Result = {
+  status: "partial",
+  reason: "personal tracking continues on the next call",
+};
 
-type PersonalTable = "releaseProgress" | "favorites" | "comments" | "userSeriesStates" | "collectionEntries";
+type PersonalTable =
+  | "releaseProgress"
+  | "favorites"
+  | "comments"
+  | "userSeriesStates"
+  | "collectionEntries";
 
 /** Patch a personal row, logging each field that changes on the trail. */
 async function refile<T extends PersonalTable>(
@@ -1264,7 +1416,9 @@ async function refile<T extends PersonalTable>(
   patch: Partial<Doc<T>>,
 ) {
   const current: Record<string, unknown> = doc;
-  const changed = Object.entries(patch).filter(([field, after]) => !sameValue(current[field], after));
+  const changed = Object.entries(patch).filter(
+    ([field, after]) => !sameValue(current[field], after),
+  );
   if (changed.length === 0) return;
   await audit.meta();
   await ctx.db.patch(doc._id, patch);
@@ -1364,7 +1518,8 @@ async function closeMoves(ctx: MutationCtx, audit: Audit, ref: Ref, moves: Moves
     const state = unsaved.get(row.sweep);
     unsaved.delete(row.sweep);
     if (!moves.unfinished) await ctx.db.delete(row._id);
-    else if (state && (state.after !== row.after || state.done !== row.done)) await ctx.db.patch(row._id, state);
+    else if (state && (state.after !== row.after || state.done !== row.done))
+      await ctx.db.patch(row._id, state);
   }
   if (!moves.unfinished) return;
   for (const [name, state] of unsaved) {
@@ -1440,7 +1595,8 @@ async function carryingTracking<R>(
       .collect();
     for (const row of readers) await carryVisibility(ctx, sink, row.userId, READING, [from], [to]);
   }
-  for (const [editionId, before] of editionsBefore) await carryEditionTracking(ctx, sink, editionId, before);
+  for (const [editionId, before] of editionsBefore)
+    await carryEditionTracking(ctx, sink, editionId, before);
 
   for (const volumeId of volumesBefore.keys()) {
     const volume = await ctx.db.get(volumeId);
@@ -1451,7 +1607,8 @@ async function carryingTracking<R>(
     // A Release `change` moved to another Edition follows on its own.
     for (const releaseId of before.releaseSeries.keys()) {
       const release = await ctx.db.get(releaseId);
-      if (release && release.editionId !== editionId) await followRelease(ctx, audit, moves, release);
+      if (release && release.editionId !== editionId)
+        await followRelease(ctx, audit, moves, release);
     }
   }
   return result;
@@ -1464,12 +1621,7 @@ async function carryingTracking<R>(
  * in. Rows key on the Volume, so nothing collides; only stale rows move, so
  * a re-run heals any earlier move. Each table is a sweep (bounded legs).
  */
-async function followVolume(
-  ctx: MutationCtx,
-  audit: Audit,
-  moves: Moves,
-  volume: Doc<"volumes">,
-) {
+async function followVolume(ctx: MutationCtx, audit: Audit, moves: Moves, volume: Doc<"volumes">) {
   const stale = (row: { seriesId: Id<"series"> }) => row.seriesId !== volume.seriesId;
   const to = { seriesId: volume.seriesId };
   await sweep(
@@ -1558,7 +1710,8 @@ async function followEdition(
   moves: Moves,
   editionId: Id<"editions">,
 ) {
-  for (const release of await releasesOf(ctx, editionId)) await followRelease(ctx, audit, moves, release);
+  for (const release of await releasesOf(ctx, editionId))
+    await followRelease(ctx, audit, moves, release);
 
   const first = (await coverageOf(ctx, editionId)).sort((a, b) => a.order - b.order)[0];
   const firstSeriesId = first ? (await ctx.db.get(first.volumeId))?.seriesId : undefined;
@@ -1573,7 +1726,8 @@ async function followEdition(
         .withIndex("by_edition", (q) => q.eq("editionId", editionId).gt("_creationTime", after))
         .take(count),
     async (row) => {
-      if (row.seriesId !== firstSeriesId) await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });
+      if (row.seriesId !== firstSeriesId)
+        await refile(ctx, audit, moves, "favorites", row, { seriesId: firstSeriesId });
     },
   );
 }
@@ -1681,7 +1835,8 @@ async function followLine(
     .withIndex("by_line", (q) => q.eq("editionLineId", line._id))
     .collect();
   const staying = members.find((m) => m.status === "active" && !moving.has(m._id));
-  if (staying) skip(`edition line "${line.name}" also holds edition ${staying.publicId}, which stays`);
+  if (staying)
+    skip(`edition line "${line.name}" also holds edition ${staying.publicId}, which stays`);
   await audit.meta();
   await ctx.db.patch(line._id, { seriesId: targetId });
   const ref = { type: "editionLine" as const, id: line._id };
@@ -1703,9 +1858,11 @@ async function splitSeries(
   }
 
   let target = await splitTarget(ctx, entry);
-  if (target && target.status !== "active") skip(`split-off series ${target.publicId} is ${target.status}`);
+  if (target && target.status !== "active")
+    skip(`split-off series ${target.publicId} is ${target.status}`);
   if (!target) {
-    if (source.title !== entry.sourceTitle) skip(`source title drifted: ${JSON.stringify(source.title)}`);
+    if (source.title !== entry.sourceTitle)
+      skip(`source title drifted: ${JSON.stringify(source.title)}`);
     target = await createSplitSeries(ctx, audit, entry, source);
   }
   const targetId = target!._id;
@@ -1734,10 +1891,13 @@ async function splitSeries(
     if (volume.status !== "active") skip(`volume ${volume.publicId} is ${volume.status}`);
     if (volume.seriesId !== source._id) skip(`volume ${volume.publicId} left the source series`);
     if (volume.locked) skip(`volume ${volume.publicId} is locked`);
-    if (!sameLabel(volume.label, row.label)) skip(`volume ${volume.publicId} label drifted: ${JSON.stringify(volume.label ?? null)}`);
+    if (!sameLabel(volume.label, row.label))
+      skip(`volume ${volume.publicId} label drifted: ${JSON.stringify(volume.label ?? null)}`);
     const editions = await activeEditionsCovering(ctx, volume._id);
     if (!sameValue(idSet(editions.map((e) => e._id)), idSet(row.editionIds))) {
-      skip(`volume ${volume.publicId} editions drifted: now ${editions.map((e) => e.publicId).join(", ") || "none"}`);
+      skip(
+        `volume ${volume.publicId} editions drifted: now ${editions.map((e) => e.publicId).join(", ") || "none"}`,
+      );
     }
     const targetVolumes = await activeVolumes(ctx, targetId);
     if (targetVolumes.some((v) => sameLabel(v.label, row.newLabel))) {
@@ -1764,26 +1924,39 @@ async function splitSeries(
   for (const row of entry.editions) {
     const edition = await ctx.db.get(row.editionId);
     if (!edition || edition.status !== "active") return skip(`edition ${row.editionId} not active`);
-    if (row.labels.length !== row.fromVolumeIds.length) skip("plan error: one label per coverage row");
+    if (row.labels.length !== row.fromVolumeIds.length)
+      skip("plan error: one label per coverage row");
     const coverage = (await coverageOf(ctx, edition._id)).sort((a, b) => a.order - b.order);
     const covered = [];
     for (const cover of coverage) covered.push(await ctx.db.get(cover.volumeId));
-    const done = covered.length === row.labels.length && covered.every((vol, i) => vol?.seriesId === targetId && sameLabel(vol.label, row.labels[i]));
+    const done =
+      covered.length === row.labels.length &&
+      covered.every((vol, i) => vol?.seriesId === targetId && sameLabel(vol.label, row.labels[i]));
     if (done) {
       await followEdition(ctx, audit, moves, edition._id);
       continue;
     }
-    if (!sameValue(coverage.map((c) => c.volumeId), row.fromVolumeIds)) {
+    if (
+      !sameValue(
+        coverage.map((c) => c.volumeId),
+        row.fromVolumeIds,
+      )
+    ) {
       skip(`edition ${edition.publicId} coverage drifted`);
     }
     const releases = (await releasesOf(ctx, edition._id)).filter((r) => r.status === "active");
     if (!sameValue(idSet(releases.map((r) => r._id)), idSet(row.releaseIds))) {
-      skip(`edition ${edition.publicId} releases drifted: now ${releases.map((r) => r.isbn13 ?? r._id).join(", ")}`);
+      skip(
+        `edition ${edition.publicId} releases drifted: now ${releases.map((r) => r.isbn13 ?? r._id).join(", ")}`,
+      );
     }
     if (edition.locked) skip(`edition ${edition.publicId} is locked`);
     const rows: Parameters<typeof replaceCoverage>[3] = [];
     for (const [i, label] of row.labels.entries()) {
-      rows.push({ volumeId: (await ensureVolume(ctx, audit, targetId, label))._id, extent: coverage[i]!.extent });
+      rows.push({
+        volumeId: (await ensureVolume(ctx, audit, targetId, label))._id,
+        extent: coverage[i]!.extent,
+      });
     }
     await carryingTracking(ctx, audit, moves, { editionIds: [edition._id] }, async () => {
       await followLine(ctx, audit, edition, source._id, targetId, moving);
@@ -1809,7 +1982,11 @@ async function splitSeries(
     await linkObservation(ctx, observation._id, { type: "series", id: targetId });
     const from = { type: "series" as const, id: source._id };
     const to = { type: "series" as const, id: targetId };
-    audit.op({ kind: "update", ref: from, changes: [{ field: "sourceObservation", before: record }] });
+    audit.op({
+      kind: "update",
+      ref: from,
+      changes: [{ field: "sourceObservation", before: record }],
+    });
     audit.op({ kind: "update", ref: to, changes: [{ field: "sourceObservation", after: record }] });
     await audit.revise(from, [{ field: "sourceObservation", before: record }]);
     await audit.revise(to, [{ field: "sourceObservation", after: record }]);
@@ -1871,7 +2048,9 @@ async function createRelease(
     .query("releases")
     .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
     .collect();
-  const own = clashes.length === 1 && (await createdByEntry(ctx, { type: "release", id: clashes[0]!._id }, entry.key));
+  const own =
+    clashes.length === 1 &&
+    (await createdByEntry(ctx, { type: "release", id: clashes[0]!._id }, entry.key));
   if (own) return already;
   if (clashes.length > 0) return skip(`ISBN ${entry.isbn13} already exists`);
   const isbn10 = entry.isbn10;
@@ -1887,7 +2066,8 @@ async function createRelease(
     .withIndex("by_isbn13", (q) => q.eq("isbn13", entry.isbn13))
     .first();
   if (bundle) skip(`ISBN ${entry.isbn13} is Release Bundle ${bundle.publicId}`);
-  if (entry.format === "digital" && entry.binding !== null) skip("plan error: binding on a digital release");
+  if (entry.format === "digital" && entry.binding !== null)
+    skip("plan error: binding on a digital release");
   const publisher = await ctx.db.get(entry.publisherId);
   if (!publisher || publisher.status !== "active") skip("publisher not active");
 
@@ -1909,7 +2089,13 @@ async function createRelease(
     bootstrapUnreviewed: true,
     ...(line
       ? {
-          editionLineId: await findOrCreateLine(ctx, audit, series._id, entry.publisherId, line.name),
+          editionLineId: await findOrCreateLine(
+            ctx,
+            audit,
+            series._id,
+            entry.publisherId,
+            line.name,
+          ),
           ...(line.position === null ? {} : { linePosition: line.position }),
         }
       : {}),
@@ -2015,17 +2201,25 @@ async function releaseBundle(
         .collect()
     ).filter((r) => r.status === "active");
     const member = hits[0];
-    if (!member || hits.length > 1) return skip(`member ${planned.isbn13}: ${hits.length} active releases`);
+    if (!member || hits.length > 1)
+      return skip(`member ${planned.isbn13}: ${hits.length} active releases`);
     if (box && member._id === box._id) skip("plan error: the box set is its own member");
-    firstVolume ??= (await coverageOf(ctx, member.editionId)).sort((a, b) => a.order - b.order)[0]?.volumeId ?? null;
+    firstVolume ??=
+      (await coverageOf(ctx, member.editionId)).sort((a, b) => a.order - b.order)[0]?.volumeId ??
+      null;
     const row = memberships.find((m) => m.releaseId === member._id);
     if (row) {
       if (row.order !== planned.order) skip(`member ${planned.isbn13} sits at order ${row.order}`);
       continue;
     }
-    if (memberships.some((m) => m.order === planned.order)) skip(`order ${planned.order} is taken by another member`);
+    if (memberships.some((m) => m.order === planned.order))
+      skip(`order ${planned.order} is taken by another member`);
     await audit.meta();
-    const id = await ctx.db.insert("bundleMemberships", { bundleId: bundle._id, releaseId: member._id, order: planned.order });
+    const id = await ctx.db.insert("bundleMemberships", {
+      bundleId: bundle._id,
+      releaseId: member._id,
+      order: planned.order,
+    });
     const inserted = await ctx.db.get(id);
     if (inserted) memberships.push(inserted);
     const change = { field: "member", after: `release ${planned.isbn13} (order ${planned.order})` };
@@ -2042,7 +2236,8 @@ async function releaseBundle(
     }
     const edition = await ctx.db.get(box.editionId);
     const live = (await releasesOf(ctx, box.editionId)).filter((r) => r.status === "active");
-    if (edition && live.length === 0) await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
+    if (edition && live.length === 0)
+      await hide(ctx, audit, { type: "edition", id: edition._id }, edition);
   }
   await closeMoves(ctx, audit, box ? { type: "release", id: box._id } : bundleRef, moves);
   // A box set still holding entries stays up until a later leg empties it.
@@ -2066,10 +2261,14 @@ async function setCoverage(
   if (edition.locked) skip("edition locked");
   const rows: Array<{ volumeId: Id<"volumes">; extent: "complete" | "partial" }> = [];
   for (const row of entry.coverage) {
-    const matches = (await activeVolumes(ctx, row.seriesId)).filter((v) => sameLabel(v.label, row.label));
+    const matches = (await activeVolumes(ctx, row.seriesId)).filter((v) =>
+      sameLabel(v.label, row.label),
+    );
     const volume = matches[0];
     if (!volume || matches.length > 1) {
-      return skip(`series ${row.seriesId} has ${matches.length} active volumes labelled ${JSON.stringify(row.label)}`);
+      return skip(
+        `series ${row.seriesId} has ${matches.length} active volumes labelled ${JSON.stringify(row.label)}`,
+      );
     }
     rows.push({ volumeId: volume._id, extent: row.extent });
   }
@@ -2079,7 +2278,13 @@ async function setCoverage(
   const done =
     current.length === rows.length &&
     current.every((c, i) => c.volumeId === rows[i]?.volumeId && c.extent === rows[i]?.extent);
-  if (!done && !sameValue(current.map((c) => c.volumeId), entry.before)) {
+  if (
+    !done &&
+    !sameValue(
+      current.map((c) => c.volumeId),
+      entry.before,
+    )
+  ) {
     skip(`edition ${edition.publicId} coverage drifted`);
   }
   // The Edition's trackers keep their Tracking Visibility wherever its

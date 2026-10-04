@@ -38,7 +38,10 @@ describe("fetchHomeCatalog", () => {
     await fetchHomeCatalog({ year: 2026, month: 12 }, 28);
     expect(fakes.calls).toEqual([
       { name: "catalog:stats", args: {} },
-      { name: "catalog:recentSeries", args: { limit: 28, todaySort: expect.any(Number), showMature: false } },
+      {
+        name: "catalog:recentSeries",
+        args: { limit: 28, todaySort: expect.any(Number), showMature: false },
+      },
       { name: "releases:monthBrowse", args: { year: 2026, month: 12, showMature: false } },
       { name: "releases:monthBrowse", args: { year: 2027, month: 1, showMature: false } },
     ]);
@@ -49,6 +52,8 @@ describe("fetchHomeCatalog", () => {
   test("sends the newest Series' cover pick today's UTC date", async () => {
     vi.useFakeTimers({ now: Date.UTC(2026, 9, 4, 23, 30) });
     await fetchHomeCatalog({ year: 2026, month: 10 }, 28);
-    expect(fakes.calls.find((call) => call.name === "catalog:recentSeries")?.args.todaySort).toBe(20261004);
+    expect(fakes.calls.find((call) => call.name === "catalog:recentSeries")?.args.todaySort).toBe(
+      20261004,
+    );
   });
 });

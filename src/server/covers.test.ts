@@ -101,10 +101,9 @@ describe("coverResponse", () => {
 
   test("a body that breaks everywhere is a short-lived miss", async () => {
     const broken = () =>
-      new Response(
-        new ReadableStream({ start: (c) => c.error(new Error("connection reset")) }),
-        { headers: { "Content-Type": "image/jpeg" } },
-      );
+      new Response(new ReadableStream({ start: (c) => c.error(new Error("connection reset")) }), {
+        headers: { "Content-Type": "image/jpeg" },
+      });
     upstreams = [broken, status(404)];
     const res = await get();
     expect(res?.status).toBe(503);
@@ -430,7 +429,10 @@ describe("coverResponse refreshing stale jackets", () => {
     );
     const checks = releases.length;
     // Let every check end, a second upstream included, before afterEach waits on them.
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
     for (const release of releases) release(new Response(null, { status: 404 }));
     expect(checks).toBe(4);
     expect(responses.every((res) => res?.status === 200)).toBe(true);
@@ -578,7 +580,10 @@ describe("coverResponse validators", () => {
   test("a cached outage is never a 304", async () => {
     edge.set(
       KEY,
-      new Response("Cover source unavailable", { status: 503, headers: { "Cache-Control": "public, max-age=300" } }),
+      new Response("Cover source unavailable", {
+        status: 503,
+        headers: { "Cache-Control": "public, max-age=300" },
+      }),
     );
     expect((await revalidate("*"))?.status).toBe(503);
   });
@@ -603,7 +608,9 @@ describe("coverResponse waiting on upstreams", () => {
 
   test("an answer inside three seconds is served", async () => {
     vi.useFakeTimers();
-    upstreams = [() => new Promise<Response>((resolve) => setTimeout(() => resolve(image()), 2_900))];
+    upstreams = [
+      () => new Promise<Response>((resolve) => setTimeout(() => resolve(image()), 2_900)),
+    ];
     const pending = get();
     await vi.advanceTimersByTimeAsync(2_900);
     const res = await pending;
@@ -636,7 +643,11 @@ describe("coverResponse waiting on upstreams", () => {
     slow.release(image());
     await Promise.all(worker.background);
     await Promise.all(worker.background);
-    expect(covers.put).toHaveBeenCalledWith("9781974700523.jpg", expect.anything(), expect.anything());
+    expect(covers.put).toHaveBeenCalledWith(
+      "9781974700523.jpg",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(edge.get(KEY)?.status).toBe(200);
     const next = await get();
     expect(next?.status).toBe(200);
@@ -766,7 +777,11 @@ describe("coversOnFile", () => {
     expect(await coversOnFile([{ need: 1, candidates: [isbn(70)] }], ORIGIN)).toEqual([]);
     await Promise.all(worker.background);
     await Promise.all(worker.background);
-    expect(covers.put).toHaveBeenCalledWith(`${isbn(70)}.jpg`, expect.anything(), expect.anything());
+    expect(covers.put).toHaveBeenCalledWith(
+      `${isbn(70)}.jpg`,
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   test("a failed R2 read is no jacket, and is asked again next time", async () => {

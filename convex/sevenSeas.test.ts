@@ -25,7 +25,16 @@ import {
   insertSourceRevision,
   seedCatalog,
 } from "./test.factories";
-import { alice, bundleMembers, drain, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
+import {
+  alice,
+  bundleMembers,
+  drain,
+  makeT,
+  seedRegistry,
+  seedTeam,
+  signedIn,
+  type TestT,
+} from "./test.helpers";
 import { pubDate } from "./test.catalog";
 import {
   ALPHA_1,
@@ -295,7 +304,9 @@ describe("sevenSeas.sync — packaging coverage inference", () => {
   it("never queues a brand-new Series for a work an Editor hid", async () => {
     const t = makeT();
     await seedRegistry(t, false);
-    await t.run((ctx) => insertSeries(ctx, { status: "hidden", title: "Alpha Adventures (Manga)" }));
+    await t.run((ctx) =>
+      insertSeries(ctx, { status: "hidden", title: "Alpha Adventures (Manga)" }),
+    );
     stubSite([ALPHA_1]);
     await sync(t);
     await t.run(async (ctx) => {
@@ -787,9 +798,7 @@ describe("sevenSeas.sync — a linked book never takes another Release's ISBN (B
       return { linkedId: _id, holderId };
     });
 
-    stubSite([
-      { ...ALPHA_1, modified: "2026-08-05T00:00:00", isbn: heldIsbn, price: "$24.99" },
-    ]);
+    stubSite([{ ...ALPHA_1, modified: "2026-08-05T00:00:00", isbn: heldIsbn, price: "$24.99" }]);
     await sync(t);
 
     await t.run(async (ctx) => {
@@ -1004,7 +1013,10 @@ describe("sevenSeas.sync — failure handling", () => {
       await ctx.db.patch(source._id, { enabled: false });
     });
     const stored = await observationOf(t, ALPHA_1);
-    const snapshot = { ...(stored.snapshot as BookSnapshot), title: "Alpha Manga Vol. 1 (Renamed)" };
+    const snapshot = {
+      ...(stored.snapshot as BookSnapshot),
+      title: "Alpha Manga Vol. 1 (Renamed)",
+    };
     await t.mutation(internal.sevenSeas.applyBook, { sourceRecordId, snapshot });
     expect((await observationOf(t, ALPHA_1)).snapshot).toEqual(snapshot);
   });
@@ -1024,7 +1036,10 @@ describe("sevenSeas.sync — failure handling", () => {
       const page = new URL(url).searchParams.get("page")!;
       listingPages.push(page);
       if (page === "1") {
-        await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+        await t.mutation(internal.importSources.setEnabledInternal, {
+          key: "sevenseas",
+          enabled: false,
+        });
       }
       return new Response(JSON.stringify([listingItem(page === "1" ? ALPHA_1 : ALPHA_2)]), {
         headers: { "x-wp-totalpages": "2", "content-type": "application/json" },
@@ -1034,7 +1049,12 @@ describe("sevenSeas.sync — failure handling", () => {
     expect(listingPages).toEqual(["1"]);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();
-      expect(run).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 1, recordsChanged: 1 });
+      expect(run).toMatchObject({
+        status: "stopped",
+        automatic: true,
+        recordsSeen: 1,
+        recordsChanged: 1,
+      });
       const observations = await ctx.db.query("sourceObservations").collect();
       expect(observations.find((o) => o.sourceRecordId === "999")?.withdrawn).toBe(false);
       expect(observations.some((o) => o.sourceRecordId === String(ALPHA_2.id))).toBe(false);
@@ -1057,7 +1077,10 @@ describe("sevenSeas.sync — failure handling", () => {
     // source is disabled while it loads.
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       if (String(input).startsWith(`${BASE}/wp-json/wp/v2/books`)) {
-        await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+        await t.mutation(internal.importSources.setEnabledInternal, {
+          key: "sevenseas",
+          enabled: false,
+        });
       }
       return await site(input);
     });
@@ -1097,7 +1120,10 @@ describe("sevenSeas.sync — failure handling", () => {
   it("imports through a run an operator forced on the disabled source", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "sevenseas",
+      enabled: false,
+    });
     stubSite([ALPHA_1]);
     const runId = await t.mutation(internal.imports.startRun, { sourceKey: "sevenseas" });
     expect(await sync(t, { runId })).toMatchObject({ runId, recordsSeen: 1, completeSweep: true });
@@ -1257,7 +1283,8 @@ const BOX_1: FixtureBook = {
 };
 
 /** The one box's members, by their Releases' ISBNs in bundle order. */
-const boxMembers = async (t: TestT) => (await bundleMembers(t)).map((member) => member.release.isbn13);
+const boxMembers = async (t: TestT) =>
+  (await bundleMembers(t)).map((member) => member.release.isbn13);
 
 // R09: a box imported before some of its books picks those books up once
 // they exist, whether its listing is unchanged (no detail fetch) or its
@@ -1462,11 +1489,7 @@ describe("sevenSeas.sync — a relisted book retires its cancellation review (B1
  * that planner's verdict, the snapshot parsed from the same wire shapes the
  * stubbed site serves (so the listing reads it as unchanged).
  */
-async function seedLegacyUnplaced(
-  t: TestT,
-  b: FixtureBook,
-  verdict: string,
-) {
+async function seedLegacyUnplaced(t: TestT, b: FixtureBook, verdict: string) {
   const snapshot = normalizeBook(parseBookListing(listingItem(b))!, parseBookPage(bookPageHtml(b)));
   const at = Date.now() - 86_400_000;
   await t.run((ctx) =>
@@ -1595,14 +1618,18 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
     const pages = countBookPages();
 
     expect(await sync(t)).toMatchObject({ recordsChanged: 0, completeSweep: true });
-    const first = (await observationOf(t, DELUXE_1)).conflicts!.find((c) => c.field === "placement")!;
+    const first = (await observationOf(t, DELUXE_1)).conflicts!.find(
+      (c) => c.field === "placement",
+    )!;
     expect(first.reason).toContain("which an Editor hid");
     await new Promise((r) => setTimeout(r, 5));
     expect(await sync(t, { maxDetailFetches: 0 })).toMatchObject({
       recordsChanged: 0,
       completeSweep: true,
     });
-    const second = (await observationOf(t, DELUXE_1)).conflicts!.find((c) => c.field === "placement")!;
+    const second = (await observationOf(t, DELUXE_1)).conflicts!.find(
+      (c) => c.field === "placement",
+    )!;
     expect(second).toEqual(first);
     expect(pages.count).toBe(0);
     expect(await t.run((ctx) => ctx.db.query("releases").collect())).toHaveLength(0);
@@ -1617,12 +1644,16 @@ describe("sevenSeas.sync — replays packaging an older planner left unplaced (B
 
     expect(await sync(t)).toMatchObject({ recordsChanged: 0, completeSweep: true });
     expect(pages.count).toBe(1);
-    const first = (await observationOf(t, DELUXE_1)).conflicts!.find((c) => c.field === "placement")!;
+    const first = (await observationOf(t, DELUXE_1)).conflicts!.find(
+      (c) => c.field === "placement",
+    )!;
     await new Promise((r) => setTimeout(r, 5));
     expect(await sync(t)).toMatchObject({ recordsChanged: 0 });
     expect(await sync(t, { maxDetailFetches: 0 })).toMatchObject({ completeSweep: true });
     expect(pages.count).toBe(1);
-    const second = (await observationOf(t, DELUXE_1)).conflicts!.find((c) => c.field === "placement")!;
+    const second = (await observationOf(t, DELUXE_1)).conflicts!.find(
+      (c) => c.field === "placement",
+    )!;
     expect(second).toEqual(first);
   });
 
@@ -1705,7 +1736,12 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     seriesTitle: "Alpha Deluxe Edition",
   };
   /** A book the listing files under the plain "Alpha" series: no Edition Line in its series link. */
-  const lineless = (title: string): FixtureBook => ({ ...DELUXE, title, seriesSlug: "alpha", seriesTitle: "Alpha" });
+  const lineless = (title: string): FixtureBook => ({
+    ...DELUXE,
+    title,
+    seriesSlug: "alpha",
+    seriesTitle: "Alpha",
+  });
 
   async function placed(t: TestT) {
     return await t.run(async (ctx) => ({
@@ -1714,7 +1750,11 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
       unmapped: (await ctx.db.query("editions").collect()).map((e) => e.coverageUnmapped ?? false),
     }));
   }
-  const onlyCovering = (volumes: string[]) => ({ volumes, coverages: volumes.length, unmapped: [false] });
+  const onlyCovering = (volumes: string[]) => ({
+    volumes,
+    coverages: volumes.length,
+    unmapped: [false],
+  });
   const PLACED_1_3 = onlyCovering(["1", "2", "3"]);
   const UNMAPPED = { volumes: [], coverages: 0, unmapped: [true] };
   const NOTHING = { volumes: [], coverages: 0, unmapped: [] };
@@ -1726,7 +1766,11 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
       book: { ...THREE_IN_1, title: "Alpha 3-in-1 Edition 1 (Vol. 1 & 3)" },
       expected: UNMAPPED,
     },
-    { name: "without any statement the declared size still places a 3-in-1", book: THREE_IN_1, expected: PLACED_1_3 },
+    {
+      name: "without any statement the declared size still places a 3-in-1",
+      book: THREE_IN_1,
+      expected: PLACED_1_3,
+    },
     {
       name: "a title's own range (Alpha Omnibus 2 (Vol. 4-6)) creates and covers its Volumes",
       book: { ...OMNIBUS, title: "Alpha Omnibus 2 (Vol. 4-6)" },
@@ -1744,7 +1788,10 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     },
     {
       name: "a blurb never stands in for a title statement the outer range contradicts",
-      book: { ...DELUXE, title: "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)" },
+      book: {
+        ...DELUXE,
+        title: "Alpha Deluxe Edition Vol. 1-9 (Collects Vols. 1-3 plus Vol. 4’s bonus chapter)",
+      },
       blurb: "<p>Collects volumes 1-9.</p>",
       expected: UNMAPPED,
     },
@@ -1811,14 +1858,17 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     },
   ];
 
-  it.each(WIRING.map((row) => [`${row.name}: ${row.book.title}`, row] as const))("%s", async (_, row) => {
-    const { book, blurb, expected } = row;
-    const t = makeT();
-    await seedRegistry(t, true);
-    stubSite([{ ...book, blurb }]);
-    await sync(t);
-    expect(await placed(t)).toEqual(expected);
-  });
+  it.each(WIRING.map((row) => [`${row.name}: ${row.book.title}`, row] as const))(
+    "%s",
+    async (_, row) => {
+      const { book, blurb, expected } = row;
+      const t = makeT();
+      await seedRegistry(t, true);
+      stubSite([{ ...book, blurb }]);
+      await sync(t);
+      expect(await placed(t)).toEqual(expected);
+    },
+  );
 
   // An observation stored before the parser marked gapped lists, left
   // unplaced by an older planner, replays (R13) from its stored snapshot:
@@ -1846,7 +1896,15 @@ describe("sevenSeas.sync — a gapped coverage statement is never widened (R12)"
     const t = makeT();
     await seedRegistry(t, true);
     const title = "Alpha: Part 5, Vol. 6";
-    stubSite([{ ...THREE_IN_1, slug: "alpha-part", seriesSlug: "alpha-part", seriesTitle: undefined, title }]);
+    stubSite([
+      {
+        ...THREE_IN_1,
+        slug: "alpha-part",
+        seriesSlug: "alpha-part",
+        seriesTitle: undefined,
+        title,
+      },
+    ]);
     await sync(t);
     expect(await placed(t)).toEqual(onlyCovering(["6"]));
     await t.run(async (ctx) => {

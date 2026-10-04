@@ -55,7 +55,9 @@ function targetFlags(): string[] {
   const target = deployment || envTarget;
   const local = deployment === "" ? envTarget.startsWith("local:") : deployment === "local";
   if (!local && !flag("yes")) {
-    throw new Error(`Refusing to target "${target}" without --yes (the sandbox is the local deployment).`);
+    throw new Error(
+      `Refusing to target "${target}" without --yes (the sandbox is the local deployment).`,
+    );
   }
   console.error(`[repair] target: ${target || "(default dev deployment)"}`);
   return deployment ? ["--deployment", deployment] : [];
@@ -75,7 +77,17 @@ const TARGET = command === undefined ? [] : targetFlags();
 function convexRun(fn: string, args: unknown): string {
   return execFileSync(
     "npx",
-    ["convex", "run", "--codegen", "disable", "--typecheck", "disable", ...TARGET, fn, JSON.stringify(args)],
+    [
+      "convex",
+      "run",
+      "--codegen",
+      "disable",
+      "--typecheck",
+      "disable",
+      ...TARGET,
+      fn,
+      JSON.stringify(args),
+    ],
     { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] },
   );
 }
@@ -105,13 +117,20 @@ function batches(entries: Entry[], size: number): Entry[][] {
 function runBatch(kind: string, entries: Entry[], dryRun: boolean): Outcome[] {
   const withKind = entries.map((entry) => ({ kind, ...entry }));
   try {
-    return JSON.parse(convexRun("repair:runBatch", { entries: withKind, dryRun, actor })) as Outcome[];
+    return JSON.parse(
+      convexRun("repair:runBatch", { entries: withKind, dryRun, actor }),
+    ) as Outcome[];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (entries.length > 1) {
       const half = Math.ceil(entries.length / 2);
-      console.error(`[repair] batch of ${entries.length} failed (${message.split("\n").find((l) => /error/i.test(l)) ?? "error"}); halving`);
-      return [...runBatch(kind, entries.slice(0, half), dryRun), ...runBatch(kind, entries.slice(half), dryRun)];
+      console.error(
+        `[repair] batch of ${entries.length} failed (${message.split("\n").find((l) => /error/i.test(l)) ?? "error"}); halving`,
+      );
+      return [
+        ...runBatch(kind, entries.slice(0, half), dryRun),
+        ...runBatch(kind, entries.slice(half), dryRun),
+      ];
     }
     return [{ key: entries[0]?.key ?? "?", status: "error", reason: message.slice(0, 800) }];
   }
@@ -126,11 +145,16 @@ function runStep(step: Step, dryRun: boolean): Outcome[] {
     for (let round = 0; !dryRun && round < 100; round++) {
       const partial = new Set(results.filter((o) => o.status === "partial").map((o) => o.key));
       if (partial.size === 0) break;
-      const again = runBatch(step.kind, batch.filter((e) => partial.has(e.key)), dryRun);
+      const again = runBatch(
+        step.kind,
+        batch.filter((e) => partial.has(e.key)),
+        dryRun,
+      );
       results = [...results.filter((o) => !partial.has(o.key)), ...again];
     }
     outcomes.push(...results);
-    if (all.length > 5 && (i + 1) % 10 === 0) console.error(`[repair] ${step.step}: ${i + 1}/${all.length} batches`);
+    if (all.length > 5 && (i + 1) % 10 === 0)
+      console.error(`[repair] ${step.step}: ${i + 1}/${all.length} batches`);
   }
   return outcomes;
 }
@@ -141,7 +165,10 @@ function tally(outcomes: Outcome[]) {
   for (const o of outcomes) {
     counts[o.status] = (counts[o.status] ?? 0) + 1;
     if (o.status === "skipped" || o.status === "error" || o.status === "deferred") {
-      const reason = `${o.status}: ${(o.reason ?? "").replace(/[a-z0-9]{32}/g, "<id>").replace(/\d+/g, "N").slice(0, 120)}`;
+      const reason = `${o.status}: ${(o.reason ?? "")
+        .replace(/[a-z0-9]{32}/g, "<id>")
+        .replace(/\d+/g, "N")
+        .slice(0, 120)}`;
       reasons[reason] = (reasons[reason] ?? 0) + 1;
     }
   }
@@ -156,23 +183,41 @@ function runStage(plan: Plan, stageNo: number, onlyStep: string | null) {
   const stage = plan.stages.find((s) => s.stage === stageNo);
   if (!stage) throw new Error(`No stage ${stageNo} in the plan.`);
   if (stage.requiresPackagingResearch && !plan.inputs.packagingResearchComplete && !flag("force")) {
-    throw new Error("Stage 4 needs the packaging research shards; rebuild the plan once they land (or --force).");
+    throw new Error(
+      "Stage 4 needs the packaging research shards; rebuild the plan once they land (or --force).",
+    );
   }
   const mode = apply ? "apply" : "dry";
-  const report: Record<string, { counts: Record<string, number>; reasons: Record<string, number>; outcomes: Outcome[] }> = {};
+  const report: Record<
+    string,
+    { counts: Record<string, number>; reasons: Record<string, number>; outcomes: Outcome[] }
+  > = {};
   for (const step of stage.steps) {
     if (onlyStep && step.step !== onlyStep) continue;
     const started = Date.now();
     const outcomes = runStep(step, !apply);
     const { counts, reasons } = tally(outcomes);
-    report[step.step] = { counts, reasons, outcomes: outcomes.filter((o) => (o.status !== "applied" && o.status !== "alreadyApplied") || o.notes) };
-    console.log(`${step.step} ${step.kind} (${step.entries.length}) ${mode} ${((Date.now() - started) / 1000).toFixed(0)}s: ${JSON.stringify(counts)}`);
-    for (const [reason, n] of Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+    report[step.step] = {
+      counts,
+      reasons,
+      outcomes: outcomes.filter(
+        (o) => (o.status !== "applied" && o.status !== "alreadyApplied") || o.notes,
+      ),
+    };
+    console.log(
+      `${step.step} ${step.kind} (${step.entries.length}) ${mode} ${((Date.now() - started) / 1000).toFixed(0)}s: ${JSON.stringify(counts)}`,
+    );
+    for (const [reason, n] of Object.entries(reasons)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)) {
       console.log(`    ${n} × ${reason}`);
     }
   }
   mkdirSync(outDir, { recursive: true });
-  const file = join(outDir, `${stamp()}-stage${stageNo}${onlyStep ? `-${onlyStep}` : ""}-${mode}.json`);
+  const file = join(
+    outDir,
+    `${stamp()}-stage${stageNo}${onlyStep ? `-${onlyStep}` : ""}-${mode}.json`,
+  );
   writeFileSync(file, JSON.stringify(report, null, 1));
   console.log(`report: ${file}`);
 }
@@ -181,7 +226,10 @@ switch (command) {
   case "metrics": {
     const result = convexRun("repair:metrics", {});
     mkdirSync(outDir, { recursive: true });
-    const file = join(outDir, `metrics-${argv[1] && !argv[1].startsWith("--") ? argv[1] : stamp()}.json`);
+    const file = join(
+      outDir,
+      `metrics-${argv[1] && !argv[1].startsWith("--") ? argv[1] : stamp()}.json`,
+    );
     writeFileSync(file, result);
     console.log(result.trim());
     console.log(`saved: ${file}`);

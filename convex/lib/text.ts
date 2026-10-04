@@ -212,7 +212,14 @@ export function decodeUtf8OrWindows1252(bytes: Uint8Array): string {
         at += 1;
         continue;
       }
-      const width = lead >= 0xc2 && lead <= 0xdf ? 2 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0;
+      const width =
+        lead >= 0xc2 && lead <= 0xdf
+          ? 2
+          : lead >= 0xe0 && lead <= 0xef
+            ? 3
+            : lead >= 0xf0 && lead <= 0xf4
+              ? 4
+              : 0;
       if (width > 0) {
         try {
           out += STRICT_UTF8.decode(bytes.subarray(at, at + width));

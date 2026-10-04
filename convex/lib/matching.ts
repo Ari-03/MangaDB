@@ -42,7 +42,10 @@ function foldTitle(title: string): string {
 
 /** Letters and digits only, one space between words. */
 const words = (text: string) =>
-  text.replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+  text
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 /**
  * Normalized series-title key for rungs ③/④ and every by-title Series

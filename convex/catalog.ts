@@ -50,7 +50,10 @@ export const stats = query({
         if (stored) return [table, { count: stored[table], capped: false }] as const;
         const docs = await ctx.db.query(table).take(COUNT_CAP + 1);
         const active = docs.filter((doc) => doc.status === "active").length;
-        return [table, { count: Math.min(active, COUNT_CAP), capped: docs.length > COUNT_CAP }] as const;
+        return [
+          table,
+          { count: Math.min(active, COUNT_CAP), capped: docs.length > COUNT_CAP },
+        ] as const;
       }),
     );
     return Object.fromEntries(entries) as Record<CountedTable, { count: number; capped: boolean }>;
@@ -174,9 +177,7 @@ export const recentSeries = query({
         (entry.coverUrl || entry.coverIsbns.length > 0 ? jacketed : cloth).push(entry);
       }
     }
-    return [...jacketed, ...cloth]
-      .slice(0, take)
-      .sort((a, b) => b.publicId - a.publicId);
+    return [...jacketed, ...cloth].slice(0, take).sort((a, b) => b.publicId - a.publicId);
   },
 });
 
@@ -408,10 +409,10 @@ export const search = query({
       authorHits(ctx, trimmed, SEARCH_AUTHORS, showMature),
     ]);
     const wholeIds = new Set(hits.whole.map((doc) => doc._id));
-    const ranked = [
-      ...hits.whole,
-      ...hits.active.filter((doc) => !wholeIds.has(doc._id)),
-    ].slice(0, SEARCH_LIMIT);
+    const ranked = [...hits.whole, ...hits.active.filter((doc) => !wholeIds.has(doc._id))].slice(
+      0,
+      SEARCH_LIMIT,
+    );
     const [series, didYouMean] = await Promise.all([
       Promise.all(ranked.map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc)))),
       hits.whole.length === 0 && !names && authors.length === 0
@@ -459,9 +460,7 @@ export const suggest = query({
     const shown = better ? hits.whole : hits.active;
     const [series, didYouMean] = await Promise.all([
       Promise.all(
-        shown
-          .slice(0, SUGGEST_LIMIT)
-          .map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
+        shown.slice(0, SUGGEST_LIMIT).map((doc) => seriesCard(ctx, doc, matchedAlt(trimmed, doc))),
       ),
       nearMissCards(ctx, misses),
     ]);
@@ -656,7 +655,9 @@ export const seriesPage = query({
           edition.editionLineId ? ctx.db.get(edition.editionLineId) : null,
           // The Edition's ordered Coverage within this Series.
           coverageOf(ctx, edition._id),
-          releasesOf(ctx, edition._id).then((docs) => docs.filter((doc) => doc.status === "active")),
+          releasesOf(ctx, edition._id).then((docs) =>
+            docs.filter((doc) => doc.status === "active"),
+          ),
         ]);
 
         const coverage = [];
@@ -688,9 +689,7 @@ export const seriesPage = query({
           isbn13: release.isbn13 ?? null,
           pubDate: release.pubDate ?? null,
         }));
-        releases.sort(
-          (a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity),
-        );
+        releases.sort((a, b) => (a.pubDate?.sort ?? Infinity) - (b.pubDate?.sort ?? Infinity));
 
         return {
           publicId: edition.publicId,

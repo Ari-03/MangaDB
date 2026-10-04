@@ -12,7 +12,12 @@ import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { insertSourceRevision, seedCatalog } from "./test.factories";
 import { alice, bob, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
-import { ALPHA_1 as LISTED_ALPHA_1, type FixtureBook, SEVEN_SEAS as BASE, stubSite } from "./test.imports";
+import {
+  ALPHA_1 as LISTED_ALPHA_1,
+  type FixtureBook,
+  SEVEN_SEAS as BASE,
+  stubSite,
+} from "./test.imports";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -76,12 +81,13 @@ describe("authority rules — after a Human Override is cleared", () => {
   /** The Release's newest Revision: the base a Moderator's edit or clear names. */
   const latestRevision = async (t: TestT) => {
     const release = await theRelease(t);
-    return await t.run(async (ctx) =>
-      (await ctx.db
-        .query("revisions")
-        .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id))
-        .order("desc")
-        .first())!,
+    return await t.run(
+      async (ctx) =>
+        (await ctx.db
+          .query("revisions")
+          .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id))
+          .order("desc")
+          .first())!,
     );
   };
 
@@ -140,8 +146,12 @@ describe("authority rules — after a Human Override is cleared", () => {
     const t = makeT();
     const asMod = await overriddenDate(t);
     const pending = async () =>
-      (await asMod.query(api.moderation.editForm, { type: "release", key: (await theRelease(t))._id }))
-        ?.importReviewPending;
+      (
+        await asMod.query(api.moderation.editForm, {
+          type: "release",
+          key: (await theRelease(t))._id,
+        })
+      )?.importReviewPending;
     expect(await pending()).toBe(false);
 
     stubSite([{ ...ALPHA_1, modified: "2026-08-10T00:00:00", date: "February 3, 2026" }]);
@@ -166,19 +176,23 @@ describe("authority rules — after a Human Override is cleared", () => {
     stubSite([ALPHA_1, alpha2]);
     await sync(t);
     const asMod = await setupModerator(t);
-    const release = (await t.run(async (ctx) =>
-      await ctx.db
-        .query("releases")
-        .withIndex("by_isbn13", (q) => q.eq("isbn13", "9781999000103"))
-        .unique()))!;
+    const release = (await t.run(
+      async (ctx) =>
+        await ctx.db
+          .query("releases")
+          .withIndex("by_isbn13", (q) => q.eq("isbn13", "9781999000103"))
+          .unique(),
+    ))!;
     const ref = { type: "release" as const, id: release._id };
     const latest = async () =>
-      (await t.run(async (ctx) =>
-        await ctx.db
-          .query("revisions")
-          .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id))
-          .order("desc")
-          .first()))!._id;
+      (await t.run(
+        async (ctx) =>
+          await ctx.db
+            .query("revisions")
+            .withIndex("by_record", (q) => q.eq("ref.type", "release").eq("ref.id", release._id))
+            .order("desc")
+            .first(),
+      ))!._id;
     // A future date, overridden, so the drop queues a possible-cancellation review.
     await asMod.mutation(api.moderation.submitDirectEdit, {
       ref,

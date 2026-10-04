@@ -63,9 +63,13 @@ class Wire {
   /** The server's anonymous answer to the users:viewer subscription: null. */
   answerViewerNull() {
     const update = this.messages.find(
-      (message) => message.type === "ModifyQuerySet" && message.modifications?.some((change) => change.udfPath === "users:viewer"),
+      (message) =>
+        message.type === "ModifyQuerySet" &&
+        message.modifications?.some((change) => change.udfPath === "users:viewer"),
     );
-    const queryId = update?.modifications?.find((change) => change.udfPath === "users:viewer")?.queryId;
+    const queryId = update?.modifications?.find(
+      (change) => change.udfPath === "users:viewer",
+    )?.queryId;
     if (queryId === undefined) throw new Error("no users:viewer subscription");
     this.onmessage?.({
       data: JSON.stringify({
@@ -102,6 +106,7 @@ async function render(anonymousReader = false) {
       createElement(ConvexProviderWithClerk, {
         client,
         useAuth: useConvexClerkAuth,
+        // biome-ignore lint/correctness/noChildrenProp: ConvexProviderWithClerk's and InitialStateProvider's props types require children, so createElement takes it here rather than as a third argument
         children: createElement(
           Fragment,
           null,
@@ -153,7 +158,11 @@ it("a slow token holds the private query until Authenticate", async () => {
   expect(shown()).toBe("loading");
   expect(Wire.latest.messages).toEqual([]);
   await act(async () => resolveToken("test-token"));
-  expect(Wire.latest.messages.map((message) => message.type)).toEqual(["Connect", "Authenticate", "ModifyQuerySet"]);
+  expect(Wire.latest.messages.map((message) => message.type)).toEqual([
+    "Connect",
+    "Authenticate",
+    "ModifyQuerySet",
+  ]);
 });
 
 it("a sign-in on the page shows loading, not the anonymous answer, while the token loads", async () => {

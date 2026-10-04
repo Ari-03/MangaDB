@@ -52,7 +52,11 @@ function liveForm(name: string, baseRevisionId: string, overridden = true) {
 }
 
 const reasonBox = (tree: Host[]) =>
-  tree.find((host) => host.type === "textarea" && host.props.placeholder === "Why should imports weigh this field again?");
+  tree.find(
+    (host) =>
+      host.type === "textarea" &&
+      host.props.placeholder === "Why should imports weigh this field again?",
+  );
 /** The value the Clear preview says stays. */
 const keptValue = (tree: Host[]) => text(tree.find((host) => host.type === "code")?.props.children);
 const notices = (tree: Host[]) =>
@@ -119,7 +123,9 @@ describe("clearing a Human Override directly", () => {
     const preview = () =>
       text(
         mount(page).find(
-          (host) => host.props.className === "section-hint" && text(host.props.children).startsWith("Clearing"),
+          (host) =>
+            host.props.className === "section-hint" &&
+            text(host.props.children).startsWith("Clearing"),
         )?.props.children,
       );
     press(mount(page), "Clear").click();
@@ -145,7 +151,8 @@ describe("clearing a Human Override directly", () => {
       locked.some(
         (host) =>
           host.props.role === "alert" &&
-          text(host.props.children) === "This record is now locked; its override cannot be cleared.",
+          text(host.props.children) ===
+            "This record is now locked; its override cannot be cleared.",
       ),
     ).toBe(true);
     confirmClear();
@@ -161,7 +168,9 @@ describe("clearing a Human Override directly", () => {
     // The live query drops the override, and the panel with it.
     fakes.form = liveForm("Original", "r2", false);
     const after = mount(page);
-    expect(after.some((host) => host.type === "h2" && text(host.props.children) === "Human Overrides")).toBe(false);
+    expect(
+      after.some((host) => host.type === "h2" && text(host.props.children) === "Human Overrides"),
+    ).toBe(false);
     expect(notices(after)).toContain("Override on Name cleared — revision #5 recorded.");
   });
 });

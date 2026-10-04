@@ -279,9 +279,8 @@ const VOLUME_MARKER = new RegExp(
 const BRACKET_MARKER = new RegExp(`(?:^|\\s)${MARKER}\\s*(${LABEL})$`, "i");
 
 /** "Otherside Picnic 05", "Buddha 3: Devadatta", "Astro Boy 1 & 2". */
-const BARE_NUMBER = new RegExp(
-  `^(.*?[^\\s#,])(?:\\s*,)?\\s+(\\d{1,3}(?:\\.\\d+)?(?:\\s*(?:-|–|&)\\s*\\d{1,3})?)(?:\\s*:\\s*(.+)|\\s+\\(([^()]+)\\))?$`,
-);
+const BARE_NUMBER =
+  /^(.*?[^\s#,])(?:\s*,)?\s+(\d{1,3}(?:\.\d+)?(?:\s*(?:-|–|&)\s*\d{1,3})?)(?:\s*:\s*(.+)|\s+\(([^()]+)\))?$/;
 
 /**
  * "BARBARITIES II": an unmarked trailing roman numeral, upper-case only and
@@ -416,10 +415,7 @@ function absorbGroup(inner: string, peel: Peeled): boolean {
     return true;
   }
   if (absorbStatement(text, peel)) return true;
-  const coverage = new RegExp(
-    `^vol(?:ume)?s?\\.?\\s*(${RANGE})(?:\\s+(.*))?$`,
-    "i",
-  ).exec(text);
+  const coverage = new RegExp(`^vol(?:ume)?s?\\.?\\s*(${RANGE})(?:\\s+(.*))?$`, "i").exec(text);
   if (coverage) {
     peel.stated = agreed(peel.stated, statedList(coverage[1]!));
     const rest = coverage[2]?.trim();
@@ -541,15 +537,8 @@ function endsInPackaging(text: string): boolean {
   return phrase !== null && (phrase.position !== null || phrase.listed !== undefined);
 }
 
-function sameNumber(
-  label: string,
-  seriesNumber: ParseOptions["seriesNumber"],
-): boolean {
-  if (
-    seriesNumber === undefined ||
-    seriesNumber === null ||
-    `${seriesNumber}` === ""
-  ) {
+function sameNumber(label: string, seriesNumber: ParseOptions["seriesNumber"]): boolean {
+  if (seriesNumber === undefined || seriesNumber === null || `${seriesNumber}` === "") {
     return false;
   }
   return Number(label) === Number(seriesNumber);
@@ -562,10 +551,7 @@ function sameNumber(
  * it. Never falls back to the whole book title when a volume marker is
  * present, and never turns a packaging number ("Omnibus 7") into a Volume.
  */
-export function parseBookTitle(
-  raw: string,
-  options: ParseOptions = {},
-): ParsedBookTitle {
+export function parseBookTitle(raw: string, options: ParseOptions = {}): ParsedBookTitle {
   const cleaned = decodeEntities(raw)
     .replace(/[\s ]+/g, " ")
     .trim();
@@ -584,7 +570,7 @@ export function parseBookTitle(
   let volumeSubtitle: string | null = null;
   // The Volumes a designation lists outside the brackets ("Vol. 1-3",
   // "Omnibus 5-6"): packaging even when a gap leaves it null.
-  let listed: Stated = undefined;
+  let listed: Stated;
   let bareNumber = false;
   let bareRoman = false;
   let bareSplit: ParsedBookTitle["bareSplit"] = null;
@@ -600,7 +586,9 @@ export function parseBookTitle(
   const trailing = TRAILING_STATEMENT.exec(text);
   const marker = trailing ? VOLUME_MARKER.exec(text) : null;
   const statement =
-    trailing && (marker === null || marker[1]!.length > trailing[1]!.length) && endsInPackaging(trailing[1]!)
+    trailing &&
+    (marker === null || marker[1]!.length > trailing[1]!.length) &&
+    endsInPackaging(trailing[1]!)
       ? trailing
       : null;
   if (statement) text = peelTrailingGroups(statement[1]!, peel);
@@ -629,7 +617,9 @@ export function parseBookTitle(
       text = marked[1]!;
       const designation = marked[2]!;
       // "18+1" is one extra volume's label, never a range.
-      listed = PLUS_EXTRA_RE.test(designation) ? undefined : parseVolumeList(designation)?.coverRange;
+      listed = PLUS_EXTRA_RE.test(designation)
+        ? undefined
+        : parseVolumeList(designation)?.coverRange;
       if (listed === undefined) volumeLabel = canonicalLabel(designation);
       volumeSubtitle = (marked[3] ?? marked[4])?.trim() || null;
     }
@@ -664,9 +654,7 @@ export function parseBookTitle(
   if (volumeLabel === null && listed === undefined && linePosition === null) {
     const bare = BARE_NUMBER.exec(text);
     const context =
-      peel.formatTags.length > 0 ||
-      peel.lineNames.length > 0 ||
-      packagingName !== null;
+      peel.formatTags.length > 0 || peel.lineNames.length > 0 || packagingName !== null;
     if (bare && !/\bno\.?$/i.test(bare[1]!.trim())) {
       const designation = bare[2]!;
       const list = parseVolumeList(designation)?.coverRange;
@@ -702,7 +690,9 @@ export function parseBookTitle(
   // (3-in-1 Edition) Volume 3" carrying "Vol. 7,8,9"), and so may be its
   // subtitle. A Part or Book list there names no Volumes.
   const carried = options.subtitle
-    ? new RegExp(`^(${MARKER})\\s*(${RANGE}|${LABEL})(?:\\s*[:\\-–]\\s*(.+))?$`, "i").exec(options.subtitle.trim())
+    ? new RegExp(`^(${MARKER})\\s*(${RANGE}|${LABEL})(?:\\s*[:\\-–]\\s*(.+))?$`, "i").exec(
+        options.subtitle.trim(),
+      )
     : null;
   let carriedSubtitle: string | undefined;
   if (carried) {
@@ -714,7 +704,10 @@ export function parseBookTitle(
     } else if (
       list !== undefined &&
       /^(?:vol|#)/i.test(carried[1]!) &&
-      (packagingName !== null || peel.lineNames.length > 0 || peel.stated !== undefined || listed !== undefined)
+      (packagingName !== null ||
+        peel.lineNames.length > 0 ||
+        peel.stated !== undefined ||
+        listed !== undefined)
     ) {
       listed = agreed(listed, statedList(carried[2]!));
       carriedSubtitle = carried[3];
@@ -723,7 +716,12 @@ export function parseBookTitle(
 
   // Last, and only when nothing else named the volume (a bracket, a
   // subtitle): "Kingdom Hearts II (Vol. 3)" is Vol. 3 of Kingdom Hearts II.
-  if (volumeLabel === null && listed === undefined && linePosition === null && packagingName === null) {
+  if (
+    volumeLabel === null &&
+    listed === undefined &&
+    linePosition === null &&
+    packagingName === null
+  ) {
     const roman = BARE_ROMAN.exec(text);
     if (roman && !CONJUNCTION_BEFORE.test(roman[1]!)) {
       text = roman[1]!;
@@ -801,12 +799,7 @@ export function parseBookTitle(
 export function rangeLabels(range: CoverRange): string[] {
   const from = Number(range.from);
   const to = Number(range.to);
-  if (
-    !Number.isInteger(from) ||
-    !Number.isInteger(to) ||
-    to < from ||
-    to - from >= 50
-  ) {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || to < from || to - from >= 50) {
     return [];
   }
   return Array.from({ length: to - from + 1 }, (_, i) => String(from + i));

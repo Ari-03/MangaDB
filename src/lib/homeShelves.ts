@@ -228,7 +228,10 @@ export function homeShelves<Book extends HeroBook, Series extends ShelfSeries>(
     hero: heroBooks(hero, onFile, HERO_ROWS * HERO_COLS),
     primary: primary ? seat(primary, SHELF_LIMIT) : null,
     secondary: next && next.books.length > 0 ? next : null,
-    undated: { count: undated.length, books: primary ? [] : jacketed(undated, onFile, SHELF_LIMIT) },
+    undated: {
+      count: undated.length,
+      books: primary ? [] : jacketed(undated, onFile, SHELF_LIMIT),
+    },
     series: enoughSeries ? shelfSeries : [],
     seriesLinks: enoughSeries
       ? []

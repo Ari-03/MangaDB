@@ -8,7 +8,7 @@ import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import { useState } from "react";
 
-import { api } from "../../convex/_generated/api";
+import type { api } from "../../convex/_generated/api";
 import { editionTitle, volumeTitle } from "../../convex/lib/titles";
 import { Cover, coverIsbns } from "~/lib/cover";
 import { formatPartialDate } from "~/lib/format";
@@ -53,8 +53,7 @@ function coveredText(
   const first = coverage[0];
   const last = coverage[coverage.length - 1];
   if (!first || !last) return null;
-  const name = (cov: { position: number; label: string | null }) =>
-    cov.label ?? `#${cov.position}`;
+  const name = (cov: { position: number; label: string | null }) => cov.label ?? `#${cov.position}`;
   const partial = coverage.some((cov) => cov.extent === "partial") ? " (part)" : "";
   return first === last
     ? `Vol. ${name(first)}${partial}`
@@ -68,9 +67,7 @@ export function bookLabel(book: {
   coverage: Book["coverage"];
 }): string {
   if (book.lineName !== null) {
-    return book.linePosition !== null
-      ? `${book.lineName} ${book.linePosition}`
-      : book.lineName;
+    return book.linePosition !== null ? `${book.lineName} ${book.linePosition}` : book.lineName;
   }
   return coveredText(book.coverage) ?? "Unnumbered";
 }
@@ -89,9 +86,7 @@ export function bookTitle(seriesTitle: string, book: Book): string {
  * Volume this run has no book for (not on file, or never published by this
  * publisher), so gaps read as gaps instead of silently closing up.
  */
-type Slot =
-  | { kind: "book"; book: Book }
-  | { kind: "missing"; volume: Volume };
+type Slot = { kind: "book"; book: Book } | { kind: "missing"; volume: Volume };
 
 /**
  * A standard path walks the canonical sequence up to its last covered
@@ -159,8 +154,7 @@ function PathShelfView({
   overlay,
 }: PathShelfProps & { overlay: SeriesOverlay | null }) {
   const [prompts, setPrompts] = useState<ShelfPromptState>(NO_PROMPTS);
-  const raise = (next: Partial<ShelfPromptState>) =>
-    setPrompts((prev) => ({ ...prev, ...next }));
+  const raise = (next: Partial<ShelfPromptState>) => setPrompts((prev) => ({ ...prev, ...next }));
   return (
     <>
       {overlay ? (
@@ -274,13 +268,7 @@ function BookShelfItem({
 }
 
 /** A canonical Volume with no book in this path, linking its Volume page. */
-export function MissingVolume({
-  volume,
-  seriesTitle,
-}: {
-  volume: Volume;
-  seriesTitle: string;
-}) {
+export function MissingVolume({ volume, seriesTitle }: { volume: Volume; seriesTitle: string }) {
   const title = volumeTitle(seriesTitle, volume.label);
   return (
     <div className="shelf-item shelf-item--missing">
@@ -294,9 +282,7 @@ export function MissingVolume({
           <Cover
             title={title}
             numbered={
-              volume.label !== null
-                ? { series: seriesTitle, number: volume.label }
-                : undefined
+              volume.label !== null ? { series: seriesTitle, number: volume.label } : undefined
             }
           />
         </Link>

@@ -41,10 +41,29 @@ type AnalyticsEvents = {
   reading_status_changed: { seriesId: string; status: ReadingStatus | null; source: Source };
   search_performed: { queryLength: number; resultCount: number };
   mature_titles_toggled: { showMature: boolean };
-  rating_submitted: { seriesPublicId: number; volumePublicId?: number; editionPublicId?: number; score: number };
-  review_submitted: { seriesPublicId: number; volumePublicId?: number; editionPublicId?: number; length: number };
-  comment_posted: { target: "series" | "volume"; seriesId: string; isReply: boolean; held: boolean };
-  favorite_toggled: { target: "series" | "volume" | "edition"; publicId: number; favorite: boolean };
+  rating_submitted: {
+    seriesPublicId: number;
+    volumePublicId?: number;
+    editionPublicId?: number;
+    score: number;
+  };
+  review_submitted: {
+    seriesPublicId: number;
+    volumePublicId?: number;
+    editionPublicId?: number;
+    length: number;
+  };
+  comment_posted: {
+    target: "series" | "volume";
+    seriesId: string;
+    isReply: boolean;
+    held: boolean;
+  };
+  favorite_toggled: {
+    target: "series" | "volume" | "edition";
+    publicId: number;
+    favorite: boolean;
+  };
 };
 
 export type AnalyticsEvent = keyof AnalyticsEvents;
@@ -159,7 +178,8 @@ export function ViewerAnalytics() {
   else if (!isSignedIn || !userId) consent = ANONYMOUS;
   else if (viewer === undefined) consent = { status: "pending" };
   else if (viewer === null) consent = { status: "pending" };
-  else if (viewer.needsUsername) consent = dnt ? { status: "off" } : { status: "identified", userId };
+  else if (viewer.needsUsername)
+    consent = dnt ? { status: "off" } : { status: "identified", userId };
   else if (viewer.analyticsOptOut ?? dnt) consent = { status: "off" };
   else consent = { status: "identified", userId, username: viewer.username, role: viewer.role };
 
@@ -187,11 +207,11 @@ export function AnalyticsSettings() {
     <div className="sharing-settings">
       <p className="sharing-lede">
         We send page views and actions such as follows, collection and reading changes, ratings,
-        reviews, comments, favorites and searches to PostHog, to see how the site is used. While
-        you are signed in they carry your account id, username and any data-team role. They never
-        carry your email or the text of your reviews and comments. Page addresses and titles are
-        included, so a search is sent as part of the search page's address and title. PostHog
-        also receives your IP address and browser details.
+        reviews, comments, favorites and searches to PostHog, to see how the site is used. While you
+        are signed in they carry your account id, username and any data-team role. They never carry
+        your email or the text of your reviews and comments. Page addresses and titles are included,
+        so a search is sent as part of the search page's address and title. PostHog also receives
+        your IP address and browser details.
       </p>
       <div className="vis-field">
         <span className="vis-legend" id="analytics-label">

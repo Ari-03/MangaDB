@@ -6,7 +6,9 @@ const kodansha = { name: "Kodansha", slug: "kodansha" };
 const tokyopop = { name: "Tokyopop", slug: "tokyopop" };
 
 let nextId = 1;
-function book(overrides: Partial<GroupableEdition> & { at?: number[]; sort?: number }): GroupableEdition {
+function book(
+  overrides: Partial<GroupableEdition> & { at?: number[]; sort?: number },
+): GroupableEdition {
   const { at = [], sort, ...rest } = overrides;
   return {
     publicId: nextId++,

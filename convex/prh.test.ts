@@ -589,7 +589,8 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
         title: "Berserk Deluxe Volume 14",
         imprint: "Dark Horse Manga",
         flapcopy: "<p>Guts' greatest creation lives on in this final deluxe volume.</p>",
-        keynote: "<p>Collects <i>Berserk</i> Volumes 40, 41, and <i>Berserk Official Guidebook</i>.</p>",
+        keynote:
+          "<p>Collects <i>Berserk</i> Volumes 40, 41, and <i>Berserk Official Guidebook</i>.</p>",
       },
     ]);
     const result = await sync(t);
@@ -606,7 +607,10 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
       const coverage = await ctx.db.query("volumeCoverages").collect();
       const byEdition = new Map<string, string[]>();
       for (const c of coverage) {
-        byEdition.set(c.editionId, [...(byEdition.get(c.editionId) ?? []), volumes.get(c.volumeId)!]);
+        byEdition.set(c.editionId, [
+          ...(byEdition.get(c.editionId) ?? []),
+          volumes.get(c.volumeId)!,
+        ]);
       }
       const first = editions.find((e) => e.linePosition === "1")!;
       const last = editions.find((e) => e.linePosition === "14")!;
@@ -619,7 +623,9 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     const t = makeT();
     await seedRegistry(t, true);
     await backbone(t, "One Piece", ["4", "5", "6"]);
-    stubApi([{ isbn: "9781421536262", title: "One Piece 3-in-1 Edition Vol. 2", imprint: "VIZ Media" }]);
+    stubApi([
+      { isbn: "9781421536262", title: "One Piece 3-in-1 Edition Vol. 2", imprint: "VIZ Media" },
+    ]);
     await sync(t);
     await t.run(async (ctx) => {
       const [line] = await ctx.db.query("editionLines").collect();
@@ -627,7 +633,9 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
       const volumes = new Map(
         (await ctx.db.query("volumes").collect()).map((v) => [v._id, v.label]),
       );
-      const covered = (await ctx.db.query("volumeCoverages").collect()).map((c) => volumes.get(c.volumeId));
+      const covered = (await ctx.db.query("volumeCoverages").collect()).map((c) =>
+        volumes.get(c.volumeId),
+      );
       expect(covered.sort()).toEqual(["4", "5", "6"]);
     });
   });
@@ -655,7 +663,9 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
       const releases = await ctx.db.query("releases").collect();
       expect(releases.map((r) => r.format).sort()).toEqual(["digital", "physical"]);
       // The Series is still known through the line, so calendars and the library keep the book.
-      expect(releases.every((r) => r.seriesIds.length === 1 && r.seriesIds[0] === line!.seriesId)).toBe(true);
+      expect(
+        releases.every((r) => r.seriesIds.length === 1 && r.seriesIds[0] === line!.seriesId),
+      ).toBe(true);
     });
   });
 
@@ -667,7 +677,10 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
     await sync(t);
     await t.run(async (ctx) => {
       // A stated range is coverage — it creates normally (Volume 5 joins the backbone).
-      expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual(["4", "5"]);
+      expect((await ctx.db.query("volumes").collect()).map((v) => v.label).sort()).toEqual([
+        "4",
+        "5",
+      ]);
     });
   });
 
@@ -763,7 +776,9 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
         ["6", 6],
         ["7", 7],
       ]);
-      const release = (await ctx.db.query("releases").collect()).find((r) => r.isbn13 === "9781647297091");
+      const release = (await ctx.db.query("releases").collect()).find(
+        (r) => r.isbn13 === "9781647297091",
+      );
       expect(release?.seriesIds).toEqual([tower]);
     });
   });
@@ -806,7 +821,9 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
       expect(await ctx.db.query("releases").collect()).toEqual([]);
       const volumes = await ctx.db.query("volumes").collect();
       expect(volumes.map((v) => [v.seriesId, v.label])).toEqual([[base, "2"]]);
-      const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === "9781975300000")!;
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === "9781975300000",
+      )!;
       const hold = await ctx.db
         .query("placementHolds")
         .withIndex("by_observation", (q) => q.eq("observationId", obs._id))
@@ -874,7 +891,9 @@ describe("prh.sync — packaging and title shapes (Bootstrap Mode)", () => {
   it("creates an imprint's own row under its parent company", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await t.run((ctx) => insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" }));
+    await t.run((ctx) =>
+      insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" }),
+    );
     stubApi([
       {
         isbn: "9798891600836",
@@ -938,7 +957,9 @@ describe("prh.sync — hidden Series stay hidden", () => {
   };
 
   async function hideEmma(t: TestT) {
-    await t.run((ctx) => insertSeries(ctx, { status: "hidden", publicId: 15853, title: "Emma & Capucine" }));
+    await t.run((ctx) =>
+      insertSeries(ctx, { status: "hidden", publicId: 15853, title: "Emma & Capucine" }),
+    );
   }
 
   for (const bootstrap of [true, false]) {
@@ -975,7 +996,10 @@ const reviews = async (ctx: MutationCtx) =>
   (await ctx.db.query("proposals").collect()).filter((p) => p.state === "inReview");
 
 /** A listed entry the parser drops as out of scope: it fills a page without applying. */
-const LIGHT_NOVEL: FixtureTitle = { isbn: "9781646519811", title: "Excluded Story (Light Novel) Vol. 1" };
+const LIGHT_NOVEL: FixtureTitle = {
+  isbn: "9781646519811",
+  title: "Excluded Story (Light Novel) Vol. 1",
+};
 
 /** Two list pages, one manga each: 199 light novels and a manga, then another manga. */
 const TWO_PAGES: FixtureTitle[] = [
@@ -1035,7 +1059,8 @@ function disableOnPage(t: TestT, start: number, { reenable = false } = {}) {
     const url = typeof input === "object" && "url" in input ? input.url : String(input);
     if (new URL(url).searchParams.get("start") === String(start)) {
       await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
-      if (reenable) await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: true });
+      if (reenable)
+        await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: true });
     }
     return await inner(input);
   });
@@ -1069,7 +1094,10 @@ describe("prh.sync — continuation links", () => {
     const t = makeT();
     await seedRegistry(t, true);
     stubApi([
-      ...Array.from({ length: 200 }, () => ({ isbn: "9781646519811", title: "Excluded Story (Light Novel) Vol. 1" })),
+      ...Array.from({ length: 200 }, () => ({
+        isbn: "9781646519811",
+        title: "Excluded Story (Light Novel) Vol. 1",
+      })),
       { isbn: "9781646519828", title: "Included Manga 1", seriesNumber: 1 },
     ]);
     const first = await sync(t, { linkBudgetMs: 0 });
@@ -1081,7 +1109,10 @@ describe("prh.sync — continuation links", () => {
       const run = await ctx.db.get(first.runId);
       expect(run).toMatchObject({ status: "stopped", automatic: true });
       expect(run?.errors.at(-1)).toBe("Stopped: the source was disabled mid-run.");
-      expect(await prhSource(ctx)).toMatchObject({ consecutiveFailures: 0, healthState: "healthy" });
+      expect(await prhSource(ctx)).toMatchObject({
+        consecutiveFailures: 0,
+        healthState: "healthy",
+      });
     });
   });
 
@@ -1090,10 +1121,15 @@ describe("prh.sync — continuation links", () => {
   it("stops a scheduled continuation that finds the source disabled and unconfigured", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "prh", automatic: true });
+    const runId = await t.mutation(internal.imports.startRun, {
+      sourceKey: "prh",
+      automatic: true,
+    });
     await t.mutation(internal.importSources.setEnabledInternal, { key: "prh", enabled: false });
     vi.stubEnv("PRH_API_KEY", "");
-    expect(await sync(t, { runId, seen: 3, changed: 1, errors: ["carried"] })).toEqual({ skipped: "disabled" });
+    expect(await sync(t, { runId, seen: 3, changed: 1, errors: ["carried"] })).toEqual({
+      skipped: "disabled",
+    });
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
       expect(run).toMatchObject({ status: "stopped", recordsSeen: 3, recordsChanged: 1 });
@@ -1248,7 +1284,12 @@ describe("prh.sync — continuation links", () => {
     stubApi([...Array.from({ length: 200 }, () => LIGHT_NOVEL), LISTED_TITLE]);
     const markedId = await t.mutation(internal.imports.startRun, { sourceKey: "prh" });
     expect(
-      await sync(t, { ...continuation, runStartedAt: Date.now(), runId: markedId, observedEveryPage: true }),
+      await sync(t, {
+        ...continuation,
+        runStartedAt: Date.now(),
+        runId: markedId,
+        observedEveryPage: true,
+      }),
     ).toMatchObject({ completeSweep: true });
     await t.run(async (ctx) => {
       expect(await ctx.db.get(listed)).toMatchObject({ withdrawn: false });
@@ -1262,12 +1303,22 @@ describe("prh.sync — continuation links", () => {
     stubApi(TWO_PAGES);
     disableOnPage(t, 0);
     const result = await sync(t);
-    expect(result).toMatchObject({ stopped: true, recordsSeen: 1, recordsChanged: 1, completeSweep: false });
+    expect(result).toMatchObject({
+      stopped: true,
+      recordsSeen: 1,
+      recordsChanged: 1,
+      completeSweep: false,
+    });
     expect(requestedUrls).toHaveLength(1);
     await t.run(async (ctx) => {
       if (!("runId" in result)) throw new Error("Expected an import run");
       const run = await ctx.db.get(result.runId);
-      expect(run).toMatchObject({ status: "stopped", automatic: true, recordsSeen: 1, recordsChanged: 1 });
+      expect(run).toMatchObject({
+        status: "stopped",
+        automatic: true,
+        recordsSeen: 1,
+        recordsChanged: 1,
+      });
       const observations = await ctx.db.query("sourceObservations").collect();
       expect(observations.map((o) => o.sourceRecordId)).toEqual(["9781646519828"]);
     });
@@ -1283,7 +1334,10 @@ describe("prh.sync — continuation links", () => {
     await t.run(async (ctx) => {
       expect((await ctx.db.query("importRuns").first())?.status).toBe("succeeded");
       const observations = await ctx.db.query("sourceObservations").collect();
-      expect(observations.map((o) => o.sourceRecordId).sort()).toEqual(["9781646519828", "9781646519835"]);
+      expect(observations.map((o) => o.sourceRecordId).sort()).toEqual([
+        "9781646519828",
+        "9781646519835",
+      ]);
     });
   });
 
@@ -1301,7 +1355,10 @@ describe("prh.sync — continuation links", () => {
     await t.run(async (ctx) => {
       const runs = await ctx.db.query("importRuns").collect();
       expect(runs.map((run) => run.status)).toEqual(["stopped", "stopped", "stopped"]);
-      expect(await prhSource(ctx)).toMatchObject({ consecutiveFailures: 0, healthState: "healthy" });
+      expect(await prhSource(ctx)).toMatchObject({
+        consecutiveFailures: 0,
+        healthState: "healthy",
+      });
     });
   });
 
@@ -1446,7 +1503,11 @@ describe("prh.sync — a box set gains members that arrive after it (B15)", () =
     const t = makeT();
     await seedRegistry(t, true);
     await backbone(t, "Fire Force", []);
-    const box = { isbn: "9798888772584", title: "Fire Force Manga Box Set 1 (Vol. 1-2)", seriesNumber: 1 };
+    const box = {
+      isbn: "9798888772584",
+      title: "Fire Force Manga Box Set 1 (Vol. 1-2)",
+      seriesNumber: 1,
+    };
     stubApi([box]);
     await sync(t);
     const members = async () => (await bundleMembers(t)).map((member) => member.release.isbn13);
@@ -1487,7 +1548,9 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
       const editions = await ctx.db.query("editions").collect();
       return {
         volumes: [...labels.values()].sort(),
-        covered: (await ctx.db.query("volumeCoverages").collect()).map((c) => labels.get(c.volumeId)).sort(),
+        covered: (await ctx.db.query("volumeCoverages").collect())
+          .map((c) => labels.get(c.volumeId))
+          .sort(),
         unmapped: editions.map((e) => e.coverageUnmapped ?? false),
         releases: (await ctx.db.query("releases").collect()).length,
       };
@@ -1496,7 +1559,12 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
 
   const ONE_TO_THREE = ["1", "2", "3"];
   /** Placed: covering `covered` (by default every Volume there is). */
-  const covering = (volumes: string[], covered = volumes) => ({ volumes, covered, unmapped: [false], releases: 1 });
+  const covering = (volumes: string[], covered = volumes) => ({
+    volumes,
+    covered,
+    unmapped: [false],
+    releases: 1,
+  });
   /** Unmapped Packaging under its line, covering nothing. */
   const unmapped = (volumes: string[]) => ({ volumes, covered: [], unmapped: [true], releases: 1 });
   /** No Edition and no Release: the observation waits for an Editor. */
@@ -1640,15 +1708,18 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     },
   ];
 
-  it.each(WIRING.map((row) => [`${row.name}: ${row.title}`, row] as const))("%s", async (_, row) => {
-    const { title, flapcopy, keynote, backbone: volumes, expected } = row;
-    const t = makeT();
-    await seedRegistry(t, true);
-    if (volumes) await backbone(t, "Alpha", volumes);
-    stubApi([{ isbn: "9781646519828", title, flapcopy, keynote }]);
-    expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
-    expect(await placed(t)).toEqual(expected);
-  });
+  it.each(WIRING.map((row) => [`${row.name}: ${row.title}`, row] as const))(
+    "%s",
+    async (_, row) => {
+      const { title, flapcopy, keynote, backbone: volumes, expected } = row;
+      const t = makeT();
+      await seedRegistry(t, true);
+      if (volumes) await backbone(t, "Alpha", volumes);
+      stubApi([{ isbn: "9781646519828", title, flapcopy, keynote }]);
+      expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
+      expect(await placed(t)).toEqual(expected);
+    },
+  );
 
   // "Part N, Vol. M" is Volume M of the Part's Series: no packaging, and no
   // Volume N is created.
@@ -1658,7 +1729,9 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     stubApi([{ isbn: "9781646519828", title: "Alpha: Part 5, Vol. 6" }]);
     expect(await sync(t)).toMatchObject({ recordsSeen: 1, errorCount: 0 });
     await t.run(async (ctx) => {
-      expect((await ctx.db.query("series").collect()).map((s) => s.title)).toEqual(["Alpha: Part 5"]);
+      expect((await ctx.db.query("series").collect()).map((s) => s.title)).toEqual([
+        "Alpha: Part 5",
+      ]);
       expect((await ctx.db.query("volumes").collect()).map((v) => v.label)).toEqual(["6"]);
       expect(await ctx.db.query("editionLines").collect()).toHaveLength(0);
       const editions = await ctx.db.query("editions").collect();
@@ -1709,7 +1782,9 @@ describe("prh.sync — a gapped coverage statement is never widened (R12)", () =
     const t = await syncBox("Alpha Vol. 4-6 Omnibus 1-3 Box Set");
     await t.run(async (ctx) => {
       expect(await ctx.db.query("releaseBundles").collect()).toHaveLength(0);
-      expect((await ctx.db.query("placementHolds").collect()).map((hold) => hold.kind)).toEqual(["packaging"]);
+      expect((await ctx.db.query("placementHolds").collect()).map((hold) => hold.kind)).toEqual([
+        "packaging",
+      ]);
     });
   });
 });
@@ -2096,7 +2171,8 @@ describe("prh.notePresent — relisted Steamship titles and the library projecti
       let publicId = 0;
       for (let r = 0; r < releases; r++) {
         const seriesIds = [];
-        for (let k = 0; k < perRelease; k++) seriesIds.push(await insertSeries(ctx, { publicId: ++publicId }));
+        for (let k = 0; k < perRelease; k++)
+          seriesIds.push(await insertSeries(ctx, { publicId: ++publicId }));
         const editionId = await insertEdition(ctx, { publisherId });
         const isbn13 = `97800000${String(r).padStart(5, "0")}`;
         const releaseId = await insertRelease(ctx, { editionId, publisherId, seriesIds, isbn13 });

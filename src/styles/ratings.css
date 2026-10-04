@@ -9,7 +9,11 @@
   border-color: color-mix(in srgb, var(--gold) 45%, transparent);
   font-variant-numeric: tabular-nums;
 }
-.rating-star { width: 12px; height: 12px; fill: currentColor; }
+.rating-star {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
 
 /* --- The viewer's control ------------------------------------------------
    One of two, by Rating Format (convex/lib/scoreFormat.ts): the format's
@@ -32,7 +36,9 @@
   text-underline-offset: 3px;
   cursor: pointer;
 }
-.rating-clear:hover { color: var(--accent); }
+.rating-clear:hover {
+  color: var(--accent);
+}
 
 /* point10 / star5 / point100: a number between two round steppers */
 .rating-stepper {
@@ -64,10 +70,18 @@
   font-weight: 700;
   line-height: calc(var(--stepper-size) - 2px);
   cursor: pointer;
-  transition: border-color 110ms ease, color 110ms ease;
+  transition:
+    border-color 110ms ease,
+    color 110ms ease;
 }
-.rating-stepper-btn:hover { border-color: var(--accent); color: var(--accent); }
-.rating-stepper-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rating-stepper-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.rating-stepper-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .rating-stepper-input {
   width: 3.4rem;
   min-width: 0;
@@ -87,10 +101,23 @@
 }
 /* the steppers are the buttons: no browser spinners inside the field */
 .rating-stepper-input::-webkit-outer-spin-button,
-.rating-stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.rating-stepper-input::placeholder { color: var(--text-mute); }
-.rating-stepper-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.rating-stepper-of { flex: none; color: var(--text-mute); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.rating-stepper-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.rating-stepper-input::placeholder {
+  color: var(--text-mute);
+}
+.rating-stepper-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.rating-stepper-of {
+  flex: none;
+  color: var(--text-mute);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
 
 /* smiley3: three equal segments of one pill (the .seg-pill look), only the
    chosen one lit. The segments share the width and never wrap. */
@@ -121,13 +148,31 @@
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 130ms ease, color 130ms ease;
+  transition:
+    background 130ms ease,
+    color 130ms ease;
 }
-.rating-smiley-btn:hover { color: var(--text); }
-.rating-smiley-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
-.rating-smiley-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.rating-smiley-label { min-width: 0; overflow: hidden; text-overflow: clip; }
-.rating-smiley { width: 17px; height: 17px; flex: none; }
+.rating-smiley-btn:hover {
+  color: var(--text);
+}
+.rating-smiley-btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.rating-smiley-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.rating-smiley-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+}
+.rating-smiley {
+  width: 17px;
+  height: 17px;
+  flex: none;
+}
 
 /* --- The viewer's take, under the cover -----------------------------------
    TakePanel (lib/reviews.tsx) on the Series, Volume and Edition pages (a
@@ -149,62 +194,157 @@
   background: var(--surface);
   font-size: 0.88rem;
 }
-.take-panel > :empty { display: none; }
-.take-panel:not(:has(> :not(:empty, .take-note))) { display: none; }
+.take-panel > :empty {
+  display: none;
+}
+.take-panel:not(:has(> :not(:empty, .take-note))) {
+  display: none;
+}
 /* open for writing, the panel spans the hero: keep its lines readable */
-.take-panel:has(.review-form) { max-width: 52rem; }
+.take-panel:has(.review-form) {
+  max-width: 52rem;
+}
 
-.take-note { font-size: 0.8rem; line-height: 1.45; color: var(--text-mute); }
-.take-note a { color: var(--text-dim); font-weight: 700; border-bottom: 1px solid var(--line-strong); }
-.take-note a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.take-note {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-mute);
+}
+.take-note a {
+  color: var(--text-dim);
+  font-weight: 700;
+  border-bottom: 1px solid var(--line-strong);
+}
+.take-note a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 
-.take-rating { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.take-rating {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
 
 /* the toggles share a row under a hairline and fill it when they wrap */
-.take-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.take-panel > :not(:empty) ~ .take-actions { padding-top: 14px; border-top: 1px solid var(--line); }
-.take-actions .follow-btn { flex: 1 1 auto; justify-content: center; }
-.take-panel:has(.review-form) .take-actions .follow-btn { flex: none; }
-.take-actions .track-hint { order: 1; }
+.take-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.take-panel > :not(:empty) ~ .take-actions {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.take-actions .follow-btn {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+.take-panel:has(.review-form) .take-actions .follow-btn {
+  flex: none;
+}
+.take-actions .track-hint {
+  order: 1;
+}
 
 /* a narrow cover column (the Series page's under 960px, ~156px inside):
    tighter steppers, and smaller smiley faces and labels so the pill keeps
    one row */
 @container (max-width: 199px) {
-  .rating-stepper { --stepper-size: 28px; gap: 4px; }
-  .rating-stepper-input { width: 2.9rem; }
-  .rating-smileys { padding: 2px; gap: 1px; }
-  .rating-smiley-btn { gap: 2px; padding-inline: 0; font-size: 0.68rem; }
-  .rating-smiley { width: 13px; height: 13px; }
+  .rating-stepper {
+    --stepper-size: 28px;
+    gap: 4px;
+  }
+  .rating-stepper-input {
+    width: 2.9rem;
+  }
+  .rating-smileys {
+    padding: 2px;
+    gap: 1px;
+  }
+  .rating-smiley-btn {
+    gap: 2px;
+    padding-inline: 0;
+    font-size: 0.68rem;
+  }
+  .rating-smiley {
+    width: 13px;
+    height: 13px;
+  }
 }
 
 /* --- The viewer's own Review, under the rating ---------------------------- */
 
-.own-review { min-width: 0; display: grid; gap: 10px; }
-.own-review-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.own-review-row .track-hint { flex-basis: auto; }
+.own-review {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.own-review-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.own-review-row .track-hint {
+  flex-basis: auto;
+}
 .own-review-saved summary {
   cursor: pointer;
   font-size: 0.8rem;
   font-weight: 700;
   color: var(--text-dim);
 }
-.own-review-saved summary:hover { color: var(--accent); }
-.own-review-saved .review-body { margin-top: 8px; font-size: 0.88rem; }
-.own-review-saved .review-hidden-note { margin-top: 8px; }
-.own-review .review-form { margin-bottom: 0; padding: 14px; background: var(--surface-2); }
-.own-review .review-form textarea { background: var(--surface); }
+.own-review-saved summary:hover {
+  color: var(--accent);
+}
+.own-review-saved .review-body {
+  margin-top: 8px;
+  font-size: 0.88rem;
+}
+.own-review-saved .review-hidden-note {
+  margin-top: 8px;
+}
+.own-review .review-form {
+  margin-bottom: 0;
+  padding: 14px;
+  background: var(--surface-2);
+}
+.own-review .review-form textarea {
+  background: var(--surface);
+}
 
 /* --- The Reviews section ------------------------------------------------ */
 
-.reviews { max-width: 52rem; }
+.reviews {
+  max-width: 52rem;
+}
 .reviews-empty,
-.review-prompt { color: var(--text-mute); font-size: 0.92rem; }
-.review-prompt { margin-bottom: 18px; }
-.review-prompt a { color: var(--text-dim); border-bottom: 1px solid var(--line-strong); }
-.review-prompt a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.review-prompt {
+  color: var(--text-mute);
+  font-size: 0.92rem;
+}
+.review-prompt {
+  margin-bottom: 18px;
+}
+.review-prompt a {
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--line-strong);
+}
+.review-prompt a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 
-.review-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
 
 .review-card {
   padding: 16px 20px 18px;
@@ -212,7 +352,10 @@
   border-radius: var(--r-md);
   background: var(--surface);
 }
-.review-card.is-hidden { border-style: dashed; background: transparent; }
+.review-card.is-hidden {
+  border-style: dashed;
+  background: transparent;
+}
 
 .review-head {
   display: flex;
@@ -221,8 +364,13 @@
   gap: 6px 12px;
   margin-bottom: 10px;
 }
-.review-author { font-weight: 800; color: var(--text); }
-a.review-author:hover { color: var(--accent); }
+.review-author {
+  font-weight: 800;
+  color: var(--text);
+}
+a.review-author:hover {
+  color: var(--accent);
+}
 .review-score {
   font-family: var(--display);
   font-size: 1.25rem;
@@ -231,14 +379,38 @@ a.review-author:hover { color: var(--accent); }
   color: var(--gold);
   font-variant-numeric: tabular-nums;
 }
-.review-score-of { font-size: 0.72rem; color: var(--text-mute); margin-left: 1px; }
-.review-score--smiley { display: inline-flex; align-items: center; gap: 5px; }
-.review-score--smiley .rating-smiley { width: 18px; height: 18px; }
-.review-date { font-size: 0.8rem; color: var(--text-mute); }
-.review-head .chip { align-self: center; }
-.chip--spoiler { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 45%, transparent); }
-.chip--hidden { border-style: dashed; color: var(--text-mute); }
-[data-theme="light"] .chip--spoiler { color: #a23c15; }
+.review-score-of {
+  font-size: 0.72rem;
+  color: var(--text-mute);
+  margin-left: 1px;
+}
+.review-score--smiley {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.review-score--smiley .rating-smiley {
+  width: 18px;
+  height: 18px;
+}
+.review-date {
+  font-size: 0.8rem;
+  color: var(--text-mute);
+}
+.review-head .chip {
+  align-self: center;
+}
+.chip--spoiler {
+  color: #e08a6a;
+  border-color: color-mix(in srgb, #e08a6a 45%, transparent);
+}
+.chip--hidden {
+  border-style: dashed;
+  color: var(--text-mute);
+}
+[data-theme="light"] .chip--spoiler {
+  color: #a23c15;
+}
 
 /* plain text: the author's own line breaks, nothing else */
 .review-body {
@@ -249,7 +421,9 @@ a.review-author:hover { color: var(--accent); }
   color: var(--text-dim);
 }
 
-.reviews-more { margin-top: 18px; }
+.reviews-more {
+  margin-top: 18px;
+}
 
 /* --- The viewer's own Review and the form -------------------------------- */
 
@@ -261,16 +435,32 @@ a.review-author:hover { color: var(--accent); }
   text-transform: uppercase;
   color: var(--text-mute);
 }
-.review-hidden-note { margin-bottom: 10px; font-size: 0.88rem; }
+.review-hidden-note {
+  margin-bottom: 10px;
+  font-size: 0.88rem;
+}
 
 .review-actions,
-.review-mod { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
+.review-mod {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 12px;
+}
 .review-mod .form-error,
-.review-actions .form-error { flex-basis: 100%; }
+.review-actions .form-error {
+  flex-basis: 100%;
+}
 .reviews .btn-danger,
-.own-review .btn-danger { color: #e08a6a; border-color: color-mix(in srgb, #e08a6a 55%, transparent); }
+.own-review .btn-danger {
+  color: #e08a6a;
+  border-color: color-mix(in srgb, #e08a6a 55%, transparent);
+}
 [data-theme="light"] .reviews .btn-danger,
-[data-theme="light"] .own-review .btn-danger { color: #a23c15; }
+[data-theme="light"] .own-review .btn-danger {
+  color: #a23c15;
+}
 
 .review-mod-reason {
   flex: 1 1 16rem;
@@ -291,7 +481,12 @@ a.review-author:hover { color: var(--accent); }
   border-radius: var(--r-md);
   background: var(--surface);
 }
-.review-field { display: grid; gap: 8px; font-size: 0.9rem; font-weight: 700; }
+.review-field {
+  display: grid;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
 .review-form textarea {
   width: 100%;
   padding: 10px 12px;
@@ -303,15 +498,40 @@ a.review-author:hover { color: var(--accent); }
   line-height: 1.55;
   resize: vertical;
 }
-.review-form textarea::placeholder { color: var(--text-mute); }
-.review-form-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; font-size: 0.86rem; }
-.review-spoiler { display: inline-flex; align-items: center; gap: 8px; color: var(--text-dim); cursor: pointer; }
-.review-spoiler input { accent-color: var(--accent); }
-.review-count { color: var(--text-mute); font-variant-numeric: tabular-nums; }
-.review-count.is-short { color: var(--gold); }
-.review-form .review-actions { margin-top: 0; }
+.review-form textarea::placeholder {
+  color: var(--text-mute);
+}
+.review-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  font-size: 0.86rem;
+}
+.review-spoiler {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.review-spoiler input {
+  accent-color: var(--accent);
+}
+.review-count {
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
+.review-count.is-short {
+  color: var(--gold);
+}
+.review-form .review-actions {
+  margin-top: 0;
+}
 
-.reviews-hidden { margin-top: 30px; }
+.reviews-hidden {
+  margin-top: 30px;
+}
 
 /* --- The profile's rated Series ----------------------------------------- */
 
@@ -330,7 +550,12 @@ a.review-author:hover { color: var(--accent); }
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
 }
-.profile-ratings .review-score { min-width: 3.2ch; }
-.profile-ratings a { font-weight: 700; }
-.profile-ratings a:hover { color: var(--accent); }
-
+.profile-ratings .review-score {
+  min-width: 3.2ch;
+}
+.profile-ratings a {
+  font-weight: 700;
+}
+.profile-ratings a:hover {
+  color: var(--accent);
+}

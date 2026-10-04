@@ -97,7 +97,10 @@ export function clusterKey(title: string): string {
     .replace(/[’']/g, "")
     .replace(/[([][^)\]]*[)\]]/g, " ")
     .replace(/[,:\-–]?\s*\b(?:vol(?:ume)?s?\.?|book|part)\s*\d.*$/, " ")
-    .replace(/\b(?:manga\s+)?(?:omnibus|box\s+set|deluxe(?:\s+edition)?|collector'?s\s+edition|\d-in-1(?:\s+edition)?)\b.*$/, " ")
+    .replace(
+      /\b(?:manga\s+)?(?:omnibus|box\s+set|deluxe(?:\s+edition)?|collector'?s\s+edition|\d-in-1(?:\s+edition)?)\b.*$/,
+      " ",
+    )
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/(?:\s\d{1,3})+\s*$/, " ")
     .trim()
@@ -116,7 +119,10 @@ export function computeMetrics(rows: MetricRows) {
   let zeroPaddedLabels = 0;
   for (const vol of rows.volumes) {
     if (vol.status !== "active") continue;
-    minPosition.set(vol.seriesId, Math.min(minPosition.get(vol.seriesId) ?? Infinity, vol.position));
+    minPosition.set(
+      vol.seriesId,
+      Math.min(minPosition.get(vol.seriesId) ?? Infinity, vol.position),
+    );
     if (vol.label !== null && /^\d+(\.\d+)?$/.test(vol.label)) {
       if (Number(vol.label) !== vol.position) labelPositionMismatch++;
       if (/^0\d/.test(vol.label)) zeroPaddedLabels++;
@@ -141,7 +147,11 @@ export function computeMetrics(rows: MetricRows) {
     }
     if (obs.isbn13 && release.isbn13 && obs.isbn13 !== release.isbn13) conflated.add(release.id);
     const sameBook = obs.isbn13 !== null && obs.isbn13 === release.isbn13;
-    if (sameBook && (OUT_OF_SCOPE.some((re) => re.test(obs.title)) || (obs.sourceKey === "prh" && obs.imprint === "Vertical"))) {
+    if (
+      sameBook &&
+      (OUT_OF_SCOPE.some((re) => re.test(obs.title)) ||
+        (obs.sourceKey === "prh" && obs.imprint === "Vertical"))
+    ) {
       outOfScope.add(release.id);
     }
   }
@@ -150,18 +160,23 @@ export function computeMetrics(rows: MetricRows) {
   }
 
   const duplicateRowIds = new Set(
-    rows.publishers.filter((p) => p.status === "active" && p.slug in DUPLICATE_SLUGS).map((p) => p.id),
+    rows.publishers
+      .filter((p) => p.status === "active" && p.slug in DUPLICATE_SLUGS)
+      .map((p) => p.id),
   );
 
   return {
     publishersActive: rows.publishers.filter((p) => p.status === "active").length,
     publishersMerged: rows.publishers.filter((p) => p.status === "merged").length,
     imprintsLinked: rows.publishers.filter((p) => p.status === "active" && p.linked).length,
-    releasesOnDuplicatePublisherRows: activeReleases.filter((r) => duplicateRowIds.has(r.publisherId)).length,
+    releasesOnDuplicatePublisherRows: activeReleases.filter((r) =>
+      duplicateRowIds.has(r.publisherId),
+    ).length,
     seriesActive: activeSeries.length,
     seriesMerged: rows.series.filter((s) => s.status === "merged").length,
     seriesHidden: rows.series.filter((s) => s.status === "hidden").length,
-    seriesPollutedTitles: activeSeries.filter((s) => POLLUTED.some((re) => re.test(s.title))).length,
+    seriesPollutedTitles: activeSeries.filter((s) => POLLUTED.some((re) => re.test(s.title)))
+      .length,
     seriesNotStartingAt1: activeSeries.filter((s) => (minPosition.get(s.id) ?? 1) > 1).length,
     duplicateTitleClusters: dupClusters.length,
     seriesInDuplicateClusters: dupClusters.reduce((sum, n) => sum + n, 0),

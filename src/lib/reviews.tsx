@@ -153,7 +153,11 @@ function ReviewCard({ item, moderated = false }: { item: ReviewCardData; moderat
         {item.hidden ? <span className="chip chip--hidden">Hidden</span> : null}
       </header>
       {folded ? (
-        <button type="button" className="btn btn-sm review-reveal" onClick={() => setRevealed(true)}>
+        <button
+          type="button"
+          className="btn btn-sm review-reveal"
+          onClick={() => setRevealed(true)}
+        >
           Show spoiler
         </button>
       ) : (

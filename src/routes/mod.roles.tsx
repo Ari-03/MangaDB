@@ -21,10 +21,7 @@ export const Route = createFileRoute("/mod/roles")({
 
 function ModRolesPage() {
   return (
-    <ModGate
-      role="moderator"
-      refusal="Role governance is for Moderators and Administrators."
-    >
+    <ModGate role="moderator" refusal="Role governance is for Moderators and Administrators.">
       <ModRolesContent />
     </ModGate>
   );
@@ -74,9 +71,8 @@ function ModRolesContent() {
       <Breadcrumbs trail={["Roles"]} />
       <h1>Data-team roles</h1>
       <p className="section-hint">
-        Administrators appoint Moderators; Moderators appoint Editors. Every
-        change is audited permanently, and revoking a role never rewrites past
-        attribution.
+        Administrators appoint Moderators; Moderators appoint Editors. Every change is audited
+        permanently, and revoking a role never rewrites past attribution.
       </p>
       <ModTools />
 
@@ -107,12 +103,7 @@ function ModRolesContent() {
           </label>
           <label>
             Role
-            <select
-              value={role}
-              onChange={(event) =>
-                setRole(event.target.value as typeof role)
-              }
-            >
+            <select value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
               <option value="editor">Editor</option>
               <option value="moderator">Moderator</option>
               <option value="administrator">Administrator</option>
@@ -120,10 +111,7 @@ function ModRolesContent() {
           </label>
           <label>
             Reason (optional)
-            <input
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-            />
+            <input value={reason} onChange={(event) => setReason(event.target.value)} />
           </label>
           <div className="mod-actions">
             <button type="submit" className="btn btn-primary" disabled={busy}>
@@ -149,9 +137,7 @@ function ModRolesContent() {
                   {member.suspended ? (
                     <>
                       {" "}
-                      <span className="chip mod-chip mod-chip--bad">
-                        Suspended
-                      </span>
+                      <span className="chip mod-chip mod-chip--bad">Suspended</span>
                     </>
                   ) : null}
                 </span>
@@ -160,9 +146,7 @@ function ModRolesContent() {
                     type="button"
                     className="btn btn-sm"
                     disabled={busy}
-                    onClick={() =>
-                      void run(() => revoke({ username: member.username }))
-                    }
+                    onClick={() => void run(() => revoke({ username: member.username }))}
                   >
                     Revoke
                   </button>
@@ -171,9 +155,7 @@ function ModRolesContent() {
                       type="button"
                       className="btn btn-sm"
                       disabled={busy}
-                      onClick={() =>
-                        void run(() => reinstate({ username: member.username }))
-                      }
+                      onClick={() => void run(() => reinstate({ username: member.username }))}
                     >
                       Reinstate
                     </button>
@@ -183,13 +165,9 @@ function ModRolesContent() {
                       className="btn btn-sm"
                       disabled={busy}
                       onClick={() => {
-                        const why = window.prompt(
-                          `Reason for suspending @${member.username}?`,
-                        );
+                        const why = window.prompt(`Reason for suspending @${member.username}?`);
                         if (why === null || why.trim() === "") return;
-                        void run(() =>
-                          suspend({ username: member.username, reason: why.trim() }),
-                        );
+                        void run(() => suspend({ username: member.username, reason: why.trim() }));
                       }}
                     >
                       Suspend
@@ -204,9 +182,7 @@ function ModRolesContent() {
 
       <section className="mod-panel">
         <h2>Audit trail</h2>
-        <p className="section-hint">
-          Append-only; entries survive even account deletion.
-        </p>
+        <p className="section-hint">Append-only; entries survive even account deletion.</p>
         {auditLog === undefined ? (
           <p className="mod-empty">Loading…</p>
         ) : auditLog.length === 0 ? (
@@ -214,7 +190,10 @@ function ModRolesContent() {
         ) : (
           <ul className="audit-list">
             {auditLog.map((entry, i) => (
-              <li key={i}>
+              <li
+                // biome-ignore lint/suspicious/noArrayIndexKey: each entry is plain text with no state, so a key by position only re-renders in place
+                key={i}
+              >
                 <time dateTime={new Date(entry.at).toISOString()}>
                   {new Date(entry.at).toLocaleDateString(undefined, {
                     year: "numeric",

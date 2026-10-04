@@ -45,9 +45,7 @@ export const Route = createFileRoute("/search")({
   head: ({ loaderData }) => ({
     meta: [
       {
-        title: loaderData?.q
-          ? `Search “${loaderData.q}” — MangaDB`
-          : "Search — MangaDB",
+        title: loaderData?.q ? `Search “${loaderData.q}” — MangaDB` : "Search — MangaDB",
       },
       { name: "robots", content: "noindex, follow" },
     ],
@@ -79,6 +77,7 @@ function SearchPage() {
   // this page's box once typing settles, "Did you mean" links, direct URLs.
   // Keyed on the query alone, so a reload of the same query (a mature-titles
   // change) is not a second search. Never the query text itself.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `q` alone, as said above; the loader returns `results` with `q`, so the counts read are this query's
   useEffect(() => {
     if (q === "") return;
     track("search_performed", {
@@ -100,7 +99,12 @@ function SearchPage() {
   const hold = useCallback(() => {
     held.current = true;
   }, []);
-  const { draft, setDraft, request } = useUrlDraft(Route.useSearch(), validateSearch, queryOf, hold);
+  const { draft, setDraft, request } = useUrlDraft(
+    Route.useSearch(),
+    validateSearch,
+    queryOf,
+    hold,
+  );
   const text = draft.q;
   const settled = useDebounced(text, LIVE_DEBOUNCE_MS);
   useEffect(() => {
@@ -136,6 +140,7 @@ function SearchPage() {
             }}
             placeholder="Series title, author, publisher, or ISBN"
             aria-label="Search series, authors, publishers, or an ISBN"
+            // biome-ignore lint/a11y/noAutofocus: the search page opens to type a query
             autoFocus
           />
           <button className="btn btn-primary" type="submit">
@@ -143,26 +148,17 @@ function SearchPage() {
           </button>
         </form>
         <p className="search-note">
-          Series titles — including alternate titles and initials like
-          “aot” — authors, and publishers. Paste an ISBN to jump straight to
-          that book.
+          Series titles — including alternate titles and initials like “aot” — authors, and
+          publishers. Paste an ISBN to jump straight to that book.
         </p>
       </div>
 
-      {q === "" ? null : (
-        <SearchResultsView q={q} results={results} />
-      )}
+      {q === "" ? null : <SearchResultsView q={q} results={results} />}
     </main>
   );
 }
 
-function SearchResultsView({
-  q,
-  results,
-}: {
-  q: string;
-  results: SearchResults;
-}) {
+function SearchResultsView({ q, results }: { q: string; results: SearchResults }) {
   const didYouMean = <DidYouMean hits={results.didYouMean} />;
   if (
     results.series.length === 0 &&
@@ -192,8 +188,8 @@ function SearchResultsView({
           </div>
           <div className="empty-note">
             <p>
-              Nothing on the shelf matches “{q}”. Try fewer words, the Japanese
-              title, or browse what is coming out this month.
+              Nothing on the shelf matches “{q}”. Try fewer words, the Japanese title, or browse
+              what is coming out this month.
             </p>
             <Link className="btn" to="/releases">
               Open the release agenda
@@ -211,8 +207,7 @@ function SearchResultsView({
           <div className="section-head">
             <h2 className="section-title">Series</h2>
             <p className="section-note">
-              {results.series.length}{" "}
-              {results.series.length === 1 ? "match" : "matches"} for “{q}”
+              {results.series.length} {results.series.length === 1 ? "match" : "matches"} for “{q}”
             </p>
           </div>
           <div className="shelf">
@@ -226,12 +221,7 @@ function SearchResultsView({
                   >
                     {/* The Series library's jacket for it; a Series with no
                         art on file is plain cloth with the title. */}
-                    <Cover
-                      src={s.coverUrl}
-                      isbn13={s.coverIsbn}
-                      title={s.title}
-                      lazy={false}
-                    />
+                    <Cover src={s.coverUrl} isbn13={s.coverIsbn} title={s.title} lazy={false} />
                   </Link>
                 </div>
                 <div className="caption">
@@ -243,9 +233,7 @@ function SearchResultsView({
                     {s.title}
                   </Link>
                   {s.altTitles.length > 0 ? (
-                    <p className="result-alt">
-                      also known as {s.altTitles.join(", ")}
-                    </p>
+                    <p className="result-alt">also known as {s.altTitles.join(", ")}</p>
                   ) : null}
                 </div>
               </div>

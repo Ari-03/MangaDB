@@ -266,7 +266,9 @@ describe("kodansha.sync — hidden Series stay hidden", () => {
     it(`records the volume on its observation only (${bootstrap ? "Bootstrap Mode" : "steady state"})`, async () => {
       const t = makeT();
       await seedRegistry(t, bootstrap);
-      await t.run((ctx) => insertSeries(ctx, { status: "hidden", publicId: 14761, title: IRUMA.series }));
+      await t.run((ctx) =>
+        insertSeries(ctx, { status: "hidden", publicId: 14761, title: IRUMA.series }),
+      );
       stubSite([{ ...IRUMA, formats: ["print"] }]);
       await sync(t);
       await sync(t);
@@ -629,9 +631,12 @@ describe("kodansha covers — stored once, kept current", () => {
     const t = makeT();
     await seedRegistry(t, true);
     const vol22: FixtureVolume = { ...IRUMA, volume: 22, image: "http://127.0.0.1/cover.webp" };
-    const challenge = "<!DOCTYPE html><html>checking your browser</html>".padEnd(MIN_COVER_BYTES + 1);
-    stubSite([IRUMA, vol22], () =>
-      new Response(challenge, { headers: { "content-type": "image/webp" } }),
+    const challenge = "<!DOCTYPE html><html>checking your browser</html>".padEnd(
+      MIN_COVER_BYTES + 1,
+    );
+    stubSite(
+      [IRUMA, vol22],
+      () => new Response(challenge, { headers: { "content-type": "image/webp" } }),
     );
     expect(await sync(t)).toMatchObject({ errorCount: 4 });
     expect(requested.some((u) => u.includes("127.0.0.1"))).toBe(false);
@@ -672,7 +677,10 @@ describe("kodansha covers — stored once, kept current", () => {
     expect(a![0]).not.toBe(b![0]);
 
     // Volume 21's real jacket arrives; volume 22's Releases still show a live blob.
-    stubSite([{ ...IRUMA, image: "https://production.image.azuki.co/iruma-21-real/800.webp" }, vol22]);
+    stubSite([
+      { ...IRUMA, image: "https://production.image.azuki.co/iruma-21-real/800.webp" },
+      vol22,
+    ]);
     expect(await sync(t)).toMatchObject({ errorCount: 0 });
     await t.run(async (ctx) => {
       for (const r of await ctx.db.query("releases").collect()) {
@@ -1182,7 +1190,12 @@ describe("kodansha.backlistSync — the crawl", () => {
       const publisherId = kodansha!._id;
       const seriesId = await insertSeries(ctx, { title: "Blue Lock" });
       const editionId = await insertEdition(ctx, { publisherId });
-      return await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], isbn13: "9798888778210" });
+      return await insertRelease(ctx, {
+        editionId,
+        publisherId,
+        seriesIds: [seriesId],
+        isbn13: "9798888778210",
+      });
     });
     // A changed listing stamp re-crawls the series whole.
     vi.unstubAllGlobals();
@@ -1248,7 +1261,9 @@ describe("Kodansha scope gate — both feeds", () => {
     const t = makeT();
     await seedBacklist(t, false);
     // The scope repair hid the earlier picture-book Series.
-    await t.run((ctx) => insertSeries(ctx, { status: "hidden", title: "Cells at Work! Picture Book" }));
+    await t.run((ctx) =>
+      insertSeries(ctx, { status: "hidden", title: "Cells at Work! Picture Book" }),
+    );
     const listed = {
       slug: "cells-at-work-picture-book",
       name: "Cells at Work! Picture Book",
@@ -1289,7 +1304,10 @@ describe("Kodansha scope gate — both feeds", () => {
     // Simulate the pre-gate import: the observation already links a Release.
     const releaseId = await t.run(async (ctx) => {
       const publisherId = await insertPublisher(ctx, { name: "Kodansha", slug: "kodansha" });
-      const seriesId = await insertSeries(ctx, { status: "hidden", title: "Cells at Work! Picture Book" });
+      const seriesId = await insertSeries(ctx, {
+        status: "hidden",
+        title: "Cells at Work! Picture Book",
+      });
       const editionId = await insertEdition(ctx, { publisherId });
       const id = await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId] });
       await insertObservation(ctx, {
@@ -1539,8 +1557,14 @@ describe("kodansha — disabling the source mid-run", () => {
     const site = globalThis.fetch;
     // Disabled while the first record's cover downloads, after its apply.
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-      if (String(input).includes("azuki.co") && !requested.some((url) => url.includes("azuki.co"))) {
-        await t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha", enabled: false });
+      if (
+        String(input).includes("azuki.co") &&
+        !requested.some((url) => url.includes("azuki.co"))
+      ) {
+        await t.mutation(internal.importSources.setEnabledInternal, {
+          key: "kodansha",
+          enabled: false,
+        });
       }
       return await site(input);
     });
@@ -1561,7 +1585,10 @@ describe("kodansha — disabling the source mid-run", () => {
     // row is disabled while the first series page loads.
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       if (String(input) === `${BASE}/series/7-billion-needles/`) {
-        await t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha-backlist", enabled: false });
+        await t.mutation(internal.importSources.setEnabledInternal, {
+          key: "kodansha-backlist",
+          enabled: false,
+        });
       }
       return await site(input);
     });
@@ -1569,7 +1596,11 @@ describe("kodansha — disabling the source mid-run", () => {
     expect(requested.some((url) => url.includes("/series/blue-lock/"))).toBe(false);
     await t.run(async (ctx) => {
       const [run] = await ctx.db.query("importRuns").collect();
-      expect(run).toMatchObject({ sourceKey: "kodansha-backlist", status: "stopped", automatic: true });
+      expect(run).toMatchObject({
+        sourceKey: "kodansha-backlist",
+        status: "stopped",
+        automatic: true,
+      });
     });
   });
 });
@@ -1579,14 +1610,19 @@ describe("kodansha.backlistSync — a run of another source", () => {
     const t = makeT();
     await seedBacklist(t, true);
     stubBacklist([BLUE_LOCK], BACKLIST_PAGES);
-    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "kodansha", automatic: true });
+    const runId = await t.mutation(internal.imports.startRun, {
+      sourceKey: "kodansha",
+      automatic: true,
+    });
     const before = await t.run(async (ctx) => ({
       run: await ctx.db.get(runId),
       sources: await ctx.db.query("approvedSources").collect(),
     }));
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await backlist(t, { runId })).toEqual({ skipped: "disabled" });
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/kodansha-backlist: run .* belongs to "kodansha"/));
+    expect(error).toHaveBeenCalledWith(
+      expect.stringMatching(/kodansha-backlist: run .* belongs to "kodansha"/),
+    );
     error.mockRestore();
     expect(requested).toEqual([]);
     expect(
@@ -1602,7 +1638,10 @@ describe("kodansha.sync — a forced run", () => {
   it("imports a daily window an operator forced on its disabled row", async () => {
     const t = makeT();
     await seedRegistry(t, true);
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "kodansha", enabled: false });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "kodansha",
+      enabled: false,
+    });
     stubSite([IRUMA]);
     const runId = await t.mutation(internal.imports.startRun, { sourceKey: "kodansha" });
     expect(await t.action(internal.kodansha.sync, { politeDelayMs: 0, runId })).toMatchObject({
@@ -1888,7 +1927,11 @@ describe("kodansha.backlistSync — per-binding identity survives page order (B0
 });
 
 /** Blue Lock volume 1 as an ISBN-less Release another source made under Kodansha, in this Binding and language. */
-async function insertIsbnLessVolume1(t: TestT, binding: Doc<"releases">["binding"], language = "en") {
+async function insertIsbnLessVolume1(
+  t: TestT,
+  binding: Doc<"releases">["binding"],
+  language = "en",
+) {
   const { releaseId } = await t.run((ctx) =>
     seedCatalog(ctx, {
       publisher: { slug: "kodansha" },
@@ -2036,10 +2079,7 @@ describe("kodansha — a legacy snapshot never owns an ISBN another Release hold
     await seedBacklist(t, true);
     const { paperbackId, hardcoverId } = await legacySetup(t);
 
-    stubBacklist(
-      [BLUE_LOCK],
-      blueLockPages([{ ...HARDCOVER, datePublished: "2024-01-09" }]),
-    );
+    stubBacklist([BLUE_LOCK], blueLockPages([{ ...HARDCOVER, datePublished: "2024-01-09" }]));
     await backlist(t);
 
     await t.run(async (ctx) => {
@@ -2241,7 +2281,9 @@ describe("kodansha.recordListingRatings — listing age ratings", () => {
     const t = makeT();
     await linkedSeries(t, 1);
     const shelf = async () =>
-      (await t.query(api.catalog.recentSeries, { limit: 10, showMature: false })).map((s) => s.publicId);
+      (await t.query(api.catalog.recentSeries, { limit: 10, showMature: false })).map(
+        (s) => s.publicId,
+      );
     expect(await shelf()).toEqual([1]);
 
     await t.mutation(internal.kodansha.recordListingRatings, { entries: ratings(1, () => true) });

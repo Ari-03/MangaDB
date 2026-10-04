@@ -28,14 +28,17 @@ import { AUTH, harness, mount, resetHarness, setQuery, text, type Host } from ".
 
 vi.mock("convex/react", async () => (await import("./test.react")).backendHooks);
 vi.mock("@clerk/tanstack-react-start", async () => (await import("./test.react")).clerkHooks);
-vi.mock("@tanstack/react-router", () => ({ Link: ({ children }: { children?: ReactNode }) => children }));
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children }: { children?: ReactNode }) => children,
+}));
 vi.mock("~/lib/analytics", () => ({ track: () => undefined }));
 vi.mock("~/lib/mature", () => ({ useArtConcealed: () => false }));
 
 const { SeriesFollowControls } = await import("./follows");
 const { FavoriteButton } = await import("./favorites");
 const { ReviewsSection, TakePanel } = await import("./reviews");
-const { SeriesReadingControls, SeriesReadingProgress, VolumeReadCount, ReleasePassControls } = await import("./reading");
+const { SeriesReadingControls, SeriesReadingProgress, VolumeReadCount, ReleasePassControls } =
+  await import("./reading");
 const { SeriesVisibilityControls } = await import("./sharing");
 const { ReleaseCollectionControls } = await import("./collection");
 const { RecordHistory } = await import("./moderation");
@@ -83,7 +86,11 @@ function seriesPage(releaseId: Id<"releases">) {
     createElement(ReleaseCollectionControls, { releaseId }),
     createElement(ReleasePassControls, { releaseId }),
     createElement(Shelf, { seriesPublicId: 1 }),
-    createElement(ReviewsSection, { target, initial: { items: [], hasMore: false }, noun: "series" }),
+    createElement(ReviewsSection, {
+      target,
+      initial: { items: [], hasMore: false },
+      noun: "series",
+    }),
   );
 }
 
@@ -103,7 +110,10 @@ async function seed() {
 
 const buttons = (tree: Host[]) =>
   tree.filter((host) => host.type === "button").map((host) => text(host.props.children));
-const pageText = (tree: Host[]) => tree.map((host) => (typeof host.props.children === "string" ? host.props.children : "")).join(" ");
+const pageText = (tree: Host[]) =>
+  tree
+    .map((host) => (typeof host.props.children === "string" ? host.props.children : ""))
+    .join(" ");
 
 beforeEach(resetHarness);
 
@@ -136,16 +146,33 @@ describe("viewer-only queries follow the Clerk session", () => {
     setQuery(api.ratings.mine, await as.query(api.ratings.mine, { target }));
     setQuery(api.reviews.mine, await as.query(api.reviews.mine, { target }));
     setQuery(api.reviews.hiddenList, await as.query(api.reviews.hiddenList, { target }));
-    setQuery(api.follows.seriesFollow, await as.query(api.follows.seriesFollow, { seriesPublicId: 1 }));
+    setQuery(
+      api.follows.seriesFollow,
+      await as.query(api.follows.seriesFollow, { seriesPublicId: 1 }),
+    );
     setQuery(api.favorites.isFavorite, await as.query(api.favorites.isFavorite, { target }));
-    setQuery(api.sharing.seriesVisibility, await as.query(api.sharing.seriesVisibility, { seriesPublicId: 1 }));
-    setQuery(api.reading.seriesTracking, await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }));
+    setQuery(
+      api.sharing.seriesVisibility,
+      await as.query(api.sharing.seriesVisibility, { seriesPublicId: 1 }),
+    );
+    setQuery(
+      api.reading.seriesTracking,
+      await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }),
+    );
     setQuery(api.reading.passForRelease, await as.query(api.reading.passForRelease, { releaseId }));
-    setQuery(api.collection.entryForRelease, await as.query(api.collection.entryForRelease, { releaseId }));
-    setQuery(api.collection.seriesEntries, await as.query(api.collection.seriesEntries, { seriesPublicId: 1 }));
+    setQuery(
+      api.collection.entryForRelease,
+      await as.query(api.collection.entryForRelease, { releaseId }),
+    );
+    setQuery(
+      api.collection.seriesEntries,
+      await as.query(api.collection.seriesEntries, { seriesPublicId: 1 }),
+    );
     const tree = mount(() => seriesPage(releaseId));
     expect([...harness.subscribed].sort()).toEqual([...PERSONAL, "reviews:list"].sort());
-    expect(buttons(tree)).toEqual(expect.arrayContaining(["Write a review", "Follow series", "Favorite", "Mark read"]));
+    expect(buttons(tree)).toEqual(
+      expect.arrayContaining(["Write a review", "Follow series", "Favorite", "Mark read"]),
+    );
     expect(tree.some((host) => host.type === "a" && host.props.href === "/sign-in")).toBe(false);
     expect(pageText(tree)).toContain("Your reading");
   });
@@ -211,7 +238,9 @@ describe("RecordHistory", () => {
   function open(tree: Host[]) {
     const details = tree.find((host) => host.type === "details");
     if (!details) throw new Error("no disclosure");
-    const onToggle = details.props.onToggle as (event: { currentTarget: { open: boolean } }) => void;
+    const onToggle = details.props.onToggle as (event: {
+      currentTarget: { open: boolean };
+    }) => void;
     onToggle({ currentTarget: { open: true } });
   }
   const history = () => createElement(RecordHistory, { type: "series", publicId: 1 });
@@ -228,11 +257,14 @@ describe("RecordHistory", () => {
     expect(harness.subscribed.has("moderation:recordHistory")).toBe(true);
     expect(tree.map((host) => text(host.props.children))).toContain("Loading…");
 
-    setQuery(api.moderation.recordHistory, await t.query(api.moderation.recordHistory, { type: "series", publicId: 1 }));
+    setQuery(
+      api.moderation.recordHistory,
+      await t.query(api.moderation.recordHistory, { type: "series", publicId: 1 }),
+    );
     tree = mount(history);
     expect(tree.map((host) => text(host.props.children))).toContain("No changes recorded yet.");
-    expect(text(tree.find((host) => host.props.className === "record-history-count")?.props.children)).toBe(
-      "0 revisions",
-    );
+    expect(
+      text(tree.find((host) => host.props.className === "record-history-count")?.props.children),
+    ).toBe("0 revisions");
   });
 });

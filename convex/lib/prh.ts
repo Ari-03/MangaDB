@@ -440,7 +440,9 @@ const FUSED_WORDS = 4;
 
 /** Whether a name is an organisation's rather than a person's. */
 function isOrganisation(name: string): boolean {
-  return ORGANISATION.test(name) || KNOWN_ORGANISATIONS.has(name.toLowerCase().replace(/[^a-z]/g, ""));
+  return (
+    ORGANISATION.test(name) || KNOWN_ORGANISATIONS.has(name.toLowerCase().replace(/[^a-z]/g, ""))
+  );
 }
 
 /**
@@ -451,7 +453,9 @@ function isOrganisation(name: string): boolean {
  */
 export function isPersonName(name: string): boolean {
   const trimmed = name.trim();
-  return trimmed !== "" && !NOT_A_NAME.test(trimmed) && !FUSED.test(trimmed) && !isOrganisation(trimmed);
+  return (
+    trimmed !== "" && !NOT_A_NAME.test(trimmed) && !FUSED.test(trimmed) && !isOrganisation(trimmed)
+  );
 }
 
 /**
@@ -490,7 +494,10 @@ export function isPersonName(name: string): boolean {
  * merges them.
  */
 export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
-  const text = (author ?? "").replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim();
+  const text = (author ?? "")
+    .replace(/\s*\([^()]*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (text === "" || /[:/()[\]]/.test(text)) return [];
   const labeled: AuthorCredit[] = [];
   let lead: string[] = [];
@@ -535,8 +542,9 @@ export function parseAuthorCredits(author: string | undefined): AuthorCredit[] {
   const drawn = credits.some((credit) => credit.role === "art" || credit.role === "story_art");
   return credits
     .filter((credit) => !isOrganisation(credit.name))
-    .map((credit): AuthorCredit =>
-      !drawn && credit.role === "story" ? { ...credit, role: "author" } : credit,
+    .map(
+      (credit): AuthorCredit =>
+        !drawn && credit.role === "story" ? { ...credit, role: "author" } : credit,
     );
 }
 

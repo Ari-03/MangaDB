@@ -146,13 +146,7 @@ function ActionForm({
 }
 
 /** Merge needs a second record: resolve + preview the survivor, then act. */
-function MergeSection({
-  type,
-  form,
-}: {
-  type: RecordType;
-  form: ManageForm;
-}) {
+function MergeSection({ type, form }: { type: RecordType; form: ManageForm }) {
   const [keyInput, setKeyInput] = useState("");
   const [survivorKey, setSurvivorKey] = useState<string | null>(null);
   const survivor = useQuery(
@@ -172,9 +166,9 @@ function MergeSection({
     <section className="manage-action">
       <h2>Merge into a survivor</h2>
       <p className="section-hint">
-        This record becomes the merge loser: its observations, compatible
-        relationships, and user tracking transfer to the survivor, and its
-        URLs 301 there permanently. Only an explicit Split reverses a merge.
+        This record becomes the merge loser: its observations, compatible relationships, and user
+        tracking transfer to the survivor, and its URLs 301 there permanently. Only an explicit
+        Split reverses a merge.
       </p>
       <form
         onSubmit={(event) => {
@@ -191,11 +185,7 @@ function MergeSection({
           />
         </label>
         <div className="mod-actions">
-          <button
-            type="submit"
-            className="btn btn-sm"
-            disabled={keyInput.trim() === ""}
-          >
+          <button type="submit" className="btn btn-sm" disabled={keyInput.trim() === ""}>
             Preview survivor
           </button>
         </div>
@@ -203,7 +193,9 @@ function MergeSection({
       {survivorKey === null ? null : survivor === undefined ? (
         <p className="notice">Loading survivor…</p>
       ) : survivor === null ? (
-        <p className="form-error">No {type} matches "{survivorKey}".</p>
+        <p className="form-error">
+          No {type} matches "{survivorKey}".
+        </p>
       ) : survivor.ref.id === form.ref.id ? (
         <p className="form-error">A record cannot merge into itself.</p>
       ) : survivor.status !== "active" || survivor.locked ? (
@@ -235,13 +227,7 @@ function MergeSection({
   );
 }
 
-function ModManagePanel({
-  type,
-  manageKey,
-}: {
-  type: RecordType;
-  manageKey: string;
-}) {
+function ModManagePanel({ type, manageKey }: { type: RecordType; manageKey: string }) {
   const form = useQuery(api.sensitiveOps.manageForm, { type, key: manageKey });
   const hideRecord = useMutation(api.sensitiveOps.hideRecord);
   const restoreRecord = useMutation(api.sensitiveOps.restoreRecord);
@@ -267,36 +253,27 @@ function ModManagePanel({
     );
   }
 
-  const singleRefOp =
-    (mutate: typeof hideRecord) => async (reason: string) => {
-      await mutate({ ref: form.ref as never, reason, confirmImpact: true });
-    };
+  const singleRefOp = (mutate: typeof hideRecord) => async (reason: string) => {
+    await mutate({ ref: form.ref as never, reason, confirmImpact: true });
+  };
 
   return (
     <main className="mod-page mod-manage-page">
       <Breadcrumbs trail={["Manage"]} />
       <h1>Manage: {form.title}</h1>
       <p className="section-hint">
-        Sensitive catalog operations (hide, restore, merge, split, locks).
-        Each one requires a reason, the impact preview below, and explicit
-        confirmation; all of it lands in the record's public history.
+        Sensitive catalog operations (hide, restore, merge, split, locks). Each one requires a
+        reason, the impact preview below, and explicit confirmation; all of it lands in the record's
+        public history.
       </p>
       <p className="manage-status">
-        <span
-          className={`chip mod-chip mod-chip--${
-            form.status === "active" ? "ok" : "bad"
-          }`}
-        >
+        <span className={`chip mod-chip mod-chip--${form.status === "active" ? "ok" : "bad"}`}>
           {form.status}
         </span>
         {form.locked ? (
-          <span className="chip mod-chip mod-chip--warn">
-            temporarily locked
-          </span>
+          <span className="chip mod-chip mod-chip--warn">temporarily locked</span>
         ) : null}
-        {form.mergedInto ? (
-          <span>merged into "{form.mergedInto.title}"</span>
-        ) : null}
+        {form.mergedInto ? <span>merged into "{form.mergedInto.title}"</span> : null}
       </p>
 
       <ImpactPreview impact={form.impact} title={`"${form.title}"`} />
@@ -347,8 +324,8 @@ function ModManagePanel({
           />
         ) : (
           <p className="notice">
-            This record is merged and no reversible manifest exists — it
-            cannot be split automatically.
+            This record is merged and no reversible manifest exists — it cannot be split
+            automatically.
           </p>
         )
       ) : null}

@@ -151,8 +151,7 @@ export const myUpcoming = query({
       const series = await getActive(ctx, "series", state.seriesId);
       if (series) followed.add(series._id);
     }
-    const inFollowed = (doc: Doc<"releases">) =>
-      doc.seriesIds.some((id) => followed.has(id));
+    const inFollowed = (doc: Doc<"releases">) => doc.seriesIds.some((id) => followed.has(id));
     const matchesPreference = (doc: Doc<"releases">) =>
       user.formatPreference === "both" || doc.format === user.formatPreference;
 
@@ -209,8 +208,7 @@ export const myUpcoming = query({
     }
 
     const included = [...candidates.values()].filter(
-      (doc) =>
-        releaseEntries.get(doc._id)?.state !== "owned" && !derivedOwned.has(doc._id),
+      (doc) => releaseEntries.get(doc._id)?.state !== "owned" && !derivedOwned.has(doc._id),
     );
     const rows = await joinBrowseRows(ctx, included);
     const annotations = new Map(
@@ -251,12 +249,8 @@ export const myUpcoming = query({
         : [],
     );
 
-    const name = (
-      item: (typeof releaseItems)[number] | (typeof bundleItems)[number],
-    ) =>
-      item.kind === "release"
-        ? (item.series[0]?.title ?? item.edition.title)
-        : item.name;
+    const name = (item: (typeof releaseItems)[number] | (typeof bundleItems)[number]) =>
+      item.kind === "release" ? (item.series[0]?.title ?? item.edition.title) : item.name;
     const items = [...releaseItems, ...bundleItems].sort(
       (a, b) => a.sort - b.sort || name(a).localeCompare(name(b)),
     );

@@ -29,7 +29,8 @@ type Session = { isLoaded: boolean; isSignedIn: boolean | undefined; sessionId?:
 // off, where Clerk's useAuth throws for want of a ClerkProvider.
 const clerk = vi.hoisted(() => ({ session: null as Session | null }));
 function useAuth() {
-  if (!clerk.session) throw new Error("useAuth can only be used within the <ClerkProvider /> component.");
+  if (!clerk.session)
+    throw new Error("useAuth can only be used within the <ClerkProvider /> component.");
   return {
     ...clerk.session,
     getToken: async () => (clerk.session?.isSignedIn ? "token" : null),
@@ -101,7 +102,8 @@ const rendered: string[] = [];
 function Probe() {
   const viewer = useViewerQuery(api.users.viewer);
   const name = viewer && !viewer.needsUsername ? ` as ${viewer.username}` : "";
-  const shown = viewer === undefined ? "loading" : viewer === null ? "signed out" : `signed in${name}`;
+  const shown =
+    viewer === undefined ? "loading" : viewer === null ? "signed out" : `signed in${name}`;
   rendered.push(shown);
   return createElement("p", null, shown);
 }
@@ -123,7 +125,12 @@ afterEach(async () => {
 async function render(fake: ReturnType<typeof fakeClient>) {
   await act(async () =>
     root.render(
-      createElement(ConvexProviderWithClerk, { client: fake.client, useAuth: useConvexClerkAuth, children: createElement(Probe) }),
+      createElement(ConvexProviderWithClerk, {
+        client: fake.client,
+        useAuth: useConvexClerkAuth,
+        // biome-ignore lint/correctness/noChildrenProp: ConvexProviderWithClerk's and InitialStateProvider's props types require children, so createElement takes it here rather than as a third argument
+        children: createElement(Probe),
+      }),
     ),
   );
 }
@@ -251,7 +258,9 @@ it("an account switch shows nothing of the previous account while the new token 
 it("without Clerk (a plain ConvexProvider) the visitor reads as signed out", async () => {
   const fake = fakeClient();
   clerk.session = null;
-  await act(async () => root.render(createElement(ConvexProvider, { client: fake.client }, createElement(Probe))));
+  await act(async () =>
+    root.render(createElement(ConvexProvider, { client: fake.client }, createElement(Probe))),
+  );
   expect(container.textContent).toBe("signed out");
   expect(fake.log).toEqual([]);
 });

@@ -40,13 +40,7 @@ export type CreditRole = Doc<"seriesCredits">["role"];
  * Display order of roles on a Series: the makers first (the role-less
  * "author" a publisher gives after the specific ones), the source after.
  */
-const ROLE_ORDER: ReadonlyArray<CreditRole> = [
-  "story_art",
-  "story",
-  "art",
-  "author",
-  "original",
-];
+const ROLE_ORDER: ReadonlyArray<CreditRole> = ["story_art", "story", "art", "author", "original"];
 
 /**
  * Whether a credit makes someone the Series' maker: they wrote or drew it,
@@ -319,21 +313,24 @@ export const rebuild = internalAction({
   handler: async (ctx, { state: resumed, budgetMs }) =>
     withExceptionCapture("people.rebuild", ctx, async () => {
       const began = Date.now();
-      const state: RebuildState = resumed?.version === REBUILD_VERSION ? resumed : {
-        version: REBUILD_VERSION,
-        // Past an older-layout run's stamp, whatever the clock says.
-        startedAt: Math.max(began, (resumed?.startedAt ?? 0) + 1),
-        phase: "rekey",
-        source: 0,
-        cursor: null,
-        afterPublicId: null,
-        publisherError: null,
-        credits: 0,
-        publisherCredits: 0,
-        swept: 0,
-        pruned: 0,
-        people: 0,
-      };
+      const state: RebuildState =
+        resumed?.version === REBUILD_VERSION
+          ? resumed
+          : {
+              version: REBUILD_VERSION,
+              // Past an older-layout run's stamp, whatever the clock says.
+              startedAt: Math.max(began, (resumed?.startedAt ?? 0) + 1),
+              phase: "rekey",
+              source: 0,
+              cursor: null,
+              afterPublicId: null,
+              publisherError: null,
+              credits: 0,
+              publisherCredits: 0,
+              swept: 0,
+              pruned: 0,
+              people: 0,
+            };
       const counts = () => ({
         credits: state.credits,
         publisherCredits: state.publisherCredits,
@@ -545,7 +542,8 @@ export const settleRoles = internalMutation({
         await settlePrhSeries(ctx, run.seriesId, rebuiltAt, memo);
       } else if (run.source === "creators" && run.runRole !== undefined) {
         const credit = await ctx.db.get(run.creditId);
-        if (credit && credit.role !== run.runRole) await ctx.db.patch(credit._id, { role: run.runRole });
+        if (credit && credit.role !== run.runRole)
+          await ctx.db.patch(credit._id, { role: run.runRole });
       }
     }
     return page.isDone ? null : page.continueCursor;
@@ -625,7 +623,9 @@ async function settlePrhSeries(
       runApart,
     };
     if (!row) {
-      used.add((await insertCredit(ctx, rows, { ...fields, seriesId, source: "prh", rebuiltAt }))._id);
+      used.add(
+        (await insertCredit(ctx, rows, { ...fields, seriesId, source: "prh", rebuiltAt }))._id,
+      );
       continue;
     }
     used.add(row._id);
@@ -810,13 +810,23 @@ async function creditRows(ctx: QueryCtx, seriesId: Id<"series">): Promise<Credit
   const runOf = new Map(runs.map((run) => [run.creditId, run]));
   return credits.map((credit) => {
     const { rebuiltAt, runRole, runNames, runApart, runVariants, ...shown } = credit;
-    const legacy = [rebuiltAt, runRole, runNames, runApart, runVariants].some((f) => f !== undefined);
+    const legacy = [rebuiltAt, runRole, runNames, runApart, runVariants].some(
+      (f) => f !== undefined,
+    );
     const run = runOf.get(credit._id);
     if (run) {
       const { rebuiltAt, runRole, runNames, runApart } = run;
       return { ...shown, rebuiltAt, runRole, runNames, runApart, runId: run._id, legacy };
     }
-    return { ...shown, rebuiltAt: rebuiltAt ?? 0, runRole, runNames, runApart, runId: null, legacy };
+    return {
+      ...shown,
+      rebuiltAt: rebuiltAt ?? 0,
+      runRole,
+      runNames,
+      runApart,
+      runId: null,
+      legacy,
+    };
   });
 }
 
@@ -831,7 +841,8 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
  */
 async function updateRow(ctx: MutationCtx, row: CreditRow, patch: Partial<Shown & RunFields>) {
   const shown: Partial<Shown> = {};
-  if (patch.personId !== undefined && patch.personId !== row.personId) shown.personId = patch.personId;
+  if (patch.personId !== undefined && patch.personId !== row.personId)
+    shown.personId = patch.personId;
   if (patch.role !== undefined && patch.role !== row.role) shown.role = patch.role;
   const run: Partial<RunFields> = {};
   for (const key of ["rebuiltAt", "runRole", "runNames", "runApart"] as const) {
@@ -865,7 +876,12 @@ async function insertCredit(
 ) {
   const { seriesId, personId, role, source, ...runFields } = fields;
   const creditId = await ctx.db.insert("seriesCredits", { seriesId, personId, role, source });
-  const runId = await ctx.db.insert("seriesCreditRuns", { creditId, seriesId, source, ...runFields });
+  const runId = await ctx.db.insert("seriesCreditRuns", {
+    creditId,
+    seriesId,
+    source,
+    ...runFields,
+  });
   const row: CreditRow = { ...fields, _id: creditId, _creationTime: 0, runId, legacy: false };
   rows.push(row);
   return row;
@@ -1060,9 +1076,21 @@ async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherM
       // Shown: a covering role stays until the run settles, so the row
       // doesn't drop to "author" between the batches of "author" and "art".
       const role = covers(row) ? row.role : runRole;
-      await updateRow(ctx, row, { personId, rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt), role, runRole });
+      await updateRow(ctx, row, {
+        personId,
+        rebuiltAt: Math.max(row.rebuiltAt, rebuiltAt),
+        role,
+        runRole,
+      });
     } else {
-      await insertCredit(ctx, rows, { seriesId, personId, role: runRole, runRole, source: "creators", rebuiltAt });
+      await insertCredit(ctx, rows, {
+        seriesId,
+        personId,
+        role: runRole,
+        runRole,
+        source: "creators",
+        rebuiltAt,
+      });
     }
     count++;
   }
@@ -1281,7 +1309,8 @@ export const statsBatch = internalMutation({
       const general = (entries: typeof shelf) => entries.filter((entry) => !entry.series.mature);
       // General before made: the general directory lists a mixed-credit
       // author, so a Series they only originated beats a mature one they made.
-      const pool = [general(made), general(shelf), made, shelf].find((entries) => entries.length > 0) ?? [];
+      const pool =
+        [general(made), general(shelf), made, shelf].find((entries) => entries.length > 0) ?? [];
       const biggest = pool.reduce<(typeof shelf)[number] | null>(
         (best, entry) =>
           (entry.stats?.volumeCount ?? 0) > (best?.stats?.volumeCount ?? -1) ? entry : best,
@@ -1527,13 +1556,15 @@ export const authors = query({
       .paginate(paginationOpts);
     return {
       ...page,
-      page: page.page.filter((person) => visibleTo(showMature, person.matureOnly)).map((person) => ({
-        publicId: person.publicId,
-        name: person.name,
-        seriesCount: person.seriesCount,
-        coverUrl: person.coverUrl,
-        coverIsbn: person.coverIsbn,
-      })),
+      page: page.page
+        .filter((person) => visibleTo(showMature, person.matureOnly))
+        .map((person) => ({
+          publicId: person.publicId,
+          name: person.name,
+          seriesCount: person.seriesCount,
+          coverUrl: person.coverUrl,
+          coverIsbn: person.coverIsbn,
+        })),
     };
   },
 });

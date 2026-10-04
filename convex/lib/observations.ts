@@ -257,7 +257,9 @@ export async function recordUnplaced(
   }
   const row = await holdOf(ctx, current._id);
   const listed =
-    current.recordRef === undefined && !current.withdrawn && !(await proposalInReview(ctx, current));
+    current.recordRef === undefined &&
+    !current.withdrawn &&
+    !(await proposalInReview(ctx, current));
   const kind = listed ? hold.kind : null;
   if (kind === null) {
     if (row === null) return changed;
@@ -302,7 +304,9 @@ export async function clearHold(
   }
   const conflicts = (await ctx.db.get(observationId))?.conflicts;
   if (conflicts?.some((c) => c.field === "placement")) {
-    await ctx.db.patch(observationId, { conflicts: conflicts.filter((c) => c.field !== "placement") });
+    await ctx.db.patch(observationId, {
+      conflicts: conflicts.filter((c) => c.field !== "placement"),
+    });
     changed = true;
   }
   return changed;

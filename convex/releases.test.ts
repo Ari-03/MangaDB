@@ -30,7 +30,10 @@ async function seeded() {
   const t = makeT();
   const ids = await t.run(async (ctx) => {
     const viz = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
-    const seas = await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+    const seas = await insertPublisher(ctx, {
+      name: "Seven Seas Entertainment",
+      slug: "seven-seas",
+    });
     await insertPublisher(ctx, { status: "hidden", name: "Hidden Press", slug: "hidden-press" });
 
     const ghoul = await insertSeries(ctx, { title: "Tokyo Ghoul" });
@@ -62,9 +65,19 @@ async function seeded() {
     await insertRelease(ctx, { ...quietRelease, status: "hidden", pubDate: pubDate(20260811) });
     // Neighbors that must stay outside the August window:
     await insertRelease(ctx, { ...quietRelease, pubDate: pubDate(20260731) });
-    await insertRelease(ctx, { ...ghoulRelease, editionId: ghoulEd1, format: "digital", pubDate: pubDate(20260901) });
+    await insertRelease(ctx, {
+      ...ghoulRelease,
+      editionId: ghoulEd1,
+      format: "digital",
+      pubDate: pubDate(20260901),
+    });
     // Year-only precision falls in no month window.
-    await insertRelease(ctx, { ...ghoulRelease, editionId: ghoulEd1, format: "digital", pubDate: pubDate(20260000) });
+    await insertRelease(ctx, {
+      ...ghoulRelease,
+      editionId: ghoulEd1,
+      format: "digital",
+      pubDate: pubDate(20260000),
+    });
 
     return { viz, seas };
   });
@@ -110,9 +123,7 @@ describe("releases.monthBrowse", () => {
     const result = await t.query(api.releases.monthBrowse, august);
     const partial = result.releases.find((r) => r.day === 27);
     expect(partial?.volumeLabel).toBe("Vol. 3.5 (partial)");
-    expect(result.releases.find((r) => r.day === 4)?.volumeLabel).toBe(
-      "Vol. 1–3",
-    );
+    expect(result.releases.find((r) => r.day === 4)?.volumeLabel).toBe("Vol. 1–3");
   });
 
   it("lists active Publishers alphabetically for the shared filter", async () => {
@@ -188,7 +199,9 @@ describe("releases.monthBrowse jackets", () => {
       await release(v25, "digital", "9798898302498", 20261007);
       await release(v25, "physical", "9798888778661", 20261007);
       // Vol 26: the ebook in October, print (with stored art) in November.
-      const art = await ctx.storage.store(new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }));
+      const art = await ctx.storage.store(
+        new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }),
+      );
       const v26 = await edition(26);
       await release(v26, "digital", "9780000000026", 20261007);
       await release(v26, "physical", "9780000000126", 20261107, art);
@@ -262,7 +275,12 @@ describe("joinBrowseRows cover fallback", () => {
       const v2 = await insertVolume(ctx, { seriesId, position: 2 });
       const bare = await edition(v2);
       const other = await edition(v2);
-      await insertRelease(ctx, { editionId: other, isbn13: "9780000000002", publisherId, seriesIds: [seriesId] });
+      await insertRelease(ctx, {
+        editionId: other,
+        isbn13: "9780000000002",
+        publisherId,
+        seriesIds: [seriesId],
+      });
       for (let day = 12; day <= 14; day++) await release(bare, day);
 
       const counting = countingQueries(ctx);
@@ -340,17 +358,28 @@ async function mixedMonth() {
     const z3 = await insertVolume(ctx, { seriesId: zeta, position: 3, status: "hidden" });
     const a1 = await insertVolume(ctx, { seriesId: adult, position: 1 });
     const g1 = await insertVolume(ctx, { seriesId: gone, position: 1 });
-    const edition = async (publisherId: Id<"publishers">, volumeIds: Array<Id<"volumes">>, fields = {}) => {
+    const edition = async (
+      publisherId: Id<"publishers">,
+      volumeIds: Array<Id<"volumes">>,
+      fields = {},
+    ) => {
       const editionId = await insertEdition(ctx, { publisherId, ...fields });
       for (const [index, volumeId] of volumeIds.entries()) {
         await insertCoverage(ctx, { editionId, volumeId, order: index + 1 });
       }
       return editionId;
     };
-    const line = await insertEditionLine(ctx, { seriesId: zeta, publisherId: kodansha, name: "Omnibus" });
+    const line = await insertEditionLine(ctx, {
+      seriesId: zeta,
+      publisherId: kodansha,
+      name: "Omnibus",
+    });
     const zetaVol1 = await edition(kodansha, [z1]);
     const zetaVol2 = await edition(kodansha, [z2]);
-    const omnibus = await edition(kodansha, [z1, z2, z3], { editionLineId: line, linePosition: "1" });
+    const omnibus = await edition(kodansha, [z1, z2, z3], {
+      editionLineId: line,
+      linePosition: "1",
+    });
     const merged = await edition(kodansha, [z2], { status: "merged" });
     const afterDark = await edition(yen, [a1]);
     const goneEd = await edition(yen, [g1]);
@@ -359,13 +388,22 @@ async function mixedMonth() {
     const release = (fields: Parameters<typeof insertRelease>[1], sort: number) =>
       insertRelease(ctx, { ...fields, pubDate: pubDate(sort) });
     await release({ ...zetaRow, editionId: zetaVol2, isbn13: "9780000000020" }, 20260815);
-    await release({ ...yenRow, editionId: afterDark, seriesIds: [adult], isbn13: "9780000000090" }, 20260815);
-    await release({ ...zetaRow, editionId: zetaVol1, format: "digital", isbn13: "9780000000011" }, 20260815);
+    await release(
+      { ...yenRow, editionId: afterDark, seriesIds: [adult], isbn13: "9780000000090" },
+      20260815,
+    );
+    await release(
+      { ...zetaRow, editionId: zetaVol1, format: "digital", isbn13: "9780000000011" },
+      20260815,
+    );
     await release({ ...zetaRow, editionId: omnibus, isbn13: "9780000000100" }, 20260800);
     await release({ ...zetaRow, editionId: merged, isbn13: "9780000000030" }, 20260810);
     await release({ ...yenRow, editionId: goneEd, seriesIds: [gone] }, 20260812);
     await release({ ...zetaRow, editionId: zetaVol1, isbn13: "9780000000010" }, 20260815);
-    await release({ ...yenRow, editionId: zetaVol2, seriesIds: [gone, zeta], format: "digital" }, 20260803);
+    await release(
+      { ...yenRow, editionId: zetaVol2, seriesIds: [gone, zeta], format: "digital" },
+      20260803,
+    );
   });
   return t;
 }
@@ -393,10 +431,12 @@ describe("releases.monthBrowse joins every Release at once", () => {
 
   it("keeps the rows, their order and the Mature filter exactly", async () => {
     const t = await mixedMonth();
-    expect(shape(await t.query(api.releases.monthBrowse, { ...august, showMature: true }))).toEqual(rows);
-    expect(shape(await t.query(api.releases.monthBrowse, { ...august, showMature: false }))).toEqual(
-      rows.filter((row) => row[5] === false),
+    expect(shape(await t.query(api.releases.monthBrowse, { ...august, showMature: true }))).toEqual(
+      rows,
     );
+    expect(
+      shape(await t.query(api.releases.monthBrowse, { ...august, showMature: false })),
+    ).toEqual(rows.filter((row) => row[5] === false));
     const omnibus = (await t.query(api.releases.monthBrowse, august)).releases[0];
     expect([omnibus?.lineName, omnibus?.linePosition, omnibus?.edition.title]).toEqual([
       "Omnibus",
@@ -447,7 +487,9 @@ describe("releases.monthBrowse joins every Release at once", () => {
     const t = makeT();
     const joined = await t.run(async (ctx) => {
       const publisherId = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
-      const art = await ctx.storage.store(new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }));
+      const art = await ctx.storage.store(
+        new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }),
+      );
       // 300 Releases, each its own Series, line and stored cover: joined all
       // at once, more than 1,200 reads would be in flight.
       for (let n = 0; n < 300; n++) {

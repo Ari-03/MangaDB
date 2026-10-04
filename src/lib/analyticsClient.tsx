@@ -115,7 +115,10 @@ export function applyConsent(consent: AnalyticsConsent) {
   // A denial stored by an earlier page load. Read before reset(), which clears it.
   needsOptIn ||= posthog.has_opted_out_capturing();
   // identify() records itself in posthog-js's persisted `$user_state`.
-  if (posthog.get_property("$user_state") === "identified" && posthog.get_distinct_id() !== userId) {
+  if (
+    posthog.get_property("$user_state") === "identified" &&
+    posthog.get_distinct_id() !== userId
+  ) {
     posthog.reset();
   }
   if (needsOptIn) {
@@ -142,6 +145,7 @@ function ConsentSync({ consent }: { consent: AnalyticsConsent }) {
   const username = consent.status === "identified" ? consent.username : undefined;
   const role = consent.status === "identified" ? consent.role : undefined;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `consent` can be a new object each render; its fields, which are all applyConsent reads, are the dependencies
   useLayoutEffect(() => {
     if (clientLoaded) applyConsent(consent);
     // Unmounted (the router's error screen replaced the app), nothing reads
@@ -149,7 +153,6 @@ function ConsentSync({ consent }: { consent: AnalyticsConsent }) {
     return () => {
       sending = false;
     };
-    // `consent` is a new object each render; its fields are the dependencies.
   }, [status, userId, username, role]);
 
   return null;

@@ -100,15 +100,11 @@ export function lastmodDate(ms: number): string {
 }
 
 export function sitemapIndexXml(locs: string[]): string {
-  const body = locs
-    .map((loc) => `  <sitemap><loc>${xmlEscape(loc)}</loc></sitemap>`)
-    .join("\n");
+  const body = locs.map((loc) => `  <sitemap><loc>${xmlEscape(loc)}</loc></sitemap>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</sitemapindex>\n`;
 }
 
-export function urlsetXml(
-  urls: Array<{ loc: string; lastmod?: string }>,
-): string {
+export function urlsetXml(urls: Array<{ loc: string; lastmod?: string }>): string {
   const body = urls
     .map(
       (url) =>
@@ -217,10 +213,7 @@ async function childSitemapXml(
  * missing `VITE_CONVEX_URL` throws there, and every other request reaches
  * the app, whose error screen shows the message.
  */
-export async function seoResponse(
-  request: Request,
-  data?: SitemapData,
-): Promise<Response | null> {
+export async function seoResponse(request: Request, data?: SitemapData): Promise<Response | null> {
   if (request.method !== "GET" && request.method !== "HEAD") return null;
   const { pathname } = new URL(request.url);
   const origin = siteOrigin();
@@ -236,9 +229,7 @@ export async function seoResponse(
 
   if (pathname === "/sitemap.xml") {
     return xmlResponse(
-      sitemapIndexXml(
-        SITEMAP_CHILDREN.map((child) => `${origin}/sitemaps/${child}.xml`),
-      ),
+      sitemapIndexXml(SITEMAP_CHILDREN.map((child) => `${origin}/sitemaps/${child}.xml`)),
     );
   }
 

@@ -7,21 +7,12 @@
 // ClerkProvider the visitor is anonymous, in StrictMode too; a token fetch
 // that fails sends the query anonymously and reads as signed out; a
 // sign-out hides the viewer at once. (From the review of the Clerk gate.)
-import {
-  act,
-  createElement,
-  StrictMode,
-  type ComponentProps,
-  type ContextType,
-} from "react";
+import { act, createElement, StrictMode, type ComponentProps, type ContextType } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
-import {
-  ClerkInstanceContext,
-  InitialStateProvider,
-} from "@clerk/shared/react";
+import { ClerkInstanceContext, InitialStateProvider } from "@clerk/shared/react";
 import { afterEach, expect, it } from "vitest";
 import { api } from "../../convex/_generated/api";
 import { useConvexClerkAuth, useViewerQuery } from "./viewer";
@@ -63,14 +54,9 @@ function Probe() {
   return createElement(
     "p",
     {
-      "data-viewer":
-        viewer && !viewer.needsUsername ? viewer.username : undefined,
+      "data-viewer": viewer && !viewer.needsUsername ? viewer.username : undefined,
     },
-    viewer === undefined
-      ? "loading"
-      : viewer === null
-        ? "signed out"
-        : "signed in",
+    viewer === undefined ? "loading" : viewer === null ? "signed out" : "signed in",
   );
 }
 
@@ -212,9 +198,11 @@ function setup(signedIn: boolean, fetchToken: () => Promise<string | null>) {
     { value: clerk.context },
     createElement(InitialStateProvider, {
       initialState: sessionState(signedIn),
+      // biome-ignore lint/correctness/noChildrenProp: ConvexProviderWithClerk's and InitialStateProvider's props types require children, so createElement takes it here rather than as a third argument
       children: createElement(ConvexProviderWithClerk, {
         client,
         useAuth: useConvexClerkAuth,
+        // biome-ignore lint/correctness/noChildrenProp: ConvexProviderWithClerk's and InitialStateProvider's props types require children, so createElement takes it here rather than as a third argument
         children: createElement(Probe),
       }),
     }),
@@ -279,10 +267,7 @@ it("a token fetch failure retries, reads as signed out, and sends the query anon
   const socket = Socket.sockets[0];
   if (!socket) throw new Error("No Convex socket opened");
   socket.open();
-  expect(socket.sent.map((message) => message.type)).toEqual([
-    "Connect",
-    "ModifyQuerySet",
-  ]);
+  expect(socket.sent.map((message) => message.type)).toEqual(["Connect", "ModifyQuerySet"]);
   // Convex has given up on the token: signed out, before the anonymous
   // answer arrives (which agrees).
   expect(s.container.textContent).toBe("signed out");
@@ -291,9 +276,7 @@ it("a token fetch failure retries, reads as signed out, and sends the query anon
       type: "Transition",
       startVersion: { querySet: 0, identity: 0, ts: "AAAAAAAAAAA=" },
       endVersion: { querySet: 1, identity: 0, ts: "AQAAAAAAAAA=" },
-      modifications: [
-        { type: "QueryUpdated", queryId: 0, value: null, logLines: [] },
-      ],
+      modifications: [{ type: "QueryUpdated", queryId: 0, value: null, logLines: [] }],
     }),
   );
   expect(s.container.textContent).toBe("signed out");
@@ -329,7 +312,5 @@ it("a sign-out hides the subscribed viewer at once", async () => {
     "ModifyQuerySet",
   ]);
   expect(socket.sent.at(-2)?.tokenType).toBe("None");
-  expect(socket.sent.at(-1)?.modifications).toEqual([
-    { type: "Remove", queryId: 0 },
-  ]);
+  expect(socket.sent.at(-1)?.modifications).toEqual([{ type: "Remove", queryId: 0 }]);
 });

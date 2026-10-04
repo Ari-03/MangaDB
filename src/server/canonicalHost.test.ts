@@ -33,16 +33,12 @@ describe("canonicalRedirect", () => {
   });
 
   it("leaves non-canonical hosts (workers.dev previews, localhost) alone", () => {
-    expect(
-      canonicalRedirect(get("https://mangadb.someone.workers.dev/"), HOST),
-    ).toBeNull();
+    expect(canonicalRedirect(get("https://mangadb.someone.workers.dev/"), HOST)).toBeNull();
     expect(canonicalRedirect(get("http://localhost:3000/"), HOST)).toBeNull();
   });
 
   it("does nothing when no canonical host is configured", () => {
-    expect(
-      canonicalRedirect(get("https://www.mangadb.org/"), undefined),
-    ).toBeNull();
+    expect(canonicalRedirect(get("https://www.mangadb.org/"), undefined)).toBeNull();
     expect(canonicalRedirect(get("https://www.mangadb.org/"), "")).toBeNull();
   });
 });

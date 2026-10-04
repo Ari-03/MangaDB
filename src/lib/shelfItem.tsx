@@ -36,12 +36,7 @@ export function SeriesShelfItem({
           tabIndex={-1}
           aria-hidden="true"
         >
-          <Cover
-            src={series.coverUrl}
-            isbn13={series.coverIsbn}
-            title={series.title}
-            lazy={lazy}
-          />
+          <Cover src={series.coverUrl} isbn13={series.coverIsbn} title={series.title} lazy={lazy} />
         </Link>
       </div>
       <div className="caption">

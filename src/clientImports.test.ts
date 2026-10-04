@@ -61,8 +61,15 @@ function importsOf(file: string, text: string): Edge[] {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       // `import { type A } from "x"` keeps a bare `import "x"` under
       // verbatimModuleSyntax, so only a wholly type-only clause is erased.
-      edges.push({ specifier: node.moduleSpecifier.text, typeOnly: node.importClause?.isTypeOnly ?? false });
-    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      edges.push({
+        specifier: node.moduleSpecifier.text,
+        typeOnly: node.importClause?.isTypeOnly ?? false,
+      });
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
       edges.push({ specifier: node.moduleSpecifier.text, typeOnly: node.isTypeOnly });
     } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       edges.push(follow(node, node.arguments[0]));
@@ -90,7 +97,11 @@ function importsOf(file: string, text: string): Edge[] {
  * when there is no such file; `root` is the repo root that holds src/ and
  * convex/.
  */
-function convexLeaks(roots: string[], root: string, read: (file: string) => string | undefined): string[] {
+function convexLeaks(
+  roots: string[],
+  root: string,
+  read: (file: string) => string | undefined,
+): string[] {
   const convexDir = path.join(root, "convex") + path.sep;
   const rel = (file: string) => path.relative(root, file);
   // A file path, or null for a package. A bare name is a repo file first
@@ -106,7 +117,9 @@ function convexLeaks(roots: string[], root: string, read: (file: string) => stri
     const extensions = ["", ".ts", ".tsx", ".js", ".d.ts", "/index.ts", "/index.tsx"];
     // `./x.js` names ./x.ts or ./x.tsx in TypeScript source.
     const stems = [base, base.replace(/\.js$/, ".ts"), base.replace(/\.jsx?$/, ".tsx")];
-    const found = stems.flatMap((stem) => extensions.map((ext) => stem + ext)).find((file) => read(file) !== undefined);
+    const found = stems
+      .flatMap((stem) => extensions.map((ext) => stem + ext))
+      .find((file) => read(file) !== undefined);
     if (found !== undefined) return found;
     if (/^[~./]/.test(bare)) throw new Error(`${rel(from)}: cannot resolve "${specifier}"`);
     return null;
@@ -127,26 +140,36 @@ function convexLeaks(roots: string[], root: string, read: (file: string) => stri
     const inLib = file.startsWith(path.join(convexDir, "lib") + path.sep);
     for (const edge of importsOf(file, read(file) ?? "")) {
       if ("opaque" in edge) {
-        leaks.push(`${chain(file)} has ${edge.opaque}, which the guard cannot follow (Vite bundles every file it matches: pass import() and new URL() one plain string, and import files by name instead of import.meta.glob)`);
+        leaks.push(
+          `${chain(file)} has ${edge.opaque}, which the guard cannot follow (Vite bundles every file it matches: pass import() and new URL() one plain string, and import files by name instead of import.meta.glob)`,
+        );
         continue;
       }
       if (edge.typeOnly) continue;
       const target = resolve(file, edge.specifier);
       if (target === null) {
         if (inLib && !PURE_PACKAGES.has(edge.specifier)) {
-          leaks.push(`${chain(file)} imports "${edge.specifier}" (a convex/lib/ module the browser loads may import only ${[...PURE_PACKAGES].join(", ")})`);
+          leaks.push(
+            `${chain(file)} imports "${edge.specifier}" (a convex/lib/ module the browser loads may import only ${[...PURE_PACKAGES].join(", ")})`,
+          );
         }
         continue;
       }
       if (target.startsWith(convexDir)) {
-        const module = rel(target).slice("convex/".length).replace(/(\.d)?\.[jt]sx?$/, "");
+        const module = rel(target)
+          .slice("convex/".length)
+          .replace(/(\.d)?\.[jt]sx?$/, "");
         if (CLIENT_GENERATED.has(module) && !inLib) continue;
         if (!module.startsWith("lib/")) {
-          leaks.push(`${chain(file)} → ${rel(target)} (server code: import it from a pure convex/lib/ module instead)`);
+          leaks.push(
+            `${chain(file)} → ${rel(target)} (server code: import it from a pure convex/lib/ module instead)`,
+          );
           continue;
         }
       } else if (inLib) {
-        leaks.push(`${chain(file)} → ${rel(target)} (a convex/lib/ module the browser loads must stay inside convex/lib/)`);
+        leaks.push(
+          `${chain(file)} → ${rel(target)} (a convex/lib/ module the browser loads must stay inside convex/lib/)`,
+        );
         continue;
       }
       if (!parent.has(target)) {
@@ -174,9 +197,11 @@ describe("client imports of convex/", () => {
     "/r/src/router.tsx": router,
     "/r/convex/_generated/api.js": "export const api = {};",
     "/r/convex/_generated/dataModel.d.ts": "export type Id<T> = string;",
-    "/r/convex/comments.ts": 'import { query } from "./_generated/server";\nexport const COMMENT_POLICY = {};',
+    "/r/convex/comments.ts":
+      'import { query } from "./_generated/server";\nexport const COMMENT_POLICY = {};',
     "/r/convex/_generated/server.js": "export const query = () => {};",
-    "/r/convex/lib/policy.ts": 'import { v } from "convex/values";\nexport const POLICY = v.string();',
+    "/r/convex/lib/policy.ts":
+      'import { v } from "convex/values";\nexport const POLICY = v.string();',
     ...more,
   });
 
@@ -191,12 +216,15 @@ describe("client imports of convex/", () => {
       'import { useQuery } from "convex/react";',
       'const lazy = () => import(("~/lib/lazy"));',
     ].join("\n");
-    expect(leaksIn(repo(router, { "/r/src/styles.css": "", "/r/src/lib/lazy.ts": "export {};" }))).toEqual([]);
+    expect(
+      leaksIn(repo(router, { "/r/src/styles.css": "", "/r/src/lib/lazy.ts": "export {};" })),
+    ).toEqual([]);
   });
 
   it("catch a function module reached through src/", () => {
     const files = repo('import { x } from "~/lib/comments";', {
-      "/r/src/lib/comments.tsx": 'import { COMMENT_POLICY } from "../../convex/comments";\nexport const x = 1;',
+      "/r/src/lib/comments.tsx":
+        'import { COMMENT_POLICY } from "../../convex/comments";\nexport const x = 1;',
     });
     expect(leaksIn(files)).toEqual([
       "src/router.tsx → src/lib/comments.tsx → convex/comments.ts (server code: import it from a pure convex/lib/ module instead)",
@@ -232,7 +260,9 @@ describe("client imports of convex/", () => {
   });
 
   it("report an import() it cannot reduce to one file rather than skip it", () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the guard parses, where ${…} is the interpolation under test
     expect(leaksIn(repo('import(`../convex/${"comments"}.ts`);'))).toEqual([
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the guard parses, where ${…} is the interpolation under test
       'src/router.tsx has import(`../convex/${"comments"}.ts`), which the guard cannot follow (Vite bundles every file it matches: pass import() and new URL() one plain string, and import files by name instead of import.meta.glob)',
     ]);
   });
@@ -241,15 +271,19 @@ describe("client imports of convex/", () => {
     ["a concatenated import()", 'const name = "comments";\nimport("../convex/" + name + ".ts");'],
     ["an import() of a variable", "import(specifier);"],
     ["import.meta.glob", 'import.meta.glob("/convex/*.ts", { eager: true });'],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text the guard parses, where ${…} is the interpolation under test
     ["a template new URL()", "new URL(`../convex/${name}.ts`, import.meta.url);"],
   ])("report %s", (_, router) => {
-    expect(leaksIn(repo(router))).toEqual([expect.stringContaining("which the guard cannot follow")]);
+    expect(leaksIn(repo(router))).toEqual([
+      expect.stringContaining("which the guard cannot follow"),
+    ]);
   });
 
   it("catch a convex/lib/ module that imports server code, however deep", () => {
     const files = repo('import { a } from "../convex/lib/a";', {
       "/r/convex/lib/a.ts": 'import { b } from "./b";\nexport const a = b;',
-      "/r/convex/lib/b.ts": 'import { schema } from "../schema";\nimport { RateLimiter } from "@convex-dev/rate-limiter";\nimport { api } from "../_generated/api";\nexport { query } from "../_generated/server";\nexport const b = 1;',
+      "/r/convex/lib/b.ts":
+        'import { schema } from "../schema";\nimport { RateLimiter } from "@convex-dev/rate-limiter";\nimport { api } from "../_generated/api";\nexport { query } from "../_generated/server";\nexport const b = 1;',
       "/r/convex/schema.ts": "export const schema = {};",
     });
     expect(leaksIn(files)).toEqual([
@@ -261,6 +295,8 @@ describe("client imports of convex/", () => {
   });
 
   it("fail loudly on an import it cannot resolve rather than skip it", () => {
-    expect(() => leaksIn(repo('import { x } from "./missing";'))).toThrow('src/router.tsx: cannot resolve "./missing"');
+    expect(() => leaksIn(repo('import { x } from "./missing";'))).toThrow(
+      'src/router.tsx: cannot resolve "./missing"',
+    );
   });
 });

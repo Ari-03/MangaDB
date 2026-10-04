@@ -87,7 +87,8 @@ export const claimUsername = mutation({
   handler: async (ctx, { username }) => {
     const identity = await requireIdentity(ctx);
     const existing = await getUserBySubject(ctx, identity.subject);
-    if (existing?.deletingSince !== undefined) fail("unauthenticated", "This account is being deleted.");
+    if (existing?.deletingSince !== undefined)
+      fail("unauthenticated", "This account is being deleted.");
     if (existing?.suspended) fail("suspended", "Account suspended.");
     const trimmed = username.trim();
     const result = validateUsername(trimmed);
@@ -97,9 +98,7 @@ export const claimUsername = mutation({
 
     const holder = await ctx.db
       .query("users")
-      .withIndex("by_username", (q) =>
-        q.eq("usernameNormalized", result.normalized),
-      )
+      .withIndex("by_username", (q) => q.eq("usernameNormalized", result.normalized))
       .unique();
     if (holder && holder.clerkSubject !== identity.subject) {
       throw new ConvexError({
@@ -135,11 +134,7 @@ export const claimUsername = mutation({
  */
 export const setFormatPreference = mutation({
   args: {
-    preference: v.union(
-      v.literal("physical"),
-      v.literal("digital"),
-      v.literal("both"),
-    ),
+    preference: v.union(v.literal("physical"), v.literal("digital"), v.literal("both")),
   },
   handler: async (ctx, { preference }) => {
     const user = await requireUser(ctx);
@@ -176,7 +171,8 @@ export const setAnalyticsOptOut = mutation({
   handler: async (ctx, { optOut }) => {
     const identity = await requireIdentity(ctx);
     const user = await getUserBySubject(ctx, identity.subject);
-    if (user?.deletingSince !== undefined) fail("unauthenticated", "This account is being deleted.");
+    if (user?.deletingSince !== undefined)
+      fail("unauthenticated", "This account is being deleted.");
     if (!user) fail("usernameRequired", "Claim a username to finish setting up your account.");
     // Never chosen (undefined) differs from either choice, so a first choice is stored.
     if (user.analyticsOptOut !== optOut) await ctx.db.patch(user._id, { analyticsOptOut: optOut });
@@ -204,7 +200,9 @@ export const deleteAccount = mutation({
   handler: async (ctx) => {
     const identity = await requireIdentity(ctx);
     if (!process.env.CLERK_SECRET_KEY) {
-      console.error("CLERK_SECRET_KEY is not set on the Convex deployment; account deletion is refused.");
+      console.error(
+        "CLERK_SECRET_KEY is not set on the Convex deployment; account deletion is refused.",
+      );
       fail("unconfigured", "Account deletion is not available right now.");
     }
     const user = await getUserBySubject(ctx, identity.subject);
@@ -227,7 +225,13 @@ const MINUTE = 60 * 1000;
  * How long deleteClerkIdentity waits before each retry: five retries over
  * about seven hours, then it gives up.
  */
-export const CLERK_RETRY_DELAYS = [MINUTE / 2, 2 * MINUTE, 10 * MINUTE, 60 * MINUTE, 6 * 60 * MINUTE];
+export const CLERK_RETRY_DELAYS = [
+  MINUTE / 2,
+  2 * MINUTE,
+  10 * MINUTE,
+  60 * MINUTE,
+  6 * 60 * MINUTE,
+];
 
 /**
  * How long a purged User row outlives its Clerk identity. A Convex token
@@ -254,14 +258,18 @@ export const PURGED_ROW_GRACE = 24 * 60 * MINUTE;
 export const deleteClerkIdentity = internalAction({
   args: { clerkSubject: v.string(), attempt: v.number() },
   handler: async (ctx, { clerkSubject, attempt }) => {
-    const refusal: string | null = await ctx.runQuery(internal.users.clerkDeletionRefusal, { clerkSubject });
+    const refusal: string | null = await ctx.runQuery(internal.users.clerkDeletionRefusal, {
+      clerkSubject,
+    });
     if (refusal !== null) {
       console.error(`Not deleting Clerk identity ${clerkSubject}: ${refusal}.`);
       return null;
     }
     const failure = await deleteFromClerk(clerkSubject);
     if (failure === null) {
-      await ctx.scheduler.runAfter(PURGED_ROW_GRACE, internal.users.removePurgedUser, { clerkSubject });
+      await ctx.scheduler.runAfter(PURGED_ROW_GRACE, internal.users.removePurgedUser, {
+        clerkSubject,
+      });
       return null;
     }
     const delay = CLERK_RETRY_DELAYS[attempt];
@@ -389,21 +397,56 @@ export const purgeUser = internalMutation({
     // unit, so each makes progress.
     const steps = [
       () => purgeUserComments(ctx, userId, room),
-      () => drain(ctx.db.query("reviews").withIndex("by_user", (q) => q.eq("userId", userId)), room, remove),
       () =>
-        drain(ctx.db.query("ratings").withIndex("by_user", (q) => q.eq("userId", userId)), room, async (row) => {
-          await ctx.db.delete(row._id);
-          const target = targetOfRow(row);
-          if (target) await applyRatingDelta(ctx, target, row.score, null);
-        }),
-      () => drain(ctx.db.query("favorites").withIndex("by_user", (q) => q.eq("userId", userId)), room, remove),
-      () => drain(ctx.db.query("collectionEntries").withIndex("by_user", (q) => q.eq("userId", userId)), room, remove),
+        drain(
+          ctx.db.query("reviews").withIndex("by_user", (q) => q.eq("userId", userId)),
+          room,
+          remove,
+        ),
       () =>
-        drain(ctx.db.query("userSeriesStates").withIndex("by_user_series", (q) => q.eq("userId", userId)), room, remove),
+        drain(
+          ctx.db.query("ratings").withIndex("by_user", (q) => q.eq("userId", userId)),
+          room,
+          async (row) => {
+            await ctx.db.delete(row._id);
+            const target = targetOfRow(row);
+            if (target) await applyRatingDelta(ctx, target, row.score, null);
+          },
+        ),
       () =>
-        drain(ctx.db.query("releaseProgress").withIndex("by_user_release", (q) => q.eq("userId", userId)), room, remove),
+        drain(
+          ctx.db.query("favorites").withIndex("by_user", (q) => q.eq("userId", userId)),
+          room,
+          remove,
+        ),
       () =>
-        drain(ctx.db.query("volumeProgress").withIndex("by_user_volume", (q) => q.eq("userId", userId)), room, remove),
+        drain(
+          ctx.db.query("collectionEntries").withIndex("by_user", (q) => q.eq("userId", userId)),
+          room,
+          remove,
+        ),
+      () =>
+        drain(
+          ctx.db
+            .query("userSeriesStates")
+            .withIndex("by_user_series", (q) => q.eq("userId", userId)),
+          room,
+          remove,
+        ),
+      () =>
+        drain(
+          ctx.db
+            .query("releaseProgress")
+            .withIndex("by_user_release", (q) => q.eq("userId", userId)),
+          room,
+          remove,
+        ),
+      () =>
+        drain(
+          ctx.db.query("volumeProgress").withIndex("by_user_volume", (q) => q.eq("userId", userId)),
+          room,
+          remove,
+        ),
     ];
     for (const step of steps) {
       if (!(await step())) {
@@ -441,7 +484,11 @@ function purgeRoom(ctx: MutationCtx): PurgeRoom {
 }
 
 /** Remove `rows` one unit each while `room` allows; true when the rows ran out first. */
-async function drain<Row>(rows: AsyncIterable<Row>, room: PurgeRoom, remove: (row: Row) => Promise<void>) {
+async function drain<Row>(
+  rows: AsyncIterable<Row>,
+  room: PurgeRoom,
+  remove: (row: Row) => Promise<void>,
+) {
   for await (const row of rows) {
     if (!(await room())) return false;
     await remove(row);
@@ -462,9 +509,7 @@ const MANIFEST_PAGE = 8;
 export const redactMergeManifests = internalMutation({
   args: { userId: v.id("users"), cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { userId, cursor }) => {
-    const page = await ctx.db
-      .query("mergeManifests")
-      .paginate({ cursor, numItems: MANIFEST_PAGE });
+    const page = await ctx.db.query("mergeManifests").paginate({ cursor, numItems: MANIFEST_PAGE });
     await redactUserFromManifests(ctx, page.page, userId);
     if (!page.isDone) {
       await ctx.scheduler.runAfter(0, internal.users.redactMergeManifests, {

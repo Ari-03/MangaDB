@@ -55,7 +55,11 @@ describe("catalog.search", () => {
       await insertSeries(ctx, { status: "merged", publicId: 4, title: "Tokyo Duplicate" });
       await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
       await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
-      await insertPublisher(ctx, { status: "hidden", name: "Seven Hidden Press", slug: "seven-hidden" });
+      await insertPublisher(ctx, {
+        status: "hidden",
+        name: "Seven Hidden Press",
+        slug: "seven-hidden",
+      });
       await insertSeries(ctx, { publicId: 5, title: "Seven Seeds" });
     });
   };
@@ -166,9 +170,7 @@ describe("catalog.search", () => {
     const t = makeT();
     await seed(t);
     const results = await t.query(api.catalog.search, { query: "seven" });
-    expect(results.publishers).toEqual([
-      { name: "Seven Seas Entertainment", slug: "seven-seas" },
-    ]);
+    expect(results.publishers).toEqual([{ name: "Seven Seas Entertainment", slug: "seven-seas" }]);
   });
 
   it("keeps typo help when the query only starts a word of a Publisher's name", async () => {
@@ -182,7 +184,6 @@ describe("catalog.search", () => {
     expect(results.publishers.map((p) => p.slug)).toEqual(["witchery-press"]);
     expect(results.didYouMean.map((s) => s.title)).toEqual(["Witch Hat Atelier"]);
   });
-
 });
 
 describe("catalog.suggest", () => {
@@ -214,10 +215,7 @@ describe("catalog.suggest", () => {
     const t = makeT();
     await seed(t);
     const results = await t.query(api.catalog.suggest, { query: "berserk" });
-    expect(results.series.map((s) => s.title)).toEqual([
-      "Berserk",
-      "Berserk of Gluttony",
-    ]);
+    expect(results.series.map((s) => s.title)).toEqual(["Berserk", "Berserk of Gluttony"]);
     expect(results.didYouMean).toEqual([]);
   });
 
@@ -233,10 +231,7 @@ describe("catalog.suggest", () => {
     await seed(t);
     const berzerk = await t.query(api.catalog.suggest, { query: "berzerk" });
     expect(berzerk.series).toEqual([]);
-    expect(berzerk.didYouMean.map((s) => s.title)).toEqual([
-      "Berserk",
-      "Berserk of Gluttony",
-    ]);
+    expect(berzerk.didYouMean.map((s) => s.title)).toEqual(["Berserk", "Berserk of Gluttony"]);
     const chainsawman = await t.query(api.catalog.suggest, { query: "chainsawman" });
     expect(chainsawman.didYouMean.map((s) => s.title)).toEqual(["Chainsaw Man"]);
   });
@@ -253,13 +248,13 @@ describe("catalog.suggest", () => {
   it("finds a merged Publisher's survivor by the old name", async () => {
     const t = makeT();
     await seed(t);
-    expect(
-      (await t.query(api.catalog.suggest, { query: "kodansha comics" })).publishers,
-    ).toEqual([{ name: "Kodansha", slug: "kodansha" }]);
+    expect((await t.query(api.catalog.suggest, { query: "kodansha comics" })).publishers).toEqual([
+      { name: "Kodansha", slug: "kodansha" },
+    ]);
     // The survivor is listed once, though both rows match "kodansha".
-    expect(
-      (await t.query(api.catalog.suggest, { query: "kodansha" })).publishers,
-    ).toEqual([{ name: "Kodansha", slug: "kodansha" }]);
+    expect((await t.query(api.catalog.suggest, { query: "kodansha" })).publishers).toEqual([
+      { name: "Kodansha", slug: "kodansha" },
+    ]);
   });
 
   it("does not match a Publisher mid-word", async () => {
@@ -364,7 +359,12 @@ describe("catalog.seriesPage", () => {
     const t = makeT();
     await t.run(async (ctx) => {
       const winner = await insertSeries(ctx, { publicId: 1, title: "Survivor" });
-      await insertSeries(ctx, { status: "merged", mergedIntoId: winner, publicId: 2, title: "Duplicate" });
+      await insertSeries(ctx, {
+        status: "merged",
+        mergedIntoId: winner,
+        publicId: 2,
+        title: "Duplicate",
+      });
     });
 
     const page = await t.query(api.catalog.seriesPage, { publicId: 2 });
@@ -401,7 +401,11 @@ describe("catalog.seriesPage", () => {
       const publisherId = await insertPublisher(ctx, { name: "Pub", slug: "pub" });
       const seriesId = await insertSeries(ctx, { publicId: 1, title: "S" });
       const volumeId = await insertVolume(ctx, { publicId: 1, seriesId });
-      const hiddenEdition = await insertEdition(ctx, { status: "hidden", publicId: 1, publisherId });
+      const hiddenEdition = await insertEdition(ctx, {
+        status: "hidden",
+        publicId: 1,
+        publisherId,
+      });
       await insertCoverage(ctx, { editionId: hiddenEdition, volumeId });
       const activeEdition = await insertEdition(ctx, { publicId: 2, publisherId });
       await insertCoverage(ctx, { editionId: activeEdition, volumeId });
@@ -434,9 +438,19 @@ async function readingOrderSeries(ctx: MutationCtx & { storage: StorageActionWri
   const seriesId = await insertSeries(ctx, { publicId: 50, title: "Order Matters" });
   const volume = (position: number, status: "active" | "hidden" = "active") =>
     insertVolume(ctx, { publicId: 500 + position, seriesId, position, status });
-  const [v1, v2, v3, v4] = [await volume(1), await volume(2), await volume(3, "hidden"), await volume(4)];
+  const [v1, v2, v3, v4] = [
+    await volume(1),
+    await volume(2),
+    await volume(3, "hidden"),
+    await volume(4),
+  ];
   const deluxe = await insertEditionLine(ctx, { seriesId, publisherId: dh, name: "Deluxe" });
-  const oldLine = await insertEditionLine(ctx, { seriesId, publisherId: dh, name: "Old", status: "hidden" });
+  const oldLine = await insertEditionLine(ctx, {
+    seriesId,
+    publisherId: dh,
+    name: "Old",
+    status: "hidden",
+  });
   const edition = async (
     publicId: number,
     publisherId: Id<"publishers">,
@@ -449,9 +463,21 @@ async function readingOrderSeries(ctx: MutationCtx & { storage: StorageActionWri
     }
     return editionId;
   };
-  const release = (editionId: Id<"editions">, publisherId: Id<"publishers">, sort: number, fields = {}) =>
-    insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], pubDate: pubDate(sort), ...fields });
-  const art = (bytes: number, type: string) => ctx.storage.store(new Blob([new Uint8Array(bytes)], { type }));
+  const release = (
+    editionId: Id<"editions">,
+    publisherId: Id<"publishers">,
+    sort: number,
+    fields = {},
+  ) =>
+    insertRelease(ctx, {
+      editionId,
+      publisherId,
+      seriesIds: [seriesId],
+      pubDate: pubDate(sort),
+      ...fields,
+    });
+  const art = (bytes: number, type: string) =>
+    ctx.storage.store(new Blob([new Uint8Array(bytes)], { type }));
 
   await edition(1, dh, [v1], { status: "hidden" });
   const ss2 = await edition(2, ss, [v2]);
@@ -485,12 +511,34 @@ describe("catalog.seriesPage reads concurrently", () => {
     expect(
       page?.editionGroups.map((group) => [
         group.key,
-        group.books.map((book) => [book.publicId, book.coverage.map((c) => c.position), book.releases.length]),
+        group.books.map((book) => [
+          book.publicId,
+          book.coverage.map((c) => c.position),
+          book.releases.length,
+        ]),
       ]),
     ).toEqual([
-      ["dark-horse", [[3, [1], 2], [5, [4], 1]]],
-      ["seven-seas", [[2, [2], 1], [6, [4], 1]]],
-      ["dark-horse-deluxe", [[4, [1, 2], 1], [7, [], 1]]],
+      [
+        "dark-horse",
+        [
+          [3, [1], 2],
+          [5, [4], 1],
+        ],
+      ],
+      [
+        "seven-seas",
+        [
+          [2, [2], 1],
+          [6, [4], 1],
+        ],
+      ],
+      [
+        "dark-horse-deluxe",
+        [
+          [4, [1, 2], 1],
+          [7, [], 1],
+        ],
+      ],
     ]);
     // The first stored cover that is not a placeholder, among Releases in stored order.
     expect(page?.editionGroups[0]?.books[0]?.coverUrl).toBe(jacketUrl);
@@ -508,7 +556,10 @@ describe("catalog.seriesPage reads concurrently", () => {
           .collect()
       ).filter((volume) => volume.status === "active");
       const { editions, firstPosition } = await seriesEditions(ctx, seriesId, volumes);
-      return [...editions.values()].map((edition) => [edition.publicId, firstPosition.get(edition._id) ?? null]);
+      return [...editions.values()].map((edition) => [
+        edition.publicId,
+        firstPosition.get(edition._id) ?? null,
+      ]);
     });
     expect(met).toEqual([
       [3, 1],
@@ -566,9 +617,18 @@ describe("catalog.seriesPage reads concurrently", () => {
       for (let position = 1; position <= 110; position++) {
         const volumeId = await insertVolume(ctx, { seriesId, position });
         for (const editionLineId of lines) {
-          const editionId = await insertEdition(ctx, { publisherId, editionLineId, linePosition: String(position) });
+          const editionId = await insertEdition(ctx, {
+            publisherId,
+            editionLineId,
+            linePosition: String(position),
+          });
           await insertCoverage(ctx, { editionId, volumeId });
-          await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], pubDate: pubDate(20260101) });
+          await insertRelease(ctx, {
+            editionId,
+            publisherId,
+            seriesIds: [seriesId],
+            pubDate: pubDate(20260101),
+          });
         }
       }
     });
@@ -662,7 +722,13 @@ describe("catalog.recentSeries", () => {
         const volumeId = await insertVolume(ctx, { seriesId, position });
         const editionId = await insertEdition(ctx, { publisherId });
         await insertCoverage(ctx, { editionId, volumeId });
-        await insertRelease(ctx, { editionId, publisherId, seriesIds: [seriesId], isbn13, pubDate: pubDate(sort) });
+        await insertRelease(ctx, {
+          editionId,
+          publisherId,
+          seriesIds: [seriesId],
+          isbn13,
+          pubDate: pubDate(sort),
+        });
       }
     });
     const isbns = async (todaySort?: number) =>

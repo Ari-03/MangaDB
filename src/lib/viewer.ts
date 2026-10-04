@@ -46,12 +46,14 @@ export function useConvexClerkAuth() {
  * then: the visitor is anonymous.
  */
 function useSession(): { isSignedIn: boolean; status: "loading" | "signedOut" | "viewer" } {
-  let clerk;
+  let clerk: ReturnType<typeof useAuth>;
   try {
+    // biome-ignore lint/correctness/useHookAtTopLevel: Clerk's presence is fixed at build time and useAuth throws from its first hook without it, so every render calls the same hooks
     clerk = useAuth();
   } catch {
     return { isSignedIn: false, status: "signedOut" };
   }
+  // biome-ignore lint/correctness/useHookAtTopLevel: reached on every render when Clerk is configured and on none when it is not (above)
   const convex = useConvexAuth();
   if (!clerk.isLoaded) return { isSignedIn: false, status: "loading" };
   if (!clerk.isSignedIn) return { isSignedIn: false, status: "signedOut" };

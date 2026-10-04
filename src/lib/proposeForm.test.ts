@@ -52,8 +52,11 @@ function liveForm(name: string, baseRevisionId: string, overridden = true) {
 }
 
 const textInputs = (tree: Host[]) =>
-  tree.filter((host) => host.type === "input" && host.props.type !== "checkbox" && host.props.type !== "url");
-const checkbox = (tree: Host[]) => tree.find((host) => host.type === "input" && host.props.type === "checkbox");
+  tree.filter(
+    (host) => host.type === "input" && host.props.type !== "checkbox" && host.props.type !== "url",
+  );
+const checkbox = (tree: Host[]) =>
+  tree.find((host) => host.type === "input" && host.props.type === "checkbox");
 
 function typeWebsite(value: string) {
   (textInputs(mount(page))[1]!.props.onChange as (event: unknown) => void)({ target: { value } });

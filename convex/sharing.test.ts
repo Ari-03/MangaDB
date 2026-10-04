@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import { api } from "./_generated/api";
 import { seedCatalog } from "./test.factories";
-import { alice, makeT, seedTeam, signedIn, withUser, type Accessor, type TestT } from "./test.helpers";
+import {
+  alice,
+  makeT,
+  seedTeam,
+  signedIn,
+  withUser,
+  type Accessor,
+  type TestT,
+} from "./test.helpers";
 import { describeNoViewer, witchHatShelf } from "./test.tracking";
 
 /**
@@ -64,16 +72,23 @@ async function profileOf(t: TestT, username = "sharer") {
 }
 
 describeNoViewer(setup, {
-  queries: [["seriesVisibility", (as) => as.query(api.sharing.seriesVisibility, { seriesPublicId: 1 })]],
+  queries: [
+    ["seriesVisibility", (as) => as.query(api.sharing.seriesVisibility, { seriesPublicId: 1 })],
+  ],
   mutations: [
     [
       "setDefaultVisibility",
-      (as) => as.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" }),
+      (as) =>
+        as.mutation(api.sharing.setDefaultVisibility, { kind: "ownership", visibility: "public" }),
     ],
     [
       "setSeriesVisibility",
       (as, { seriesA }) =>
-        as.mutation(api.sharing.setSeriesVisibility, { seriesId: seriesA, kind: "reading", visibility: "public" }),
+        as.mutation(api.sharing.setSeriesVisibility, {
+          seriesId: seriesA,
+          kind: "reading",
+          visibility: "public",
+        }),
     ],
   ],
 });
@@ -123,9 +138,7 @@ describe("sharing.publicProfile", () => {
     const profile = await profileOf(t);
     // r1 owned with the Variant; the Wanted r2 and Ordered rB never appear.
     expect(profile!.ownership.releases).toHaveLength(1);
-    expect(profile!.ownership.releases[0]!.variantName).toBe(
-      "Bookstore exclusive",
-    );
+    expect(profile!.ownership.releases[0]!.variantName).toBe("Bookstore exclusive");
     // The Owned box set with derived member ownership (bundle-pinned Variant).
     expect(profile!.ownership.bundles).toHaveLength(1);
     const bundle = profile!.ownership.bundles[0]!;
@@ -147,15 +160,11 @@ describe("sharing.publicProfile", () => {
     const [a, b] = profile!.reading;
     expect(a!.title).toBe("Witch Hat Atelier");
     expect(a!.readingStatus).toBe("reading");
-    expect(a!.readVolumes).toEqual([
-      { volumePublicId: 11, label: "1", position: 1, readCount: 2 },
-    ]);
+    expect(a!.readVolumes).toEqual([{ volumePublicId: 11, label: "1", position: 1, readCount: 2 }]);
     expect(a!.totalVolumes).toBe(2);
     expect(b!.title).toBe("Yokohama Kaidashi Kikou");
     expect(b!.readingStatus).toBeNull();
-    expect(b!.passes).toEqual([
-      expect.objectContaining({ percent: 40, format: "digital" }),
-    ]);
+    expect(b!.passes).toEqual([expect.objectContaining({ percent: 40, format: "digital" })]);
   });
 
   it("never exposes Follows at any visibility", async () => {
@@ -233,7 +242,7 @@ describe("sharing.publicProfile", () => {
     expect(profile!.ownership.releases).toEqual([]);
   });
 
-  it("clearing an override with \"default\" falls back to the default again", async () => {
+  it('clearing an override with "default" falls back to the default again', async () => {
     const { t, as, seriesA } = await trackEverything();
     await as.mutation(api.sharing.setSeriesVisibility, {
       seriesId: seriesA,

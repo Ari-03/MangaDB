@@ -40,16 +40,12 @@ export async function requireRole(
 }
 
 /** Moderator-or-Administrator gate — the approval/direct-edit privilege. */
-export async function requireModerator(
-  ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"users">> {
+export async function requireModerator(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
   return await requireRole(ctx, ["moderator", "administrator"]);
 }
 
 /** Any data-team role — the propose/queue-visibility privilege (spec §5). */
-export async function requireDataTeam(
-  ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"users">> {
+export async function requireDataTeam(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
   return await requireRole(ctx, DATA_ROLES);
 }
 
@@ -62,9 +58,7 @@ function activeAdministrator(user: Doc<"users">): boolean {
  * Count of active Administrators: not suspended and not deleting their
  * account. Reads only the Administrators (by_role), a handful of rows.
  */
-async function countActiveAdministrators(
-  ctx: QueryCtx | MutationCtx,
-): Promise<number> {
+async function countActiveAdministrators(ctx: QueryCtx | MutationCtx): Promise<number> {
   const admins = await ctx.db
     .query("users")
     .withIndex("by_role", (q) => q.eq("role", "administrator"))

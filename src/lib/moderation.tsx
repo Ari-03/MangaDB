@@ -32,14 +32,11 @@ export function renderFieldValue(value: unknown): string {
     const record = value as Record<string, unknown>;
     if (typeof record.year === "number") {
       return (
-        formatPartialDate(record as { year: number; month?: number; day?: number }) ??
-        "(empty)"
+        formatPartialDate(record as { year: number; month?: number; day?: number }) ?? "(empty)"
       );
     }
     if (typeof record.amountCents === "number") {
-      return (
-        formatPrice(record as { amountCents: number; currency: string }) ?? "(empty)"
-      );
+      return formatPrice(record as { amountCents: number; currency: string }) ?? "(empty)";
     }
   }
   return JSON.stringify(value);
@@ -112,13 +109,7 @@ export function ProposalStateChip({ state }: { state: string }) {
  * disclosure opens (and stays live from then on): "Loading…" until the
  * history arrives, the revision count in the summary after.
  */
-export function RecordHistory({
-  type,
-  publicId,
-}: {
-  type: HistoryTargetType;
-  publicId: number;
-}) {
+export function RecordHistory({ type, publicId }: { type: HistoryTargetType; publicId: number }) {
   const [opened, setOpened] = useState(false);
   const history = useQuery(api.moderation.recordHistory, opened ? { type, publicId } : "skip");
   const count = history?.revisions.length;
@@ -175,18 +166,14 @@ function HistoryBody({
                     {revision.author.username
                       ? `@${revision.author.username}`
                       : "(deleted account)"}
-                    {revision.author.role
-                      ? ` (${ROLE_LABELS[revision.author.role]})`
-                      : null}
+                    {revision.author.role ? ` (${ROLE_LABELS[revision.author.role]})` : null}
                   </>
                 ) : (
                   `Imported from ${revision.author.sourceKey}`
                 )}
               </span>
               <span className="revision-approver">
-                {revision.approver
-                  ? `approved by @${revision.approver}`
-                  : "approved automatically"}
+                {revision.approver ? `approved by @${revision.approver}` : "approved automatically"}
               </span>
               <time dateTime={new Date(revision.at).toISOString()}>
                 {new Date(revision.at).toLocaleDateString(undefined, {
@@ -203,8 +190,7 @@ function HistoryBody({
                   <li key={change.field}>{overrideChangeText(change.before, change.after)}</li>
                 ) : (
                   <li key={change.field}>
-                    <code>{change.field}</code>:{" "}
-                    <del>{renderFieldValue(change.before)}</del> →{" "}
+                    <code>{change.field}</code>: <del>{renderFieldValue(change.before)}</del> →{" "}
                     <ins>{renderFieldValue(change.after)}</ins>
                   </li>
                 ),
@@ -359,11 +345,7 @@ export function ModEditLink({ type, editKey }: { type: string; editKey: string }
  * data-team member can propose a new Volume + Edition + Release in one
  * temp-ID Proposal.
  */
-export function ProposeNewRecordsLink({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
+export function ProposeNewRecordsLink({ seriesPublicId }: { seriesPublicId: number }) {
   const isDataTeam = useIsDataTeam();
   if (!isDataTeam) return null;
   return (

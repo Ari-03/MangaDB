@@ -9,7 +9,13 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { activeVolumes, resolveActiveSeries } from "./catalog";
 import { editionCoverage } from "./catalogPages";
 import { getActive, mergeSurvivor, requireActive } from "./lib/merges";
@@ -40,22 +46,14 @@ export async function volumeProgressRow(
 ) {
   return await ctx.db
     .query("volumeProgress")
-    .withIndex("by_user_volume", (q) =>
-      q.eq("userId", userId).eq("volumeId", volumeId),
-    )
+    .withIndex("by_user_volume", (q) => q.eq("userId", userId).eq("volumeId", volumeId))
     .unique();
 }
 
-async function passRowFor(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  releaseId: Id<"releases">,
-) {
+async function passRowFor(ctx: QueryCtx, userId: Id<"users">, releaseId: Id<"releases">) {
   return await ctx.db
     .query("releaseProgress")
-    .withIndex("by_user_release", (q) =>
-      q.eq("userId", userId).eq("releaseId", releaseId),
-    )
+    .withIndex("by_user_release", (q) => q.eq("userId", userId).eq("releaseId", releaseId))
     .unique();
 }
 
@@ -638,9 +636,7 @@ export const adjustVolumeReadCount = mutation({
         message: "Read count must change by a whole number of completed reads.",
       });
     }
-    return await writeVolumeReadCount(ctx, volumeId, (current) =>
-      Math.max(0, current + delta),
-    );
+    return await writeVolumeReadCount(ctx, volumeId, (current) => Math.max(0, current + delta));
   },
 });
 
@@ -675,7 +671,10 @@ async function writeEditionRead(
     const progress = await volumeProgressRow(ctx, userId, volume._id);
     if (read) {
       if (progress && progress.readCount >= 1) continue;
-      await putVolumeProgress(ctx, userId, volume, progress, { readCount: 1, lastCompletedAt: now });
+      await putVolumeProgress(ctx, userId, volume, progress, {
+        readCount: 1,
+        lastCompletedAt: now,
+      });
     } else {
       if (!progress) continue;
       await ctx.db.delete(progress._id);
@@ -756,7 +755,10 @@ export const unsetProgressSeries = internalMutation({
       unset++;
     }
     if (!isDone) {
-      await ctx.scheduler.runAfter(0, internal.reading.unsetProgressSeries, { cursor: continueCursor, unset });
+      await ctx.scheduler.runAfter(0, internal.reading.unsetProgressSeries, {
+        cursor: continueCursor,
+        unset,
+      });
     } else {
       console.log(`[reading.unsetProgressSeries] done: ${unset} rows cleared`);
     }

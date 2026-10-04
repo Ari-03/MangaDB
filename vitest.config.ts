@@ -12,7 +12,8 @@ export default defineConfig({
     // build imports the inlined posthog-js instead (see `inline` below).
     alias: {
       "~": new URL("./src", import.meta.url).pathname,
-      "@posthog/react": new URL("./node_modules/@posthog/react/dist/esm/index.js", import.meta.url).pathname,
+      "@posthog/react": new URL("./node_modules/@posthog/react/dist/esm/index.js", import.meta.url)
+        .pathname,
     },
   },
   test: {
@@ -28,7 +29,15 @@ export default defineConfig({
     // page load in src/lib/analyticsClient.test.ts, and @posthog/react so its
     // provider inits that same instance.
     server: {
-      deps: { inline: ["convex-test", "@convex-dev/rate-limiter", "@posthog/convex", "posthog-js", "@posthog/react"] },
+      deps: {
+        inline: [
+          "convex-test",
+          "@convex-dev/rate-limiter",
+          "@posthog/convex",
+          "posthog-js",
+          "@posthog/react",
+        ],
+      },
     },
     include: ["src/**/*.test.ts", "convex/**/*.test.ts"],
   },

@@ -18,7 +18,15 @@ import {
   toSnapshots,
 } from "./lib/yenPress";
 import { insertBundle, insertObservation, insertPublisher, insertSeries } from "./test.factories";
-import { bundleMembers, drain, expectStampedAtHandOff, makeT, seedRegistry, tickingClock, type TestT } from "./test.helpers";
+import {
+  bundleMembers,
+  drain,
+  expectStampedAtHandOff,
+  makeT,
+  seedRegistry,
+  tickingClock,
+  type TestT,
+} from "./test.helpers";
 
 // Trimmed first-party HTML fetched 2026-09-26; only fields used by the parser.
 const liveFixture = (name: string) =>
@@ -313,14 +321,18 @@ describe("yenPress.sync — disabling a source", () => {
     // only a notice), and the source is disabled while the first one loads.
     const urls = Array.from(
       { length: 101 },
-      (_, i) => `https://yenpress.com/titles/${isbn10To13(`19753${String(i).padStart(4, "0")}0`)}-gate-manga-vol-${i + 1}`,
+      (_, i) =>
+        `https://yenpress.com/titles/${isbn10To13(`19753${String(i).padStart(4, "0")}0`)}-gate-manga-vol-${i + 1}`,
     );
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = String(input);
       requested.push(url);
       if (url === "https://yenpress.com/sitemap.xml") return new Response(sitemap(urls));
       if (requested.length === 2) {
-        await t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled: false });
+        await t.mutation(internal.importSources.setEnabledInternal, {
+          key: "yenpress",
+          enabled: false,
+        });
       }
       return new Response("not found", { status: 404 });
     });
@@ -622,7 +634,10 @@ describe("yenPress.applyTitle — a box set gains members that arrive after it (
       changed: true,
     });
     const members = await bundleMembers(t);
-    expect(members.map((member) => member.release.isbn13)).toEqual(["9781975300012", "9781975300029"]);
+    expect(members.map((member) => member.release.isbn13)).toEqual([
+      "9781975300012",
+      "9781975300029",
+    ]);
     expect(await t.mutation(internal.yenPress.applyTitle, { snapshot: MIGNON_BOX })).toMatchObject({
       status: "unchanged",
     });
@@ -680,7 +695,10 @@ describe("yenPress.reconcileLinkedBox", () => {
     expect(
       await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: "9781975300012" }),
     ).toEqual({ added: 0 });
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "yenpress", enabled: false });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "yenpress",
+      enabled: false,
+    });
     expect(
       await t.mutation(internal.yenPress.reconcileLinkedBox, { isbn: MIGNON_BOX.isbn13 }),
     ).toEqual({ added: 1 });
@@ -715,7 +733,8 @@ describe("yenPress.sync — a fresh box set gains members that arrived after it 
     [VOL_2_URL]: titlePage("Alpha Adventures, Vol. 2", "9781975300029"),
   };
   /** The one box's members, by their Releases' ISBNs in bundle order. */
-  const boxMembers = async (t: TestT) => (await bundleMembers(t)).map((member) => member.release.isbn13);
+  const boxMembers = async (t: TestT) =>
+    (await bundleMembers(t)).map((member) => member.release.isbn13);
 
   it("links the late books on the next run, without fetching the box page", async () => {
     const t = makeT();
@@ -753,7 +772,8 @@ describe("yenPress.sync — a fresh box set gains members that arrived after it 
       ]),
     );
     await t.run(async (ctx) => {
-      for (const title of ["Alpha Adventures", "Beta Adventures"]) await insertSeries(ctx, { title });
+      for (const title of ["Alpha Adventures", "Beta Adventures"])
+        await insertSeries(ctx, { title });
     });
     stubYen({ ...pages, ...betaPages });
     await sync(t);
@@ -825,7 +845,10 @@ describe("yenPress.applyTitle — a gapped coverage statement is never widened (
   it("a title listing Volumes 1 & 3 leaves the book Unmapped Packaging", async () => {
     const t = makeT();
     await seed(t);
-    const page = { ...parseTitlePage(DELUXE_PAGE)!, title: "Battle Royale 3-in-1 Edition 1 (Vol. 1 & 3)" };
+    const page = {
+      ...parseTitlePage(DELUXE_PAGE)!,
+      title: "Battle Royale 3-in-1 Edition 1 (Vol. 1 & 3)",
+    };
     for (const snapshot of toSnapshots(page, DELUXE_URL)) {
       await t.mutation(internal.yenPress.applyTitle, { snapshot });
     }
@@ -846,7 +869,9 @@ describe("yenPress.applyTitle — a sequel's book stays off its first work", () 
     {
       title: `${SEQUEL}, Vol. 1 (manga): Cycle of the Elixir`,
       category: "manga",
-      formats: [{ tab: "Paperback", isbn13: ISBN, imprint: "Yen Press", seriesName: `${SEQUEL} (manga)` }],
+      formats: [
+        { tab: "Paperback", isbn13: ISBN, imprint: "Yen Press", seriesName: `${SEQUEL} (manga)` },
+      ],
     },
     `https://yenpress.com/titles/${ISBN}-the-alchemist-who-survived-now-dreams-of-a-quiet-city-life-ii-vol-1-manga`,
   );
@@ -855,7 +880,11 @@ describe("yenPress.applyTitle — a sequel's book stays off its first work", () 
   async function seedAlchemist(t: TestT, sequel: "active" | "hidden") {
     await seed(t);
     return await t.run(async (ctx) => {
-      const firstId = await insertSeries(ctx, { publicId: 1229, title: FIRST, altTitles: [SEQUEL] });
+      const firstId = await insertSeries(ctx, {
+        publicId: 1229,
+        title: FIRST,
+        altTitles: [SEQUEL],
+      });
       const sequelId = await insertSeries(ctx, { publicId: 5358, title: SEQUEL, status: sequel });
       for (const seriesId of [firstId, sequelId]) {
         await ctx.db.insert("volumes", {
@@ -887,7 +916,9 @@ describe("yenPress.applyTitle — a sequel's book stays off its first work", () 
     await t.mutation(internal.yenPress.applyTitle, { snapshot: snapshot! });
     await t.run(async (ctx) => {
       expect(await ctx.db.query("releases").collect()).toEqual([]);
-      const obs = (await ctx.db.query("sourceObservations").collect()).find((o) => o.sourceRecordId === ISBN)!;
+      const obs = (await ctx.db.query("sourceObservations").collect()).find(
+        (o) => o.sourceRecordId === ISBN,
+      )!;
       const hold = await ctx.db
         .query("placementHolds")
         .withIndex("by_observation", (q) => q.eq("observationId", obs._id))

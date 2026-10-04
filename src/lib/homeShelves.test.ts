@@ -51,7 +51,13 @@ describe("hasJacket", () => {
 
 describe("jacketed", () => {
   test("seats the first jacketed books in shelf order, skipping cloth", () => {
-    const shelf = [book(1, "isbn"), book(2, "none"), book(3, "url"), book(4, "isbn"), book(5, "isbn")];
+    const shelf = [
+      book(1, "isbn"),
+      book(2, "none"),
+      book(3, "url"),
+      book(4, "isbn"),
+      book(5, "isbn"),
+    ];
     const onFile = new Set([isbnOf(4), isbnOf(5)]);
     expect(ids(jacketed(shelf, onFile, 2))).toEqual([3, 4]);
     expect(ids(jacketed(shelf, onFile, 10))).toEqual([3, 4, 5]);
@@ -156,7 +162,10 @@ describe("the home page's shelves", () => {
 
   test("asks the cover store about the hero, both day shelves and the Series, in that order", () => {
     const [hero, primary, secondary, shelf] = homeQuestions(pools, fourSeries);
-    expect(hero).toEqual({ need: 15, candidates: [isbnOf(5), isbnOf(8), isbnOf(9), isbnOf(2), isbnOf(4)] });
+    expect(hero).toEqual({
+      need: 15,
+      candidates: [isbnOf(5), isbnOf(8), isbnOf(9), isbnOf(2), isbnOf(4)],
+    });
     expect(primary).toEqual({ need: 14, candidates: [isbnOf(2), isbnOf(4)] });
     expect(secondary).toEqual({ need: 7, candidates: [isbnOf(5)] });
     expect(shelf?.candidates).toHaveLength(5);
