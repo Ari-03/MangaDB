@@ -528,7 +528,6 @@ is fixed.
   `openLibrary:replayDescriptions`, the repair entry kinds used only by
   the sandbox plan, and the dev seed (`convex/seed.ts`) can go once the
   owner confirms they are no longer needed.
-- **No formatter or linter.** Line width runs from 80 to 200 columns.
 - **Reads on Volumes of a hidden Series.** Ratings refuse a Volume whose
   Series is hidden (`activeVolume` in `convex/lib/ratings.ts`). Reading
   does not: `reading.setVolumeReadCount`, `adjustVolumeReadCount`,

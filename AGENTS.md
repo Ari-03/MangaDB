@@ -12,6 +12,11 @@ Convex agent skills for common tasks can be installed by running
 
 <!-- convex-ai-end -->
 
+Before finishing a change, run `npm run format` and then `npm run check`.
+CI runs `npm run check`, which fails on any file Biome would reformat and on
+any lint error or warning. Info-level lint suggestions are printed but do not
+fail it.
+
 # Local data is not in git
 
 Every checkout and worktree of this repo can hold a Convex local backend
