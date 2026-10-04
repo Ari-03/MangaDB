@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import { insertEdition, insertPublisher, insertRelease, insertSeries } from "./test.factories";
-import { ADMIN, MOD, PLAIN, alice, bob, dave, makeT, seedRegistry, seedTeam, type TestT } from "./test.helpers";
+import { ADMIN, MOD, PLAIN, alice, bob, dave, drain, makeT, seedRegistry, seedTeam, type TestT } from "./test.helpers";
 
 async function setup(t: TestT) {
   await seedTeam(t, [alice, bob, dave]);
@@ -91,6 +91,7 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
       .withIdentity({ subject: ADMIN })
       .mutation(api.launch.startSeedStage, { stage: 2 });
     expect(res.started).toEqual(["ann"]);
+    await drain(t);
   });
 
   it("starts stage 1's two pilots, and stage 2 once stage 1 completed", async () => {
@@ -111,6 +112,7 @@ describe("seed stages (spec §7: four stages, in order, under Bootstrap Mode)", 
 
     const stage2 = await asAdmin.mutation(api.launch.startSeedStage, { stage: 2 });
     expect(stage2).toMatchObject({ started: ["ann"] });
+    await drain(t);
   });
 
   it("a failed run does not complete a stage; ordering tracks first successes", async () => {

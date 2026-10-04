@@ -96,6 +96,17 @@ Ruled out:
   material, and Yen's images are signed URLs.
 - **Open Library by edition key.** It found nothing the ISBN lookup missed.
 
+## Open Library continuations read the dump from the start
+
+Each continuation of `openLibrary:sync` downloads the filtered dump again
+from byte zero and skips the lines earlier links processed (decided
+2026-10-04). A run is monthly, and starting over needs no stored byte
+offset and no host that answers range requests, so any static URL can
+serve the dump. Continuing from a byte offset with HTTP Range, or
+splitting the dump into separate files, would save the repeated download.
+That changes if the dump grows past what one action can read, or if Open
+Library offers range requests.
+
 ## Staging
 
 One shared staging environment instead of a deployment per branch. The

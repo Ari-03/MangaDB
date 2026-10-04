@@ -1,6 +1,6 @@
 # Known issues
 
-Open problems confirmed in the code on 2026-10-02. Remove an entry when it
+Open problems confirmed in the code on 2026-10-04. Remove an entry when it
 is fixed.
 
 ## Personal data and tracking
@@ -93,10 +93,6 @@ is fixed.
   ([imports](imports.md#matching-ladder)). A Series no ANN entry holds (a
   publisher feed's) with no ISBN in a format the entry lists still takes
   the entry by title.
-- **Open Library continuations re-download the dump.** `openLibrary:sync`
-  restarts each continuation from byte zero and skips lines it already
-  processed. Byte-offset continuation with HTTP Range, or a dump split into
-  separate files, would avoid it.
 - **A large merge cannot be Split.** `applySplit`
   (`convex/lib/sensitiveOps.ts`) runs as one transaction. It reads several
   index ranges for every row the merge moved and for every owner of every
@@ -107,6 +103,19 @@ is fixed.
   memberships of one-Release Bundles. Release, Bundle and Series merges
   log every moved row into one manifest document with no bound at all.
   The fix is a Split, and a merge manifest, that work in batches.
+- **Publisher merges and their preview scan whole tables.** A Publisher
+  merge (`transferReferences` in `convex/lib/sensitiveOps.ts`) reads every
+  Edition Line, Release Bundle and publisher slug redirect to find the
+  loser's, and the impact preview (`impactOf`) reads every Edition Line and
+  Release Bundle to count them. None of those tables has a publisher index,
+  so both come nearer a transaction's read limits as the catalog grows.
+- **A Release Split can leave a Variant pin on another Release.** A
+  Release merge moves the loser's Variants to the survivor
+  (`transferReferences`), and after it any Collection Entry or Bundle
+  Membership on the survivor can be pinned to any of them. `applySplit`
+  replays only what the merge's manifest recorded, so a row pinned since
+  the merge can end up on one Release pinned to a Variant of the other,
+  which pinning itself refuses (`convex/collection.ts`).
 - **Three kinds of Held Book have no Data Team route.** "Prepare placement"
   (`convex/placement.ts`) refuses a box set, which is a Release Bundle no
   Proposal can create, and a book whose publisher has no Publisher row,
@@ -117,6 +126,36 @@ is fixed.
   Packaging needs a line. Outside Bootstrap Mode such a book stays held
   until an operator repair (`convex/lib/repair`) creates the Bundle or
   the Volume, or a deploy adds the Publisher.
+- **A hold noted during an import's review is listed only once the book
+  is applied again.** While an import's Proposal of a book is in review,
+  `recordUnplaced` (`convex/lib/observations.ts`) writes the note and no
+  Held Books row. Rejecting or withdrawing the Proposal lists nothing. The
+  next apply lists the book, and so does `imports:backfillHolds`. When
+  that is depends on the importer: PRH applies a title again at its next
+  run that lists it (every title at the Sunday full sweep), Open Library at
+  each monthly run, Seven Seas only when the book's page changes or an
+  older parser read it (`noteListing` in `convex/sevenSeas.ts`), and Yen
+  Press and Kodansha's
+  back catalog when the book is next due for a fetch.
+- **A conflict or cancellation review hides an unlinked book.**
+  `proposalInReview` (`convex/lib/observations.ts`) counts any import's
+  Proposal in review that `queuedProposalId` points at, not only a
+  creation Proposal. A field conflict or possible-cancellation review is
+  queued on a linked book, and if the observation is unlinked while it is
+  open (the repair op `unlinkObservation`, for one), the book stays off
+  the Held Books list until that review is decided.
+- **The repair op `withdrawProposal` leaves a book in no list.** Withdrawing
+  an import's creation Proposal (`withdrawProposal` in
+  `convex/lib/repair/ops.ts`) unsets the observation's `queuedProposalId`
+  and writes no hold. Queuing the Proposal had removed the book's hold and
+  note, so the book is neither in the review queue nor a Held Book until
+  its importer applies it again (see above for when each does).
+- **Seven Seas never replays an outdated packaging verdict once a Proposal
+  pointed at the book.** `noteListing` (`convex/sevenSeas.ts`) replays an
+  unplaced book's stored snapshot when its note is an older planner's
+  (`staleVerdict`), but only while `queuedProposalId` is unset. The field
+  stays after its Proposal is decided, and a member's placement Draft sets
+  it too, so such a book keeps the older verdict until its page changes.
 - **Some routes cannot tell that a book is for adults.** A Series is
   mature only from evidence the catalog holds (`convex/lib/mature.ts`).
   An ANN entry with no Objectionable-content rating and no erotica or
@@ -126,6 +165,21 @@ is fixed.
   files its Release under the parent with no evidence. Either is mature
   only once another source rates or names the imprint, an Edition sits
   under an adult-only Publisher row, or the Data Team rates the Series.
+- **Author listings learn that a Series became mature up to six hours
+  late.** The Authors directory (`people.authors` in `convex/people.ts`)
+  and author search (`authorHits` in `convex/catalog.ts`) read each
+  author's stored jacket and `matureOnly`, which `people:rebuild` refreshes
+  every six hours (`statsBatch`). Until then, an author whose biggest Series
+  became mature still shows that Series' jacket in the general directory,
+  and an author whose every Series is now mature is still listed there and
+  in search.
+- **`prh.notePresent` has no read bound for a relisted page.** It marks
+  each listed ISBN seen, and a book that was withdrawn and is listed again
+  applies its 18+ evidence (`markSeen`, `applyMatureEvidence` in
+  `convex/lib/mature.ts`), reading every Series on its Release. A page of
+  200 such books, each on a Release spanning about 20 Series, would pass
+  the 4,096 index ranges a transaction may read. Real Releases span 1 to
+  4 Series.
 - **A Seven Seas book page that cannot be read is read again every run.**
   A listed book whose stored snapshot predates the current parser, or
   that was never read, is fetched on every run until a read succeeds. A
@@ -149,6 +203,41 @@ is fixed.
   When many covers fall due together this can pass Open Library's limit
   of about 100 lookups per 5 minutes.
 
+## Review queue
+
+- **Request Changes on a reader's report makes a Draft the reader cannot
+  open.** A report (`reports.submit`) is an In-Review Proposal authored by
+  any signed-in user. `proposals.requestChanges` turns it back into a Draft
+  for its author, but `proposalDetail`, `myProposals` ("My Proposals"),
+  `saveDraft`, `submitProposal` and `withdrawProposal` all need Data Team
+  membership, so a reader who is not on the team cannot open, resubmit or
+  withdraw it, and no Moderator can decide a Draft.
+- **Import Proposals put back to Draft before the refusal stay there.**
+  `requestChanges` now refuses an import's Proposal, but ones it returned
+  to Draft before that check existed have no author who can resubmit or
+  withdraw them. An operator finds them as `proposals` in state `draft`
+  whose `author.kind` is `source`.
+- **The stale notice promises a rebase nobody can make on an import's
+  Proposal.** The Proposal page (`src/routes/mod.proposal.$id.tsx`) says
+  approval is blocked "until the author explicitly rebases and resubmits"
+  whatever the author, and an import's Proposal has no author who can
+  rebase it (`rebaseProposal` needs the author). A Moderator can only
+  reject it.
+
+## Tests
+
+- **Thirty-two tests leave scheduled functions pending when they end.**
+  Counted on 2026-10-04 by checking every `makeT` backend after each test:
+  thirteen that purge a user (`users:redactMergeManifests`, and in
+  `convex/users.test.ts` further purge passes and the Clerk deletion), ten
+  that make a Series mature (`seriesBrowse:projectMature`), four
+  stranded-run tests in `convex/imports.test.ts` (every source's sync), two
+  in `convex/people.test.ts` (`people:rebuild`), two in
+  `convex/analytics.test.ts` (PostHog's capture) and one in
+  `convex/ann.test.ts` (`ann:sync`). It is harmless while the setup refuses
+  unstubbed network requests, but in shuffled order a leaked job can run
+  under the next test's stubs.
+
 ## Decisions waiting on the owner
 
 - **One-time code that may have finished.** The operator backfills
@@ -162,3 +251,36 @@ is fixed.
   does not: `reading.setVolumeReadCount`, `adjustVolumeReadCount`,
   `setEditionRead`, `completePass` and `undoCompletion` all write such
   Volumes. Whether reads on them should stay editable is the owner's call.
+- **`npm run dev` without `.env.local` reads production's catalog.** In
+  dev the Worker's `process.env` comes from the top-level `vars` in
+  `wrangler.jsonc`, which hold production's Convex URL, and `convexUrl()`
+  (`src/lib/convexUrl.ts`) falls back to it, so the dev server renders
+  production's public catalog. Nothing is written. Stopping it means moving
+  the production values out of the top-level `vars`, which changes the
+  deploy commands.
+- **Production runs on a Clerk development instance.** `wrangler.jsonc`
+  sets production's `VITE_CLERK_PUBLISHABLE_KEY` to a `pk_test_` key, the
+  same one staging uses, and `scripts/check-deploy-target.mjs` stops a
+  production build whose key differs. Moving production to a Clerk
+  production instance is the owner's step.
+- **Kodansha holds every unmatched packaged volume.** Its adapter passes
+  the placement tail no Volumes for packaging (`applyVolume` in
+  `convex/kodansha.ts`), so an omnibus, box set or line member that matched
+  no Release is held for an Editor even when its title states its range or
+  its line declares its size, and in Bootstrap Mode it is never created as
+  Unmapped Packaging. Seven Seas, PRH and Yen Press place such books.
+  Letting Kodansha place them changes what it creates.
+- **Volumes for two-in-one English editions.** The catalog's Volumes for
+  "Alice in Borderland" follow VIZ's English two-in-one numbering (the
+  existing Volume 4). Whether such a Series should instead carry the
+  original Volumes, with each English book covering two, is a modelling
+  choice the Data Team needs before it places the held books.
+- **Search text reaches PostHog.** `search_performed` carries only the
+  query's length and the result count, but posthog-js adds the page
+  address to every event (`$current_url`, with `?q=…`) and the page title
+  to pageviews, and the `/search` title names the query. A session that
+  begins on a search page also carries its address as `$session_entry_url`
+  on every later event.
+  [configuration.md](configuration.md#analytics-posthog) says so for
+  operators, and nothing tells a reader. Stripping the query from what
+  posthog-js sends, or disclosing it, is the owner's call.

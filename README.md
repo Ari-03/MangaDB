@@ -88,9 +88,9 @@ npm run preview     # serve the production build locally in workerd
 npm run deploy      # deploy production from this machine (see Deployment)
 ```
 
-Tests never reach the network: `vitest.setup.ts` answers any `fetch` a test
-has not stubbed with a 400 "no fetch stub installed", and refuses WebSocket
-and happy-dom's own requests the same way.
+The test setup (`vitest.setup.ts`) refuses unstubbed global `fetch` calls
+with a 400, makes opening a `WebSocket` throw, and refuses requests from
+Vitest's happy-dom window.
 
 ## Repo layout
 

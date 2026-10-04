@@ -171,6 +171,50 @@ settles it at once: `contentRating` "mature" on the Series. A Data Team
 evidence it has, so check `contentRating` first on a Series that has
 evidence and is still listed.
 
+## After deploying the 2026-10 known-issues round
+
+The steps this round's changes need, in order. Each is explained where it
+links to.
+
+1. Before deploying: let running imports finish, or disable the sources
+   and wait until no run is `running`. The round changes import code
+   (the "Any importer" row in [After deploying a change](#after-deploying-a-change)).
+2. Mark the adult-only Publisher rows (Steamship):
+   `npx convex run launch:seedPublishers '{}'`. Safe to rerun; a rerun
+   reports nothing new. Step 1 of
+   [Mature evidence after a deploy](#mature-evidence-after-a-deploy).
+3. Only where Seven Seas observations exist (not production): let the
+   syncs re-read book pages stored under an older parser, or repeat
+   `npx convex run sevenSeas:sync '{"maxDetailFetches":1000}'` until done.
+   Safe to rerun. Step 2 of the same section says how to tell it is done.
+4. Rebuild the library: `npx convex run seriesBrowse:rebuild`. It sets
+   the mature flags from the evidence (step 3 of the same section) and
+   writes each Series card's list of jacket ISBNs (`coverIsbns`); a row
+   not yet rebuilt shows its one stored jacket. Then
+   `npx convex run publisher:rebuildBoards` and
+   `npx convex run people:rebuild`. All three are safe to rerun, and the
+   six-hourly jobs run them anyway.
+5. Fill the Held Books list: `npx convex run imports:backfillHolds '{}'`.
+   Safe to rerun; a failed page ends the chain, and a rerun starts from the
+   top ([Held books](imports.md#held-books)).
+6. Clear the stored Series on read counts:
+   `npx convex run reading:unsetProgressSeries '{}'`. Safe to rerun, and
+   done when the log shows `[reading.unsetProgressSeries] done: N rows
+   cleared` or a rerun logs 0. The deploy before it is one-way (the
+   "Volume Progress without a stored Series" row in
+   [After deploying a change](#after-deploying-a-change), and
+   [known issues](known-issues.md#personal-data-and-tracking)).
+7. Open Library needs no step of its own. Every sync parses each dump line
+   with the current title parser and places an unlinked edition afresh,
+   so an edition stored under an older parse (a "Vagabond Definitive
+   Edition" read before that line was recognised) is placed or held under
+   today's reading on the next sync: the monthly run, or
+   `npx convex run openLibrary:sync '{}'`. A linked edition is reconciled
+   again only when today's parse changes its snapshot. Safe to rerun; each
+   run downloads the dump ([Open Library](imports.md#open-library)). The
+   backfill in step 5 reads stored snapshots, so it classifies such an
+   edition by its older parse until that sync.
+
 ## Account deletion
 
 A user's request (`users.deleteAccount`) sets `deletingSince` on their

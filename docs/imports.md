@@ -606,6 +606,10 @@ npx convex run openLibrary:sync '{}'   # streams + self-continues to the end
 
 Without `OPENLIBRARY_DUMP_URL`, runs skip as "unconfigured".
 
+Each continuation of a run downloads the dump again from its first byte
+and skips the lines earlier links processed, a cost accepted
+([decisions](decisions.md#open-library-continuations-read-the-dump-from-the-start)).
+
 `maxLines` caps the lines one link processes. With `noContinue: true` the
 sync closes its run after that one link instead of scheduling the next, and
 its result's `nextLine` says where it stopped: a one-link probe of a new
