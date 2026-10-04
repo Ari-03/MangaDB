@@ -25,15 +25,10 @@ import { normalizeUsername } from "./lib/usernames";
 import { dataRole } from "./schema";
 
 /** The User a username names; a User deleting their account counts as none. */
-async function findUserByUsername(
-  ctx: MutationCtx,
-  username: string,
-): Promise<Doc<"users">> {
+async function findUserByUsername(ctx: MutationCtx, username: string): Promise<Doc<"users">> {
   const user = await ctx.db
     .query("users")
-    .withIndex("by_username", (q) =>
-      q.eq("usernameNormalized", normalizeUsername(username)),
-    )
+    .withIndex("by_username", (q) => q.eq("usernameNormalized", normalizeUsername(username)))
     .unique();
   if (!user || user.deletingSince !== undefined) fail("notFound", `No user named "${username}".`);
   return user;
@@ -56,7 +51,10 @@ export const bootstrapAdministrator = internalMutation({
       .withIndex("by_role", (q) => q.eq("role", "administrator"))
       .first();
     if (existingAdmin) {
-      fail("alreadyBootstrapped", "An Administrator already exists; appoint further roles through them.");
+      fail(
+        "alreadyBootstrapped",
+        "An Administrator already exists; appoint further roles through them.",
+      );
     }
     const user = await findUserByUsername(ctx, username);
     await ctx.db.patch(user._id, { role: "administrator" });
@@ -71,10 +69,7 @@ export const bootstrapAdministrator = internalMutation({
   },
 });
 
-async function requireGovernanceOver(
-  ctx: MutationCtx,
-  role: DataRole,
-): Promise<Doc<"users">> {
+async function requireGovernanceOver(ctx: MutationCtx, role: DataRole): Promise<Doc<"users">> {
   const actor = await requireRole(ctx, ["moderator", "administrator"]);
   if (!canGovern(actor.role as DataRole, role)) {
     fail("forbidden", `A ${actor.role} cannot govern the ${role} role.`);

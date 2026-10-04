@@ -11,9 +11,5 @@ export default defineConfig({
     // "~/*" → "src/*" from tsconfig.json
     tsconfigPaths: true,
   },
-  plugins: [
-    cloudflare({ viteEnvironment: { name: "ssr" } }),
-    tanstackStart(),
-    react(),
-  ],
+  plugins: [cloudflare({ viteEnvironment: { name: "ssr" } }), tanstackStart(), react()],
 });

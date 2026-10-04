@@ -471,7 +471,8 @@ export const backlistSync = internalAction({
               break;
             }
             const stopped = await stopAtGate(ctx, runId, source.key, { seen, changed, errors });
-            if (stopped) return { ...stopped, seriesCrawled, fetched: fetchedTotal, continued: false };
+            if (stopped)
+              return { ...stopped, seriesCrawled, fetched: fetchedTotal, continued: false };
 
             // The series page: its volume list and blurb.
             const seriesUrl = `${BASE_URL}/series/${entry.slug}/`;
@@ -510,7 +511,8 @@ export const backlistSync = internalAction({
                 if (page === null && !volumePageAwaitsIsbn(html)) {
                   throw new Error("unrecognized volume page: no JSON-LD Book");
                 }
-                if (page === null || needsRecheck(page.offers, Date.now())) recheck.push(volumeSlug);
+                if (page === null || needsRecheck(page.offers, Date.now()))
+                  recheck.push(volumeSlug);
                 if (page === null) continue;
                 for (const { sourceRecordId: recordId, snapshot } of toBacklistSnapshots(
                   page,
@@ -642,7 +644,8 @@ async function withPageFacts(
 ): Promise<KodanshaSnapshot> {
   if (snapshot.isbn13 !== undefined) return snapshot;
   const stored = (await getObservation(ctx, SOURCE_KEY, recordId))?.snapshot as
-    KodanshaSnapshot | undefined;
+    | KodanshaSnapshot
+    | undefined;
   if (stored?.isbn13 === undefined) return snapshot;
   return {
     ...snapshot,

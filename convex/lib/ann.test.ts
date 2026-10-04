@@ -133,7 +133,9 @@ describe("splitReleaseTitle", () => {
       multi: false,
     });
     // VIZ's One Piece omnibus shape: the designator states the collected range.
-    expect(splitReleaseTitle("One Piece - [Omnibus] 33 - Wano (GN 97-99)", "One Piece")).toMatchObject({
+    expect(
+      splitReleaseTitle("One Piece - [Omnibus] 33 - Wano (GN 97-99)", "One Piece"),
+    ).toMatchObject({
       title: "One Piece - [Omnibus] 33 - Wano",
       label: undefined,
       multi: true,
@@ -165,45 +167,110 @@ describe("splitReleaseTitle", () => {
   it("reads a contiguous Volume list as the range it spans, as a written range", () => {
     expect(coverage("Alpha (GN 97-99)")).toEqual([undefined, true, range("97", "99"), undefined]);
     expect(coverage("Alpha (eBook 8-10)")).toEqual([undefined, true, range("8", "10"), undefined]);
-    expect(coverage("Alpha (Omnibus GN 1-3)")).toEqual([undefined, true, range("1", "3"), undefined]);
+    expect(coverage("Alpha (Omnibus GN 1-3)")).toEqual([
+      undefined,
+      true,
+      range("1", "3"),
+      undefined,
+    ]);
     expect(coverage("Alpha (GN 1, 2, 3)")).toEqual([undefined, true, range("1", "3"), undefined]);
     expect(coverage("Alpha (GN 1 & 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
     expect(coverage("Alpha (GN 1 and 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
     expect(coverage("Alpha (GN 1-3, 4-6)")).toEqual([undefined, true, range("1", "6"), undefined]);
-    expect(coverage("Alpha (GN 10.5-11)")).toEqual([undefined, true, range("10.5", "11"), undefined]);
+    expect(coverage("Alpha (GN 10.5-11)")).toEqual([
+      undefined,
+      true,
+      range("10.5", "11"),
+      undefined,
+    ]);
     // The shared grammar's em dash is a range too.
     expect(coverage("Alpha (GN 1—3)")).toEqual([undefined, true, range("1", "3"), undefined]);
     // The release page's "of N" total, if a line ever carries it, is not a Volume.
     expect(coverage("Alpha (GN 1-4 / 34)")).toEqual([undefined, true, range("1", "4"), undefined]);
-    expect(coverage("Alpha (eBook 1-2 / 2)")).toEqual([undefined, true, range("1", "2"), undefined]);
+    expect(coverage("Alpha (eBook 1-2 / 2)")).toEqual([
+      undefined,
+      true,
+      range("1", "2"),
+      undefined,
+    ]);
   });
 
   it("reads coverage only after the format marker: a number before it is never coverage", () => {
-    expect(coverage("Alpha (2nd Edition GN 1-3)")).toEqual([undefined, true, range("1", "3"), undefined]);
-    expect(coverage("Alpha (3-in-1 Edition GN 1-3)")).toEqual([undefined, true, range("1", "3"), undefined]);
-    expect(coverage("Alpha (2020 Edition GN 1-3)")).toEqual([undefined, true, range("1", "3"), undefined]);
+    expect(coverage("Alpha (2nd Edition GN 1-3)")).toEqual([
+      undefined,
+      true,
+      range("1", "3"),
+      undefined,
+    ]);
+    expect(coverage("Alpha (3-in-1 Edition GN 1-3)")).toEqual([
+      undefined,
+      true,
+      range("1", "3"),
+      undefined,
+    ]);
+    expect(coverage("Alpha (2020 Edition GN 1-3)")).toEqual([
+      undefined,
+      true,
+      range("1", "3"),
+      undefined,
+    ]);
     expect(coverage("Alpha (2nd Edition GN 1)")).toEqual(["1", false, undefined, undefined]);
     expect(coverage("Alpha (3-in-1 Edition GN 1)")).toEqual(["1", false, undefined, undefined]);
     expect(coverage("Alpha (Vol. 1 GN 2)")).toEqual(["2", false, undefined, undefined]);
     expect(coverage("Alpha (2nd Edition GN 1, 3)")).toEqual([undefined, true, undefined, true]);
     // A number in the title's own parentheses is not the designator.
     expect(coverage("Alpha (2020) (GN 1, 3)")).toEqual([undefined, true, undefined, true]);
-    expect(splitReleaseTitle("Alpha (2nd Edition) (GN 1-3)")).toMatchObject({ title: "Alpha (2nd Edition)", coverRange: range("1", "3") });
+    expect(splitReleaseTitle("Alpha (2nd Edition) (GN 1-3)")).toMatchObject({
+      title: "Alpha (2nd Edition)",
+      coverRange: range("1", "3"),
+    });
     expect(coverage("Alpha (3-in-1 Edition) (GN 1)")).toEqual(["1", false, undefined, undefined]);
   });
 
   it("rejects a list no range holds: multi-volume with neither label nor range", () => {
-    for (const designator of ["GN 1, 3", "GN 1-3, 5", "GN 1-2 & 4", "GN 3-1", "GN 1-3-5", "eBook 2, 4"]) {
-      expect(coverage(`Alpha (${designator})`), designator).toEqual([undefined, true, undefined, true]);
+    for (const designator of [
+      "GN 1, 3",
+      "GN 1-3, 5",
+      "GN 1-2 & 4",
+      "GN 3-1",
+      "GN 1-3-5",
+      "eBook 2, 4",
+    ]) {
+      expect(coverage(`Alpha (${designator})`), designator).toEqual([
+        undefined,
+        true,
+        undefined,
+        true,
+      ]);
     }
     // The whole list is read, never its first numbers: a trailing item, a
     // numbered extra, words or a dangling separator leave it unread.
-    for (const designator of ["GN 1, 2, and 4", "GN 1, 2, & 4", "GN 1, and 3", "GN 1-2 + 3", "GN 1 and Vol. 3", "GN 3 Part 1-2", "GN 1 and", "GN 1-3 Special", "GN 1 Part 2"]) {
-      expect(coverage(`Alpha (${designator})`), designator).toEqual([undefined, true, undefined, true]);
+    for (const designator of [
+      "GN 1, 2, and 4",
+      "GN 1, 2, & 4",
+      "GN 1, and 3",
+      "GN 1-2 + 3",
+      "GN 1 and Vol. 3",
+      "GN 3 Part 1-2",
+      "GN 1 and",
+      "GN 1-3 Special",
+      "GN 1 Part 2",
+    ]) {
+      expect(coverage(`Alpha (${designator})`), designator).toEqual([
+        undefined,
+        true,
+        undefined,
+        true,
+      ]);
     }
     // Any number smaller than the one before it, not only the last.
     for (const designator of ["GN 1-5, 6-2", "GN 1-3, 4-2, 3-5"]) {
-      expect(coverage(`Alpha (${designator})`), designator).toEqual([undefined, true, undefined, true]);
+      expect(coverage(`Alpha (${designator})`), designator).toEqual([
+        undefined,
+        true,
+        undefined,
+        true,
+      ]);
     }
     // On a 3-in-1 line too: the line's size never stands in for the list.
     expect(splitReleaseTitle("Naruto [3-in-1 Edition] (GN 1, 3)", "Naruto")).toMatchObject({
@@ -226,7 +293,13 @@ describe("splitReleaseTitle", () => {
     expect(coverage("Alpha (GN)")).toEqual([undefined, false, undefined, undefined]);
     expect(coverage("Alpha (eBook)")).toEqual([undefined, false, undefined, undefined]);
     // Not book designators, chapters, and no designator at all: no line.
-    for (const text of ["Alpha (omnibus 1)", "Alpha (Box Set 1)", "Alpha (light novel)", "Alpha (eBook ch 17)", "Alpha"]) {
+    for (const text of [
+      "Alpha (omnibus 1)",
+      "Alpha (Box Set 1)",
+      "Alpha (light novel)",
+      "Alpha (eBook ch 17)",
+      "Alpha",
+    ]) {
       expect(splitReleaseTitle(text), text).toBeNull();
     }
   });
@@ -273,7 +346,7 @@ Elf mage Frieren &amp;amp; her comrades said &quot;farewell&quot; &#8212; what&#
 </manga></ann>`);
     expect(manga!.synopsis).toBe(
       "The demon king has been defeated, and the victorious hero party returns home. " +
-        "Elf mage Frieren & her comrades said \"farewell\" — what's next?",
+        'Elf mage Frieren & her comrades said "farewell" — what\'s next?',
     );
     // No Plot Summary (or an empty one): no synopsis at all.
     expect(parseApiResponse(API)[0]!.synopsis).toBeUndefined();
@@ -288,7 +361,8 @@ Elf mage Frieren &amp;amp; her comrades said &quot;farewell&quot; &#8212; what&#
   });
 
   it("falls back to the name attribute when the Main title is absent or empty", () => {
-    const records = parseApiResponse(`<ann><manga id="1" name="No Main Title &#039;Here&#039;"><info type="Genres">x</info></manga>
+    const records =
+      parseApiResponse(`<ann><manga id="1" name="No Main Title &#039;Here&#039;"><info type="Genres">x</info></manga>
 <manga id="2" name="Empty Main Title"><info gid="1" type="Main title" lang="EN">  </info></manga>
 <manga id="3" name=""><info gid="1" type="Main title" lang="EN"></info></manga></ann>`);
     expect(records.map((r) => [r.id, r.title])).toEqual([
@@ -441,7 +515,9 @@ describe("parseReleasePage", () => {
     // The newer layout: text in a div after the field's paragraph, with
     // zero-width spaces after its punctuation.
     const ebook = parseReleasePage(EBOOK_PAGE)!.description!;
-    expect(ebook).toMatch(/^A new shonen sensation in Japan, this series features Monkey D\. Luffy, /);
+    expect(ebook).toMatch(
+      /^A new shonen sensation in Japan, this series features Monkey D\. Luffy, /,
+    );
     expect(ebook).toMatch(/in search of the elusive treasure "One Piece\."$/);
     expect(ebook).not.toMatch(/[\u200B-\u200D\uFEFF]|added on/);
   });
@@ -459,23 +535,26 @@ describe("parseReleasePage", () => {
     );
 
   it("keeps markup inside the Description from cutting it short", () => {
-    expect(parseReleasePage(inlineField("Includes:<ul><li>Volume 1</li><li>Volume 2</li></ul>"))?.description).toBe(
-      "Includes: Volume 1 Volume 2",
-    );
     expect(
-      parseReleasePage(inlineField("Pirates <small>(and ninjas)</small> sail.<br><b>Note:</b> Bonus story."))
+      parseReleasePage(inlineField("Includes:<ul><li>Volume 1</li><li>Volume 2</li></ul>"))
         ?.description,
+    ).toBe("Includes: Volume 1 Volume 2");
+    expect(
+      parseReleasePage(
+        inlineField("Pirates <small>(and ninjas)</small> sail.<br><b>Note:</b> Bonus story."),
+      )?.description,
     ).toBe("Pirates (and ninjas) sail. Note: Bonus story.");
     expect(
-      parseReleasePage(divField("<p>Part one.</p><div>Part <small>two</small>.</div><ul><li>A list</li></ul>"))
-        ?.description,
+      parseReleasePage(
+        divField("<p>Part one.</p><div>Part <small>two</small>.</div><ul><li>A list</li></ul>"),
+      )?.description,
     ).toBe("Part one. Part two. A list");
   });
 
   it("strips zero-width spaces, entity-encoded ones too", () => {
-    expect(parseReleasePage(divField("Luffy,&#8203; Zoro,\u200b and Nami&#x200B;."))?.description).toBe(
-      "Luffy, Zoro, and Nami.",
-    );
+    expect(
+      parseReleasePage(divField("Luffy,&#8203; Zoro,\u200b and Nami&#x200B;."))?.description,
+    ).toBe("Luffy, Zoro, and Nami.");
     expect(parseReleasePage(divField("&#8203;"))?.description).toBeUndefined();
   });
 
@@ -489,29 +568,41 @@ describe("parseReleasePage", () => {
       description: undefined,
     });
     // The link after real text goes too.
-    expect(parseReleasePage(inlineField('A story.<br><a href="0/0/reviews/new">Submit your own review of this item.</a>'))?.description).toBe(
-      "A story.",
-    );
+    expect(
+      parseReleasePage(
+        inlineField(
+          'A story.<br><a href="0/0/reviews/new">Submit your own review of this item.</a>',
+        ),
+      )?.description,
+    ).toBe("A story.");
   });
 
   it("has no description when the page has none", () => {
     const field = /<p class="easyread-width">[\s\S]*?<\/p>/;
     expect(field.test(ROMANCE_DAWN_PAGE)).toBe(true);
     const absent = ROMANCE_DAWN_PAGE.replace(field, "");
-    const empty = ROMANCE_DAWN_PAGE.replace(field, '<p class="easyread-width"><b>Description:</b><br></p>');
-    expect(parseReleasePage(absent)).toMatchObject({ isbn13: "9781569319017", description: undefined });
+    const empty = ROMANCE_DAWN_PAGE.replace(
+      field,
+      '<p class="easyread-width"><b>Description:</b><br></p>',
+    );
+    expect(parseReleasePage(absent)).toMatchObject({
+      isbn13: "9781569319017",
+      description: undefined,
+    });
     expect(parseReleasePage(empty)?.description).toBeUndefined();
   });
 });
 
 describe("cleanAnnDescription", () => {
   it("drops ANN's trailing credit sentences", () => {
-    expect(cleanAnnDescription("But is Roronoa Zoro, the pirate hunter, a friend or a foe? Story and art by Eiichiro Oda.")).toBe(
-      "But is Roronoa Zoro, the pirate hunter, a friend or a foe?",
-    );
-    expect(cleanAnnDescription("Noriko needs all the help she can get. Story and art by Kiyoko Hikawa.")).toBe(
-      "Noriko needs all the help she can get.",
-    );
+    expect(
+      cleanAnnDescription(
+        "But is Roronoa Zoro, the pirate hunter, a friend or a foe? Story and art by Eiichiro Oda.",
+      ),
+    ).toBe("But is Roronoa Zoro, the pirate hunter, a friend or a foe?");
+    expect(
+      cleanAnnDescription("Noriko needs all the help she can get. Story and art by Kiyoko Hikawa."),
+    ).toBe("Noriko needs all the help she can get.");
     expect(cleanAnnDescription("Magic school! Story & Art by CLAMP")).toBe("Magic school!");
     expect(cleanAnnDescription('"Run!" Written and illustrated by Ken Akamatsu.')).toBe('"Run!"');
   });
@@ -538,14 +629,19 @@ describe("cleanAnnDescription", () => {
     "Adapted by Chayamachi Suguro.",
     "Story and art by Eiichiro Oda. Notes: Recalled due to a misprint on page 193.",
   ])("drops the credit ending %j", (ending) => {
-    expect(cleanAnnDescription(`Will they win the final battle? ${ending}`)).toBe("Will they win the final battle?");
+    expect(cleanAnnDescription(`Will they win the final battle? ${ending}`)).toBe(
+      "Will they win the final battle?",
+    );
   });
 
   it("drops only the fused credit glued to the copy before it", () => {
-    expect(cleanAnnDescription("The end of her Story and art by Akihisa Ikeda.")).toBe("The end of her");
+    expect(cleanAnnDescription("The end of her Story and art by Akihisa Ikeda.")).toBe(
+      "The end of her",
+    );
     // Two clauses glued mid-sentence stay: never cutting prose costs this
     // one real credit.
-    const glued = "Insights from an E.R. physician Story by Koshun Takami and art by Masayuki Taguchi.";
+    const glued =
+      "Insights from an E.R. physician Story by Koshun Takami and art by Masayuki Taguchi.";
     expect(cleanAnnDescription(glued)).toBe(glued);
   });
 
@@ -567,14 +663,19 @@ describe("cleanAnnDescription", () => {
     "Story and and art by You Higuri.",
     "Written and art by Minako Narita.",
     "Story and art by Kei Toume .",
-  ])("drops a credit sentence with lower-case or odd names, a typo or a doubled prefix: %j", (ending) => {
-    expect(cleanAnnDescription(`Will they win? ${ending}`)).toBe("Will they win?");
-  });
+  ])(
+    "drops a credit sentence with lower-case or odd names, a typo or a doubled prefix: %j",
+    (ending) => {
+      expect(cleanAnnDescription(`Will they win? ${ending}`)).toBe("Will they win?");
+    },
+  );
 
   it("drops a credit glued to the full stop before it", () => {
-    expect(cleanAnnDescription("Teenage madness in this concluding volume.Story and art by Usamaru Furuya.")).toBe(
-      "Teenage madness in this concluding volume.",
-    );
+    expect(
+      cleanAnnDescription(
+        "Teenage madness in this concluding volume.Story and art by Usamaru Furuya.",
+      ),
+    ).toBe("Teenage madness in this concluding volume.");
   });
 
   it.each([
@@ -599,9 +700,9 @@ describe("cleanAnnDescription", () => {
     expect(cleanAnnDescription("Story and art by Taeko Watanabe. Romance between swordsmen.")).toBe(
       "Romance between swordsmen.",
     );
-    expect(cleanAnnDescription("Story and art by Oh!Great. FEARSOME FRIEND AND FOE On their mission!")).toBe(
-      "FEARSOME FRIEND AND FOE On their mission!",
-    );
+    expect(
+      cleanAnnDescription("Story and art by Oh!Great. FEARSOME FRIEND AND FOE On their mission!"),
+    ).toBe("FEARSOME FRIEND AND FOE On their mission!");
   });
 
   it.each([
@@ -630,9 +731,11 @@ describe("cleanAnnDescription", () => {
 
   it("drops a one-word fused credit and ANN's note about the release", () => {
     expect(cleanAnnDescription("A one-shot. Story and art by CLAMP.")).toBe("A one-shot.");
-    expect(cleanAnnDescription("A sequel. Notes: This volume despite being numbered as the first volume contains material from the 10th volume of the Japanese release.")).toBe(
-      "A sequel.",
-    );
+    expect(
+      cleanAnnDescription(
+        "A sequel. Notes: This volume despite being numbered as the first volume contains material from the 10th volume of the Japanese release.",
+      ),
+    ).toBe("A sequel.");
   });
 
   it.each([
@@ -644,12 +747,13 @@ describe("cleanAnnDescription", () => {
     expect(cleanAnnDescription(text)).toBe(text);
   });
 
-  it.each(["Story and art by Eiichiro Oda.", "Story and art by Yonezou Nekota.", "Submit your own review of this item."])(
-    "has nothing left of a text that is only a credit or page chrome: %j",
-    (text) => {
-      expect(cleanAnnDescription(text)).toBeUndefined();
-    },
-  );
+  it.each([
+    "Story and art by Eiichiro Oda.",
+    "Story and art by Yonezou Nekota.",
+    "Submit your own review of this item.",
+  ])("has nothing left of a text that is only a credit or page chrome: %j", (text) => {
+    expect(cleanAnnDescription(text)).toBeUndefined();
+  });
 
   it.each([
     "A tale. Story and art by Eiichiro Oda. Now in a deluxe edition.",
@@ -679,7 +783,8 @@ describe("cleanAnnDescription: ANN's notes, C1 controls, entities and listing ju
 
   // Bold-label paragraphs inside the copy are copy; only ANN's own
   // `<p class="easyread-width"><b>Notes:</b>` field ends the Description.
-  const notesField = '<p class="easyread-width"><b>Notes:</b><br>Published in left-to-right "flipped" format.</p>';
+  const notesField =
+    '<p class="easyread-width"><b>Notes:</b><br>Published in left-to-right "flipped" format.</p>';
   const withField = (description: string, after = "") =>
     NOTES_FIELD_PAGE.replace(
       /<p class="easyread-width"><b>Description:<\/b>[\s\S]*?(?=<p><small>)/,
@@ -688,40 +793,53 @@ describe("cleanAnnDescription: ANN's notes, C1 controls, entities and listing ju
 
   it("keeps the copy's own bold-label paragraphs, inline and in a div", () => {
     expect(
-      parseReleasePage(withField("<br>A story.</p><p><b>Bonus Features:</b> Sketches and an interview.</p>"))
-        ?.description,
+      parseReleasePage(
+        withField("<br>A story.</p><p><b>Bonus Features:</b> Sketches and an interview.</p>"),
+      )?.description,
     ).toBe("A story. Bonus Features: Sketches and an interview.");
     expect(
       parseReleasePage(
-        withField('<br></p><div class="simple-html"><p>A story.</p><p><b>Bonus Features:</b> Sketches.</p></div><p></p>'),
+        withField(
+          '<br></p><div class="simple-html"><p>A story.</p><p><b>Bonus Features:</b> Sketches.</p></div><p></p>',
+        ),
       )?.description,
     ).toBe("A story. Bonus Features: Sketches.");
-    expect(parseReleasePage(withField("<br>A story.</p><p><b>Note:</b> Reads right to left.</p>"))?.description).toBe(
-      "A story. Note: Reads right to left.",
-    );
+    expect(
+      parseReleasePage(withField("<br>A story.</p><p><b>Note:</b> Reads right to left.</p>"))
+        ?.description,
+    ).toBe("A story. Note: Reads right to left.");
   });
 
   it("keeps a nested div and stops at ANN's Notes field after it", () => {
     expect(
       parseReleasePage(
-        withField('<br></p><div class="simple-html"><div>Part one.</div> Part two.</div><p></p>', notesField),
+        withField(
+          '<br></p><div class="simple-html"><div>Part one.</div> Part two.</div><p></p>',
+          notesField,
+        ),
       )?.description,
     ).toBe("Part one. Part two.");
-    expect(parseReleasePage(withField("<br>A story.</p>", notesField))?.description).toBe("A story.");
+    expect(parseReleasePage(withField("<br>A story.</p>", notesField))?.description).toBe(
+      "A story.",
+    );
   });
 
   it("drops stored format notes", () => {
-    expect(cleanAnnDescription('The wizard wakes. Notes: Published in left-to-right "flipped" format.')).toBe(
-      "The wizard wakes.",
-    );
-    expect(cleanAnnDescription("Serving the forces of good... Notes: Published in right-to-left format.")).toBe(
-      "Serving the forces of good...",
-    );
+    expect(
+      cleanAnnDescription('The wizard wakes. Notes: Published in left-to-right "flipped" format.'),
+    ).toBe("The wizard wakes.");
+    expect(
+      cleanAnnDescription(
+        "Serving the forces of good... Notes: Published in right-to-left format.",
+      ),
+    ).toBe("Serving the forces of good...");
   });
 
   it("maps C1 controls to the Windows-1252 characters ANN meant", () => {
     expect(cleanAnnDescription("Dark Schneider\u0092s nemesis.")).toBe("Dark Schneider’s nemesis.");
-    expect(cleanAnnDescription("But then a miracle\u0097her body rises.")).toBe("But then a miracle—her body rises.");
+    expect(cleanAnnDescription("But then a miracle\u0097her body rises.")).toBe(
+      "But then a miracle—her body rises.",
+    );
   });
 
   it("decodes stray entities and ANN's &qout; typo", () => {

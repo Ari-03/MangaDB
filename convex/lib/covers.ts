@@ -132,7 +132,8 @@ export async function storeCover(
     const res = await politeFetch(args.sourceUrl, args.delayMs);
     const bytes = new Uint8Array(await res.arrayBuffer());
     const header = (res.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-    const image = header.startsWith("image/") && (header === "image/svg+xml" || !looksLikeMarkup(bytes));
+    const image =
+      header.startsWith("image/") && (header === "image/svg+xml" || !looksLikeMarkup(bytes));
     const type = image ? header : rasterType(bytes);
     if (type === null) {
       throw new Error(`not an image (${header || "no type"}, ${bytes.length} bytes)`);
@@ -212,9 +213,7 @@ export async function releaseCover(
  */
 export function jacketCache(
   ctx: QueryCtx,
-  coverage: (editionId: Id<"editions">) => Promise<Array<Doc<"volumeCoverages">>> = (
-    editionId,
-  ) =>
+  coverage: (editionId: Id<"editions">) => Promise<Array<Doc<"volumeCoverages">>> = (editionId) =>
     ctx.db
       .query("volumeCoverages")
       .withIndex("by_edition", (q) => q.eq("editionId", editionId))

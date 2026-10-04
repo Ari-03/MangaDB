@@ -1,9 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
-import type {
-  FunctionArgs,
-  FunctionReference,
-  FunctionReturnType,
-} from "convex/server";
+import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
 
 import { api } from "../../convex/_generated/api";
 import { convexUrl } from "~/lib/convexUrl";
@@ -32,9 +28,7 @@ export async function catalogQuery<Query extends FunctionReference<"query">>(
 }
 
 /** A query's result with its "not found" null taken out. */
-type Found<Query extends FunctionReference<"query">> = NonNullable<
-  FunctionReturnType<Query>
->;
+type Found<Query extends FunctionReference<"query">> = NonNullable<FunctionReturnType<Query>>;
 
 /** One month window of the Releases browser: Agenda and Month Grid. */
 export type MonthReleasesData = Found<typeof api.releases.monthBrowse>;

@@ -107,10 +107,12 @@ function MatureNotice() {
   return (
     <div className="container">
       <aside className="mature-notice" role="note">
-        <span className="mature-badge" aria-hidden="true">18+</span>
+        <span className="mature-badge" aria-hidden="true">
+          18+
+        </span>
         <p>
-          Rated 18+ by the publisher. Covers and listings stay hidden until you choose to see
-          mature titles.
+          Rated 18+ by the publisher. Covers and listings stay hidden until you choose to see mature
+          titles.
         </p>
         <button className="btn btn-sm" type="button" onClick={() => setAsking(true)}>
           Show mature titles
@@ -146,9 +148,9 @@ function AgeConfirm({ onClose }: { onClose: () => void }) {
     >
       <h2 id="age-confirm-title">Show mature titles?</h2>
       <p>
-        Mature titles are rated 18+ by their publishers and can include explicit sexual content
-        or extreme violence. They will appear across the catalog, with their covers. The home
-        page's shelves still leave them out.
+        Mature titles are rated 18+ by their publishers and can include explicit sexual content or
+        extreme violence. They will appear across the catalog, with their covers. The home page's
+        shelves still leave them out.
       </p>
       <div className="age-confirm-actions">
         <button className="btn" type="button" onClick={close}>
@@ -183,8 +185,8 @@ export function MatureSettings() {
     <div className="sharing-settings">
       <p className="sharing-lede">
         Titles rated 18+ by their publishers stay out of browsing, search, and the calendars, and
-        their covers are hidden, until you choose to show them. The home page's shelves always
-        leave them out. This is saved in this browser.
+        their covers are hidden, until you choose to show them. The home page's shelves always leave
+        them out. This is saved in this browser.
       </p>
       <div className="vis-field">
         <span className="vis-legend" id="mature-titles-label">
@@ -280,8 +282,8 @@ function MatureWelcome() {
       <h2 id="mature-welcome-title">Allow mature content?</h2>
       <p>
         Some manga are rated 18+ by their publishers, from graphic violence to explicit sexual
-        content. They are hidden unless you allow them. You can change this any time in the
-        Series filters or your settings.
+        content. They are hidden unless you allow them. You can change this any time in the Series
+        filters or your settings.
       </p>
       <div className="age-confirm-actions">
         <button className="btn" type="button" onClick={() => answer(false)}>

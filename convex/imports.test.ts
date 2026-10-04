@@ -10,13 +10,30 @@ import { api, internal } from "./_generated/api";
 import { isDue, possiblyFuture } from "./imports";
 import { isStranded, STRANDED_AFTER_MS } from "./lib/importRuns";
 import { insertObservation, insertSeries, seedCatalog } from "./test.factories";
-import { alice, dave, drain, makeT, seedRegistry, seedTeam, signedIn, type TestT } from "./test.helpers";
+import {
+  alice,
+  dave,
+  drain,
+  makeT,
+  seedRegistry,
+  seedTeam,
+  signedIn,
+  type TestT,
+} from "./test.helpers";
 
 /** alice, the Administrator, and dave, who holds no role. */
 const setup = (t: TestT) => seedTeam(t, [alice, dave]);
 
 /** Every source the registry seeds. */
-const SOURCE_KEYS = ["ann", "kodansha", "kodansha-backlist", "openlibrary", "prh", "sevenseas", "yenpress"];
+const SOURCE_KEYS = [
+  "ann",
+  "kodansha",
+  "kodansha-backlist",
+  "openlibrary",
+  "prh",
+  "sevenseas",
+  "yenpress",
+];
 
 /**
  * Start and finish one Import Run of `sourceKey` (Seven Seas unless given),
@@ -25,9 +42,16 @@ const SOURCE_KEYS = ["ann", "kodansha", "kodansha-backlist", "openlibrary", "prh
 async function finishRun(
   t: TestT,
   status: "succeeded" | "failed",
-  run: { sourceKey?: string; recordsSeen?: number; recordsChanged?: number; errors?: string[] } = {},
+  run: {
+    sourceKey?: string;
+    recordsSeen?: number;
+    recordsChanged?: number;
+    errors?: string[];
+  } = {},
 ) {
-  const runId = await t.mutation(internal.imports.startRun, { sourceKey: run.sourceKey ?? "sevenseas" });
+  const runId = await t.mutation(internal.imports.startRun, {
+    sourceKey: run.sourceKey ?? "sevenseas",
+  });
   await t.mutation(internal.imports.finishRun, {
     runId,
     status,
@@ -79,7 +103,10 @@ describe("stranded runs", () => {
   const clockAt = (ms: number) => vi.setSystemTime(ms);
   /** An automatic Seven Seas run opened now, last stamped at `lastActivityAt`. */
   async function openRun(t: TestT, lastActivityAt: number) {
-    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "sevenseas", automatic: true });
+    const runId = await t.mutation(internal.imports.startRun, {
+      sourceKey: "sevenseas",
+      automatic: true,
+    });
     await t.run((ctx) => ctx.db.patch(runId, { lastActivityAt }));
     return runId;
   }
@@ -88,10 +115,16 @@ describe("stranded runs", () => {
   it("is quiet time since the last stamp, or for an unstamped run, age past 12 hours", () => {
     const now = 100 * HOUR;
     const opened = now - 5 * HOUR;
-    expect(isStranded({ _creationTime: opened, lastActivityAt: now - STRANDED_AFTER_MS }, now)).toBe(false);
-    expect(isStranded({ _creationTime: opened, lastActivityAt: now - STRANDED_AFTER_MS - 1 }, now)).toBe(true);
+    expect(
+      isStranded({ _creationTime: opened, lastActivityAt: now - STRANDED_AFTER_MS }, now),
+    ).toBe(false);
+    expect(
+      isStranded({ _creationTime: opened, lastActivityAt: now - STRANDED_AFTER_MS - 1 }, now),
+    ).toBe(true);
     // A multi-hour chain that passed the gate a minute ago is live.
-    expect(isStranded({ _creationTime: now - 20 * HOUR, lastActivityAt: now - 60_000 }, now)).toBe(false);
+    expect(isStranded({ _creationTime: now - 20 * HOUR, lastActivityAt: now - 60_000 }, now)).toBe(
+      false,
+    );
     expect(isStranded({ _creationTime: now - 12 * HOUR }, now)).toBe(false);
     expect(isStranded({ _creationTime: now - 12 * HOUR - 1 }, now)).toBe(true);
   });
@@ -130,7 +163,13 @@ describe("stranded runs", () => {
     await seedRegistry(t);
     const opened = Date.now();
     const runId = await t.run((ctx) =>
-      ctx.db.insert("importRuns", { sourceKey: "sevenseas", status: "running", recordsSeen: 0, recordsChanged: 0, errors: [] }),
+      ctx.db.insert("importRuns", {
+        sourceKey: "sevenseas",
+        status: "running",
+        recordsSeen: 0,
+        recordsChanged: 0,
+        errors: [],
+      }),
     );
     clockAt(opened + 11 * HOUR);
     await tick(t);
@@ -170,13 +209,20 @@ describe("stranded runs", () => {
       });
     clockAt(opened + 20 * 60_000);
     expect(await pass()).toBe(false);
-    expect(await t.run((ctx) => ctx.db.get(runId))).toMatchObject({ lastActivityAt: opened + 20 * 60_000 });
+    expect(await t.run((ctx) => ctx.db.get(runId))).toMatchObject({
+      lastActivityAt: opened + 20 * 60_000,
+    });
     // A forced run on a disabled source passes too, and is stamped.
     await t.run((ctx) => ctx.db.patch(runId, { automatic: undefined }));
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "sevenseas",
+      enabled: false,
+    });
     clockAt(opened + 40 * 60_000);
     expect(await pass()).toBe(false);
-    expect(await t.run((ctx) => ctx.db.get(runId))).toMatchObject({ lastActivityAt: opened + 40 * 60_000 });
+    expect(await t.run((ctx) => ctx.db.get(runId))).toMatchObject({
+      lastActivityAt: opened + 40 * 60_000,
+    });
   });
 
   it("closes a stranded run with the counts and errors its last pass stored", async () => {
@@ -226,10 +272,21 @@ describe("stranded runs", () => {
     const t = makeT();
     await seedRegistry(t);
     const runId = await openRun(t, Date.now());
-    await t.mutation(internal.imports.finishRun, { runId, status: "succeeded", recordsSeen: 3, recordsChanged: 1, errors: [] });
+    await t.mutation(internal.imports.finishRun, {
+      runId,
+      status: "succeeded",
+      recordsSeen: 3,
+      recordsChanged: 1,
+      errors: [],
+    });
     const before = await t.run((ctx) => ctx.db.get(runId));
     clockAt(Date.now() + HOUR);
-    await t.mutation(internal.imports.recordRunActivity, { runId, recordsSeen: 9, recordsChanged: 9, errors: ["late"] });
+    await t.mutation(internal.imports.recordRunActivity, {
+      runId,
+      recordsSeen: 9,
+      recordsChanged: 9,
+      errors: ["late"],
+    });
     expect(await t.run((ctx) => ctx.db.get(runId))).toEqual(before);
   });
 
@@ -251,7 +308,9 @@ describe("stranded runs", () => {
       requested.push(String(input));
       return new Response("", { status: 503 });
     });
-    expect(await t.action(internal.sevenSeas.sync, { politeDelayMs: 0, runId })).toEqual({ skipped: "disabled" });
+    expect(await t.action(internal.sevenSeas.sync, { politeDelayMs: 0, runId })).toEqual({
+      skipped: "disabled",
+    });
     expect(requested).toEqual([]);
     expect(await t.run((ctx) => ctx.db.get(runId))).toEqual(before);
     expect(await sevenSeas(t)).toEqual(health);
@@ -349,9 +408,12 @@ describe("importSources.backfillFieldAuthority", () => {
       await ctx.db.patch(kodansha._id, { fieldAuthority: { date: "weak", description: "weak" } });
     });
     const { added } = await t.mutation(internal.importSources.backfillFieldAuthority, {});
-    expect(added.filter((row) => row.key === "kodansha").map((row) => row.category).sort()).toEqual(
-      ["creators", "format", "isbn", "price", "titles"],
-    );
+    expect(
+      added
+        .filter((row) => row.key === "kodansha")
+        .map((row) => row.category)
+        .sort(),
+    ).toEqual(["creators", "format", "isbn", "price", "titles"]);
     const kodansha = await t.run(async (ctx) =>
       (await ctx.db.query("approvedSources").collect()).find((s) => s.key === "kodansha"),
     );
@@ -390,9 +452,9 @@ describe("importSources.upsert — registry rows are data", () => {
       fieldAuthority: {},
       cadence: "daily",
     };
-    await expect(
-      signedIn(t, dave).mutation(api.importSources.upsert, args),
-    ).rejects.toMatchObject({ data: { code: "forbidden" } });
+    await expect(signedIn(t, dave).mutation(api.importSources.upsert, args)).rejects.toMatchObject({
+      data: { code: "forbidden" },
+    });
     await expect(
       signedIn(t, alice).mutation(api.importSources.upsert, { ...args, key: "Bad Key!" }),
     ).rejects.toMatchObject({ data: { code: "invalidKey" } });
@@ -462,8 +524,14 @@ describe("imports.stopIfAutomatic", () => {
   it("keeps the stop note on a run that already carries fifty errors", async () => {
     const t = makeT();
     await seedRegistry(t);
-    const runId = await t.mutation(internal.imports.startRun, { sourceKey: "sevenseas", automatic: true });
-    await t.mutation(internal.importSources.setEnabledInternal, { key: "sevenseas", enabled: false });
+    const runId = await t.mutation(internal.imports.startRun, {
+      sourceKey: "sevenseas",
+      automatic: true,
+    });
+    await t.mutation(internal.importSources.setEnabledInternal, {
+      key: "sevenseas",
+      enabled: false,
+    });
     const carried = Array.from({ length: 50 }, (_, i) => `error ${i}`);
     expect(
       await t.mutation(internal.imports.stopIfAutomatic, {
@@ -477,7 +545,10 @@ describe("imports.stopIfAutomatic", () => {
     await t.run(async (ctx) => {
       const run = await ctx.db.get(runId);
       expect(run?.status).toBe("stopped");
-      expect(run?.errors).toEqual([...carried.slice(0, 49), "Stopped: the source was disabled mid-run."]);
+      expect(run?.errors).toEqual([
+        ...carried.slice(0, 49),
+        "Stopped: the source was disabled mid-run.",
+      ]);
     });
   });
 
@@ -486,11 +557,19 @@ describe("imports.stopIfAutomatic", () => {
   it("accepts a call without a source key, as actions deployed before it make", async () => {
     const t = makeT();
     await seedRegistry(t);
-    const automatic = await t.mutation(internal.imports.startRun, { sourceKey: "ann", automatic: true });
+    const automatic = await t.mutation(internal.imports.startRun, {
+      sourceKey: "ann",
+      automatic: true,
+    });
     const forced = await t.mutation(internal.imports.startRun, { sourceKey: "ann" });
     await t.mutation(internal.importSources.setEnabledInternal, { key: "ann", enabled: false });
     const legacy = (runId: typeof automatic) =>
-      t.mutation(internal.imports.stopIfAutomatic, { runId, recordsSeen: 4, recordsChanged: 2, errors: ["e"] });
+      t.mutation(internal.imports.stopIfAutomatic, {
+        runId,
+        recordsSeen: 4,
+        recordsChanged: 2,
+        errors: ["e"],
+      });
     expect(await legacy(automatic)).toBe(true);
     expect(await t.run((ctx) => ctx.db.get(automatic))).toMatchObject({
       status: "stopped",
@@ -498,7 +577,10 @@ describe("imports.stopIfAutomatic", () => {
       errors: ["e", "Stopped: the source was disabled mid-run."],
     });
     expect(await legacy(forced)).toBe(false);
-    expect(await t.run((ctx) => ctx.db.get(forced))).toMatchObject({ status: "running", recordsSeen: 4 });
+    expect(await t.run((ctx) => ctx.db.get(forced))).toMatchObject({
+      status: "running",
+      recordsSeen: 4,
+    });
     // A closed run still stops the chain.
     expect(await legacy(automatic)).toBe(true);
   });
@@ -526,9 +608,7 @@ describe("cadence", () => {
     const before = await t.query(internal.imports.enabledSources, {});
     // Every seeded source is enabled and unrun.
     expect(before.map((s) => s.key).sort()).toEqual(SOURCE_KEYS);
-    expect(
-      before.every((s) => s.lastStartedAt === null && s.lastStatus === null),
-    ).toBe(true);
+    expect(before.every((s) => s.lastStartedAt === null && s.lastStatus === null)).toBe(true);
     await finishRun(t, "succeeded");
     const after = await t.query(internal.imports.enabledSources, {});
     expect(after[0]!.lastStatus).toBe("succeeded");
@@ -595,9 +675,7 @@ describe("withdrawal → possible-cancellation review (#37)", () => {
     const after = await t.run((ctx) => ctx.db.get(releaseId));
     expect(after).toEqual(before);
 
-    const proposal = (await t.run((ctx) =>
-      ctx.db.get(obs.queuedProposalId!),
-    ))!;
+    const proposal = (await t.run((ctx) => ctx.db.get(obs.queuedProposalId!)))!;
     expect(proposal).toMatchObject({
       state: "inReview",
       author: { kind: "source", sourceKey: "sevenseas" },
@@ -612,9 +690,7 @@ describe("withdrawal → possible-cancellation review (#37)", () => {
       { kind: "hide", ref: { type: "release", id: releaseId }, baseRevisionId: undefined },
     ]);
     expect(version!.changeComment).toContain("possible cancellation");
-    expect(version!.evidence).toEqual([
-      { kind: "observation", observationId },
-    ]);
+    expect(version!.evidence).toEqual([{ kind: "observation", observationId }]);
 
     // Approving the pre-filled guess hides the release — one click.
     await signedIn(t, alice).mutation(api.proposals.approveProposal, { proposalId: proposal._id });
@@ -636,9 +712,7 @@ describe("withdrawal → possible-cancellation review (#37)", () => {
       const obs = (await t.run((ctx) => ctx.db.get(observationId)))!;
       expect(obs.withdrawn).toBe(true);
       expect(obs.queuedProposalId).toBeUndefined();
-      expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toEqual(
-        [],
-      );
+      expect(await t.run((ctx) => ctx.db.query("proposals").collect())).toEqual([]);
       const release = await t.run((ctx) => ctx.db.get(releaseId));
       expect(release!.status).toBe("active");
       expect(release!.pubDate).toEqual(pubDate);
@@ -684,8 +758,7 @@ describe("source health alert emails", () => {
     vi.stubGlobal(
       "fetch",
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-        const url =
-          typeof input === "object" && "url" in input ? input.url : String(input);
+        const url = typeof input === "object" && "url" in input ? input.url : String(input);
         if (url === "https://api.resend.com/emails") {
           sent.push(JSON.parse(String(init?.body)) as Sent);
           return new Response(JSON.stringify({ id: "email_1" }), {
@@ -757,10 +830,11 @@ describe("imports.dashboard", () => {
     const t = makeT();
     await setup(t);
     await seedRegistry(t);
-    for (let i = 0; i < 3; i++) await finishRun(t, "failed", { sourceKey: "kodansha", recordsSeen: 5 });
-    await expect(
-      signedIn(t, dave).query(api.imports.dashboard, {}),
-    ).rejects.toMatchObject({ data: { code: "forbidden" } });
+    for (let i = 0; i < 3; i++)
+      await finishRun(t, "failed", { sourceKey: "kodansha", recordsSeen: 5 });
+    await expect(signedIn(t, dave).query(api.imports.dashboard, {})).rejects.toMatchObject({
+      data: { code: "forbidden" },
+    });
 
     const rows = await signedIn(t, alice).query(api.imports.dashboard, {});
     expect(rows.map((r) => r.key)[0]).toBe("kodansha"); // unhealthy first
@@ -792,9 +866,9 @@ describe("imports.bootstrapBacklog", () => {
       await insertSeries(ctx, { title: "Tagged", bootstrapUnreviewed: true });
       await insertSeries(ctx, { title: "Untagged" });
     });
-    await expect(
-      signedIn(t, dave).query(api.imports.bootstrapBacklog, {}),
-    ).rejects.toMatchObject({ data: { code: "forbidden" } });
+    await expect(signedIn(t, dave).query(api.imports.bootstrapBacklog, {})).rejects.toMatchObject({
+      data: { code: "forbidden" },
+    });
     const backlog = await signedIn(t, alice).query(api.imports.bootstrapBacklog, {});
     expect(backlog.series.count).toBe(1);
     expect(backlog.volumes.count).toBe(0);

@@ -20,7 +20,9 @@ describe("convexUrl", () => {
 
   it("throws a message naming the variable and the setup step when it is absent", () => {
     vi.stubEnv("VITE_CONVEX_URL", undefined);
-    expect(() => convexUrl()).toThrow(/^VITE_CONVEX_URL is not set\. Locally, run `npx convex dev`.*README/);
+    expect(() => convexUrl()).toThrow(
+      /^VITE_CONVEX_URL is not set\. Locally, run `npx convex dev`.*README/,
+    );
   });
 
   it("treats an empty value as absent", () => {

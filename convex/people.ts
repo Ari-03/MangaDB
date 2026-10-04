@@ -40,13 +40,7 @@ export type CreditRole = Doc<"seriesCredits">["role"];
  * Display order of roles on a Series: the makers first (the role-less
  * "author" a publisher gives after the specific ones), the source after.
  */
-const ROLE_ORDER: ReadonlyArray<CreditRole> = [
-  "story_art",
-  "story",
-  "art",
-  "author",
-  "original",
-];
+const ROLE_ORDER: ReadonlyArray<CreditRole> = ["story_art", "story", "art", "author", "original"];
 
 /**
  * Whether a credit makes someone the Series' maker: they wrote or drew it,
@@ -612,7 +606,13 @@ async function settlePrhSeries(
       continue;
     }
     used.add(row._id);
-    const current = { personId: row.personId, role: row.role, runRole: row.runRole, runNames: row.runNames, runApart: row.runApart };
+    const current = {
+      personId: row.personId,
+      role: row.role,
+      runRole: row.runRole,
+      runNames: row.runNames,
+      runApart: row.runApart,
+    };
     if (JSON.stringify(current) !== JSON.stringify(fields)) await ctx.db.patch(row._id, fields);
   }
   for (const row of rows) if (!used.has(row._id)) await ctx.db.delete(row._id);
@@ -961,7 +961,14 @@ async function stampCreators(ctx: MutationCtx, args: StampArgs, memo: PublisherM
         Object.assign(row, patch);
       }
     } else {
-      await insertCredit(ctx, rows, { seriesId, personId, role: runRole, runRole, source: "creators", rebuiltAt });
+      await insertCredit(ctx, rows, {
+        seriesId,
+        personId,
+        role: runRole,
+        runRole,
+        source: "creators",
+        rebuiltAt,
+      });
     }
     count++;
   }
@@ -1161,7 +1168,8 @@ export const statsBatch = internalMutation({
       const general = (entries: typeof shelf) => entries.filter((entry) => !entry.series.mature);
       // General before made: the general directory lists a mixed-credit
       // author, so a Series they only originated beats a mature one they made.
-      const pool = [general(made), general(shelf), made, shelf].find((entries) => entries.length > 0) ?? [];
+      const pool =
+        [general(made), general(shelf), made, shelf].find((entries) => entries.length > 0) ?? [];
       const biggest = pool.reduce<(typeof shelf)[number] | null>(
         (best, entry) =>
           (entry.stats?.volumeCount ?? 0) > (best?.stats?.volumeCount ?? -1) ? entry : best,
@@ -1407,13 +1415,15 @@ export const authors = query({
       .paginate(paginationOpts);
     return {
       ...page,
-      page: page.page.filter((person) => visibleTo(showMature, person.matureOnly)).map((person) => ({
-        publicId: person.publicId,
-        name: person.name,
-        seriesCount: person.seriesCount,
-        coverUrl: person.coverUrl,
-        coverIsbn: person.coverIsbn,
-      })),
+      page: page.page
+        .filter((person) => visibleTo(showMature, person.matureOnly))
+        .map((person) => ({
+          publicId: person.publicId,
+          name: person.name,
+          seriesCount: person.seriesCount,
+          coverUrl: person.coverUrl,
+          coverIsbn: person.coverIsbn,
+        })),
     };
   },
 });

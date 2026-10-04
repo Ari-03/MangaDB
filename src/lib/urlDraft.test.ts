@@ -58,7 +58,12 @@ function play(shown: string, steps: Array<["request", string] | ["start", Naviga
 describe("useUrlDraft's bookkeeping", () => {
   it("skips a navigation to the view already asked for or shown", () => {
     expect(play("b", [["request", "b"]]).log).toEqual(["skip b"]);
-    expect(play("b", [["request", "k1"], ["request", "k1"]]).log).toEqual(["go k1", "skip k1"]);
+    expect(
+      play("b", [
+        ["request", "k1"],
+        ["request", "k1"],
+      ]).log,
+    ).toEqual(["go k1", "skip k1"]);
   });
 
   it("takes the page's own navigations for its own, superseded ones included", () => {
@@ -89,10 +94,12 @@ describe("useUrlDraft's bookkeeping", () => {
     const run = play("b", [["start", nav(at("b"), at("b"))]]);
     expect(run.log).toEqual(["outside b"]);
     // Then typing back to b has nothing to do.
-    expect(play("b", [["start", nav(at("b"), at("b"))], ["request", "b"]]).log).toEqual([
-      "outside b",
-      "skip b",
-    ]);
+    expect(
+      play("b", [
+        ["start", nav(at("b"), at("b"))],
+        ["request", "b"],
+      ]).log,
+    ).toEqual(["outside b", "skip b"]);
   });
 
   it("replaces the draft when Clear all starts while a filter is on its way", () => {
@@ -106,12 +113,18 @@ describe("useUrlDraft's bookkeeping", () => {
   });
 
   it("replaces the draft on back and forward", () => {
-    const run = play("k1", [["start", nav(at("k1"), at("b"))], ["start", nav(at("b"), at("k1"))]]);
+    const run = play("k1", [
+      ["start", nav(at("k1"), at("b"))],
+      ["start", nav(at("b"), at("k1"))],
+    ]);
     expect(run.log).toEqual(["outside b", "outside k1"]);
   });
 
   it("drops what is pending when the page is left", () => {
-    const run = play("b", [["request", "k1"], ["start", nav(at("b"), at("", "", "/elsewhere"))]]);
+    const run = play("b", [
+      ["request", "k1"],
+      ["start", nav(at("b"), at("", "", "/elsewhere"))],
+    ]);
     expect(run.log).toEqual(["go k1", "leave"]);
     expect(run.pending).toEqual([]);
   });

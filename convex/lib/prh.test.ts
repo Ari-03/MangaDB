@@ -317,8 +317,9 @@ describe("parseTitleList", () => {
 
   it("rejects a non-ok status even with a count", () => {
     expect(() => parseTitleList({ status: "error", recordCount: 0 })).toThrow("status is error");
-    expect(parseTitleList({ status: "warning", recordCount: 1, data: { titles: [TITLE] } }))
-      .toMatchObject({ rawCount: 1 });
+    expect(
+      parseTitleList({ status: "warning", recordCount: 1, data: { titles: [TITLE] } }),
+    ).toMatchObject({ rawCount: 1 });
   });
 
   // A missing titles array requires an explicit zero count, not an absent count.

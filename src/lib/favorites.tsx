@@ -75,7 +75,8 @@ export function LibraryFavorites() {
   if (mine.items.length === 0) {
     return (
       <p className="placeholder">
-        Favorite a series, a volume or an omnibus from its page and it lands here. Favorites are private.
+        Favorite a series, a volume or an omnibus from its page and it lands here. Favorites are
+        private.
       </p>
     );
   }
@@ -128,7 +129,12 @@ function FavoriteLink({
       );
     case "edition":
       return (
-        <Link className={className} to="/edition/$publicId/$slug" params={params} aria-label={label}>
+        <Link
+          className={className}
+          to="/edition/$publicId/$slug"
+          params={params}
+          aria-label={label}
+        >
           {children}
         </Link>
       );
@@ -144,7 +150,9 @@ function FavoriteCover({ item }: { item: FavoriteItem }) {
         src={item.coverUrl}
         isbn13={item.coverIsbn}
         title={item.title}
-        numbered={item.label !== null ? { series: item.seriesTitle, number: item.label } : undefined}
+        numbered={
+          item.label !== null ? { series: item.seriesTitle, number: item.label } : undefined
+        }
       />
     </ConcealArt>
   );
@@ -164,7 +172,11 @@ function FavoriteCover({ item }: { item: FavoriteItem }) {
                 setBusy(true);
                 void toggle({ target: item.target })
                   .then(({ favorite }) =>
-                    track("favorite_toggled", { target: item.kind, publicId: item.publicId, favorite }),
+                    track("favorite_toggled", {
+                      target: item.kind,
+                      publicId: item.publicId,
+                      favorite,
+                    }),
                   )
                   .finally(() => setBusy(false));
               }}

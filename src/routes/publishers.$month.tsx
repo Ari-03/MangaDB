@@ -17,7 +17,10 @@ export const Route = createFileRoute("/publishers/$month")({
   loader: async ({ params }) => {
     const anchor = parseMonthParam(params.month);
     if (!anchor) throw notFound();
-    const data = await catalogQuery(api.publisher.monthBoard, { ...anchor, showMature: showMature() });
+    const data = await catalogQuery(api.publisher.monthBoard, {
+      ...anchor,
+      showMature: showMature(),
+    });
     return { anchor, today: currentMonth(), data };
   },
   head: ({ loaderData }) => {
@@ -27,10 +30,7 @@ export const Route = createFileRoute("/publishers/$month")({
       title: `English Manga Publishers – ${month} Releases | ${SITE_NAME}`,
       description: `What every English manga publisher released in ${month}: release counts, new series, formats, and covers, publisher by publisher.`,
       path: `/publishers/${monthParam(loaderData.anchor)}`,
-      breadcrumbs: [
-        { name: "Publishers", path: "/publishers" },
-        { name: month },
-      ],
+      breadcrumbs: [{ name: "Publishers", path: "/publishers" }, { name: month }],
     });
   },
   component: MonthBoardPage,

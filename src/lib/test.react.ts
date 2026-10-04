@@ -53,7 +53,8 @@ vi.mock("react", async (importOriginal) => {
       slots[index] = typeof initial === "function" ? (initial as () => S)() : initial;
     }
     const set = (next: S | ((prev: S) => S)) => {
-      slots[index] = typeof next === "function" ? (next as (prev: S) => S)(slots[index] as S) : next;
+      slots[index] =
+        typeof next === "function" ? (next as (prev: S) => S)(slots[index] as S) : next;
     };
     return [slots[index] as S, set] as const;
   }
@@ -61,8 +62,14 @@ vi.mock("react", async (importOriginal) => {
   // on its first render, and every render without deps).
   const changed = (index: number, deps?: readonly unknown[]) => {
     const prev = (state.slots[index] as { deps?: readonly unknown[] } | undefined)?.deps;
-    return !prev || !deps || prev.length !== deps.length || deps.some((dep, i) => !Object.is(dep, prev[i]));
+    return (
+      !prev ||
+      !deps ||
+      prev.length !== deps.length ||
+      deps.some((dep, i) => !Object.is(dep, prev[i]))
+    );
   };
+  // biome-ignore lint/suspicious/noConfusingVoidType: mirrors React's EffectCallback, which returns void or a destructor
   function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]) {
     const slots = state.slots;
     const index = state.cursor++;
@@ -85,7 +92,10 @@ vi.mock("react", async (importOriginal) => {
     if (!(index in state.slots)) state.slots[index] = { current: initial };
     return state.slots[index] as { current: T };
   }
-  function useSyncExternalStore<T>(subscribe: (listener: () => void) => () => void, snapshot: () => T) {
+  function useSyncExternalStore<T>(
+    subscribe: (listener: () => void) => () => void,
+    snapshot: () => T,
+  ) {
     state.subscribe = subscribe;
     return snapshot();
   }
@@ -175,7 +185,8 @@ export function text(node: ReactNode): string {
 export function press(tree: Host[], label: string) {
   const button = tree.find(
     (host) =>
-      host.type === "button" && (text(host.props.children) === label || host.props["aria-label"] === label),
+      host.type === "button" &&
+      (text(host.props.children) === label || host.props["aria-label"] === label),
   );
   if (!button) throw new Error(`No button "${label}"`);
   const onClick = button.props.onClick as () => void;

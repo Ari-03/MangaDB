@@ -39,8 +39,9 @@ vi.mock("convex/react", async () => (await import("./test.react")).backendHooks)
 vi.mock("~/lib/analytics", () => ({ track: () => undefined }));
 vi.mock("~/lib/mature", () => ({ useArtConcealed: () => false }));
 
-const { BookQuickActions, RUN_BATCH, RunActions, quickBookFor, useSeriesOverlay } =
-  await import("./quickActions");
+const { BookQuickActions, RUN_BATCH, RunActions, quickBookFor, useSeriesOverlay } = await import(
+  "./quickActions"
+);
 const { ReleaseCollectionControls } = await import("./collection");
 const { ReleasePassControls, VolumeReadCount } = await import("./reading");
 type OverlayBook = import("./quickActions").OverlayBook;
@@ -60,7 +61,12 @@ async function seed(t: TestT, count: number) {
       const volumeId = await insertVolume(ctx, { publicId: 1000 + i, seriesId, position: i + 1 });
       const editionId = await insertEdition(ctx, { publicId: 5000 + i, publisherId });
       await insertCoverage(ctx, { editionId, volumeId });
-      const releaseId = await insertRelease(ctx, { editionId, binding: "paperback", publisherId, seriesIds: [seriesId] });
+      const releaseId = await insertRelease(ctx, {
+        editionId,
+        binding: "paperback",
+        publisherId,
+        seriesIds: [seriesId],
+      });
       books.push({
         publicId: 5000 + i,
         releases: [{ id: releaseId, format: "physical" as const }],
@@ -110,8 +116,15 @@ async function signIn(t: TestT) {
 
 /** Refresh the useQuery snapshot and read the overlay the way a shelf does. */
 async function overlayFor(as: Accessor) {
-  setQuery(api.collection.seriesEntries, await as.query(api.collection.seriesEntries, { seriesPublicId: 1 }));
-  setQuery(api.reading.seriesTracking, await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }));
+  setQuery(
+    api.collection.seriesEntries,
+    await as.query(api.collection.seriesEntries, { seriesPublicId: 1 }),
+  );
+  setQuery(
+    api.reading.seriesTracking,
+    await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }),
+  );
+  // biome-ignore lint/correctness/useHookAtTopLevel: called outside a render on purpose; its only hooks are the mocked useQuery, which reads the snapshot set above
   const overlay = useSeriesOverlay(1);
   if (!overlay) throw new Error("overlay missing");
   return overlay;
@@ -379,35 +392,46 @@ describe("covers during a whole run", () => {
 
   it.each([
     // The same books on another shelf (a Release shelved under two Series).
-    { ...KINDS.entries, second: "Want all", shelf: (books: OverlayBook[], _omnibus: OverlayBook) => books },
+    {
+      ...KINDS.entries,
+      second: "Want all",
+      shelf: (books: OverlayBook[], _omnibus: OverlayBook) => books,
+    },
     // The omnibus's own reading path, sharing the run's Volume 205.
-    { ...KINDS.reads, second: "Read all", shelf: (_books: OverlayBook[], omnibus: OverlayBook) => [omnibus] },
-  ])("refuses a second $second over what a running $run has not finished", async ({ second, shelf, ...kind }) => {
-    const t = makeT();
-    const { books } = await seed(t, count);
-    const omnibus = await addOmnibus(t, [count]);
-    const as = await signIn(t);
-    const overlay = await overlayFor(as);
-    const first = hold(kind.call, 1, "after");
-    click(mount(runActions(books, overlay)), kind.run);
-    await first.reached;
+    {
+      ...KINDS.reads,
+      second: "Read all",
+      shelf: (_books: OverlayBook[], omnibus: OverlayBook) => [omnibus],
+    },
+  ])(
+    "refuses a second $second over what a running $run has not finished",
+    async ({ second, shelf, ...kind }) => {
+      const t = makeT();
+      const { books } = await seed(t, count);
+      const omnibus = await addOmnibus(t, [count]);
+      const as = await signIn(t);
+      const overlay = await overlayFor(as);
+      const first = hold(kind.call, 1, "after");
+      click(mount(runActions(books, overlay)), kind.run);
+      await first.reached;
 
-    // The other run, with its own component state.
-    const others = shelf(books, omnibus);
-    const other = attempt(mountAside([], runActions(others, overlay)), second);
-    await settleBesides(1);
-    first.release();
-    await settle();
+      // The other run, with its own component state.
+      const others = shelf(books, omnibus);
+      const other = attempt(mountAside([], runActions(others, overlay)), second);
+      await settleBesides(1);
+      first.release();
+      await settle();
 
-    expect(other).toEqual({ disabled: true, accepted: false });
-    // The first run's marks stand, and the refused run left no claim behind:
-    // every cover is live again.
-    const settled = await overlayFor(as);
-    for (const book of others) {
-      expect(await kind.picture(as, book)).toBe(kind.marked);
-      expect(press(cover(book, settled), kind.after).disabled).toBe(false);
-    }
-  });
+      expect(other).toEqual({ disabled: true, accepted: false });
+      // The first run's marks stand, and the refused run left no claim behind:
+      // every cover is live again.
+      const settled = await overlayFor(as);
+      for (const book of others) {
+        expect(await kind.picture(as, book)).toBe(kind.marked);
+        expect(press(cover(book, settled), kind.after).disabled).toBe(false);
+      }
+    },
+  );
 
   // Reading is per Volume: another Edition covering a Volume the run has yet
   // to mark writes that same Volume, so its cover waits for the run too.
@@ -462,9 +486,15 @@ describe("covers during a whole run", () => {
 
 /** Refresh the useQuery snapshot the way a Release row and Volume page read it. */
 async function pageFor(as: Accessor, releaseId: Id<"releases">) {
-  setQuery(api.collection.entryForRelease, await as.query(api.collection.entryForRelease, { releaseId }));
+  setQuery(
+    api.collection.entryForRelease,
+    await as.query(api.collection.entryForRelease, { releaseId }),
+  );
   setQuery(api.reading.passForRelease, await as.query(api.reading.passForRelease, { releaseId }));
-  setQuery(api.reading.seriesTracking, await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }));
+  setQuery(
+    api.reading.seriesTracking,
+    await as.query(api.reading.seriesTracking, { seriesPublicId: 1 }),
+  );
 }
 
 // Review R17, second pass: the controls on the Release, Volume and Edition
@@ -634,7 +664,14 @@ describe("overlapping whole runs", { timeout: 30_000 }, () => {
    * run B changes the state, a Read all needs the book unread again).
    */
   const OVERLAPS = {
-    entries: { ...KINDS.entries, b: "Want all", cover: "Order", held: "owned", landed: "wanted", reopen: null },
+    entries: {
+      ...KINDS.entries,
+      b: "Want all",
+      cover: "Order",
+      held: "owned",
+      landed: "wanted",
+      reopen: null,
+    },
     reads: {
       ...KINDS.reads,
       b: "Read all",
@@ -658,7 +695,10 @@ describe("overlapping whole runs", { timeout: 30_000 }, () => {
     click(mountAside(aSlots, runA), overlap.run);
     await runs.reachedA;
     await overlap.reopen?.(as, shared);
-    click(mountAside([], runActions([...books.slice(205), shared], await overlayFor(as))), overlap.b);
+    click(
+      mountAside([], runActions([...books.slice(205), shared], await overlayFor(as))),
+      overlap.b,
+    );
     await runs.reachedB;
     // B holds book 5 for its last batch.
     expect(press(cover(shared, await overlayFor(as)), overlap.cover).disabled).toBe(true);
@@ -681,10 +721,13 @@ describe("overlapping whole runs", { timeout: 30_000 }, () => {
     return { as, books, alert };
   }
 
-  it.each([OVERLAPS.entries, OVERLAPS.reads])("a finishing $run frees only the claims it still holds", async (overlap) => {
-    const { alert } = await overlapping(overlap);
-    expect(alert).toBeUndefined();
-  });
+  it.each([OVERLAPS.entries, OVERLAPS.reads])(
+    "a finishing $run frees only the claims it still holds",
+    async (overlap) => {
+      const { alert } = await overlapping(overlap);
+      expect(alert).toBeUndefined();
+    },
+  );
 
   it("a run that fails mid-way frees only what it still holds", async () => {
     const { as, books, alert } = await overlapping(OVERLAPS.entries, true);

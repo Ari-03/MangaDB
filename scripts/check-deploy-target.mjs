@@ -42,7 +42,9 @@ const workerNames = { production: "mangadb", staging: "mangadb-staging" };
 
 const target = process.argv[2];
 if (!Object.hasOwn(workerNames, target)) {
-  fail([`expected "production" or "staging" as the argument, got ${JSON.stringify(target ?? null)}.`]);
+  fail([
+    `expected "production" or "staging" as the argument, got ${JSON.stringify(target ?? null)}.`,
+  ]);
 }
 
 // The Cloudflare Vite plugin writes this pointer to the flattened config
@@ -59,15 +61,11 @@ const problems = [];
 // A plain build leaves targetEnvironment null; CLOUDFLARE_ENV=staging sets it.
 const built = config.targetEnvironment ?? "production";
 if (built !== target) {
-  problems.push(
-    `expected a ${target} build, found Worker "${config.name}" built for ${built}.`,
-  );
+  problems.push(`expected a ${target} build, found Worker "${config.name}" built for ${built}.`);
 }
 
 if (config.name !== workerNames[target]) {
-  problems.push(
-    `expected Worker "${workerNames[target]}" for ${target}, found "${config.name}".`,
-  );
+  problems.push(`expected Worker "${workerNames[target]}" for ${target}, found "${config.name}".`);
 }
 
 if (target === "staging" && config.routes?.length) {

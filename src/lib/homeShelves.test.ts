@@ -48,7 +48,13 @@ describe("hasJacket", () => {
 
 describe("jacketed", () => {
   test("seats the first jacketed books in shelf order, skipping cloth", () => {
-    const shelf = [book(1, "isbn"), book(2, "none"), book(3, "url"), book(4, "isbn"), book(5, "isbn")];
+    const shelf = [
+      book(1, "isbn"),
+      book(2, "none"),
+      book(3, "url"),
+      book(4, "isbn"),
+      book(5, "isbn"),
+    ];
     const onFile = new Set([isbnOf(4), isbnOf(5)]);
     expect(ids(jacketed(shelf, onFile, 2))).toEqual([3, 4]);
     expect(ids(jacketed(shelf, onFile, 10))).toEqual([3, 4, 5]);

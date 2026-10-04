@@ -23,12 +23,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, type MutationCtx } from "./_generated/server";
 import { getBootstrapMode, getSourceByKey } from "./importSources";
-import {
-  coverKey,
-  coverRequest,
-  type CoverRequest,
-  type StoredCovers,
-} from "./lib/covers";
+import { coverKey, coverRequest, type CoverRequest, type StoredCovers } from "./lib/covers";
 import { errorMessage, politeFetch } from "./lib/http";
 import { closeRun, registryRow, runToContinue, stopAtGate, storeRunCover } from "./lib/importRuns";
 import { applyRetrying } from "./lib/occ";
@@ -278,7 +273,10 @@ export const sync = internalAction({
         }
 
         const status = failures > 0 ? "failed" : "succeeded";
-        return { ...(await closeRun(ctx, runId, status, { seen, changed, errors })), completeSweep };
+        return {
+          ...(await closeRun(ctx, runId, status, { seen, changed, errors })),
+          completeSweep,
+        };
       } catch (e) {
         errors.push(errorMessage(e));
         return {
@@ -360,8 +358,7 @@ export const noteListing = internalMutation({
         },
       };
     }
-    const release =
-      obs.recordRef?.type === "release" ? await ctx.db.get(obs.recordRef.id) : null;
+    const release = obs.recordRef?.type === "release" ? await ctx.db.get(obs.recordRef.id) : null;
     // Descriptions predate their import: a linked Release still without one
     // is re-read while the listing offers a blurb, paced by the detail
     // budget, so the backfill needs no forced run. So is one an aggregator

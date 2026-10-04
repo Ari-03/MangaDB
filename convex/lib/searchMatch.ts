@@ -145,9 +145,10 @@ export function matchesSeries(
  * alt title ("kny": Demon Slayer: Kimetsu no Yaiba before The King's Beast,
  * alias Kogetsu no Yume).
  */
-export function sortByTitleMatch<
-  T extends { title: string; altTitles: ReadonlyArray<string> },
->(query: string, items: ReadonlyArray<T>): T[] {
+export function sortByTitleMatch<T extends { title: string; altTitles: ReadonlyArray<string> }>(
+  query: string,
+  items: ReadonlyArray<T>,
+): T[] {
   const q = compact(query);
   const nameRank = (name: string) => {
     const c = compact(name);
@@ -171,8 +172,7 @@ export function sortByTitleMatch<
   });
   return keyed
     .sort(
-      (a, b) =>
-        a.rank - b.rank || a.viaAlt - b.viaAlt || a.length - b.length || a.index - b.index,
+      (a, b) => a.rank - b.rank || a.viaAlt - b.viaAlt || a.length - b.length || a.index - b.index,
     )
     .map(({ item }) => item);
 }
@@ -298,9 +298,11 @@ export type NearMiss<T> = {
  * "chainsawman" ~ "Chainsaw Man"), closest first, then shortest title.
  * Returns nothing for queries under `NEAR_MISS_MIN_LENGTH` letters.
  */
-export function rankNearMisses<
-  T extends { title: string; altTitles: ReadonlyArray<string> },
->(query: string, candidates: ReadonlyArray<T>, limit: number): Array<NearMiss<T>> {
+export function rankNearMisses<T extends { title: string; altTitles: ReadonlyArray<string> }>(
+  query: string,
+  candidates: ReadonlyArray<T>,
+  limit: number,
+): Array<NearMiss<T>> {
   const q = compact(query);
   if (q.length < NEAR_MISS_MIN_LENGTH) return [];
   const max = allowedEdits(q.length);

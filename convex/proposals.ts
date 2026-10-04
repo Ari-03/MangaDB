@@ -15,12 +15,7 @@ import { HOUR, RateLimiter } from "@convex-dev/rate-limiter";
 import { ConvexError, v } from "convex/values";
 import { components } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import {
-  mutation,
-  query,
-  type MutationCtx,
-  type QueryCtx,
-} from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import {
   applyClearOverride,
   applyUpdate,
@@ -136,10 +131,7 @@ type OpInput =
  * human correction, and which of the two applied last would decide the
  * outcome.
  */
-async function buildDraftOps(
-  ctx: MutationCtx,
-  submitted: OpInput[],
-): Promise<StoredOp[]> {
+async function buildDraftOps(ctx: MutationCtx, submitted: OpInput[]): Promise<StoredOp[]> {
   if (submitted.length === 0) {
     fail("noOps", "A proposal needs at least one operation.");
   }
@@ -150,10 +142,16 @@ async function buildDraftOps(
   for (const op of submitted) {
     if (op.kind === "create") {
       if (carriesPlacement(op)) {
-        fail("invalidCreate", "A held book's placement is prepared from its observation: use Prepare placement.");
+        fail(
+          "invalidCreate",
+          "A held book's placement is prepared from its observation: use Prepare placement.",
+        );
       }
       if (marksJoin(op)) {
-        fail("invalidCreate", "A create op joins an existing record only in a placement or an import: reference the record by ID.");
+        fail(
+          "invalidCreate",
+          "A create op joins an existing record only in a placement or an import: reference the record by ID.",
+        );
       }
       ops.push({
         kind: "create",
@@ -179,10 +177,7 @@ async function buildDraftOps(
     const doc = await getCanonical(ctx, ref);
     if (!doc) fail("notFound", "A record this proposal changes does not exist.");
     if (doc.status !== "active" || doc.locked) {
-      fail(
-        "locked",
-        `A record this proposal changes is ${doc.locked ? "locked" : doc.status}.`,
-      );
+      fail("locked", `A record this proposal changes is ${doc.locked ? "locked" : doc.status}.`);
     }
     const latest = (await revisionsOf(ctx, ref))[0];
     if (op.kind === "update") {
@@ -335,10 +330,7 @@ async function staleRecordsOf(
     const latest = (await revisionsOf(ctx, ref))[0];
     if ((latest?._id ?? null) !== (op.baseRevisionId ?? null)) {
       stale.push({ type: ref.type, id: ref.id as string, reason: "baseChanged" });
-    } else if (
-      op.kind === "clearOverride" &&
-      !(doc.overriddenFields ?? []).includes(op.field)
-    ) {
+    } else if (op.kind === "clearOverride" && !(doc.overriddenFields ?? []).includes(op.field)) {
       stale.push({ type: ref.type, id: ref.id as string, reason: "notOverridden" });
     }
   }
@@ -393,7 +385,10 @@ export const saveDraft = mutation({
         fail("badState", "Only Draft proposals can be edited.");
       }
       if (proposal.draft?.ops.some((op) => op.kind === "create" && carriesPlacement(op))) {
-        fail("placementDraft", "This Draft places a held book: state its coverage, line and comment in its placement form.");
+        fail(
+          "placementDraft",
+          "This Draft places a held book: state its coverage, line and comment in its placement form.",
+        );
       }
       await ctx.db.patch(args.proposalId, { draft });
       return { proposalId: args.proposalId };
@@ -552,9 +547,7 @@ export const rebaseProposal = mutation({
       const version = await ctx.db
         .query("proposalVersions")
         .withIndex("by_proposal", (q) =>
-          q
-            .eq("proposalId", args.proposalId)
-            .eq("versionNo", proposal.currentVersionNo),
+          q.eq("proposalId", args.proposalId).eq("versionNo", proposal.currentVersionNo),
         )
         .unique();
       if (!version) fail("notFound", "The submitted version is missing.");
@@ -858,7 +851,11 @@ export const approveProposal = mutation({
         const record = await applyCreatePlan(ctx, plan, temp);
         // A joined existing record was not created: no creation Revision.
         if (record.existing) continue;
-        if (plan.table === "releases" && plan.placement !== undefined && record.ref.type === "release") {
+        if (
+          plan.table === "releases" &&
+          plan.placement !== undefined &&
+          record.ref.type === "release"
+        ) {
           // Linking clears the hold and applies the book's 18+ evidence.
           await linkObservation(ctx, plan.placement.observationId, record.ref);
         }
@@ -908,14 +905,7 @@ export const approveProposal = mutation({
         // each validates the record's current state and throws (rolling the
         // whole approval back) when the world moved.
         if (op.kind === "merge") {
-          revisionIds.push(
-            ...(await applyMerge(
-              ctx,
-              op.survivor,
-              op.merged,
-              meta,
-            )),
-          );
+          revisionIds.push(...(await applyMerge(ctx, op.survivor, op.merged, meta)));
         } else {
           revisionIds.push(...(await SINGLE_RECORD_OPS[op.kind](ctx, op.ref, meta)));
         }
@@ -1011,9 +1001,7 @@ async function describeCreate(
               "publishers",
               (doc: Doc<"publishers">) => `publisher "${doc.name}"`,
             );
-      const coverage = Array.isArray(fields.volumeCoverage)
-        ? fields.volumeCoverage.length
-        : 0;
+      const coverage = Array.isArray(fields.volumeCoverage) ? fields.volumeCoverage.length : 0;
       tempLabels.set(op.tempId, "the new edition");
       if (fields.coverageUnmapped === true) {
         return `Create an edition at ${publisher} as Unmapped Packaging of its line`;
@@ -1065,9 +1053,7 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boo
     } else if (op.kind === "update") {
       const ref = op.ref;
       const doc = await getCanonical(ctx, ref);
-      const title = doc
-        ? (await displayInfo(ctx, ref.type, doc)).title
-        : "(missing record)";
+      const title = doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)";
       const latest = (await revisionsOf(ctx, ref))[0];
       const base = op.baseRevisionId ? await ctx.db.get(op.baseRevisionId) : null;
       rendered.push({
@@ -1076,9 +1062,7 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boo
         recordId: ref.id as string,
         recordTitle: title,
         changes: op.changes,
-        base: base
-          ? { seq: base.seq, comment: base.comment }
-          : { seq: 0, comment: null },
+        base: base ? { seq: base.seq, comment: base.comment } : { seq: 0, comment: null },
         stale:
           live &&
           (!doc ||
@@ -1104,9 +1088,7 @@ async function renderOps(ctx: QueryCtx | MutationCtx, ops: StoredOp[], live: boo
               writtenBy: writtenBy(history, op.field),
             }
           : null,
-        base: base
-          ? { seq: base.seq, comment: base.comment }
-          : { seq: 0, comment: null },
+        base: base ? { seq: base.seq, comment: base.comment } : { seq: 0, comment: null },
         stale:
           live &&
           (!doc ||
@@ -1140,10 +1122,7 @@ const OP_VERBS: Record<SingleRecordOp, string> = {
 };
 
 /** `type "title"` label for a sensitive-op summary line. */
-async function refLabel(
-  ctx: QueryCtx | MutationCtx,
-  ref: RecordRef,
-): Promise<string> {
+async function refLabel(ctx: QueryCtx | MutationCtx, ref: RecordRef): Promise<string> {
   const doc = await getCanonical(ctx, ref);
   const title = doc ? (await displayInfo(ctx, ref.type, doc)).title : "(missing record)";
   return `${ref.type} "${title}"`;
@@ -1203,8 +1182,7 @@ export const reviewQueue = query({
     for (const proposal of proposals) {
       const version = await currentVersionOf(ctx, proposal);
       if (!version) continue;
-      const stale =
-        proposal.stale || (await staleRecordsOf(ctx, version.ops)).length > 0;
+      const stale = proposal.stale || (await staleRecordsOf(ctx, version.ops)).length > 0;
       rows.push({
         proposalId: proposal._id as string,
         versionNo: proposal.currentVersionNo,
@@ -1231,16 +1209,12 @@ export const reviewQueue = query({
       }
       if (args.authorKind === "humans" && row.author.kind !== "user") return false;
       if (args.author) {
-        const name =
-          row.author.kind === "user" ? row.author.username : row.author.sourceKey;
+        const name = row.author.kind === "user" ? row.author.username : row.author.sourceKey;
         if (name !== args.author) return false;
       }
       if (args.staleOnly && !row.stale) return false;
       if (args.warningsOnly && row.warnings.length === 0) return false;
-      if (
-        args.minAgeHours !== undefined &&
-        row.ageMs < args.minAgeHours * 60 * 60 * 1000
-      ) {
+      if (args.minAgeHours !== undefined && row.ageMs < args.minAgeHours * 60 * 60 * 1000) {
         return false;
       }
       return true;
@@ -1298,9 +1272,7 @@ export const proposalDetail = query({
       });
     }
 
-    const current = versions.find(
-      (version) => version.versionNo === proposal.currentVersionNo,
-    );
+    const current = versions.find((version) => version.versionNo === proposal.currentVersionNo);
     const stale =
       proposal.state === "inReview" && current
         ? (await staleRecordsOf(ctx, current.ops)).length > 0
@@ -1329,11 +1301,8 @@ export const proposalDetail = query({
       // A held book's placement (placement.ts): the Draft's, else the current version's.
       placement: await placementView(ctx, proposal.draft?.ops ?? current?.ops ?? []),
       viewer: {
-        isAuthor:
-          proposal.author.kind === "user" &&
-          proposal.author.userId === viewer._id,
-        canReview:
-          viewer.role === "moderator" || viewer.role === "administrator",
+        isAuthor: proposal.author.kind === "user" && proposal.author.userId === viewer._id,
+        canReview: viewer.role === "moderator" || viewer.role === "administrator",
       },
     };
   },

@@ -15,10 +15,7 @@ describe("representativeDescription", () => {
   it("is null when no Release carries non-blank text", () => {
     expect(representativeDescription([])).toBeNull();
     expect(
-      representativeDescription([
-        release({ id: "a" }),
-        release({ id: "b", description: "  \n " }),
-      ]),
+      representativeDescription([release({ id: "a" }), release({ id: "b", description: "  \n " })]),
     ).toBeNull();
   });
 
@@ -109,8 +106,16 @@ describe("representativeDescription", () => {
     expect(
       pick([
         release({ id: "undated", description: "Undated and the longest of all." }),
-        release({ id: "later", description: "Later.", pubDate: { year: 2020, month: 3, sort: 20200300 } }),
-        release({ id: "earlier", description: "Earlier.", pubDate: { year: 2020, month: 1, sort: 20200100 } }),
+        release({
+          id: "later",
+          description: "Later.",
+          pubDate: { year: 2020, month: 3, sort: 20200300 },
+        }),
+        release({
+          id: "earlier",
+          description: "Earlier.",
+          pubDate: { year: 2020, month: 1, sort: 20200100 },
+        }),
       ]),
     ).toBe("earlier");
   });

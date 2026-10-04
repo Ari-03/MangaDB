@@ -170,9 +170,7 @@ export async function joinBrowseRows(
     }
 
     const publisherDoc = await cache.publisher(release.publisherId);
-    const line = edition.editionLineId
-      ? await cache.line(edition.editionLineId)
-      : null;
+    const line = edition.editionLineId ? await cache.line(edition.editionLineId) : null;
 
     releases.push({
       id: release._id,
@@ -200,8 +198,7 @@ export async function joinBrowseRows(
       volumeLabel: composeVolumeLabel(covered, anyPartial),
       lineName: line && line.status === "active" ? line.name : null,
       linePosition: edition.linePosition ?? null,
-      publisher:
-        publisherLink(publisherDoc),
+      publisher: publisherLink(publisherDoc),
       // The row's art (lib/covers.ts `releaseCover`): `coverUrl` is its own
       // stored cover, else its Edition's, and `coverIsbns` the Edition's
       // ISBNs to fetch art by, physical first, the same for every row of one
@@ -232,13 +229,10 @@ export async function joinBrowseRows(
 export const monthBrowse = query({
   args: { year: v.number(), month: v.number(), ...showMatureArg },
   handler: async (ctx, { year, month, showMature }) => {
-    const publisherDocs = await ctx.db
-      .query("publishers")
-      .take(PUBLISHER_SCAN_CAP);
+    const publisherDocs = await ctx.db.query("publishers").take(PUBLISHER_SCAN_CAP);
     const publishers = publisherDocs
       .filter(
-        (doc) =>
-          doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
+        (doc) => doc.status === "active" && visibleTo(showMature, doc.contentRating === "mature"),
       )
       .map((doc) => ({ name: doc.name, slug: doc.slug }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -254,9 +248,7 @@ export const monthBrowse = query({
 
     const windowDocs = await ctx.db
       .query("releases")
-      .withIndex("by_date", (q) =>
-        q.gte("pubDate.sort", fromSort).lte("pubDate.sort", toSort),
-      )
+      .withIndex("by_date", (q) => q.gte("pubDate.sort", fromSort).lte("pubDate.sort", toSort))
       .take(WINDOW_CAP);
     const refined = windowDocs.filter((doc) => doc.status === "active");
 

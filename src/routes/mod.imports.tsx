@@ -53,9 +53,8 @@ function Imports() {
       <Breadcrumbs trail={["Imports"]} />
       <h1>Imports</h1>
       <p className="section-hint">
-        Every Approved Source runs unattended on its registry cadence; three
-        consecutive failed runs flag it unhealthy here (and email the
-        Administrator once per transition).
+        Every Approved Source runs unattended on its registry cadence; three consecutive failed runs
+        flag it unhealthy here (and email the Administrator once per transition).
       </p>
       <ModTools current="/mod/imports" />
 
@@ -77,9 +76,7 @@ function Imports() {
                 <strong>{source.name}</strong>
                 {source.healthState === "unhealthy" ? (
                   <>
-                    <span className="chip mod-chip mod-chip--bad">
-                      Unhealthy
-                    </span>
+                    <span className="chip mod-chip mod-chip--bad">Unhealthy</span>
                     <strong className="import-flag">
                       {source.consecutiveFailures} consecutive failed runs
                     </strong>
@@ -132,11 +129,7 @@ function Imports() {
           {runs.map((run) => (
             <li
               key={run._id}
-              className={
-                run.status === "failed"
-                  ? "import-run mod-flagged"
-                  : "import-run"
-              }
+              className={run.status === "failed" ? "import-run mod-flagged" : "import-run"}
             >
               <div className="import-run-head">
                 <strong>{run.sourceKey}</strong>
@@ -166,7 +159,10 @@ function Imports() {
                   </summary>
                   <ul>
                     {run.errors.map((error, i) => (
-                      <li key={i}>
+                      <li
+                        // biome-ignore lint/suspicious/noArrayIndexKey: each error is a plain string, so a key by position only re-renders in place
+                        key={i}
+                      >
                         <code>{error}</code>
                       </li>
                     ))}
@@ -273,13 +269,13 @@ function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> 
     <section>
       <h2>Held books</h2>
       <p className="section-hint">
-        Books a source lists that its import could not place: the Volume they name is missing,
-        their packaging cannot be mapped, no single Series fits, or their ISBN or slot is taken.
-        A book leaves this list once it is linked, an import queues a creation Proposal for it, or
-        its source stops listing it. Prepare placement drafts a Proposal of your own that creates
-        what a missing-Volume or packaging book needs under its Series; the book stays here,
-        marked, until that Proposal is approved. Preparing a book another member has an
-        unsubmitted Draft for withdraws their Draft.
+        Books a source lists that its import could not place: the Volume they name is missing, their
+        packaging cannot be mapped, no single Series fits, or their ISBN or slot is taken. A book
+        leaves this list once it is linked, an import queues a creation Proposal for it, or its
+        source stops listing it. Prepare placement drafts a Proposal of your own that creates what a
+        missing-Volume or packaging book needs under its Series; the book stays here, marked, until
+        that Proposal is approved. Preparing a book another member has an unsubmitted Draft for
+        withdraws their Draft.
       </p>
       <form className="queue-filters" onSubmit={(event) => event.preventDefault()}>
         <label>
@@ -321,7 +317,9 @@ function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> 
                 <span className="chip mod-chip mod-chip--warn">{HOLD_KINDS[row.kind]}</span>
                 <span>{sourceName(row.sourceKey)}</span>
                 <span>held {timestamp(row.heldAt)}</span>
-                {row.lastSeenAt !== null ? <span>last listed {timestamp(row.lastSeenAt)}</span> : null}
+                {row.lastSeenAt !== null ? (
+                  <span>last listed {timestamp(row.lastSeenAt)}</span>
+                ) : null}
               </div>
               <div className="import-source-meta">
                 {row.isbn13 !== null ? <span>ISBN {row.isbn13}</span> : null}
@@ -332,7 +330,10 @@ function HeldBooks({ sources }: { sources: Array<{ key: string; name: string }> 
                   </span>
                 ) : null}
                 {row.series !== null ? (
-                  <Link to="/series/$publicId/$slug" params={slugParams(row.series.publicId, row.series.title)}>
+                  <Link
+                    to="/series/$publicId/$slug"
+                    params={slugParams(row.series.publicId, row.series.title)}
+                  >
                     {row.series.title}
                   </Link>
                 ) : null}

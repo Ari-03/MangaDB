@@ -49,14 +49,9 @@ export type BrowseFilters = {
 };
 
 /** Search-param validation shared by both routes; unknown values read as unset. */
-export function validateBrowseFilters(
-  search: Record<string, unknown>,
-): BrowseFilters {
+export function validateBrowseFilters(search: Record<string, unknown>): BrowseFilters {
   return {
-    format:
-      search.format === "physical" || search.format === "digital"
-        ? search.format
-        : undefined,
+    format: search.format === "physical" || search.format === "digital" ? search.format : undefined,
     publisher:
       typeof search.publisher === "string" && search.publisher !== ""
         ? search.publisher
@@ -127,10 +122,7 @@ type BrowserProps = {
 export function ReleasesBrowser(props: BrowserProps) {
   const followed = useQuery(api.follows.followedSeries, {});
   return (
-    <BrowserView
-      {...props}
-      followedSeries={followed ? new Set(followed.seriesPublicIds) : null}
-    />
+    <BrowserView {...props} followedSeries={followed ? new Set(followed.seriesPublicIds) : null} />
   );
 }
 
@@ -188,30 +180,23 @@ function BrowserView({
       </div>
       {data.capped ? (
         <p className="note">
-          This month holds more releases than the browser loads at once; some may be
-          missing here.
+          This month holds more releases than the browser loads at once; some may be missing here.
         </p>
       ) : null}
 
       {filters.followed && followedSeries === null ? (
         <p className="notice">
           {/* Clerk owns /sign-in; a plain anchor leaves the router out of it. */}
-          <a href="/sign-in">Sign in</a> to see only releases from series you
-          follow.
+          <a href="/sign-in">Sign in</a> to see only releases from series you follow.
         </p>
       ) : releases.length === 0 ? (
         <p className="notice">
-          No releases{" "}
-          {filtered ? "match these filters " : ""}
+          No releases {filtered ? "match these filters " : ""}
           in {monthTitle(anchor)}.
           {filtered ? (
             <>
               {" "}
-              <button
-                className="link-btn"
-                type="button"
-                onClick={() => onFiltersChange({})}
-              >
+              <button className="link-btn" type="button" onClick={() => onFiltersChange({})}>
                 Clear the filters
               </button>
             </>
@@ -225,11 +210,7 @@ function BrowserView({
           followedSeries={followedSeries}
         />
       ) : (
-        <AgendaView
-          anchor={anchor}
-          releases={releases}
-          followedSeries={followedSeries}
-        />
+        <AgendaView anchor={anchor} releases={releases} followedSeries={followedSeries} />
       )}
     </main>
   );
@@ -237,15 +218,11 @@ function BrowserView({
 
 /** "12 releases · 3 publication days" — the window's size, not a filter. */
 function ResultCount({ releases }: { releases: Array<BrowseRelease> }) {
-  const days = new Set(
-    releases.filter((release) => release.day !== null).map((r) => r.day),
-  ).size;
+  const days = new Set(releases.filter((release) => release.day !== null).map((r) => r.day)).size;
   return (
     <p className="result-count">
       {plural(releases.length, "release")}
-      {days > 0
-        ? ` · ${plural(days, "publication day")}`
-        : null}
+      {days > 0 ? ` · ${plural(days, "publication day")}` : null}
     </p>
   );
 }
@@ -338,12 +315,7 @@ function ViewToggle({
           Agenda
         </span>
       ) : sameMonth(anchor, today) ? (
-        <Link
-          className="seg-btn"
-          to="/releases"
-          search={filters}
-          activeOptions={EXACT_ACTIVE}
-        >
+        <Link className="seg-btn" to="/releases" search={filters} activeOptions={EXACT_ACTIVE}>
           Agenda
         </Link>
       ) : (
@@ -420,8 +392,7 @@ function FilterBar({
             const value = event.currentTarget.value;
             onChange({
               ...filters,
-              format:
-                value === "physical" || value === "digital" ? value : undefined,
+              format: value === "physical" || value === "digital" ? value : undefined,
             });
           }}
         >
@@ -488,9 +459,7 @@ function groupByDay(releases: Array<BrowseRelease>) {
     if (list) list.push(release);
     else groups.set(release.day, [release]);
   }
-  return [...groups.entries()].sort(
-    ([a], [b]) => (a ?? 0) - (b ?? 0),
-  );
+  return [...groups.entries()].sort(([a], [b]) => (a ?? 0) - (b ?? 0));
 }
 
 /**
@@ -533,11 +502,7 @@ function AgendaView({
             </div>
             <ol className="day-list">
               {dayReleases.map((release) => (
-                <ReleaseRow
-                  key={release.id}
-                  release={release}
-                  followedSeries={followedSeries}
-                />
+                <ReleaseRow key={release.id} release={release} followedSeries={followedSeries} />
               ))}
             </ol>
           </section>
@@ -548,13 +513,9 @@ function AgendaView({
 }
 
 /** Whether any of the row's Series is one the viewer follows. */
-function isFollowed(
-  release: BrowseRelease,
-  followedSeries: FollowedSeriesSet,
-): boolean {
+function isFollowed(release: BrowseRelease, followedSeries: FollowedSeriesSet): boolean {
   return (
-    followedSeries !== null &&
-    release.series.some((series) => followedSeries.has(series.publicId))
+    followedSeries !== null && release.series.some((series) => followedSeries.has(series.publicId))
   );
 }
 
@@ -591,10 +552,7 @@ function ReleaseRow({
 }) {
   const title = releaseTitle(release);
   const volumeLabel = release.volumeLabel || "Edition";
-  const editionParams = slugParams(
-    release.edition.publicId,
-    release.edition.title,
-  );
+  const editionParams = slugParams(release.edition.publicId, release.edition.title);
   const followed = isFollowed(release, followedSeries);
   return (
     <li className={followed ? "rel is-followed" : "rel"}>
@@ -735,31 +693,23 @@ function GridView({
           .filter((day) => day >= 1 && day <= length);
         const active = days.filter((day) => byDay.has(day));
         const quiet = days.filter((day) => !byDay.has(day));
-        const total = active.reduce(
-          (sum, day) => sum + (byDay.get(day)?.length ?? 0),
-          0,
-        );
+        const total = active.reduce((sum, day) => sum + (byDay.get(day)?.length ?? 0), 0);
         return (
           // A week nobody publishes in is a tick line, not a panel.
-          <section
-            key={start}
-            className={total > 0 ? "week-row" : "week-row is-quiet"}
-          >
+          <section key={start} className={total > 0 ? "week-row" : "week-row is-quiet"}>
             <div className="week-gutter">
               <span className="wk-kicker">Week of</span>
               <span className="wk-date">{dayLabel(anchor, start)}</span>
               <span className="wk-range">to {dayLabel(anchor, start + 6)}</span>
-              {total > 0 ? (
-                <span className="wk-total">{plural(total, "release")}</span>
-              ) : null}
+              {total > 0 ? <span className="wk-total">{plural(total, "release")}</span> : null}
             </div>
             <div className="week-body">
               {active.map((day) => (
                 <div key={day} className="rel-day">
                   <div className="rd-head">
                     <h2 className="rd-date">
-                      <span className="rd-dow">{weekdayName(anchor, day)}</span>{" "}
-                      {day} {MONTH_NAMES[anchor.month - 1]}
+                      <span className="rd-dow">{weekdayName(anchor, day)}</span> {day}{" "}
+                      {MONTH_NAMES[anchor.month - 1]}
                     </h2>
                     <span className="rd-count">
                       {plural(byDay.get(day)?.length ?? 0, "release")}

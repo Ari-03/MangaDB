@@ -20,9 +20,7 @@ export function isRecordType(raw: string): raw is RecordType {
 
 export type FormState = Record<string, string>;
 
-export function initialFormState(
-  fields: Array<FieldDescriptor & { value: unknown }>,
-): FormState {
+export function initialFormState(fields: Array<FieldDescriptor & { value: unknown }>): FormState {
   const state: FormState = {};
   for (const field of fields) {
     const value = field.value;
@@ -33,17 +31,14 @@ export function initialFormState(
       case "partialDate": {
         const date = (value ?? {}) as { year?: number; month?: number; day?: number };
         state[`${field.name}.year`] = date.year !== undefined ? String(date.year) : "";
-        state[`${field.name}.month`] =
-          date.month !== undefined ? String(date.month) : "";
+        state[`${field.name}.month`] = date.month !== undefined ? String(date.month) : "";
         state[`${field.name}.day`] = date.day !== undefined ? String(date.day) : "";
         break;
       }
       case "price": {
         const price = (value ?? {}) as { amountCents?: number; currency?: string };
         state[`${field.name}.amount`] =
-          price.amountCents !== undefined
-            ? (price.amountCents / 100).toFixed(2)
-            : "";
+          price.amountCents !== undefined ? (price.amountCents / 100).toFixed(2) : "";
         state[`${field.name}.currency`] = price.currency ?? "USD";
         break;
       }
@@ -82,8 +77,13 @@ export function fieldValue(
       };
       if (month !== "") parsed.month = Number(month);
       if (day !== "") parsed.day = Number(day);
-      if ([parsed.year, parsed.month, parsed.day].some((n) => n !== undefined && !Number.isInteger(n))) {
-        return { ok: false, message: `${descriptor.label}: year, month, and day must be whole numbers.` };
+      if (
+        [parsed.year, parsed.month, parsed.day].some((n) => n !== undefined && !Number.isInteger(n))
+      ) {
+        return {
+          ok: false,
+          message: `${descriptor.label}: year, month, and day must be whole numbers.`,
+        };
       }
       return { ok: true, value: parsed };
     }
@@ -111,11 +111,7 @@ export function fieldValue(
 export function stateKeysOf(descriptor: FieldDescriptor): string[] {
   switch (descriptor.kind) {
     case "partialDate":
-      return [
-        `${descriptor.name}.year`,
-        `${descriptor.name}.month`,
-        `${descriptor.name}.day`,
-      ];
+      return [`${descriptor.name}.year`, `${descriptor.name}.month`, `${descriptor.name}.day`];
     case "price":
       return [`${descriptor.name}.amount`, `${descriptor.name}.currency`];
     default:
@@ -263,8 +259,7 @@ export function FieldInput({
             />
           </label>
           <span className="field-help">
-            Partial dates are fine: year only, or year + month. Clear the year
-            to unset.
+            Partial dates are fine: year only, or year + month. Clear the year to unset.
           </span>
         </fieldset>
       );
@@ -286,9 +281,7 @@ export function FieldInput({
             <input
               value={values[`${field.name}.currency`] ?? "USD"}
               disabled={disabled}
-              onChange={(event) =>
-                setValue(`${field.name}.currency`, event.target.value)
-              }
+              onChange={(event) => setValue(`${field.name}.currency`, event.target.value)}
             />
           </label>
         </fieldset>

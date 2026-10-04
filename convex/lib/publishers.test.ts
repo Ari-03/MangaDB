@@ -18,9 +18,7 @@ describe("canonicalPublisherFor", () => {
   it("merges only true duplicates into their company", () => {
     expect(canonicalPublisherFor("Kodansha Comics")?.slug).toBe("kodansha");
     expect(canonicalPublisherFor("Vertical Comics")?.slug).toBe("vertical");
-    expect(canonicalPublisherFor("Square Enix Manga")?.slug).toBe(
-      "square-enix",
-    );
+    expect(canonicalPublisherFor("Square Enix Manga")?.slug).toBe("square-enix");
     expect(canonicalPublisherFor("Dark Horse Manga")?.slug).toBe("dark-horse");
     expect(canonicalPublisherFor("Dark Horse Manhwa")?.slug).toBe("dark-horse");
     expect(canonicalPublisherFor("Irodori Inc.")?.slug).toBe("irodori-comics");
@@ -33,12 +31,8 @@ describe("canonicalPublisherFor", () => {
       parentSlug: "seven-seas",
       adultOnly: true,
     });
-    expect(canonicalPublisherFor("TOKYOPOP LoveLove")?.parentSlug).toBe(
-      "tokyopop",
-    );
-    expect(canonicalPublisherFor("TOKYOPOP Classics")?.parentSlug).toBe(
-      "tokyopop",
-    );
+    expect(canonicalPublisherFor("TOKYOPOP LoveLove")?.parentSlug).toBe("tokyopop");
+    expect(canonicalPublisherFor("TOKYOPOP Classics")?.parentSlug).toBe("tokyopop");
     expect(canonicalPublisherFor("Steamship")?.parentSlug).toBe("seven-seas");
     expect(canonicalPublisherFor("Ize Press")?.parentSlug).toBe("yen-press");
     // Vertical stays its own publisher, an imprint of Kodansha.
@@ -51,15 +45,16 @@ describe("canonicalPublisherFor", () => {
 
   it("matches case- and punctuation-insensitively, and knows nothing else", () => {
     expect(canonicalPublisherFor("TOKYOPOP")?.slug).toBe("tokyopop");
-    expect(canonicalPublisherFor("Drawn and Quarterly")?.slug).toBe(
-      "drawn-and-quarterly",
-    );
+    expect(canonicalPublisherFor("Drawn and Quarterly")?.slug).toBe("drawn-and-quarterly");
     expect(canonicalPublisherFor("Kumar Publishing")).toBeNull();
     // VIZ's imprint labels are VIZ; its prose-free sibling SuBLime is a row.
     expect(canonicalPublisherFor("SHONEN JUMP")?.slug).toBe("viz-media");
     expect(canonicalPublisherFor("Shojo Beat")?.slug).toBe("viz-media");
     expect(canonicalPublisherFor("VIZ Signature")?.slug).toBe("viz-media");
-    expect(canonicalPublisherFor("SuBLime")).toMatchObject({ slug: "sublime", parentSlug: "viz-media" });
+    expect(canonicalPublisherFor("SuBLime")).toMatchObject({
+      slug: "sublime",
+      parentSlug: "viz-media",
+    });
     // Prose lines never alias to their manga siblings.
     expect(canonicalPublisherFor("Yen On")).toBeNull();
     expect(canonicalPublisherFor("Del Rey")).toBeNull();
@@ -70,10 +65,7 @@ describe("canonicalPublisherFor", () => {
 describe("the exported tables", () => {
   it("every alias and duplicate slug points at a canonical row", () => {
     const slugs = new Set(CANONICAL_PUBLISHERS.map((pub) => pub.slug));
-    for (const slug of [
-      ...Object.values(DUPLICATE_ALIASES),
-      ...Object.values(DUPLICATE_SLUGS),
-    ]) {
+    for (const slug of [...Object.values(DUPLICATE_ALIASES), ...Object.values(DUPLICATE_SLUGS)]) {
       expect(slugs.has(slug), slug).toBe(true);
     }
     expect(canonicalPublisherBySlug("kodansha-comics")?.slug).toBe("kodansha");
@@ -83,10 +75,7 @@ describe("the exported tables", () => {
     const slugs = new Set(CANONICAL_PUBLISHERS.map((pub) => pub.slug));
     for (const [imprint, parent] of Object.entries(IMPRINT_PARENTS)) {
       expect(slugs.has(parent), `${imprint} → ${parent}`).toBe(true);
-      expect(
-        IMPRINT_PARENTS[parent],
-        `${parent} has no parent`,
-      ).toBeUndefined();
+      expect(IMPRINT_PARENTS[parent], `${parent} has no parent`).toBeUndefined();
     }
     expect(IMPRINT_PARENTS["waves-of-color"]).toBe("seven-seas");
     expect(IMPRINT_PARENTS["titan-manga"]).toBeUndefined();

@@ -22,39 +22,23 @@ import { completelyCoveredVolumes, volumeProgressRow } from "./reading";
 export const MANY_ENTRIES_CAP = 200;
 
 // Mirrors the collectionEntries.state union in schema.ts.
-const stateValidator = v.union(
-  v.literal("wanted"),
-  v.literal("ordered"),
-  v.literal("owned"),
-);
+const stateValidator = v.union(v.literal("wanted"), v.literal("ordered"), v.literal("owned"));
 
 // ---------- shared lookups ----------
 
 /** The one direct entry for (user, release) — at most one by invariant. */
-async function releaseEntryRow(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  releaseId: Id<"releases">,
-) {
+async function releaseEntryRow(ctx: QueryCtx, userId: Id<"users">, releaseId: Id<"releases">) {
   return await ctx.db
     .query("collectionEntries")
-    .withIndex("by_user_release", (q) =>
-      q.eq("userId", userId).eq("releaseId", releaseId),
-    )
+    .withIndex("by_user_release", (q) => q.eq("userId", userId).eq("releaseId", releaseId))
     .unique();
 }
 
 /** The one entry for (user, bundle) — at most one by invariant. */
-async function bundleEntryRow(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  bundleId: Id<"releaseBundles">,
-) {
+async function bundleEntryRow(ctx: QueryCtx, userId: Id<"users">, bundleId: Id<"releaseBundles">) {
   return await ctx.db
     .query("collectionEntries")
-    .withIndex("by_user_bundle", (q) =>
-      q.eq("userId", userId).eq("bundleId", bundleId),
-    )
+    .withIndex("by_user_bundle", (q) => q.eq("userId", userId).eq("bundleId", bundleId))
     .unique();
 }
 
@@ -174,11 +158,7 @@ export async function variantName(
  * set specifies one. Computed here at read time — never stored — so it
  * appears and disappears with the Bundle entry alone.
  */
-async function derivedOwnership(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  releaseId: Id<"releases">,
-) {
+async function derivedOwnership(ctx: QueryCtx, userId: Id<"users">, releaseId: Id<"releases">) {
   const memberships = await ctx.db
     .query("bundleMemberships")
     .withIndex("by_release", (q) => q.eq("releaseId", releaseId))
@@ -242,9 +222,7 @@ export const entryForRelease = query({
 
     return {
       releaseId: release._id,
-      entry: entry
-        ? { state: entry.state, variantId: entry.variantId ?? null }
-        : null,
+      entry: entry ? { state: entry.state, variantId: entry.variantId ?? null } : null,
       variants,
       derived: await derivedOwnership(ctx, user._id, release._id),
     };
@@ -292,7 +270,9 @@ export const volumeOwnership = query({
     for (const coverage of coverages) {
       const edition = await getActive(ctx, "editions", coverage.editionId);
       if (!edition) continue;
-      const releases = (await releasesOf(ctx, edition._id)).filter((doc) => doc.status === "active");
+      const releases = (await releasesOf(ctx, edition._id)).filter(
+        (doc) => doc.status === "active",
+      );
       for (const release of releases) {
         const link = await releaseLink(ctx, release);
         if (!link) continue;
@@ -398,11 +378,7 @@ async function editionRead(
  * facts the shelf shows (title, line numbering, covered Volumes, cover) and
  * the reading-path key it belongs to on its Series page.
  */
-async function libraryBook(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-  release: Doc<"releases">,
-) {
+async function libraryBook(ctx: QueryCtx, userId: Id<"users">, release: Doc<"releases">) {
   const edition = await getActive(ctx, "editions", release.editionId);
   if (!edition) return null;
   const { title, lineName, coverage, series } = await editionCoverage(ctx, edition);
@@ -603,8 +579,7 @@ export const myLibrary = query({
       }
       paths.sort(
         (a, b) =>
-          (a.kind === "line" ? 1 : 0) - (b.kind === "line" ? 1 : 0) ||
-          a.name.localeCompare(b.name),
+          (a.kind === "line" ? 1 : 0) - (b.kind === "line" ? 1 : 0) || a.name.localeCompare(b.name),
       );
       const coverIsbns = statsCoverIsbns(stats);
       series.push({
@@ -694,13 +669,7 @@ export const setReleaseEntry = mutation({
   },
   handler: async (ctx, { releaseId, state, variantId }) => {
     const user = await requireUser(ctx);
-    const { entry, insertedId } = await writeReleaseEntry(
-      ctx,
-      user,
-      releaseId,
-      state,
-      variantId,
-    );
+    const { entry, insertedId } = await writeReleaseEntry(ctx, user, releaseId, state, variantId);
     const suggestFollow = await followSuggestions(
       ctx,
       user._id,

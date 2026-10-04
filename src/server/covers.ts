@@ -216,7 +216,10 @@ function refreshInBackground(
 ): void {
   if (refreshing.has(isbn13) || refreshing.size >= REFRESH_LIMIT) return;
   refreshing.add(isbn13);
-  inBackground("refresh", refresh(bucket, isbn13, stored).finally(() => refreshing.delete(isbn13)));
+  inBackground(
+    "refresh",
+    refresh(bucket, isbn13, stored).finally(() => refreshing.delete(isbn13)),
+  );
 }
 
 async function refresh(
@@ -289,7 +292,12 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 }
 
 /** A jacket response; `maxAge` (seconds) is both the browser's and the edge cache's lifetime. */
-function coverOk(bytes: ArrayBuffer, contentType: string, origin: string, maxAge: number): Response {
+function coverOk(
+  bytes: ArrayBuffer,
+  contentType: string,
+  origin: string,
+  maxAge: number,
+): Response {
   return new Response(bytes, {
     headers: {
       "Content-Type": contentType,

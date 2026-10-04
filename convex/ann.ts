@@ -217,7 +217,9 @@ export const sync = internalAction({
           let rawCount: number;
           if (targeted) {
             // One pass over the named entries; the report is never read.
-            ids = [...new Set(args.onlyManga!.map((id) => id.trim()).filter((id) => /^\d+$/.test(id)))];
+            ids = [
+              ...new Set(args.onlyManga!.map((id) => id.trim()).filter((id) => /^\d+$/.test(id))),
+            ];
             rawCount = ids.length;
             reachedEnd = true;
             if (ids.length === 0) break;
@@ -364,7 +366,10 @@ export const sync = internalAction({
         return { ...closed, continued: false };
       } catch (e) {
         errors.push(errorMessage(e));
-        return { ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })), continued: false };
+        return {
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
+          continued: false,
+        };
       }
     }),
 });
@@ -510,9 +515,7 @@ async function annEntryHolding(ctx: MutationCtx, seriesId: Id<"series">): Promis
     .take(SERIES_LINK_SCAN);
   const holder = links.find(
     (link) =>
-      link.sourceKey === SOURCE_KEY &&
-      !link.withdrawn &&
-      link.sourceRecordId.startsWith("manga:"),
+      link.sourceKey === SOURCE_KEY && !link.withdrawn && link.sourceRecordId.startsWith("manga:"),
   );
   return holder?.sourceRecordId.slice("manga:".length) ?? null;
 }
@@ -963,10 +966,12 @@ const VARIANT_LINE = /\b(?:exclusive|variant)\b/i;
  * stored line the same way).
  */
 export function lineOutOfScope(line: AnnReleaseSnapshot): string | null {
-  if (VARIANT_LINE.test(line.title)) return "A store-exclusive or variant cover: never a Release of its own.";
+  if (VARIANT_LINE.test(line.title))
+    return "A store-exclusive or variant cover: never a Release of its own.";
   const distributor = line.page?.distributor;
   if (distributor === undefined) return null;
-  if (NOVEL_DISTRIBUTORS.test(distributor)) return `"${distributor}" is a prose imprint: out of manga scope.`;
+  if (NOVEL_DISTRIBUTORS.test(distributor))
+    return `"${distributor}" is a prose imprint: out of manga scope.`;
   if (FOREIGN_DISTRIBUTORS.test(distributor.trim())) {
     return `"${distributor}" publishes in another language: out of English scope.`;
   }
@@ -986,8 +991,9 @@ export function packagingOf(line: {
   multi: boolean;
   coverRange?: { from: string; to: string };
 }): { name: string; position: string | null } | null {
-  const tagged =
-    /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(line.title);
+  const tagged = /^(.+?)\s*(?:[-–—:]\s*)?\[([^\]]+)\]\s*(\d+(?:\.\d+)?)?(?:\s*[-–—:]\s*.*)?$/.exec(
+    line.title,
+  );
   const probe = tagged ? `${tagged[1]!.trim()} [${tagged[2]!.trim()}]` : line.title;
   const parsed = parseBookTitle(probe);
   if (parsed.isBox) return null;
@@ -1262,7 +1268,9 @@ async function fetchReleasePage(annId: string, delay: number): Promise<PageState
   const fetchedAt = Date.now();
   try {
     const res = await politeFetch(releaseUrl(annId), delay);
-    const parsed = parseReleasePage(decodeUtf8OrWindows1252(new Uint8Array(await res.arrayBuffer())));
+    const parsed = parseReleasePage(
+      decodeUtf8OrWindows1252(new Uint8Array(await res.arrayBuffer())),
+    );
     return parsed
       ? { status: "ok", fetchedAt, ...parsed, descriptionChecked: true }
       : { status: "unparsed", fetchedAt };
@@ -1371,7 +1379,11 @@ export const applyReleasePage = internalMutation({
     // `seriesId`: the line's active Series, once it is known. A null kind
     // keeps the reason for a line no one can place or that is out of scope,
     // off the Held Books list.
-    const hold = async (kind: HoldKind | null, reason: string, seriesId?: Id<"series">): Promise<PlaceResult> => {
+    const hold = async (
+      kind: HoldKind | null,
+      reason: string,
+      seriesId?: Id<"series">,
+    ): Promise<PlaceResult> => {
       const held = await recordUnplaced(
         ctx,
         observation!,
@@ -1430,7 +1442,10 @@ export const applyReleasePage = internalMutation({
     // variant covers still only link by ISBN.
     const packaging = line.editionLineHint || line.multi ? packagingOf(line) : null;
     if ((line.multi || line.editionLineHint) && packaging === null) {
-      return await hold("packaging", "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.");
+      return await hold(
+        "packaging",
+        "Packaging (omnibus/box set/deluxe) links by ISBN only; none matched.",
+      );
     }
     if (!series || series.status !== "active") {
       return await hold("series", "The manga entry has no linked active Series.");
@@ -1438,10 +1453,15 @@ export const applyReleasePage = internalMutation({
     if (series.locked) return await hold("series", "The Series is locked.", series._id);
 
     const distributor = page.distributor;
-    if (distributor === undefined) return await hold("other", "The release page names no distributor.", series._id);
+    if (distributor === undefined)
+      return await hold("other", "The release page names no distributor.", series._id);
     const publisher = await findPublisherByName(ctx, distributor);
     if (!publisher) {
-      return await hold("other", `Distributor "${distributor}" resolves to no publisher row.`, series._id);
+      return await hold(
+        "other",
+        `Distributor "${distributor}" resolves to no publisher row.`,
+        series._id,
+      );
     }
 
     const volumes = await ctx.db
@@ -1509,7 +1529,11 @@ export const applyReleasePage = internalMutation({
       (vol) => vol.status === "active" && labelsEqual(vol.label, line.label ?? null),
     );
     if (!volume) {
-      return await hold("volumeMissing", `No Volume ${line.label ?? "(unlabeled)"} under the Series.`, series._id);
+      return await hold(
+        "volumeMissing",
+        `No Volume ${line.label ?? "(unlabeled)"} under the Series.`,
+        series._id,
+      );
     }
 
     // One Release per (Volume, publisher, format): a same-format sibling
@@ -1623,7 +1647,12 @@ async function fillLinked(
   }
   const changed = fetched !== undefined;
   const release = await ctx.db.get(releaseId);
-  if (refresh && fetched?.status === "ok" && release !== null && release.description !== undefined) {
+  if (
+    refresh &&
+    fetched?.status === "ok" &&
+    release !== null &&
+    release.description !== undefined
+  ) {
     const text = pageDescriptionText(page);
     const shrinks = text === undefined || text.length < release.description.length / 2;
     if (shrinks && !allowClear && text !== release.description) {
@@ -1637,7 +1666,8 @@ async function fillLinked(
       citation: await pageCitation(ctx, line.annId),
       now,
     });
-    const status = rewritten === "cleared" ? "cleared" : rewritten === "updated" ? "refreshed" : "stored";
+    const status =
+      rewritten === "cleared" ? "cleared" : rewritten === "updated" ? "refreshed" : "stored";
     return { status, changed, releaseId };
   }
   const offered = release !== null ? descriptionOffer(page, release) : {};
@@ -1830,7 +1860,9 @@ export const backfillDescriptions = internalAction({
     let failures = args.failures ?? 0;
     if (args.allowClear && !args.refresh) throw new Error("allowClear only applies with refresh.");
     if (args.refresh && args.annIds === undefined) {
-      throw new Error("refresh needs annIds: it rewrites only the pages you name (see ann:listRefreshCandidates).");
+      throw new Error(
+        "refresh needs annIds: it rewrites only the pages you name (see ann:listRefreshCandidates).",
+      );
     }
     let handled = 0;
     const errors: string[] = [];

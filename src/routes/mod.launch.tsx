@@ -42,9 +42,8 @@ function Launch() {
       <Breadcrumbs trail={["Launch"]} />
       <h1>Seeding, quality gates &amp; launch</h1>
       <p className="section-hint">
-        Spec §7: run the four seed stages in order under Bootstrap Mode, pass
-        the quality gates, switch Bootstrap Mode off permanently, and verify
-        the checklist before opening mangadb.org.
+        Spec §7: run the four seed stages in order under Bootstrap Mode, pass the quality gates,
+        switch Bootstrap Mode off permanently, and verify the checklist before opening mangadb.org.
       </p>
       <nav className="mod-tools" aria-label="Data team tools">
         <Link to="/mod/imports">Imports</Link>
@@ -112,8 +111,7 @@ function SeedStages({ canAct }: { canAct: boolean }) {
     <section>
       <h2>Seed stages</h2>
       <p className="section-hint">
-        Bootstrap Mode is{" "}
-        <strong>{status.bootstrapMode ? "ON" : "OFF"}</strong>
+        Bootstrap Mode is <strong>{status.bootstrapMode ? "ON" : "OFF"}</strong>
         {canAct ? (
           <>
             {" "}
@@ -122,8 +120,8 @@ function SeedStages({ canAct }: { canAct: boolean }) {
               className="btn btn-sm"
               onClick={() => {
                 setError(null);
-                setBootstrap({ on: !status.bootstrapMode }).catch(
-                  (err: unknown) => setError(mutationErrorMessage(err)),
+                setBootstrap({ on: !status.bootstrapMode }).catch((err: unknown) =>
+                  setError(mutationErrorMessage(err)),
                 );
               }}
             >
@@ -261,19 +259,12 @@ function SampleTable({
         <ul className="qa-rows">
           {sample.rows.map((row) => (
             <li key={row._id}>
-              <Link
-                to="/series/$publicId/$slug"
-                params={slugParams(row.publicId, row.title)}
-              >
+              <Link to="/series/$publicId/$slug" params={slugParams(row.publicId, row.title)}>
                 {row.title}
               </Link>{" "}
               <span
                 className={`chip mod-chip mod-chip--${
-                  row.status === "verified"
-                    ? "ok"
-                    : row.status === "failed"
-                      ? "bad"
-                      : "mute"
+                  row.status === "verified" ? "ok" : row.status === "failed" ? "bad" : "mute"
                 }`}
               >
                 {row.status}
@@ -306,11 +297,7 @@ function SampleTable({
                     >
                       Record failure
                     </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => setFailing(null)}
-                    >
+                    <button type="button" className="btn btn-sm" onClick={() => setFailing(null)}>
                       Cancel
                     </button>
                   </span>
@@ -397,8 +384,7 @@ function DuplicateSweep({ canAct }: { canAct: boolean }) {
           {queue.rows.map((row) => (
             <li key={row.candidateId}>
               <PairLink publicId={row.a.publicId} title={row.a.title} /> vs{" "}
-              <PairLink publicId={row.b.publicId} title={row.b.title} />{" "}
-              <em>({row.reason})</em>
+              <PairLink publicId={row.b.publicId} title={row.b.title} /> <em>({row.reason})</em>
               {canAct ? (
                 <span className="qa-actions">
                   <button
@@ -430,7 +416,9 @@ function DuplicateSweep({ canAct }: { canAct: boolean }) {
       ) : (
         <p className="notice">No open duplicate candidates.</p>
       )}
-      {queue.hasMore ? <p className="section-hint">More pairs follow — resolve these first.</p> : null}
+      {queue.hasMore ? (
+        <p className="section-hint">More pairs follow — resolve these first.</p>
+      ) : null}
       {error ? <p className="form-error">{error}</p> : null}
     </section>
   );
@@ -459,9 +447,8 @@ function CorrectionLoop({ canAct }: { canAct: boolean }) {
     <section>
       <h2>Correction loop</h2>
       <p className="section-hint">
-        Launch gate ④: a real report → proposal → approval → public revision
-        must have happened. Attest with the approved proposal that fixed a
-        reported error (Administrator).
+        Launch gate ④: a real report → proposal → approval → public revision must have happened.
+        Attest with the approved proposal that fixed a reported error (Administrator).
       </p>
       {loop ? (
         <p className="notice gate-pass">
@@ -477,8 +464,8 @@ function CorrectionLoop({ canAct }: { canAct: boolean }) {
           onSubmit={(event) => {
             event.preventDefault();
             setError(null);
-            attest({ proposalId: proposalId.trim() as Id<"proposals"> }).catch(
-              (err: unknown) => setError(mutationErrorMessage(err)),
+            attest({ proposalId: proposalId.trim() as Id<"proposals"> }).catch((err: unknown) =>
+              setError(mutationErrorMessage(err)),
             );
           }}
         >

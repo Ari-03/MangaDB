@@ -3,8 +3,7 @@
 // pause per source etiquette (ANN's 1 req/s, WordPress-friendly ~3 req/s for
 // the publisher APIs), and backoff within a run that honours rate limits.
 
-export const USER_AGENT =
-  "MangaDB importer (+https://mangadb.org; data corrections welcome)";
+export const USER_AGENT = "MangaDB importer (+https://mangadb.org; data corrections welcome)";
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -35,10 +34,7 @@ function retryAfterMs(res: Response): number | null {
  * once. The body is read inside the loop, so a connection dropped mid-body is
  * retried too; the returned Response is fully buffered.
  */
-export async function politeFetch(
-  url: string,
-  delayMs: number,
-): Promise<Response> {
+export async function politeFetch(url: string, delayMs: number): Promise<Response> {
   await sleep(delayMs);
   let lastError: unknown;
   let wait = 0;
@@ -49,10 +45,15 @@ export async function politeFetch(
       const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
       if (res.ok) {
         const body = await res.arrayBuffer();
-        return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+        return new Response(body, {
+          status: res.status,
+          statusText: res.statusText,
+          headers: res.headers,
+        });
       }
       lastError = new Error(`HTTP ${res.status} for ${url}`);
-      const rateLimited = res.status === 429 || (res.status === 503 && res.headers.has("retry-after"));
+      const rateLimited =
+        res.status === 429 || (res.status === 503 && res.headers.has("retry-after"));
       if (rateLimited) {
         wait = retryAfterMs(res) ?? 0;
         continue;

@@ -8,7 +8,7 @@
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 
-import { api } from "../../convex/_generated/api";
+import type { api } from "../../convex/_generated/api";
 import { slugParams } from "~/lib/slug";
 
 export type Credit = NonNullable<

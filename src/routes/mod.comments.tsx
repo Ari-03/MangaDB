@@ -29,10 +29,26 @@ type Row = FunctionReturnType<typeof api.comments.queue>["rows"][number];
 type Action = FunctionArgs<typeof api.comments.moderate>["action"];
 
 const TABS: ReadonlyArray<{ tab: Tab; label: string; hint: string }> = [
-  { tab: "pending", label: "Pending", hint: "Held by a hold rule, oldest first. Approve publishes; nobody else sees them yet." },
-  { tab: "reported", label: "Reported", hint: "Published with one or more reports, most reported first. Dismiss reports keeps it published." },
-  { tab: "hidden", label: "Hidden", hint: "Hidden by a Moderator or by three reports. Only the author sees that they are there." },
-  { tab: "removed", label: "Removed", hint: "Removed by a Moderator or deleted by the author, newest first. Only Moderator removals can be restored." },
+  {
+    tab: "pending",
+    label: "Pending",
+    hint: "Held by a hold rule, oldest first. Approve publishes; nobody else sees them yet.",
+  },
+  {
+    tab: "reported",
+    label: "Reported",
+    hint: "Published with one or more reports, most reported first. Dismiss reports keeps it published.",
+  },
+  {
+    tab: "hidden",
+    label: "Hidden",
+    hint: "Hidden by a Moderator or by three reports. Only the author sees that they are there.",
+  },
+  {
+    tab: "removed",
+    label: "Removed",
+    hint: "Removed by a Moderator or deleted by the author, newest first. Only Moderator removals can be restored.",
+  },
 ];
 
 const REASON_LABELS: Record<keyof Row["reasons"], string> = {
@@ -157,9 +173,7 @@ function QueueRow({ row, canAct }: { row: Row; canAct: boolean }) {
   const run = (work: Promise<unknown>) => {
     setError(null);
     setBusy(true);
-    work
-      .catch((err: unknown) => setError(writeErrorMessage(err)))
-      .finally(() => setBusy(false));
+    work.catch((err: unknown) => setError(writeErrorMessage(err))).finally(() => setBusy(false));
   };
   const reasonArg = reason.trim() || undefined;
   const reasons = Object.entries(row.reasons) as Array<[keyof Row["reasons"], number]>;
@@ -182,12 +196,13 @@ function QueueRow({ row, canAct }: { row: Row; canAct: boolean }) {
         {row.authorShadowed ? <span className="chip mod-chip mod-chip--warn">shadowed</span> : null}
         <span className="chip mod-chip">{row.status}</span>
         {row.reportCount > 0 ? (
-          <span className="chip mod-chip mod-chip--bad">
-            {plural(row.reportCount, "report")}
-          </span>
+          <span className="chip mod-chip mod-chip--bad">{plural(row.reportCount, "report")}</span>
         ) : null}
         <span>
-          {new Date(row.createdAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
+          {new Date(row.createdAt).toLocaleString("en-US", {
+            dateStyle: "medium",
+            timeStyle: "short",
+          })}
           {row.edited ? " · edited" : ""}
         </span>
       </div>
@@ -204,7 +219,10 @@ function QueueRow({ row, canAct }: { row: Row; canAct: boolean }) {
           {row.notes.length > 0 ? (
             <ul>
               {row.notes.map((note, i) => (
-                <li key={i}>
+                <li
+                  // biome-ignore lint/suspicious/noArrayIndexKey: each note is plain text with no state, so a key by position only re-renders in place
+                  key={i}
+                >
                   {REASON_LABELS[note.reason]}: {note.note}
                 </li>
               ))}
@@ -238,7 +256,13 @@ function QueueRow({ row, canAct }: { row: Row; canAct: boolean }) {
               className="btn btn-sm"
               disabled={busy}
               onClick={() =>
-                run(setShadowed({ commentId: row.commentId, shadowed: !row.authorShadowed, reason: reasonArg }))
+                run(
+                  setShadowed({
+                    commentId: row.commentId,
+                    shadowed: !row.authorShadowed,
+                    reason: reasonArg,
+                  }),
+                )
               }
             >
               {row.authorShadowed ? "Unshadow user" : "Shadow user"}

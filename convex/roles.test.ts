@@ -7,7 +7,19 @@ import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import { insertSeries } from "./test.factories";
-import { ADMIN, EDITOR, MOD, PLAIN, alice, bob, carol, dave, makeT, seedUsers, type TestT } from "./test.helpers";
+import {
+  ADMIN,
+  EDITOR,
+  MOD,
+  PLAIN,
+  alice,
+  bob,
+  carol,
+  dave,
+  makeT,
+  seedUsers,
+  type TestT,
+} from "./test.helpers";
 
 const USERS = [alice, bob, carol, dave];
 
@@ -148,9 +160,7 @@ describe("roles.revoke", () => {
     const t = makeT();
     await withAdmin(t);
     await expect(
-      t
-        .withIdentity({ subject: ADMIN })
-        .mutation(api.roles.revoke, { username: "alice" }),
+      t.withIdentity({ subject: ADMIN }).mutation(api.roles.revoke, { username: "alice" }),
     ).rejects.toMatchObject({ data: { code: "lastAdministrator" } });
   });
 
@@ -164,14 +174,11 @@ describe("roles.revoke", () => {
     });
 
     const seriesId = await t.run((ctx) => insertSeries(ctx, { publicId: 1, title: "Alpha" }));
-    await t.withIdentity({ subject: MOD }).mutation(
-      api.moderation.submitDirectEdit,
-      {
-        ref: { type: "series", id: seriesId },
-        changes: [{ field: "title", value: "Beta" }],
-        comment: "Official romanization.",
-      },
-    );
+    await t.withIdentity({ subject: MOD }).mutation(api.moderation.submitDirectEdit, {
+      ref: { type: "series", id: seriesId },
+      changes: [{ field: "title", value: "Beta" }],
+      comment: "Official romanization.",
+    });
 
     await asAdmin.mutation(api.roles.revoke, { username: "bob" });
 
@@ -208,14 +215,11 @@ describe("roles.suspend / reinstate", () => {
     ).rejects.toMatchObject({ data: { code: "suspended" } });
 
     await asAdmin.mutation(api.roles.reinstate, { username: "bob" });
-    await t.withIdentity({ subject: MOD }).mutation(
-      api.moderation.submitDirectEdit,
-      {
-        ref: { type: "series", id: seriesId },
-        changes: [{ field: "title", value: "Beta" }],
-        comment: "Official romanization.",
-      },
-    );
+    await t.withIdentity({ subject: MOD }).mutation(api.moderation.submitDirectEdit, {
+      ref: { type: "series", id: seriesId },
+      changes: [{ field: "title", value: "Beta" }],
+      comment: "Official romanization.",
+    });
 
     const audit = await t.run((ctx) => ctx.db.query("roleAudit").collect());
     expect(audit.map((row) => row.action)).toEqual(
@@ -286,7 +290,9 @@ describe("roles.roster & auditLog", () => {
     });
     await asAdmin.mutation(api.roles.reinstate, { username: "carol" });
     await asAdmin.mutation(api.roles.revoke, { username: "alice" });
-    await expect(t.mutation(internal.roles.bootstrapAdministrator, { username: "dave" })).rejects.toMatchObject({
+    await expect(
+      t.mutation(internal.roles.bootstrapAdministrator, { username: "dave" }),
+    ).rejects.toMatchObject({
       data: { code: "alreadyBootstrapped" },
     });
   });
@@ -302,17 +308,13 @@ describe("roles.roster & auditLog", () => {
       t.withIdentity({ subject: PLAIN }).query(api.roles.roster, {}),
     ).rejects.toMatchObject({ data: { code: "forbidden" } });
 
-    const roster = await t
-      .withIdentity({ subject: ADMIN })
-      .query(api.roles.roster, {});
+    const roster = await t.withIdentity({ subject: ADMIN }).query(api.roles.roster, {});
     expect(roster).toEqual([
       { username: "alice", role: "administrator", suspended: false },
       { username: "bob", role: "moderator", suspended: false },
     ]);
 
-    const log = await t
-      .withIdentity({ subject: MOD })
-      .query(api.roles.auditLog, {});
+    const log = await t.withIdentity({ subject: MOD }).query(api.roles.auditLog, {});
     expect(log[0]).toMatchObject({
       action: "appointed",
       role: "moderator",

@@ -107,14 +107,11 @@ export function groupEditions<E extends GroupableEdition>(
         : byKeys(lineNumber, firstPosition, firstRelease, (e) => e.publicId),
     );
   }
-  const earliest = (group: EditionGroup<E>) =>
-    Math.min(...group.books.map(firstRelease));
+  const earliest = (group: EditionGroup<E>) => Math.min(...group.books.map(firstRelease));
   const standard = all
     .filter((g) => g.kind === "standard")
     .sort(byKeys((g) => -g.books.length, earliest));
-  const lines = all
-    .filter((g) => g.kind === "line")
-    .sort(byKeys(earliest, (g) => -g.books.length));
+  const lines = all.filter((g) => g.kind === "line").sort(byKeys(earliest, (g) => -g.books.length));
 
   const ordered = [...standard, ...lines];
   const nameCounts = new Map<string, number>();

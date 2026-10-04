@@ -261,7 +261,9 @@ export const sync = internalAction({
                 }
                 for (const snapshot of snapshots) {
                   seen++;
-                  const result = await applyRetrying(ctx, internal.yenPress.applyTitle, { snapshot });
+                  const result = await applyRetrying(ctx, internal.yenPress.applyTitle, {
+                    snapshot,
+                  });
                   observedHere.add(snapshot.isbn13);
                   if (result.changed) changed++;
                   if (result.status === "needsReview") {

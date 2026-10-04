@@ -67,7 +67,9 @@ describe("parseAuthorCredits", () => {
     ]);
     // A mixed "Original ..." label can't say who wrote and who illustrated.
     expect(
-      credits("Original Story and Illustrations by Mayo Momoyo and Itsuki Mito, Art by Kaki Nagato"),
+      credits(
+        "Original Story and Illustrations by Mayo Momoyo and Itsuki Mito, Art by Kaki Nagato",
+      ),
     ).toEqual(["Kaki Nagato: art"]);
   });
 
@@ -84,9 +86,10 @@ describe("parseAuthorCredits", () => {
       "Mitsuki Mihara: story",
       "MonRin: art",
     ]);
-    expect(
-      credits("Munmun; Illustrated by Butcha-U; Character Designs by Kei Mizuryu"),
-    ).toEqual(["Munmun: story", "Butcha-U: art"]);
+    expect(credits("Munmun; Illustrated by Butcha-U; Character Designs by Kei Mizuryu")).toEqual([
+      "Munmun: story",
+      "Butcha-U: art",
+    ]);
     expect(credits("Chashiba Katase; Story by Kyo Shirodaira")).toEqual([
       "Chashiba Katase: art",
       "Kyo Shirodaira: story",
@@ -109,11 +112,7 @@ describe("parseAuthorCredits", () => {
     // With no story or art label they are the authors, as on a bare line.
     expect(
       credits("Manatsu Suzuki and Yoshihiro Sono; Original concept by Mitsuki Nakamura"),
-    ).toEqual([
-      "Manatsu Suzuki: author",
-      "Yoshihiro Sono: author",
-      "Mitsuki Nakamura: original",
-    ]);
+    ).toEqual(["Manatsu Suzuki: author", "Yoshihiro Sono: author", "Mitsuki Nakamura: original"]);
   });
 
   it("leaves organisations out, keeping the people", () => {
@@ -168,7 +167,9 @@ describe("parseAuthorCredits", () => {
     expect(credits("Jin x Sayuki (ZOWLS); Illustrated by Sayuki")).toEqual([]);
     expect(credits("Kazuo Koike Goseki Kojima")).toEqual([]);
     expect(
-      credits("Series Creators Steven Moffat & Mark Gatiss; Written by Steven Moffat with art by Jay"),
+      credits(
+        "Series Creators Steven Moffat & Mark Gatiss; Written by Steven Moffat with art by Jay",
+      ),
     ).toEqual([]);
     expect(credits("")).toEqual([]);
     expect(parseAuthorCredits(undefined)).toEqual([]);

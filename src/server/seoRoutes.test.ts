@@ -8,15 +8,8 @@ const background = vi.hoisted(() => [] as Promise<unknown>[]);
 vi.mock("cloudflare:workers", () => ({
   waitUntil: (promise: Promise<unknown>) => void background.push(promise),
 }));
-const {
-  lastmodDate,
-  monthPaths,
-  robotsTxt,
-  seoResponse,
-  sitemapIndexXml,
-  urlsetXml,
-  xmlEscape,
-} = await import("./seoRoutes");
+const { lastmodDate, monthPaths, robotsTxt, seoResponse, sitemapIndexXml, urlsetXml, xmlEscape } =
+  await import("./seoRoutes");
 
 let cached: Map<string, Response>;
 beforeEach(() => {
@@ -32,17 +25,23 @@ const ORIGIN = "https://mangadb.org";
 
 /** Two pages of series entries + a three-month release range. */
 function fakeData(): SitemapData {
-  const pages = new Map<string | null, {
-    entries: Array<{ publicId: number | null; slug: string | null; title: string; lastmod: number }>;
-    isDone: boolean;
-    continueCursor: string;
-  }>([
+  const pages = new Map<
+    string | null,
+    {
+      entries: Array<{
+        publicId: number | null;
+        slug: string | null;
+        title: string;
+        lastmod: number;
+      }>;
+      isDone: boolean;
+      continueCursor: string;
+    }
+  >([
     [
       null,
       {
-        entries: [
-          { publicId: 1, slug: null, title: "Berserk", lastmod: Date.UTC(2026, 7, 1) },
-        ],
+        entries: [{ publicId: 1, slug: null, title: "Berserk", lastmod: Date.UTC(2026, 7, 1) }],
         isDone: false,
         continueCursor: "page2",
       },
@@ -94,9 +93,11 @@ describe("XML builders", () => {
   });
 
   it("enumerates month paths across a year boundary, inclusive", () => {
-    expect(
-      monthPaths({ from: { year: 2026, month: 11 }, to: { year: 2027, month: 1 } }),
-    ).toEqual(["/releases/2026-11", "/releases/2026-12", "/releases/2027-01"]);
+    expect(monthPaths({ from: { year: 2026, month: 11 }, to: { year: 2027, month: 1 } })).toEqual([
+      "/releases/2026-11",
+      "/releases/2026-12",
+      "/releases/2027-01",
+    ]);
     expect(monthPaths(null)).toEqual([]);
   });
 });
@@ -126,10 +127,7 @@ describe("seoResponse", () => {
   });
 
   it("serves a child sitemap of canonical URLs with Revision-driven lastmod, following pagination", async () => {
-    const res = await seoResponse(
-      new Request(`${ORIGIN}/sitemaps/series.xml`),
-      fakeData(),
-    );
+    const res = await seoResponse(new Request(`${ORIGIN}/sitemaps/series.xml`), fakeData());
     const xml = await res!.text();
     expect(xml).toContain(
       `<url><loc>${ORIGIN}/series/1/berserk</loc><lastmod>2026-08-01</lastmod></url>`,
@@ -140,10 +138,7 @@ describe("seoResponse", () => {
   });
 
   it("serves the month child from the dated-Release range, without lastmod", async () => {
-    const res = await seoResponse(
-      new Request(`${ORIGIN}/sitemaps/months.xml`),
-      fakeData(),
-    );
+    const res = await seoResponse(new Request(`${ORIGIN}/sitemaps/months.xml`), fakeData());
     const xml = await res!.text();
     expect(xml).toContain(`<url><loc>${ORIGIN}/releases/2026-12</loc></url>`);
     expect(xml).not.toContain("lastmod");

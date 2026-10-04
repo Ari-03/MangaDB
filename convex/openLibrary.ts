@@ -301,7 +301,10 @@ export const sync = internalAction({
         };
       } catch (e) {
         errors.push(errorMessage(e));
-        return { ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })), continued: false };
+        return {
+          ...(await closeRun(ctx, runId, "failed", { seen, changed, errors })),
+          continued: false,
+        };
       }
     }),
 });
@@ -432,7 +435,11 @@ export async function placeEdition(
   // The ladder's flag, and the note it leaves on the observation.
   const flag =
     match.kind === "review"
-      ? { rung: match.rung, reason: match.reason, note: `unmatched (rung ${match.rung}): ${match.reason}` }
+      ? {
+          rung: match.rung,
+          reason: match.reason,
+          note: `unmatched (rung ${match.rung}): ${match.reason}`,
+        }
       : null;
 
   // Rung ⑤ — the leaf-creation boundary: a single-volume Release whose
@@ -488,7 +495,11 @@ export async function placeEdition(
   if (series.locked) {
     return {
       kind: "hold",
-      hold: { kind: "series", reason: `Series ${series.publicId} is locked.`, seriesId: series._id },
+      hold: {
+        kind: "series",
+        reason: `Series ${series.publicId} is locked.`,
+        seriesId: series._id,
+      },
     };
   }
   const volumes = await ctx.db
@@ -546,10 +557,16 @@ async function noteFlag(
 ): Promise<void> {
   const conflicts = (await ctx.db.get(observationId))?.conflicts ?? [];
   const prior = conflicts.find((c) => c.field === "match");
-  if (reason === undefined ? prior === undefined : prior?.reason === reason && prior.offered === offered) return;
+  if (
+    reason === undefined
+      ? prior === undefined
+      : prior?.reason === reason && prior.offered === offered
+  )
+    return;
   const kept = conflicts.filter((c) => c.field !== "match");
   await ctx.db.patch(observationId, {
-    conflicts: reason === undefined ? kept : [...kept, { field: "match", offered, at: now, reason }],
+    conflicts:
+      reason === undefined ? kept : [...kept, { field: "match", offered, at: now, reason }],
   });
 }
 
@@ -607,7 +624,11 @@ export const applyEdition = internalMutation({
 
     const placement = await placeEdition(ctx, snapshot);
     const flag =
-      placement.kind === "review" ? placement.reason : placement.kind === "hold" ? placement.review : undefined;
+      placement.kind === "review"
+        ? placement.reason
+        : placement.kind === "hold"
+          ? placement.review
+          : undefined;
     await noteFlag(ctx, observation._id, snapshot.title, flag, now);
 
     if (placement.kind === "match") {

@@ -27,12 +27,11 @@ let convexClient: ConvexReactClient | undefined;
 
 // ClerkProvider resolves the key from VITE_CLERK_PUBLISHABLE_KEY itself; this
 // flag only decides whether the Clerk tree is mounted at all.
-export const clerkEnabled = Boolean(
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
+export const clerkEnabled = Boolean(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 
 export function AppProviders({ children }: { children: ReactNode }) {
-  const client = (convexClient ??= new ConvexReactClient(convexUrl()));
+  convexClient ??= new ConvexReactClient(convexUrl());
+  const client = convexClient;
   // The viewer's mature-titles choice (lib/mature.tsx) wraps everything.
   const inner = <MatureProvider>{children}</MatureProvider>;
   if (!clerkEnabled) {
@@ -57,7 +56,16 @@ export function BrandMark() {
     <svg className="brand-mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
       <rect x="2.5" y="3" width="4.6" height="14" rx="1.1" fill="currentColor" />
       <rect x="8.6" y="6" width="4.6" height="11" rx="1.1" fill="currentColor" opacity=".72" />
-      <rect x="14.8" y="4.4" width="4.2" height="12.6" rx="1.1" fill="currentColor" opacity=".46" transform="rotate(8 16.9 10.7)" />
+      <rect
+        x="14.8"
+        y="4.4"
+        width="4.2"
+        height="12.6"
+        rx="1.1"
+        fill="currentColor"
+        opacity=".46"
+        transform="rotate(8 16.9 10.7)"
+      />
       <rect x="1" y="18.6" width="24" height="3.1" rx="1.2" fill="currentColor" />
     </svg>
   );
@@ -127,7 +135,14 @@ export function SiteHeader() {
             aria-controls="mobile-nav"
             onClick={() => setOpen((v) => !v)}
           >
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
               <path d="M3 5.5h14M3 10h14M3 14.5h14" />
             </svg>
           </button>
@@ -179,11 +194,27 @@ function ThemeToggle() {
         }
       }}
     >
-      <svg className="sun" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
+      <svg
+        className="sun"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
         <circle cx="10" cy="10" r="3.6" />
         <path d="M10 1.6v2M10 16.4v2M1.6 10h2M16.4 10h2M4.1 4.1l1.4 1.4M14.5 14.5l1.4 1.4M15.9 4.1l-1.4 1.4M5.5 14.5l-1.4 1.4" />
       </svg>
-      <svg className="moon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" aria-hidden="true">
+      <svg
+        className="moon"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
         <path d="M16.5 12.2A7 7 0 0 1 7.8 3.5a7 7 0 1 0 8.7 8.7z" />
       </svg>
     </button>
@@ -198,13 +229,21 @@ function AuthNav({ mobile = false }: { mobile?: boolean }) {
   if (!isSignedIn) {
     return mobile ? (
       <>
-        <a className="nav-link" href="/sign-in">Sign in</a>
-        <a className="nav-link" href="/sign-up">Create account</a>
+        <a className="nav-link" href="/sign-in">
+          Sign in
+        </a>
+        <a className="nav-link" href="/sign-up">
+          Create account
+        </a>
       </>
     ) : (
       <>
-        <a className="btn btn-sm" href="/sign-in">Sign in</a>
-        <a className="btn btn-primary btn-sm" href="/sign-up">Create account</a>
+        <a className="btn btn-sm" href="/sign-in">
+          Sign in
+        </a>
+        <a className="btn btn-primary btn-sm" href="/sign-up">
+          Create account
+        </a>
       </>
     );
   }
@@ -220,15 +259,23 @@ function SignedInNav({ mobile }: { mobile: boolean }) {
   if (mobile) {
     return (
       <>
-        <Link to="/me" className="nav-link">My library</Link>
-        {isDataTeam ? <Link to="/mod/queue" className="nav-link">Review queue</Link> : null}
+        <Link to="/me" className="nav-link">
+          My library
+        </Link>
+        {isDataTeam ? (
+          <Link to="/mod/queue" className="nav-link">
+            Review queue
+          </Link>
+        ) : null}
       </>
     );
   }
   return (
     <>
       {isDataTeam ? (
-        <Link to="/mod/queue" className="nav-link">Queue</Link>
+        <Link to="/mod/queue" className="nav-link">
+          Queue
+        </Link>
       ) : null}
       <Link to="/me" className="account">
         <span className="avatar" aria-hidden="true">

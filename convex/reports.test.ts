@@ -19,17 +19,13 @@ describe("reports.submit", () => {
   it("puts a plain user's report into the review queue as a zero-op proposal", async () => {
     const t = makeT();
     await setup(t);
-    const { proposalId } = await t
-      .withIdentity({ subject: PLAIN })
-      .mutation(api.reports.submit, {
-        seriesPublicId: 7,
-        message: "Volume 12 is missing.",
-      });
+    const { proposalId } = await t.withIdentity({ subject: PLAIN }).mutation(api.reports.submit, {
+      seriesPublicId: 7,
+      message: "Volume 12 is missing.",
+    });
 
     // The report feeds the SAME queue Moderators already work (spec §7).
-    const queue = await t
-      .withIdentity({ subject: MOD })
-      .query(api.proposals.reviewQueue, {});
+    const queue = await t.withIdentity({ subject: MOD }).query(api.proposals.reviewQueue, {});
     const row = queue.find((r) => r.proposalId === proposalId);
     expect(row).toBeDefined();
     expect(row).toMatchObject({ opCount: 0 });
@@ -42,9 +38,7 @@ describe("reports.submit", () => {
       proposalId,
       note: "Added the volume — thanks.",
     });
-    const after = await t
-      .withIdentity({ subject: MOD })
-      .query(api.proposals.reviewQueue, {});
+    const after = await t.withIdentity({ subject: MOD }).query(api.proposals.reviewQueue, {});
     expect(after.find((r) => r.proposalId === proposalId)).toBeUndefined();
   });
 

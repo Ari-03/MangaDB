@@ -70,7 +70,12 @@ async function seed(t: TestT) {
       linePosition: "1",
     });
     for (const [order, volumeId] of [v1, v2, v3].entries()) {
-      await insertCoverage(ctx, { editionId: omnibus, volumeId, order: order + 1, extent: "complete" });
+      await insertCoverage(ctx, {
+        editionId: omnibus,
+        volumeId,
+        order: order + 1,
+        extent: "complete",
+      });
     }
     const r3 = await insertRelease(ctx, {
       ...ofSeries,
@@ -83,8 +88,18 @@ async function seed(t: TestT) {
 
     // Split digital Edition partially covering Vol 3.
     const split = await insertEdition(ctx, { publicId: 23, publisherId });
-    await insertCoverage(ctx, { editionId: split, volumeId: v3, extent: "partial", note: "First half only." });
-    const r4 = await insertRelease(ctx, { ...ofSeries, editionId: split, format: "digital", isbn13: SPLIT_ISBN13 });
+    await insertCoverage(ctx, {
+      editionId: split,
+      volumeId: v3,
+      extent: "partial",
+      note: "First half only.",
+    });
+    const r4 = await insertRelease(ctx, {
+      ...ofSeries,
+      editionId: split,
+      format: "digital",
+      isbn13: SPLIT_ISBN13,
+    });
 
     // Box set of the standard paperback + the omnibus, pinning r1's Variant.
     const bundleId = await insertBundle(ctx, {
@@ -98,7 +113,21 @@ async function seed(t: TestT) {
     await insertBundleMember(ctx, { bundleId, releaseId: r1, variantId, order: 1 });
     await insertBundleMember(ctx, { bundleId, releaseId: r3, order: 2 });
 
-    return { publisherId, seriesId, v1, v2, v3, standard, omnibus, split, r1, r2, r3, r4, bundleId };
+    return {
+      publisherId,
+      seriesId,
+      v1,
+      v2,
+      v3,
+      standard,
+      omnibus,
+      split,
+      r1,
+      r2,
+      r3,
+      r4,
+      bundleId,
+    };
   });
 }
 
@@ -151,7 +180,13 @@ describe("catalogPages.volumePage", () => {
     const t = makeT();
     const { seriesId, v1 } = await seed(t);
     await t.run(async (ctx) => {
-      await insertVolume(ctx, { status: "merged", mergedIntoId: v1, publicId: 19, seriesId, position: 99 });
+      await insertVolume(ctx, {
+        status: "merged",
+        mergedIntoId: v1,
+        publicId: 19,
+        seriesId,
+        position: 99,
+      });
     });
     const page = await t.query(api.catalogPages.volumePage, { publicId: 19 });
     expect(page?.volume.publicId).toBe(11);
@@ -219,7 +254,12 @@ describe("catalogPages.editionPage", () => {
     const t = makeT();
     const { publisherId, standard } = await seed(t);
     await t.run(async (ctx) => {
-      await insertEdition(ctx, { status: "merged", mergedIntoId: standard, publicId: 29, publisherId });
+      await insertEdition(ctx, {
+        status: "merged",
+        mergedIntoId: standard,
+        publicId: 29,
+        publisherId,
+      });
       await insertEdition(ctx, { status: "hidden", publicId: 28, publisherId });
     });
     const merged = await t.query(api.catalogPages.editionPage, { publicId: 29 });
@@ -239,7 +279,12 @@ describe("catalogPages.editionPage", () => {
       // An ISBN-less Edition of Vol 1, as a publisher's own site lists it.
       const bare = await insertEdition(ctx, { publicId: 24, publisherId });
       await insertCoverage(ctx, { editionId: bare, volumeId: v1 });
-      await insertRelease(ctx, { editionId: bare, pubDate: pubDate(20150620), publisherId, seriesIds: [seriesId] });
+      await insertRelease(ctx, {
+        editionId: bare,
+        pubDate: pubDate(20150620),
+        publisherId,
+        seriesIds: [seriesId],
+      });
       return { artUrl: await ctx.storage.getUrl(art) };
     });
 
@@ -336,7 +381,12 @@ describe("Edition Description", () => {
       await ctx.db.patch(r1, { description: undefined });
       const ofEdition = { editionId: standard, publisherId, seriesIds: [seriesId] };
       await insertRelease(ctx, { ...ofEdition, status: "hidden", description: "Hidden blurb." });
-      await insertRelease(ctx, { ...ofEdition, status: "merged", mergedIntoId: r1, description: "Merged blurb." });
+      await insertRelease(ctx, {
+        ...ofEdition,
+        status: "merged",
+        mergedIntoId: r1,
+        description: "Merged blurb.",
+      });
     });
     const page = await t.query(api.catalogPages.editionPage, { publicId: 21 });
     expect(page?.description).toBeNull();
@@ -398,7 +448,11 @@ describe("Volume page description", () => {
       await ctx.db.patch(r3, { description: "Omnibus blurb." });
       await ctx.db.patch(r4, { description: "Split blurb." });
 
-      const deluxeLine = await insertEditionLine(ctx, { seriesId, publisherId, name: "Deluxe Edition" });
+      const deluxeLine = await insertEditionLine(ctx, {
+        seriesId,
+        publisherId,
+        name: "Deluxe Edition",
+      });
       const deluxe = await insertEdition(ctx, {
         publicId: 25,
         publisherId,
@@ -430,8 +484,7 @@ describe("Volume page description", () => {
     return { ...ids, ...lenders };
   }
 
-  const volume = (t: TestT, publicId: number) =>
-    t.query(api.catalogPages.volumePage, { publicId });
+  const volume = (t: TestT, publicId: number) => t.query(api.catalogPages.volumePage, { publicId });
 
   it("borrows the representative blurb of whole single-volume, line-less Editions, naming the Edition", async () => {
     const t = makeT();
@@ -505,7 +558,10 @@ describe("Volume page description", () => {
     await t.run(async (ctx) => {
       await ctx.db.patch(v1, { synopsis: "Curated synopsis." });
     });
-    expect((await volume(t, 11))?.description).toEqual({ source: "volume", text: "Curated synopsis." });
+    expect((await volume(t, 11))?.description).toEqual({
+      source: "volume",
+      text: "Curated synopsis.",
+    });
   });
 });
 
@@ -597,9 +653,7 @@ describe("catalogPages.isbnLookup", () => {
   it("resolves a box-set ISBN to its Bundle page", async () => {
     const t = makeT();
     await seed(t);
-    expect(
-      await t.query(api.catalogPages.isbnLookup, { isbn: BUNDLE_ISBN13 }),
-    ).toEqual({
+    expect(await t.query(api.catalogPages.isbnLookup, { isbn: BUNDLE_ISBN13 })).toEqual({
       kind: "bundle",
       bundle: { publicId: 31, name: "S Complete Box Set" },
     });
@@ -610,7 +664,12 @@ describe("catalogPages.isbnLookup", () => {
     const { publisherId } = await seed(t);
     await t.run(async (ctx) => {
       // A (data-error) Bundle carrying a Release's ISBN: the Release wins.
-      await insertBundle(ctx, { publicId: 32, name: "Conflicting Set", publisherId, isbn13: R1_ISBN13 });
+      await insertBundle(ctx, {
+        publicId: 32,
+        name: "Conflicting Set",
+        publisherId,
+        isbn13: R1_ISBN13,
+      });
     });
     const target = await t.query(api.catalogPages.isbnLookup, { isbn: R1_ISBN13 });
     expect(target?.kind).toBe("release");
@@ -624,10 +683,20 @@ describe("catalogPages.isbnLookup", () => {
     await t.run(async (ctx) => {
       const ofEdition = { editionId: standard, publisherId, seriesIds: [seriesId] };
       await insertRelease(ctx, { ...ofEdition, status: "hidden", isbn13: hiddenIsbn });
-      await insertBundle(ctx, { publicId: 33, name: "Fallback Set", publisherId, isbn13: hiddenIsbn });
+      await insertBundle(ctx, {
+        publicId: 33,
+        name: "Fallback Set",
+        publisherId,
+        isbn13: hiddenIsbn,
+      });
       // A merged Release resolves to its survivor; the anchor is the
       // survivor's.
-      await insertRelease(ctx, { ...ofEdition, status: "merged", mergedIntoId: r1, isbn13: mergedIsbn });
+      await insertRelease(ctx, {
+        ...ofEdition,
+        status: "merged",
+        mergedIntoId: r1,
+        isbn13: mergedIsbn,
+      });
     });
 
     expect(await t.query(api.catalogPages.isbnLookup, { isbn: hiddenIsbn })).toEqual({
@@ -644,8 +713,6 @@ describe("catalogPages.isbnLookup", () => {
   it("returns null for an unknown ISBN", async () => {
     const t = makeT();
     await seed(t);
-    expect(
-      await t.query(api.catalogPages.isbnLookup, { isbn: "9780000000000" }),
-    ).toBeNull();
+    expect(await t.query(api.catalogPages.isbnLookup, { isbn: "9780000000000" })).toBeNull();
   });
 });

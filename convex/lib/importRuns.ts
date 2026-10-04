@@ -87,7 +87,10 @@ export function lastActiveAt(run: Pick<Doc<"importRuns">, "_creationTime" | "las
  * unstamped, older than UNSTAMPED_STRANDED_AFTER_MS. Shared by the hourly
  * tick's recovery and the ANN backfill's start check.
  */
-export function isStranded(run: Pick<Doc<"importRuns">, "_creationTime" | "lastActivityAt">, now: number) {
+export function isStranded(
+  run: Pick<Doc<"importRuns">, "_creationTime" | "lastActivityAt">,
+  now: number,
+) {
   return run.lastActivityAt === undefined
     ? now - run._creationTime > UNSTAMPED_STRANDED_AFTER_MS
     : now - run.lastActivityAt > STRANDED_AFTER_MS;
@@ -98,10 +101,7 @@ export function isStranded(run: Pick<Doc<"importRuns">, "_creationTime" | "lastA
  * declared return type also breaks the inference cycle between an adapter
  * and imports.ts's adapter map.
  */
-export async function registryRow(
-  ctx: ActionCtx,
-  key: string,
-): Promise<Doc<"approvedSources">> {
+export async function registryRow(ctx: ActionCtx, key: string): Promise<Doc<"approvedSources">> {
   const source = await ctx.runQuery(internal.importSources.getByKey, { key });
   if (!source) {
     throw new Error(
@@ -194,7 +194,10 @@ export async function runToContinue(
 ): Promise<Id<"importRuns"> | null> {
   if (args.runId === undefined) {
     if (!source.enabled) return null;
-    return await ctx.runMutation(internal.imports.startRun, { sourceKey: source.key, automatic: true });
+    return await ctx.runMutation(internal.imports.startRun, {
+      sourceKey: source.key,
+      automatic: true,
+    });
   }
   const stopped = await stopAtGate(ctx, args.runId, source.key, {
     seen: args.seen ?? 0,

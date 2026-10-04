@@ -9,7 +9,13 @@ import { describe, expect, it } from "vitest";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { insertEdition, insertObservation, insertPublisher, insertRelease, insertSeries } from "../test.factories";
+import {
+  insertEdition,
+  insertObservation,
+  insertPublisher,
+  insertRelease,
+  insertSeries,
+} from "../test.factories";
 import { makeT, seedRegistry, type TestT } from "../test.helpers";
 import { upsertObservation } from "./observations";
 import { reconcileFields } from "./reconcile";
@@ -19,7 +25,10 @@ const SNAPSHOT = { title: "Alpha Adventures Vol. 1" };
 
 /** A future-dated Release linked to a Seven Seas observation. */
 async function linkedRelease(ctx: MutationCtx) {
-  const publisherId = await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+  const publisherId = await insertPublisher(ctx, {
+    name: "Seven Seas Entertainment",
+    slug: "seven-seas",
+  });
   const seriesId = await insertSeries(ctx, { title: "Alpha Adventures" });
   const editionId = await insertEdition(ctx, { publisherId });
   const releaseId = await insertRelease(ctx, {

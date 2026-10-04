@@ -84,9 +84,7 @@ const MANGA_PUBLISHERS = [
 function keep(edition) {
   const publishers = Array.isArray(edition.publishers) ? edition.publishers : [];
   const named = publishers.some(
-    (name) =>
-      typeof name === "string" &&
-      MANGA_PUBLISHERS.some((brand) => brand.test(name.trim())),
+    (name) => typeof name === "string" && MANGA_PUBLISHERS.some((brand) => brand.test(name.trim())),
   );
   if (!named) return false;
   const isbns = [
@@ -128,7 +126,7 @@ for await (const line of lines) {
     continue;
   }
   if (!keep(edition)) continue;
-  process.stdout.write(line + "\n");
+  process.stdout.write(`${line}\n`);
   kept++;
 }
 

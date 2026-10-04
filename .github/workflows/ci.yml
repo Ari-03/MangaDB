@@ -1,6 +1,8 @@
-# Typecheck, test, and build. Runs on every pull request, where the `check`
-# job is the status check the "Protect main" ruleset requires
-# (.github/rulesets/main.json), and before every deploy via deploy.yml.
+# Check formatting and lint, typecheck, test, and build. Runs on every pull
+# request, where the `check` job is the status check the "Protect main"
+# ruleset requires (.github/rulesets/main.json), and before every deploy via
+# deploy.yml. `npm run check` fails on any file Biome would reformat and on
+# any lint error or warning; info-level lint suggestions do not fail it.
 name: CI
 
 on:
@@ -30,6 +32,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run check
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

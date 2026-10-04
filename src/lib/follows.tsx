@@ -31,11 +31,7 @@ export type FollowSuggestion = FunctionReturnType<
  * Favorite with the hint under both (and stays empty, and hidden, for
  * signed-out viewers).
  */
-export function SeriesFollowControls({
-  seriesPublicId,
-}: {
-  seriesPublicId: number;
-}) {
+export function SeriesFollowControls({ seriesPublicId }: { seriesPublicId: number }) {
   const data = useQuery(api.follows.seriesFollow, { seriesPublicId });
   const setFollow = useMutation(api.follows.setSeriesFollow);
   if (!data) return null; // loading, signed out, or username pending
@@ -112,8 +108,7 @@ export function FollowPrompt({
     <span className="prompt" role="status">
       {suggestions.map((suggestion) => (
         <span key={suggestion.seriesId} className="prompt-line">
-          Follow “{suggestion.title}” to see its announced releases in your
-          Upcoming?{" "}
+          Follow “{suggestion.title}” to see its announced releases in your Upcoming?{" "}
           <button
             type="button"
             onClick={() => {
@@ -266,8 +261,7 @@ export function LibraryUpcoming({ todaySort }: { todaySort: number }) {
                 value={viewer.formatPreference}
                 onChange={(event) =>
                   void setPreference({
-                    preference: event.currentTarget
-                      .value as keyof typeof PREFERENCE_LABELS,
+                    preference: event.currentTarget.value as keyof typeof PREFERENCE_LABELS,
                   })
                 }
               >
@@ -283,8 +277,8 @@ export function LibraryUpcoming({ todaySort }: { todaySort: number }) {
         </div>
         {upcoming.items.length === 0 ? (
           <p className="placeholder">
-            Follow a series, or mark a release or box set Wanted or Ordered, and
-            its announced future releases will appear here.
+            Follow a series, or mark a release or box set Wanted or Ordered, and its announced
+            future releases will appear here.
           </p>
         ) : (
           <div className="shelf">
@@ -303,9 +297,7 @@ export function LibraryUpcoming({ todaySort }: { todaySort: number }) {
   );
 }
 
-type UpcomingData = NonNullable<
-  FunctionReturnType<typeof api.follows.myUpcoming>
->;
+type UpcomingData = NonNullable<FunctionReturnType<typeof api.follows.myUpcoming>>;
 
 /** One announced release (or box set) as a book on the Upcoming shelf. */
 function UpcomingItem({ item }: { item: UpcomingData["items"][number] }) {
@@ -379,9 +371,7 @@ function UpcomingItem({ item }: { item: UpcomingData["items"][number] }) {
           <span className="caption-date">{date}</span>
           <span className="dot" />
           <span>
-            {item.format === "physical"
-              ? (item.binding ?? "Print")
-              : "Digital"}
+            {item.format === "physical" ? (item.binding ?? "Print") : "Digital"}
             {item.publisher ? ` · ${item.publisher.name}` : ""}
           </span>
         </div>

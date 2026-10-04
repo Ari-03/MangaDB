@@ -104,11 +104,17 @@ const lineOf = (packaging: Packaging | null | undefined): Line | null =>
  * knew a line word ("Vagabond Definitive Edition, Vol. 4") reads as the
  * line book it is.
  */
-function titleReading(title: string, stored: { packaging?: Packaging; multi?: boolean; isBox?: boolean }) {
+function titleReading(
+  title: string,
+  stored: { packaging?: Packaging; multi?: boolean; isBox?: boolean },
+) {
   const parsed = parseBookTitle(title);
   return {
     packaged:
-      stored.multi === true || stored.packaging !== undefined || parsed.packaging !== null || needsEditionLine(title),
+      stored.multi === true ||
+      stored.packaging !== undefined ||
+      parsed.packaging !== null ||
+      needsEditionLine(title),
     line: lineOf(stored.packaging) ?? lineOf(parsed.packaging),
     statedRange: stored.packaging?.coverRange ?? parsed.packaging?.coverRange ?? null,
     isBox: stored.isBox === true || parsed.isBox,
@@ -120,11 +126,17 @@ function titleReading(title: string, stored: { packaging?: Packaging; multi?: bo
 const PLAIN_LABEL = /^\d+(?:\.\d+)?$/;
 
 /** Read the observation's snapshot, or null for a shape no adapter here writes. */
-async function bookFacts(ctx: QueryCtx, observation: Doc<"sourceObservations">): Promise<BookFacts | null> {
+async function bookFacts(
+  ctx: QueryCtx,
+  observation: Doc<"sourceObservations">,
+): Promise<BookFacts | null> {
   const snapshot: HeldSnapshot | null = observation.snapshot ?? null;
   switch (snapshot?.kind) {
     case "olEdition": {
-      const read = titleReading(snapshot.title, { packaging: snapshot.packaging, multi: snapshot.multiVolume });
+      const read = titleReading(snapshot.title, {
+        packaging: snapshot.packaging,
+        multi: snapshot.multiVolume,
+      });
       const elsewhere =
         snapshot.isbn13 !== undefined ? await outOfScopeElsewhere(ctx, snapshot.isbn13) : null;
       return {
@@ -148,7 +160,9 @@ async function bookFacts(ctx: QueryCtx, observation: Doc<"sourceObservations">):
     }
     case "annRelease": {
       const page = snapshot.page?.status === "ok" ? snapshot.page : undefined;
-      const read = titleReading(snapshot.title, { multi: snapshot.multi || snapshot.editionLineHint });
+      const read = titleReading(snapshot.title, {
+        multi: snapshot.multi || snapshot.editionLineHint,
+      });
       return {
         title: snapshot.title,
         url: snapshot.url,
@@ -193,7 +207,10 @@ async function bookFacts(ctx: QueryCtx, observation: Doc<"sourceObservations">):
       };
     }
     case "book": {
-      const read = titleReading(snapshot.title, { packaging: snapshot.packaging, isBox: snapshot.isBox });
+      const read = titleReading(snapshot.title, {
+        packaging: snapshot.packaging,
+        isBox: snapshot.isBox,
+      });
       return {
         title: snapshot.title,
         url: snapshot.url,
@@ -223,7 +240,9 @@ async function bookFacts(ctx: QueryCtx, observation: Doc<"sourceObservations">):
         pubDate: snapshot.releaseDate,
         priceCents: snapshot.priceCents,
         outOfScope:
-          snapshot.outOfScope !== undefined ? `Kodansha's page is out of scope (${snapshot.outOfScope}).` : null,
+          snapshot.outOfScope !== undefined
+            ? `Kodansha's page is out of scope (${snapshot.outOfScope}).`
+            : null,
       };
     }
     default:
@@ -236,7 +255,8 @@ const KEPT_HOLDS: Record<Exclude<HoldKind, "volumeMissing" | "packaging">, strin
   series:
     "No single active, unlocked Series fits this book. Prepare placement never chooses or creates a Series: link, unlock or merge the Series first.",
   isbn: "Its ISBN, or its Volume's slot for this publisher and format, is already taken: correct or merge the Release that holds it instead of adding another.",
-  other: "Its publisher is missing or has no Publisher row. Prepare placement never creates a Publisher.",
+  other:
+    "Its publisher is missing or has no Publisher row. Prepare placement never creates a Publisher.",
 };
 
 type Preparable = {
@@ -282,7 +302,8 @@ async function placeable(
   if (hold.kind !== "volumeMissing" && hold.kind !== "packaging") return no(KEPT_HOLDS[hold.kind]);
   const series = hold.seriesId !== undefined ? await ctx.db.get(hold.seriesId) : null;
   if (series === null) return no(KEPT_HOLDS.series);
-  if (series.status !== "active") return no(`The Series it names, "${series.title}", is ${series.status}.`);
+  if (series.status !== "active")
+    return no(`The Series it names, "${series.title}", is ${series.status}.`);
   if (series.locked) return no(`The Series it names, "${series.title}", is locked.`);
   const facts = await bookFacts(ctx, observation);
   if (facts === null) return no("Prepare placement cannot read this source's records.");
@@ -293,14 +314,22 @@ async function placeable(
   const { isbn13, isbn10 } = facts;
   const holders = [
     ...(isbn13 !== undefined
-      ? await ctx.db.query("releases").withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13)).collect()
+      ? await ctx.db
+          .query("releases")
+          .withIndex("by_isbn13", (q) => q.eq("isbn13", isbn13))
+          .collect()
       : []),
     ...(isbn10 !== undefined
-      ? await ctx.db.query("releases").withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10)).collect()
+      ? await ctx.db
+          .query("releases")
+          .withIndex("by_isbn10", (q) => q.eq("isbn10", isbn10))
+          .collect()
       : []),
   ];
   if (holders.some((release) => release.status === "active")) {
-    return no(`ISBN ${isbn13 ?? isbn10} is already on an active Release: link or correct that Release instead.`);
+    return no(
+      `ISBN ${isbn13 ?? isbn10} is already on an active Release: link or correct that Release instead.`,
+    );
   }
   if (placing !== undefined) {
     const wrong = await placedOtherwise(ctx, facts, series, placing);
@@ -347,9 +376,11 @@ async function placedOtherwise(
     }
     if (plan.table === "editions") {
       for (const row of plan.coverage) {
-        if (row.volume.kind === "id") under.push((await ctx.db.get(row.volume.id))?.seriesId ?? null);
+        if (row.volume.kind === "id")
+          under.push((await ctx.db.get(row.volume.id))?.seriesId ?? null);
       }
-      if (plan.editionLine?.kind === "id") under.push((await ctx.db.get(plan.editionLine.id))?.seriesId ?? null);
+      if (plan.editionLine?.kind === "id")
+        under.push((await ctx.db.get(plan.editionLine.id))?.seriesId ?? null);
       // The slot an `isbn` hold guards: one Release per format in an Edition.
       const joined = plan.existingId !== undefined ? await ctx.db.get(plan.existingId) : null;
       const taken =
@@ -362,7 +393,8 @@ async function placedOtherwise(
         ).some((other) => other.status === "active" && other.format === format);
       if (taken) return KEPT_HOLDS.isbn;
     }
-    if (under.some((id) => id !== series._id)) return `Every record a placement creates is under "${series.title}".`;
+    if (under.some((id) => id !== series._id))
+      return `Every record a placement creates is under "${series.title}".`;
   }
   return null;
 }
@@ -387,7 +419,10 @@ async function placementOps(
       isbn13: facts.isbn13,
       isbn10: facts.isbn10,
       pubDate: facts.pubDate !== undefined ? toPartialDate(facts.pubDate) : undefined,
-      price: facts.priceCents !== undefined ? { amountCents: facts.priceCents, currency: "USD" } : undefined,
+      price:
+        facts.priceCents !== undefined
+          ? { amountCents: facts.priceCents, currency: "USD" }
+          : undefined,
       description: facts.description,
       publisherSlug: publisher.slug,
     },
@@ -411,15 +446,23 @@ export async function checkPlacement(
   plans: CreatePlan[],
 ): Promise<void> {
   const [first, ...more] = plans.flatMap((plan) =>
-    plan.table === "releases" && plan.placement !== undefined ? [{ release: plan, placement: plan.placement }] : [],
+    plan.table === "releases" && plan.placement !== undefined
+      ? [{ release: plan, placement: plan.placement }]
+      : [],
   );
   if (first === undefined) return;
-  if (more.length > 0) return fail("invalidCreate", "A Proposal places one held book, through one Release.");
+  if (more.length > 0)
+    return fail("invalidCreate", "A Proposal places one held book, through one Release.");
   const { release, placement } = first;
   const observation = await ctx.db.get(placement.observationId);
-  if (observation === null) return fail("invalidCreate", "The observation this release places no longer exists.");
+  if (observation === null)
+    return fail("invalidCreate", "The observation this release places no longer exists.");
   const check = await placeable(ctx, observation, { proposalId, plans, release });
-  if (!check.ok) return fail("invalidCreate", `This book can no longer be placed by this Proposal. ${check.reason}`);
+  if (!check.ok)
+    return fail(
+      "invalidCreate",
+      `This book can no longer be placed by this Proposal. ${check.reason}`,
+    );
 }
 
 /**
@@ -439,7 +482,10 @@ export const preparePlacement = mutation({
     const user = await requireDataTeam(ctx);
     const observation = await ctx.db.get(observationId);
     if (observation === null) return fail("notFound", "No such observation.");
-    const queued = observation.queuedProposalId !== undefined ? await ctx.db.get(observation.queuedProposalId) : null;
+    const queued =
+      observation.queuedProposalId !== undefined
+        ? await ctx.db.get(observation.queuedProposalId)
+        : null;
     // A member's Draft that places this book: theirs to open, or another member's to withdraw.
     const placesBook =
       queued?.state === "draft" &&
@@ -505,7 +551,10 @@ export const setPlacement = mutation({
   args: {
     proposalId: v.id("proposals"),
     coverage: v.union(v.object({ from: v.string(), to: v.string() }), v.literal("unmapped")),
-    line: v.union(v.null(), v.object({ name: v.string(), position: v.union(v.string(), v.null()) })),
+    line: v.union(
+      v.null(),
+      v.object({ name: v.string(), position: v.union(v.string(), v.null()) }),
+    ),
     comment: v.string(),
   },
   handler: async (ctx, args) => {
@@ -530,14 +579,26 @@ export const setPlacement = mutation({
     const line = name !== "" ? { name, position } : null;
     let coverage: Coverage;
     if (args.coverage === "unmapped") {
-      if (line === null) return fail("invalidCoverage", "Unmapped Packaging is a member of an Edition Line: name its line.");
+      if (line === null)
+        return fail(
+          "invalidCoverage",
+          "Unmapped Packaging is a member of an Edition Line: name its line.",
+        );
       coverage = "unmapped";
     } else {
       const from = canonicalLabel(args.coverage.from.trim());
       const to = canonicalLabel(args.coverage.to.trim());
-      const labels = !PLAIN_LABEL.test(from) || !PLAIN_LABEL.test(to) ? [] : from === to ? [from] : rangeLabels({ from, to });
+      const labels =
+        !PLAIN_LABEL.test(from) || !PLAIN_LABEL.test(to)
+          ? []
+          : from === to
+            ? [from]
+            : rangeLabels({ from, to });
       if (labels.length === 0) {
-        return fail("invalidCoverage", "State the covered Volumes as numbers, first to last (10 to 12), or one Volume (4).");
+        return fail(
+          "invalidCoverage",
+          "State the covered Volumes as numbers, first to last (10 to 12), or one Volume (4).",
+        );
       }
       coverage = { labels };
     }
@@ -564,14 +625,25 @@ export const setPlacement = mutation({
  * Volume or fills a gap below it. A light novel or a line book sharing a
  * manga's title carries numbers far past the manga's last Volume.
  */
-async function suggestedVolume(ctx: QueryCtx, facts: BookFacts, seriesId: Id<"series">): Promise<string | null> {
-  if (facts.packaged || facts.line !== null || facts.novel || facts.isBox || facts.label === null) return null;
+async function suggestedVolume(
+  ctx: QueryCtx,
+  facts: BookFacts,
+  seriesId: Id<"series">,
+): Promise<string | null> {
+  if (facts.packaged || facts.line !== null || facts.novel || facts.isBox || facts.label === null)
+    return null;
   const label = canonicalLabel(facts.label);
   if (!PLAIN_LABEL.test(label)) return null;
-  const numbers = (await ctx.db.query("volumes").withIndex("by_series", (q) => q.eq("seriesId", seriesId)).collect())
-    .flatMap((volume) =>
-      volume.status === "active" && volume.label !== undefined && PLAIN_LABEL.test(volume.label) ? [Number(volume.label)] : [],
-    );
+  const numbers = (
+    await ctx.db
+      .query("volumes")
+      .withIndex("by_series", (q) => q.eq("seriesId", seriesId))
+      .collect()
+  ).flatMap((volume) =>
+    volume.status === "active" && volume.label !== undefined && PLAIN_LABEL.test(volume.label)
+      ? [Number(volume.label)]
+      : [],
+  );
   const wanted = Number(label);
   return wanted <= Math.max(0, ...numbers) + 1 && !numbers.includes(wanted) ? label : null;
 }
@@ -603,7 +675,9 @@ export async function placementView(ctx: QueryCtx, ops: Doc<"proposalVersions">[
     if (op.table === "releases") release = op.fields ?? {};
   }
   const volumes = [];
-  const rows: Array<{ volume?: unknown; volumeId?: unknown }> = Array.isArray(edition.volumeCoverage)
+  const rows: Array<{ volume?: unknown; volumeId?: unknown }> = Array.isArray(
+    edition.volumeCoverage,
+  )
     ? edition.volumeCoverage
     : [];
   for (const row of rows) {
@@ -620,10 +694,17 @@ export async function placementView(ctx: QueryCtx, ops: Doc<"proposalVersions">[
   }
   // The Edition's line: a stored one by ID, or the one these ops create.
   const lineId =
-    typeof edition.editionLineId === "string" ? ctx.db.normalizeId("editionLines", edition.editionLineId) : null;
+    typeof edition.editionLineId === "string"
+      ? ctx.db.normalizeId("editionLines", edition.editionLineId)
+      : null;
   const storedLine = lineId !== null ? await ctx.db.get(lineId) : null;
   under.push(storedLine?.seriesId);
-  const lineName = lineId !== null ? (storedLine?.name ?? null) : edition.editionLineId !== undefined ? newLine : null;
+  const lineName =
+    lineId !== null
+      ? (storedLine?.name ?? null)
+      : edition.editionLineId !== undefined
+        ? newLine
+        : null;
   const seriesRef = under.find((ref) => typeof ref === "string") ?? placed.seriesId;
   const seriesId = typeof seriesRef === "string" ? ctx.db.normalizeId("series", seriesRef) : null;
   const series = seriesId !== null ? await ctx.db.get(seriesId) : null;
@@ -646,14 +727,18 @@ export async function placementView(ctx: QueryCtx, ops: Doc<"proposalVersions">[
             pubDate: facts.pubDate ?? null,
           },
     series: series !== null ? { publicId: series.publicId, title: series.title } : null,
-    suggestion: facts !== null && series !== null ? await suggestedVolume(ctx, facts, series._id) : null,
+    suggestion:
+      facts !== null && series !== null ? await suggestedVolume(ctx, facts, series._id) : null,
     coverage:
       edition.coverageUnmapped === true
         ? { kind: "unmapped" as const }
         : volumes.length === 0
           ? { kind: "pending" as const }
           : { kind: "volumes" as const, volumes },
-    line: lineName !== null ? { name: lineName, position: text(edition.linePosition), created: lineId === null } : null,
+    line:
+      lineName !== null
+        ? { name: lineName, position: text(edition.linePosition), created: lineId === null }
+        : null,
     publisherSlug: text(edition.publisherSlug),
     release: {
       format: text(release.format),

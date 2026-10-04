@@ -8,7 +8,19 @@ import { describe, expect, it } from "vitest";
 
 import { api, internal } from "./_generated/api";
 import { insertEdition, insertPublisher, insertRelease, insertSeries } from "./test.factories";
-import { ADMIN, MOD, PLAIN, alice, bob, dave, drain, makeT, seedRegistry, seedTeam, type TestT } from "./test.helpers";
+import {
+  ADMIN,
+  MOD,
+  PLAIN,
+  alice,
+  bob,
+  dave,
+  drain,
+  makeT,
+  seedRegistry,
+  seedTeam,
+  type TestT,
+} from "./test.helpers";
 
 async function setup(t: TestT) {
   await seedTeam(t, [alice, bob, dave]);
@@ -17,11 +29,7 @@ async function setup(t: TestT) {
 }
 
 /** Insert one finished Import Run so a stage/source counts as succeeded. */
-async function addRun(
-  t: TestT,
-  sourceKey: string,
-  status: "succeeded" | "failed" = "succeeded",
-) {
+async function addRun(t: TestT, sourceKey: string, status: "succeeded" | "failed" = "succeeded") {
   return await t.run(async (ctx) => {
     return await ctx.db.insert("importRuns", {
       sourceKey,
@@ -264,10 +272,7 @@ describe("duplicate sweep (gate ③)", () => {
   it("auto-closes an open pair once a member is merged away", async () => {
     const t = makeT();
     await setup(t);
-    const [aId, bId] = await seedCatalog(t, [
-      { title: "Berserk" },
-      { title: "Berserk" },
-    ]);
+    const [aId, bId] = await seedCatalog(t, [{ title: "Berserk" }, { title: "Berserk" }]);
     const asMod = t.withIdentity({ subject: MOD });
     await asMod.action(api.launch.runDuplicateSweep, {});
     let qa = await asMod.query(api.launch.qaStatus, {});
@@ -326,9 +331,7 @@ describe("launchChecklist (spec §7: gates, and only the gates)", () => {
   it("computes every gate and flips ready when all pass", async () => {
     const t = makeT();
     await setup(t);
-    const [seriesId] = await seedCatalog(t, [
-      { title: "Witch Hat Atelier", releases: 2 },
-    ]);
+    const [seriesId] = await seedCatalog(t, [{ title: "Witch Hat Atelier", releases: 2 }]);
     const asAdmin = t.withIdentity({ subject: ADMIN });
     const asMod = t.withIdentity({ subject: MOD });
 

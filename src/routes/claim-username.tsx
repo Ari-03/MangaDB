@@ -1,8 +1,4 @@
-import {
-  createFileRoute,
-  redirect,
-  useNavigate,
-} from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useMutation } from "convex/react";
 import { useState, type FormEvent } from "react";
@@ -31,10 +27,7 @@ export const Route = createFileRoute("/claim-username")({
     if (clerkEnabled && !(await fetchSignedIn())) throw redirect({ href: "/sign-in" });
   },
   head: () => ({
-    meta: [
-      { title: "Choose a username — MangaDB" },
-      { name: "robots", content: "noindex" },
-    ],
+    meta: [{ title: "Choose a username — MangaDB" }, { name: "robots", content: "noindex" }],
   }),
   component: ClaimUsernamePage,
 });
@@ -44,8 +37,8 @@ function ClaimUsernamePage() {
     return (
       <main>
         <p className="notice">
-          Accounts are not configured. Set the Clerk environment variables
-          (see the README) to enable sign-in.
+          Accounts are not configured. Set the Clerk environment variables (see the README) to
+          enable sign-in.
         </p>
       </main>
     );
@@ -84,8 +77,8 @@ function ClaimForm() {
           <p>
             {changing ? (
               <>
-                You are currently <strong>@{viewer.username}</strong>. Your old
-                name is released the moment the new one is claimed.
+                You are currently <strong>@{viewer.username}</strong>. Your old name is released the
+                moment the new one is claimed.
               </>
             ) : (
               "One last step. This is your name on MangaDB — it is how your public shelf is addressed."
@@ -103,6 +96,7 @@ function ClaimForm() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="off"
+                  // biome-ignore lint/a11y/noAutofocus: the page exists to fill in this one field
                   autoFocus
                   required
                 />

@@ -24,7 +24,9 @@ describe("politeFetch", () => {
   it("waits out a rate limit and then succeeds", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response("slow down", { status: 429, headers: { "Retry-After": "30" } }))
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: { "Retry-After": "30" } }),
+      )
       .mockResolvedValueOnce(new Response("<ann/>", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.useFakeTimers();
@@ -39,7 +41,9 @@ describe("politeFetch", () => {
 
   it("retries a body that fails to read", async () => {
     const broken = new Response("x", { status: 200 });
-    vi.spyOn(broken, "arrayBuffer").mockRejectedValueOnce(new Error("error decoding response body"));
+    vi.spyOn(broken, "arrayBuffer").mockRejectedValueOnce(
+      new Error("error decoding response body"),
+    );
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(broken)
@@ -92,6 +96,8 @@ describe("an unstubbed fetch", () => {
   });
 
   it("comes with a WebSocket that refuses to open", () => {
-    expect(() => new WebSocket("wss://example.test/api/sync")).toThrow("no WebSocket stub installed");
+    expect(() => new WebSocket("wss://example.test/api/sync")).toThrow(
+      "no WebSocket stub installed",
+    );
   });
 });

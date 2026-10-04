@@ -27,7 +27,10 @@ async function seeded() {
   const t = makeT();
   const ids = await t.run(async (ctx) => {
     const viz = await insertPublisher(ctx, { name: "VIZ Media", slug: "viz-media" });
-    const seas = await insertPublisher(ctx, { name: "Seven Seas Entertainment", slug: "seven-seas" });
+    const seas = await insertPublisher(ctx, {
+      name: "Seven Seas Entertainment",
+      slug: "seven-seas",
+    });
     await insertPublisher(ctx, { status: "hidden", name: "Hidden Press", slug: "hidden-press" });
 
     const ghoul = await insertSeries(ctx, { title: "Tokyo Ghoul" });
@@ -59,9 +62,19 @@ async function seeded() {
     await insertRelease(ctx, { ...quietRelease, status: "hidden", pubDate: pubDate(20260811) });
     // Neighbors that must stay outside the August window:
     await insertRelease(ctx, { ...quietRelease, pubDate: pubDate(20260731) });
-    await insertRelease(ctx, { ...ghoulRelease, editionId: ghoulEd1, format: "digital", pubDate: pubDate(20260901) });
+    await insertRelease(ctx, {
+      ...ghoulRelease,
+      editionId: ghoulEd1,
+      format: "digital",
+      pubDate: pubDate(20260901),
+    });
     // Year-only precision falls in no month window.
-    await insertRelease(ctx, { ...ghoulRelease, editionId: ghoulEd1, format: "digital", pubDate: pubDate(20260000) });
+    await insertRelease(ctx, {
+      ...ghoulRelease,
+      editionId: ghoulEd1,
+      format: "digital",
+      pubDate: pubDate(20260000),
+    });
 
     return { viz, seas };
   });
@@ -107,9 +120,7 @@ describe("releases.monthBrowse", () => {
     const result = await t.query(api.releases.monthBrowse, august);
     const partial = result.releases.find((r) => r.day === 27);
     expect(partial?.volumeLabel).toBe("Vol. 3.5 (partial)");
-    expect(result.releases.find((r) => r.day === 4)?.volumeLabel).toBe(
-      "Vol. 1–3",
-    );
+    expect(result.releases.find((r) => r.day === 4)?.volumeLabel).toBe("Vol. 1–3");
   });
 
   it("lists active Publishers alphabetically for the shared filter", async () => {
@@ -185,7 +196,9 @@ describe("releases.monthBrowse jackets", () => {
       await release(v25, "digital", "9798898302498", 20261007);
       await release(v25, "physical", "9798888778661", 20261007);
       // Vol 26: the ebook in October, print (with stored art) in November.
-      const art = await ctx.storage.store(new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }));
+      const art = await ctx.storage.store(
+        new Blob([new Uint8Array(MIN_COVER_BYTES + 1)], { type: "image/jpeg" }),
+      );
       const v26 = await edition(26);
       await release(v26, "digital", "9780000000026", 20261007);
       await release(v26, "physical", "9780000000126", 20261107, art);
@@ -259,7 +272,12 @@ describe("joinBrowseRows cover fallback", () => {
       const v2 = await insertVolume(ctx, { seriesId, position: 2 });
       const bare = await edition(v2);
       const other = await edition(v2);
-      await insertRelease(ctx, { editionId: other, isbn13: "9780000000002", publisherId, seriesIds: [seriesId] });
+      await insertRelease(ctx, {
+        editionId: other,
+        isbn13: "9780000000002",
+        publisherId,
+        seriesIds: [seriesId],
+      });
       for (let day = 12; day <= 14; day++) await release(bare, day);
 
       const counting = countingQueries(ctx);

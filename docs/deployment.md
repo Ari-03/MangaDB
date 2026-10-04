@@ -32,11 +32,11 @@ Refreshing staging from production is in
 
 ## Production
 
-1. Open a pull request. `.github/workflows/ci.yml` typechecks, tests and
-   builds it, and its `check` job must pass before the pull request can
-   merge. The "Protect main" ruleset (`.github/rulesets/main.json`) blocks
-   direct pushes, force pushes and deletion of `main`, so every change lands
-   this way.
+1. Open a pull request. `.github/workflows/ci.yml` checks its formatting
+   and lint, typechecks, tests and builds it, and its `check` job must pass
+   before the pull request can merge. The "Protect main" ruleset
+   (`.github/rulesets/main.json`) blocks direct pushes, force pushes and
+   deletion of `main`, so every change lands this way.
 2. Merge it. `.github/workflows/deploy.yml` runs CI again on `main` and queues
    a production deploy. A merge that touches only Markdown files or `docs/`
    queues no deploy.

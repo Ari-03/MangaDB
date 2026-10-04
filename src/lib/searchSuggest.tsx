@@ -6,13 +6,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import {
-  useEffect,
-  useId,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-} from "react";
+import { useEffect, useId, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import { api } from "../../convex/_generated/api";
 import { Cover } from "~/lib/cover";
@@ -71,7 +65,9 @@ export function useDebounced<T>(value: T, ms: number): T {
 function suggestionGroups(query: string, data: Suggestions | null, stale: boolean): Group[] {
   const isbn = normalizeIsbn(query);
   if (isbn) {
-    return [{ label: null, options: [{ kind: "isbn", href: `/isbn/${isbn}`, isbn }], stale: false }];
+    return [
+      { label: null, options: [{ kind: "isbn", href: `/isbn/${isbn}`, isbn }], stale: false },
+    ];
   }
   const seriesOption = (card: SeriesCard): Option => ({
     kind: "series",
@@ -288,7 +284,8 @@ export function SearchCombobox({
   // Plain left clicks navigate in-app; modified clicks keep the browser's
   // new-tab behaviour through the real href.
   const onOptionClick = (event: MouseEvent<HTMLAnchorElement>, option: Option) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+      return;
     event.preventDefault();
     follow(option);
   };
@@ -314,7 +311,14 @@ export function SearchCombobox({
         onNavigate?.();
       }}
     >
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <svg
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
         <circle cx="7.2" cy="7.2" r="4.4" />
         <path d="m10.6 10.6 3 3" />
       </svg>
@@ -329,7 +333,9 @@ export function SearchCombobox({
         aria-autocomplete="list"
         aria-expanded={expanded}
         aria-controls={listId}
-        aria-activedescendant={expanded && highlighted ? optionId(options.indexOf(highlighted)) : undefined}
+        aria-activedescendant={
+          expanded && highlighted ? optionId(options.indexOf(highlighted)) : undefined
+        }
         value={text}
         onChange={(event) => {
           setText(event.target.value);
@@ -359,7 +365,11 @@ export function SearchCombobox({
                 role="option"
                 aria-selected={option === highlighted}
                 aria-disabled={group.stale || undefined}
-                className={option.kind === "all" || option.kind === "isbn" ? "suggest-row suggest-row--all" : "suggest-row"}
+                className={
+                  option.kind === "all" || option.kind === "isbn"
+                    ? "suggest-row suggest-row--all"
+                    : "suggest-row"
+                }
                 href={option.href}
                 tabIndex={-1}
                 // Keep focus in the input so the list doesn't close mid-click.

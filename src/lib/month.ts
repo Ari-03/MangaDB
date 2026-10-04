@@ -29,8 +29,18 @@ export function sameMonth(a: YearMonth, b: YearMonth): boolean {
 }
 
 export const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ] as const;
 
 /** "August 2026" — the browser's month heading. */
@@ -64,7 +74,13 @@ export function firstWeekday({ year, month }: YearMonth): number {
 }
 
 const WEEKDAYS = [
-  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
 ] as const;
 
 /** Full weekday name for a day of the month ("Tuesday"). */

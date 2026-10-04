@@ -32,10 +32,7 @@ function ProposeNewPage() {
     );
   }
   return (
-    <ModGate
-      role="dataTeam"
-      refusal="Proposing new records needs an Editor (or stronger) role."
-    >
+    <ModGate role="dataTeam" refusal="Proposing new records needs an Editor (or stronger) role.">
       <ProposeNewForm publicId={publicId} />
     </ModGate>
   );
@@ -105,9 +102,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
           fields: {
             publisherId,
             linePosition: linePosition.trim() || undefined,
-            volumeCoverage: [
-              { volume: "volume-1", order: 1, extent: "complete" as const },
-            ],
+            volumeCoverage: [{ volume: "volume-1", order: 1, extent: "complete" as const }],
           },
         },
         {
@@ -117,10 +112,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
           fields: {
             editionId: "edition",
             format,
-            binding:
-              format === "physical" && binding.trim() !== ""
-                ? binding.trim()
-                : undefined,
+            binding: format === "physical" && binding.trim() !== "" ? binding.trim() : undefined,
             language: language.trim(),
             isbn13: isbn13.trim() || undefined,
             pubDate,
@@ -128,9 +120,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
         },
       ],
       evidence:
-        evidenceUrl.trim() !== ""
-          ? [{ kind: "url" as const, url: evidenceUrl.trim() }]
-          : [],
+        evidenceUrl.trim() !== "" ? [{ kind: "url" as const, url: evidenceUrl.trim() }] : [],
       comment,
     };
   };
@@ -140,9 +130,9 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
       <Breadcrumbs trail={["Propose new records"]} />
       <h1>New volume + edition + release: {form.title}</h1>
       <p className="section-hint">
-        One atomic proposal creates all three records together (temp-IDs wire
-        the references). The volume lands after the series' current{" "}
-        {form.volumeCount} volume{form.volumeCount === 1 ? "" : "s"}.
+        One atomic proposal creates all three records together (temp-IDs wire the references). The
+        volume lands after the series' current {form.volumeCount} volume
+        {form.volumeCount === 1 ? "" : "s"}.
       </p>
       <form
         className="mod-edit-form"
@@ -209,11 +199,7 @@ function ProposeNewForm({ publicId }: { publicId: number }) {
         ) : null}
         <label>
           Language (required)
-          <input
-            value={language}
-            onChange={(event) => setLanguage(event.target.value)}
-            required
-          />
+          <input value={language} onChange={(event) => setLanguage(event.target.value)} required />
         </label>
         <label>
           ISBN-13
