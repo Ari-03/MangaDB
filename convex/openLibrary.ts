@@ -100,11 +100,14 @@ const IMPORT_COMMENT = "Imported from OpenLibrary (CC0).";
 /** Lines per invocation before scheduling a continuation. */
 const DEFAULT_MAX_LINES = 20000;
 /**
- * Wall-clock time per link, from its start, before scheduling a
- * continuation; it covers the download of the lines earlier links
- * processed. Checked before each line, so a link overruns it by at most
- * one line's apply (applyRetrying: four tries, about 2.5 s of backoff) and
- * one gate check, leaving 20 of Convex's 30 action minutes spare.
+ * Wall-clock time per link, from its start, after which the link hands off
+ * to a continuation at the next line it reaches; it counts the download of
+ * the lines earlier links processed. Checked only between new lines, so a
+ * link overruns it by the line in progress (applyRetrying: four tries,
+ * about 2.5 s of backoff) and a gate check, and by however long the next
+ * stream read takes. Neither a read nor the skip over the earlier lines has
+ * a deadline: a stalled read or a slow download of that prefix can carry a
+ * link past ten minutes, as far as Convex's 30-minute action limit.
  */
 const LINK_BUDGET_MS = 10 * 60 * 1000;
 /** Lines between two checks of the import gate inside a link. */

@@ -637,6 +637,42 @@ describe("openLibrary.sync — a link's time budget", () => {
       expect((await ctx.db.query("releases").collect())[0]!.isbn13).toBeUndefined();
     });
   });
+
+  it("with no budget passed, hands off at the first line it reaches ten minutes into the link", async () => {
+    const t = makeT();
+    await seedRegistry(t);
+    await buildSkeleton(t, { withRelease: true });
+    const realNow = Date.now;
+    let late = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + late);
+    let fetches = 0;
+    // One line per read; in the first link the third arrives ten minutes in.
+    vi.stubGlobal("fetch", async () => {
+      const first = ++fetches === 1;
+      const lines = [NOTHING_1, NOTHING_2, CHAINSAW_22].map((edition) => `${dumpLine(edition)}\n`);
+      return new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              const line = lines.shift();
+              if (line === undefined) return controller.close();
+              if (first && lines.length === 0) late = 10 * 60_000;
+              controller.enqueue(new TextEncoder().encode(line));
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+      );
+    });
+    expect(await sync(t)).toMatchObject({ continued: true, nextLine: 2, recordsSeen: 2 });
+    vi.restoreAllMocks();
+    await drain(t);
+    expect(fetches).toBe(2);
+    expect(await storedRun(t)).toMatchObject({ status: "succeeded", recordsSeen: 3, recordsChanged: 1 });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.query("releases").collect())[0]!.isbn13).toBe("9781974766512");
+    });
+  });
 });
 
 describe("openLibrary.sync — Binding reaches the matching ladder (B14)", () => {
