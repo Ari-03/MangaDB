@@ -6,7 +6,7 @@
 
 import { PostHogProvider } from "@posthog/react";
 import posthog, { type PostHogConfig } from "posthog-js";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 
 import { attachAnalyticsClient, type AnalyticsConsent } from "~/lib/analytics";
 import { POSTHOG_PROXY_PATH, POSTHOG_UI_HOST } from "~/server/posthogProxy";
@@ -40,21 +40,21 @@ let sending = false;
 // say, since another tab's reset() or opt-in changes it for every tab.
 let needsOptIn = false;
 // Whether `loaded` has run. The posthog-js singleton outlives the component
-// and calls `loaded` once, so a remounted component starts from this.
+// and calls `loaded` once: before it, ConsentSync leaves the consent to
+// `loaded`; after it, a remounted ConsentSync applies the consent at once.
 let clientLoaded = false;
 
 /**
  * posthog.init's options: `loaded` hands the instance to track() and applies
- * the consent `current()` returns at that moment, then calls `onLoaded`.
+ * the consent `current()` returns at that moment.
  */
-export function clientOptions(current: () => AnalyticsConsent, onLoaded: () => void): Partial<PostHogConfig> {
+export function clientOptions(current: () => AnalyticsConsent): Partial<PostHogConfig> {
   return {
     ...baseOptions,
     loaded: (instance) => {
       clientLoaded = true;
       attachAnalyticsClient(instance);
       applyConsent(current());
-      onLoaded();
     },
   };
 }
@@ -66,18 +66,20 @@ export default function PostHogAnalytics({
   apiKey: string;
   consent: AnalyticsConsent;
 }) {
-  // The provider inits posthog-js's default instance (`posthog`) in its own
-  // effect, after its children's effects, so the consent sync mounts on
-  // `loaded` instead of racing init. `loaded` runs before posthog-js sends
-  // its first pageview, so the consent of that moment is applied there. A
-  // remount finds posthog-js already loaded and mounts the sync at once.
-  const [loaded, setLoaded] = useState(clientLoaded);
+  // The provider inits posthog-js's default instance (`posthog`) in a
+  // passive effect, and init calls `loaded` there. ConsentSync mounts in the
+  // same commit and its layout effects run first: on the first mount it
+  // registers the cleanup that stops sending and leaves the consent to
+  // `loaded`, which applies it before posthog-js sends its first pageview.
+  // Whatever unmounts the client after `loaded` therefore stops it. A
+  // remount finds posthog-js already loaded, and ConsentSync applies the
+  // consent at once.
   const latest = useRef(consent);
   latest.current = consent;
-  const options = useMemo(() => clientOptions(() => latest.current, () => setLoaded(true)), []);
+  const options = useMemo(() => clientOptions(() => latest.current), []);
   return (
     <PostHogProvider apiKey={apiKey} options={options}>
-      {loaded ? <ConsentSync consent={consent} /> : null}
+      <ConsentSync consent={consent} />
     </PostHogProvider>
   );
 }
@@ -126,15 +128,18 @@ export function applyConsent(consent: AnalyticsConsent) {
 
 // Reapplies the consent whenever it changes: a sign-in or sign-out, the
 // viewer's preference answering, the toggle on /me, a username or role
-// change. A sign-out that reloaded the page lands in `loaded` instead.
+// change. A sign-out that reloaded the page lands in `loaded` instead. A
+// layout effect, so a change is applied before the passive effects of the
+// same commit (a page's track() calls) run, and the cleanup and the
+// reapplication have no passive effect between them.
 function ConsentSync({ consent }: { consent: AnalyticsConsent }) {
   const { status } = consent;
   const userId = consent.status === "identified" ? consent.userId : null;
   const username = consent.status === "identified" ? consent.username : undefined;
   const role = consent.status === "identified" ? consent.role : undefined;
 
-  useEffect(() => {
-    applyConsent(consent);
+  useLayoutEffect(() => {
+    if (clientLoaded) applyConsent(consent);
     // Unmounted (the router's error screen replaced the app), nothing reads
     // the session's consent, so nothing leaves until a remount applies it.
     return () => {

@@ -156,9 +156,12 @@ next changes or they reload.
 
 Convex having no viewer yet for a new session counts as still loading. A
 render error or failed loader replaces the app with the router's error
-screen and unmounts the client; `before_send` drops everything until the
-next navigation remounts it and the session's consent is applied again.
-posthog-js captures that navigation's pageview before React remounts, so
+screen and unmounts the client. Once posthog-js has loaded, however soon
+the error comes after, `before_send` drops everything (the initial
+pageview too, if it was not yet sent) until the next navigation remounts
+the client and the session's consent is applied again; an error before
+that leaves posthog-js uninitialised until the remount. posthog-js
+captures the remounting navigation's pageview before React remounts, so
 it is dropped for every viewer and counts as a dropped pageview above.
 Remote config is off only because `advanced_disable_flags` is set. A
 browser sending Do Not Track or Global Privacy Control sets the opt-out

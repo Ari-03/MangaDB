@@ -12,6 +12,7 @@
 // on the payloads: which ids and URLs actually went out.
 
 import { gunzipSync } from "node:zlib";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsConsent } from "./analytics";
@@ -137,7 +138,7 @@ async function openPage(path: string, consent: AnalyticsConsent) {
   const { default: posthog } = await import("posthog-js");
   const client = await import("./analyticsClient");
   posthog.init("phc_test", {
-    ...client.clientOptions(() => consent, () => {}),
+    ...client.clientOptions(() => consent),
     // happy-dom's user agent reads as a bot, which posthog-js drops.
     opt_out_useragent_filter: true,
   });
@@ -162,7 +163,10 @@ async function openPage(path: string, consent: AnalyticsConsent) {
  * session's consent as props; `renderGate` renders the consent gate
  * (ViewerAnalytics) instead, which reads `session` and lazily loads the
  * client; `unmount` removes either while the page and its posthog-js stay,
- * as an error boundary reset does.
+ * as an error boundary reset does. `renderWithSearch` renders a search page
+ * before the client, as AnalyticsProvider does, which tracks a search when
+ * its query changes; `renderFailingAfterLoad` renders the client inside an
+ * error boundary whose content throws in the render right after `loaded`.
  */
 async function mountPage(path: string) {
   Object.assign(history, pristineHistory);
@@ -172,11 +176,11 @@ async function mountPage(path: string) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // Read when lib/analytics.tsx loads: without it the gate loads no client.
   vi.stubEnv("VITE_PUBLIC_POSTHOG_KEY", "phc_test");
-  const { act, createElement } = await import("react");
+  const { act, Component, createElement, Fragment, StrictMode, useEffect, useState } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { default: posthog } = await import("posthog-js");
   const { default: PostHogAnalytics } = await import("./analyticsClient");
-  const { ViewerAnalytics } = await import("./analytics");
+  const { ViewerAnalytics, track } = await import("./analytics");
   const init = posthog.init.bind(posthog);
   // happy-dom's user agent reads as a bot, which posthog-js drops.
   vi.spyOn(posthog, "init").mockImplementation((token, config, name) =>
@@ -184,12 +188,65 @@ async function mountPage(path: string) {
   );
   // The provider's second init() on a remount warns that posthog-js is already loaded.
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(container);
   mounted.push(() => act(async () => root.unmount()));
+
+  // The search page's search_performed, keyed on the query as routes/search.tsx does.
+  function SearchPage({ query }: { query: string }) {
+    useEffect(() => {
+      track("search_performed", { queryLength: query.length, resultCount: 1 });
+    }, [query]);
+    return null;
+  }
+  // The router's error boundary: an error screen in place of the app.
+  class ErrorScreen extends Component<{ children: ReactNode }, { failed: boolean }> {
+    state = { failed: false };
+    static getDerivedStateFromError() {
+      return { failed: true };
+    }
+    render() {
+      return this.state.failed ? createElement("p", null, "error screen") : this.props.children;
+    }
+  }
+  // A parent's passive effects run after its children's, so this one runs
+  // after the provider's init and `loaded`, and the render it causes throws.
+  function FailsAfterLoad({ children }: { children: ReactNode }) {
+    const [failed, setFailed] = useState(false);
+    useEffect(() => setFailed(true), []);
+    if (failed) throw new Error("render error");
+    return children;
+  }
+
   return {
     posthog,
+    container,
     render: async (consent: AnalyticsConsent) => {
       await act(async () => root.render(createElement(PostHogAnalytics, { apiKey: "phc_test", consent })));
+      await settle();
+    },
+    renderWithSearch: async (consent: AnalyticsConsent, query: string) => {
+      await act(async () =>
+        root.render(
+          createElement(
+            Fragment,
+            null,
+            createElement(SearchPage, { query }),
+            createElement(PostHogAnalytics, { apiKey: "phc_test", consent }),
+          ),
+        ),
+      );
+      await settle();
+    },
+    renderFailingAfterLoad: async (consent: AnalyticsConsent, strict: boolean) => {
+      // React reports the error the boundary caught.
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const app = createElement(ErrorScreen, {
+        children: createElement(FailsAfterLoad, {
+          children: createElement(PostHogAnalytics, { apiKey: "phc_test", consent }),
+        }),
+      });
+      await act(async () => root.render(strict ? createElement(StrictMode, null, app) : app));
       await settle();
     },
     renderGate: async () => {
@@ -671,6 +728,60 @@ describe("analyticsClient against posthog-js", () => {
       ["$pageview", "user_b", "/series/3"],
     ]);
     expect(page.posthog.has_opted_out_capturing()).toBe(false);
+  });
+
+  it.each([false, true])(
+    "sends nothing under a consent changed elsewhere when a render error lands right after posthog-js loads (StrictMode: %s)",
+    async (strict) => {
+      const page = await mountPage("/series/1");
+      await page.renderFailingAfterLoad(identified("user_b"), strict);
+      expect(page.container.textContent).toBe("error screen");
+      // `loaded` identified the viewer; the initial pageview, due a moment
+      // later, found the client unmounted.
+      expect(named(events)).toEqual([["$identify", "user_b"]]);
+      // The account goes Off in another browser while the error screen shows.
+      const failed = events.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      await page.go(`/search?q=${OFF_TIME}`);
+      window.dispatchEvent(new Event("pagehide"));
+      await settle();
+      // Earlier tests' page loads still listen for pagehide; only this one's session counts.
+      const sessionId = page.posthog.get_session_id();
+      expect(since(failed).filter((e) => e.properties.$session_id === sessionId)).toEqual([]);
+
+      // The next navigation remounts the client with the session's consent.
+      await page.render(identified("user_b"));
+      const resumed = events.length;
+      await page.go("/series/2");
+      expect(since(resumed).map((e) => [e.event, e.properties.distinct_id, e.properties.$pathname])).toEqual([
+        ["$pageview", "user_b", "/series/2"],
+      ]);
+    },
+  );
+
+  it("sends a search made in the commit that changes the username while On", async () => {
+    const page = await mountPage("/search?q=first");
+    await page.renderWithSearch(identified("user_b"), "first");
+    await page.renderWithSearch(identified("user_b"), "second");
+    expect(events.filter((e) => e.event === "search_performed")).toHaveLength(1);
+    const renamed = events.length;
+    await page.renderWithSearch({ status: "identified", userId: "user_b", username: "renamed", role: null }, "third");
+    expect(
+      since(renamed)
+        .filter((e) => e.event === "search_performed")
+        .map((e) => [e.properties.distinct_id, e.properties.queryLength]),
+    ).toEqual([["user_b", "third".length]]);
+  });
+
+  it("sends no search made in the commit that switches Off", async () => {
+    const page = await mountPage("/search?q=first");
+    await page.renderWithSearch(identified("user_b"), "first");
+    await page.renderWithSearch(identified("user_b"), "second");
+    expect(events.filter((e) => e.event === "search_performed")).toHaveLength(1);
+    const switched = requests.length;
+    await page.renderWithSearch(OFF, OFF_TIME);
+    await page.go("/series/2");
+    expect(requests.slice(switched)).toEqual([]);
   });
 
   it("sends no pageleave when the tab closes while the consent gate is unmounted", async () => {
